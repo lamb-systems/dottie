@@ -49,6 +49,16 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesTargetsCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"targets"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "expected list, add, remove or mode") {
+		t.Fatalf("targets dispatch output = %q, error = %q", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunQuotesUntrustedArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"\x1b[2J\n"}, &stdout, &stderr); code != 2 {

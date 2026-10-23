@@ -3,9 +3,9 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: scaffold only.** The binary implements help and version output. Account
-linking, capture, encryption, synchronization, restore, and the background service
-are not implemented. An opt-in internal GSettings feasibility boundary tests only
+**Status: target selection and consent policy persist locally.** Capture, apply,
+encryption, synchronization, restore, account linking and the background service
+remain unimplemented. An opt-in internal GSettings feasibility boundary tests only
 synthetic isolated memory/null backends; it is not CLI capture/apply or a production
 desktop provider. Do not use this scaffold to back up real data.
 
