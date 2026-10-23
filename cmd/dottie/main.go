@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"dottie/internal/cli"
+	"github.com/dottorblaster/dottie/internal/cli"
 )
 
 func main() {

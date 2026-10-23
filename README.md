@@ -27,6 +27,18 @@ The initial scope is a Linux/GNOME CLI and background synchronizer. A GUI, packa
 installation, privileged system configuration, and other desktop platforms are
 outside that scope.
 
+## Compatibility targets
+
+Dottie aims to work across GNOME-based Linux distributions without distribution-
+or CPU-specific synchronization logic. The initial validation target is openSUSE
+Tumbleweed with GNOME 50 on x86_64 (`linux/amd64`). Other GNOME versions,
+distributions and CPU architectures are not yet validated.
+
+Native GSettings/keyring dependencies and packaging must be checked per platform.
+Filesystem targets are not inherently GNOME-specific. The initial PDS validation
+targets are independently hosted and Bluesky-hosted accounts; neither integration
+is implemented or verified yet.
+
 ## Develop
 
 Requires Go 1.27+ and Git; Make is convenient. The scaffold uses only the standard
@@ -60,7 +72,10 @@ Only the CLI entry point and its unit tests are executable today. Other componen
 directories document their responsibilities. Presets, OAuth metadata and the
 systemd unit are draft examples, not functioning integrations or deployable configuration.
 
-## Release prerequisites
+## License
 
-A license, canonical repository/module path, owned Lexicon namespace, and OAuth
-metadata host have not been selected. The local module name is currently `dottie`.
+Licensed under the [Apache License, Version 2.0](LICENSE).
+
+The canonical repository and Go module path is `github.com/dottorblaster/dottie`.
+An owned Lexicon namespace and OAuth metadata host remain to be selected; the
+example metadata is not production configuration.
