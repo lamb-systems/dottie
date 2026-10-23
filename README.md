@@ -47,8 +47,8 @@ integration is implemented or verified yet.
 ## Develop
 
 Requires Go 1.27+ and Git; Make is convenient. The default CLI build uses only the
-standard library. A `go.sum` will be generated if external Go dependencies are
-introduced.
+standard library. Go dependencies are declared in `go.mod` and recorded in
+`go.sum`; CI verifies that metadata.
 
 ```sh
 make check
@@ -64,6 +64,18 @@ The isolated native GSettings proof is separately opt-in with `make test-gnome` 
 `make test-gnome-race` and requires Linux, cgo, a C compiler, GIO development files,
 pkg-config and `glib-compile-schemas`; it does not make the CLI source provider
 operational.
+
+## Continuous integration
+
+GitHub Actions runs on pull requests and pushes to `main`. Its default job verifies
+Go module metadata, runs `make check`, `make test-race` and `make build`, tests and
+builds with cgo disabled, and smoke-tests CLI version/help output. A separate Linux
+job installs native test prerequisites on its hosted runner and runs `make test-gnome`
+and `make test-gnome-race` against the isolated GSettings boundary.
+
+These checks do not exercise a real desktop session or PDS account. The workflow
+does not yet run fuzz targets, validate future preset/schema contracts, or check
+release artifacts.
 
 ## Layout
 
