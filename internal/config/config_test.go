@@ -1,13 +1,15 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dottorblaster/dottie/internal/model"
 	"github.com/dottorblaster/dottie/internal/platform"
@@ -22,12 +24,8 @@ func testPaths(t *testing.T) platform.Paths {
 	cacheHome := filepath.Join(root, "xdg-cache")
 	dataHome := filepath.Join(root, "xdg-data")
 	for _, directory := range []string{home, configHome, stateHome, cacheHome, dataHome} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.MkdirAll(directory, 0o700))
+		require.NoError(t, os.Chmod(directory, 0o700))
 	}
 	return platform.Paths{Home: home, ConfigHome: configHome, StateHome: stateHome, CacheHome: cacheHome, DataHome: dataHome}
 }
@@ -38,80 +36,61 @@ func filesTarget(id string, base model.RootBase, path string, kind model.Selecti
 
 func writeRawConfig(t *testing.T, paths platform.Paths, text string) {
 	t.Helper()
-	if err := os.MkdirAll(paths.AppConfigDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(paths.AppConfigDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(paths.AppConfigDir(), 0o700))
+	require.NoError(t, os.Chmod(paths.AppConfigDir(), 0o700))
 	configPath := filepath.Join(paths.AppConfigDir(), FileName)
-	if err := os.WriteFile(configPath, []byte(text), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(configPath, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(configPath, []byte(text), 0o600))
+	require.NoError(t, os.Chmod(configPath, 0o600))
 }
 
 func TestAbsentDefaultModeResolvesToReview(t *testing.T) {
 	current := Config{Version: Version, Targets: []Target{filesTarget("target", model.RootHome, "dotfiles", model.SelectionDirectory)}}
-	if err := current.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if got := current.Targets[0].ModeOrDefault(current.Defaults); got != Review {
-		t.Fatalf("mode without a default = %q, want review", got)
-	}
+	require.NoError(t, current.Validate())
+	assert.Equal(t, Review, current.Targets[0].ModeOrDefault(current.Defaults), "mode without a default")
 }
 
 func TestLoadAbsentDoesNotCreateState(t *testing.T) {
 	paths := testPaths(t)
 	got, err := Load(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Version != Version || got.Defaults.Mode != Review || len(got.Targets) != 0 {
-		t.Fatalf("Load() = %#v", got)
-	}
-	if _, err := os.Lstat(paths.AppConfigDir()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Load created config directory: %v", err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, Version, got.Version, "Version")
+	assert.Equal(t, Review, got.Defaults.Mode, "Defaults.Mode")
+	assert.Empty(t, got.Targets, "Targets")
+	_, err = os.Lstat(paths.AppConfigDir())
+	assert.ErrorIs(t, err, os.ErrNotExist, "Load created config directory")
 }
 
 func TestLoadSymlinkedRegularConfig(t *testing.T) {
 	paths := testPaths(t)
-	if err := os.Mkdir(paths.AppConfigDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
 	target := filepath.Join(t.TempDir(), "config.toml")
 	content := []byte("config_version = 1\n[defaults]\nmode = 'backup-only'\n[[targets]]\nid = 'saved'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'dotfiles'\nkind = 'directory'\n")
-	if err := os.WriteFile(target, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, filepath.Join(paths.AppConfigDir(), FileName)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(target, content, 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(paths.AppConfigDir(), FileName)))
+
 	got, err := Load(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Version != Version || got.Defaults.Mode != BackupOnly || len(got.Targets) != 1 || got.Targets[0].ID != "saved" || got.Targets[0].Source != model.SourceFiles || got.Targets[0].Root == nil || got.Targets[0].Root.Base != model.RootHome || got.Targets[0].Root.Path != "dotfiles" || got.Targets[0].Root.Kind != model.SelectionDirectory {
-		t.Fatalf("Load through symlink = %#v", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, Version, got.Version, "Version")
+	assert.Equal(t, BackupOnly, got.Defaults.Mode, "Defaults.Mode")
+	require.Len(t, got.Targets, 1, "Targets")
+	assert.Equal(t, "saved", got.Targets[0].ID, "ID")
+	assert.Equal(t, model.SourceFiles, got.Targets[0].Source, "Source")
+	require.NotNil(t, got.Targets[0].Root, "Root")
+	assert.Equal(t, model.RootHome, got.Targets[0].Root.Base, "Root.Base")
+	assert.Equal(t, "dotfiles", got.Targets[0].Root.Path, "Root.Path")
+	assert.Equal(t, model.SelectionDirectory, got.Targets[0].Root.Kind, "Root.Kind")
 }
 
 func TestLoadRefusesDanglingSymlink(t *testing.T) {
 	paths := testPaths(t)
-	if err := os.Mkdir(paths.AppConfigDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
 	configPath := filepath.Join(paths.AppConfigDir(), FileName)
-	if err := os.Symlink(filepath.Join(t.TempDir(), "missing.toml"), configPath); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "missing.toml"), configPath))
+
 	_, err := Load(paths)
-	if err == nil || !strings.Contains(err.Error(), "symbolic link whose target cannot be resolved") || strings.Contains(err.Error(), configPath) {
-		t.Fatalf("Load dangling symlink error = %v", err)
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symbolic link whose target cannot be resolved", "Load dangling symlink error")
+	assert.NotContains(t, err.Error(), configPath, "error leaked the config path")
 }
 
 func TestLoadRefusesDirectoryAndFIFO(t *testing.T) {
@@ -125,17 +104,14 @@ func TestLoadRefusesDirectoryAndFIFO(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			paths := testPaths(t)
-			if err := os.Mkdir(paths.AppConfigDir(), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
 			configPath := filepath.Join(paths.AppConfigDir(), FileName)
-			if err := test.make(configPath); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, test.make(configPath))
+
 			_, err := Load(paths)
-			if err == nil || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), configPath) {
-				t.Fatalf("Load error = %v, want %q without path", err, test.want)
-			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.want, "Load error")
+			assert.NotContains(t, err.Error(), configPath, "error leaked the config path")
 		})
 	}
 }
@@ -165,96 +141,78 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			paths := testPaths(t)
 			writeRawConfig(t, paths, tt.text)
+
 			_, err := Load(paths)
-			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.want)) {
-				t.Fatalf("Load error = %v, want substring %q", err, tt.want)
-			}
+			require.Error(t, err)
+			assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tt.want), "Load error")
 		})
 	}
 }
 
 func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	paths := testPaths(t)
-	if err := os.Mkdir(paths.AppConfigDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(paths.AppConfigDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o755))
+	require.NoError(t, os.Chmod(paths.AppConfigDir(), 0o755))
+
 	c := Default()
 	target := filesTarget("nvim", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	target.Mode = AutoApply
 	target.Root.Exclude = []string{".git", ".git/**", ".git"}
 	c.Targets = []Target{target, {ID: "desktop", Source: model.SourceGNOME}}
-	if err := Save(paths, c); err != nil {
-		t.Fatal(err)
-	}
-	if len(c.Targets[0].Root.Exclude) != 3 {
-		t.Fatalf("Save mutated the caller's excludes: %#v", c.Targets[0].Root.Exclude)
-	}
+	require.NoError(t, Save(paths, c))
+
+	assert.Len(t, c.Targets[0].Root.Exclude, 3, "Save mutated the caller's excludes")
+
 	info, err := os.Stat(paths.AppConfigDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("config dir mode = %04o, want 0700", info.Mode().Perm())
-	}
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), "config dir mode")
+
 	file := filepath.Join(paths.AppConfigDir(), FileName)
 	info, err = os.Stat(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("config file mode = %04o, want 0600", info.Mode().Perm())
-	}
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "config file mode")
+
 	loaded, err := Load(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Targets) != 2 || loaded.Targets[0].Mode != AutoApply || loaded.Targets[1].Mode != "" {
-		t.Fatalf("round trip lost overrides: %#v", loaded.Targets)
-	}
-	if got := loaded.Targets[0].Root.Exclude; len(got) != 2 || got[0] != ".git" || got[1] != ".git/**" {
-		t.Fatalf("excludes = %#v", got)
-	}
+	require.NoError(t, err)
+	require.Len(t, loaded.Targets, 2, "round trip target count")
+	assert.Equal(t, AutoApply, loaded.Targets[0].Mode, "round trip lost overrides")
+	assert.Empty(t, loaded.Targets[1].Mode, "round trip invented an override")
+	assert.Equal(t, []string{".git", ".git/**"}, loaded.Targets[0].Root.Exclude, "excludes")
 }
 
 func TestSaveRefusesUnsafePaths(t *testing.T) {
 	t.Run("non-directory app path", func(t *testing.T) {
 		paths := testPaths(t)
-		if err := os.WriteFile(paths.AppConfigDir(), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := Save(paths, Default()); err == nil || !strings.Contains(err.Error(), "directory") {
-			t.Fatalf("Save error = %v", err)
-		}
+		require.NoError(t, os.WriteFile(paths.AppConfigDir(), []byte("x"), 0o600))
+
+		err := Save(paths, Default())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "directory", "Save error")
 	})
+
 	t.Run("symlink config file", func(t *testing.T) {
 		paths := testPaths(t)
-		if err := os.Mkdir(paths.AppConfigDir(), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
 		victim := filepath.Join(t.TempDir(), "victim")
 		original := []byte("do not replace\n")
-		if err := os.WriteFile(victim, original, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(victim, original, 0o600))
 		configPath := filepath.Join(paths.AppConfigDir(), FileName)
-		if err := os.Symlink(victim, configPath); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.Symlink(victim, configPath))
 		linkBefore, err := os.Readlink(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := Save(paths, Default()); err == nil || !strings.Contains(err.Error(), "configuration file is a symbolic link") || !strings.Contains(err.Error(), "Dottie will not replace") || !strings.Contains(err.Error(), "moving the file or removing the link") {
-			t.Fatalf("Save error = %v", err)
-		}
+		require.NoError(t, err)
+
+		err = Save(paths, Default())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "configuration file is a symbolic link", "Save error")
+		assert.Contains(t, err.Error(), "Dottie will not replace", "Save error")
+		assert.Contains(t, err.Error(), "moving the file or removing the link", "Save error")
+
 		linkAfter, linkErr := os.Readlink(configPath)
+		require.NoError(t, linkErr)
 		got, readErr := os.ReadFile(victim)
-		if linkErr != nil || linkAfter != linkBefore || readErr != nil || !bytes.Equal(got, original) {
-			t.Fatalf("symlink or target changed: link %q -> %q (%v), target %q (%v)", linkBefore, linkAfter, linkErr, got, readErr)
-		}
+		require.NoError(t, readErr)
+		assert.Equal(t, linkBefore, linkAfter, "symlink target changed")
+		assert.Equal(t, original, got, "symlink target content changed")
 	})
 }
 
@@ -264,17 +222,15 @@ func TestSaveCommitPointFailures(t *testing.T) {
 			paths := testPaths(t)
 			old := Default()
 			old.Targets = []Target{filesTarget("one", model.RootHome, "old", model.SelectionDirectory)}
-			if err := Save(paths, old); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, Save(paths, old))
 			configPath := filepath.Join(paths.AppConfigDir(), FileName)
 			oldBytes, err := os.ReadFile(configPath)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
+
 			changed := Default()
 			changed.Targets = []Target{filesTarget("one", model.RootHome, "old", model.SelectionDirectory)}
 			changed.Targets[0].Mode = BackupOnly
+
 			originalRename, originalSyncFile, originalSyncDir := renameFile, syncFile, syncDir
 			t.Cleanup(func() { renameFile, syncFile, syncDir = originalRename, originalSyncFile, originalSyncDir })
 			switch stage {
@@ -285,36 +241,28 @@ func TestSaveCommitPointFailures(t *testing.T) {
 			case "directory-sync":
 				syncDir = func(string) error { return errors.New("injected directory sync") }
 			}
+
 			err = Save(paths, changed)
-			if err == nil {
-				t.Fatal("Save succeeded with injected failure")
-			}
+			require.Error(t, err, "Save succeeded with injected failure")
+
 			if stage == "directory-sync" {
-				if !strings.Contains(err.Error(), "durability uncertain") {
-					t.Fatalf("post-commit error = %v", err)
-				}
+				assert.Contains(t, err.Error(), "durability uncertain", "post-commit error")
 				loaded, loadErr := Load(paths)
-				if loadErr != nil || loaded.Targets[0].Mode != BackupOnly {
-					t.Fatalf("new value not visible after commit: %#v %v", loaded, loadErr)
-				}
+				require.NoError(t, loadErr)
+				assert.Equal(t, BackupOnly, loaded.Targets[0].Mode, "new value not visible after commit")
 			} else {
 				got, readErr := os.ReadFile(configPath)
-				if readErr != nil || !bytes.Equal(got, oldBytes) {
-					t.Fatalf("pre-commit failure changed old bytes: %q, %v", got, readErr)
-				}
+				require.NoError(t, readErr)
+				assert.Equal(t, oldBytes, got, "pre-commit failure changed old bytes")
 				loaded, loadErr := Load(paths)
-				if loadErr != nil || loaded.Targets[0].Mode != "" {
-					t.Fatalf("old value not preserved: %#v %v", loaded, loadErr)
-				}
+				require.NoError(t, loadErr)
+				assert.Empty(t, loaded.Targets[0].Mode, "old value not preserved")
 			}
+
 			entries, err := os.ReadDir(paths.AppConfigDir())
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), ".config.toml.tmp-") {
-					t.Fatalf("temporary file remains: %s", entry.Name())
-				}
+				assert.False(t, strings.HasPrefix(entry.Name(), ".config.toml.tmp-"), "temporary file remains: %s", entry.Name())
 			}
 		})
 	}
@@ -324,21 +272,24 @@ func TestTargetModelConversion(t *testing.T) {
 	files := filesTarget("portable-id", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	files.Mode = AutoApply
 	files.Root.Exclude = []string{".git"}
+
 	got, err := files.Model()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.ID != files.ID || got.Source != model.SourceFiles || got.SourceVersion != 1 || got.Root == nil || got.Root.Base != model.RootXDGConfig || got.Root.Path != "nvim" || got.Root.Kind != model.SelectionDirectory {
-		t.Fatalf("file model conversion = %#v", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, files.ID, got.ID, "ID")
+	assert.Equal(t, model.SourceFiles, got.Source, "Source")
+	assert.Equal(t, uint32(1), got.SourceVersion, "SourceVersion")
+	require.NotNil(t, got.Root, "Root")
+	assert.Equal(t, model.RootXDGConfig, got.Root.Base, "Root.Base")
+	assert.Equal(t, "nvim", got.Root.Path, "Root.Path")
+	assert.Equal(t, model.SelectionDirectory, got.Root.Kind, "Root.Kind")
+
 	gnome := Target{ID: "desktop", Source: model.SourceGNOME, Mode: BackupOnly, Root: nil}
 	got, err = gnome.Model()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.ID != "desktop" || got.Source != model.SourceGNOME || got.Root != nil || got.SourceVersion != 1 {
-		t.Fatalf("GNOME model conversion = %#v", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "desktop", got.ID, "ID")
+	assert.Equal(t, model.SourceGNOME, got.Source, "Source")
+	assert.Nil(t, got.Root, "Root")
+	assert.Equal(t, uint32(1), got.SourceVersion, "SourceVersion")
 }
 
 func TestConfigBytesContainNoAbsoluteRoot(t *testing.T) {
@@ -346,11 +297,9 @@ func TestConfigBytesContainNoAbsoluteRoot(t *testing.T) {
 	root := filepath.Join(paths.Home, "dotfiles")
 	c := Default()
 	c.Targets = []Target{filesTarget("dots", model.RootHome, "dotfiles", model.SelectionDirectory)}
+
 	encoded, err := encodeConfig(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), root) || strings.Contains(string(encoded), paths.Home) {
-		t.Fatalf("portable config leaked an absolute path: %s", encoded)
-	}
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), root, "portable config leaked the absolute root")
+	assert.NotContains(t, string(encoded), paths.Home, "portable config leaked the home directory")
 }

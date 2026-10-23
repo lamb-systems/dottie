@@ -8,37 +8,29 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dottorblaster/dottie/internal/model"
 )
 
 func TestResolveSelectionNestingAndKinds(t *testing.T) {
 	paths := testPaths(t)
 	paths.ConfigHome = filepath.Join(paths.Home, ".config")
-	if err := os.Mkdir(paths.ConfigHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(paths.ConfigHome, 0o700))
 	configFile := filepath.Join(paths.ConfigHome, "settings.ini")
-	if err := os.WriteFile(configFile, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(configFile, []byte("x"), 0o600))
+
 	root, err := ResolveSelection(paths, configFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root.Base != model.RootXDGConfig || root.Path != "settings.ini" || root.Kind != model.SelectionFile {
-		t.Fatalf("config selection = %#v", root)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, Root{Base: model.RootXDGConfig, Path: "settings.ini", Kind: model.SelectionFile}, root, "config selection")
+
 	directory := filepath.Join(paths.Home, "documents")
-	if err := os.Mkdir(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(directory, 0o700))
+
 	root, err = ResolveSelection(paths, directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root.Base != model.RootHome || root.Path != "documents" || root.Kind != model.SelectionDirectory {
-		t.Fatalf("home selection = %#v", root)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, Root{Base: model.RootHome, Path: "documents", Kind: model.SelectionDirectory}, root, "home selection")
 }
 
 func TestResolveSelectionRejectsWholeBases(t *testing.T) {
@@ -47,32 +39,28 @@ func TestResolveSelectionRejectsWholeBases(t *testing.T) {
 	paths.StateHome = filepath.Join(t.TempDir(), "relocated-state")
 	paths.CacheHome = filepath.Join(t.TempDir(), "relocated-cache")
 	paths.DataHome = filepath.Join(t.TempDir(), "relocated-data")
-	if err := os.Mkdir(paths.ConfigHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(paths.ConfigHome, 0o700))
+
 	for _, path := range []string{paths.Home, paths.ConfigHome} {
-		if _, err := ResolveSelection(paths, path); err == nil || !strings.Contains(err.Error(), "whole base") {
-			t.Errorf("ResolveSelection(%q) error = %v", path, err)
-		}
+		_, err := ResolveSelection(paths, path)
+		require.Error(t, err, "ResolveSelection(%q) accepted a whole base", path)
+		assert.Contains(t, err.Error(), "whole base", "ResolveSelection(%q) error", path)
 	}
 }
 
 func TestResolveSelectionRejectsOutsideAndSymlinkEscape(t *testing.T) {
 	paths := testPaths(t)
 	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.Mkdir(outside, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveSelection(paths, outside); err == nil {
-		t.Fatal("outside path accepted")
-	}
+	require.NoError(t, os.Mkdir(outside, 0o700))
+
+	_, err := ResolveSelection(paths, outside)
+	require.Error(t, err, "outside path accepted")
+
 	link := filepath.Join(paths.Home, "escaped")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ResolveSelection(paths, link); err == nil {
-		t.Fatal("symlink escaping portable roots accepted")
-	}
+	require.NoError(t, os.Symlink(outside, link))
+
+	_, err = ResolveSelection(paths, link)
+	require.Error(t, err, "symlink escaping portable roots accepted")
 }
 
 func TestDeriveIDGoldenVectors(t *testing.T) {
@@ -92,9 +80,7 @@ func TestDeriveIDGoldenVectors(t *testing.T) {
 		{model.RootHome, trimAfterTruncate, "home-" + strings.Repeat("a", 122)},
 	}
 	for _, tt := range tests {
-		if got := DeriveID(tt.base, tt.path); got != tt.want {
-			t.Errorf("DeriveID(%q, %q) = %q, want %q", tt.base, tt.path, got, tt.want)
-		}
+		assert.Equal(t, tt.want, DeriveID(tt.base, tt.path), "DeriveID(%q, %q)", tt.base, tt.path)
 	}
 }
 
@@ -105,12 +91,13 @@ func TestCheckAdditionIdCollisions(t *testing.T) {
 		current := Default()
 		current.Targets = []Target{filesTarget(id, model.RootHome, pair[0], model.SelectionDirectory)}
 		added := filesTarget(DeriveID(model.RootHome, pair[1]), model.RootHome, pair[1], model.SelectionDirectory)
-		if added.ID != id {
-			t.Fatalf("fixture ids did not collide: %q vs %q", id, added.ID)
-		}
-		if err := CheckAddition(current, paths, added); err == nil || !strings.Contains(err.Error(), "id") || !strings.Contains(err.Error(), pair[0]) || !strings.Contains(err.Error(), pair[1]) {
-			t.Errorf("CheckAddition collision error = %v", err)
-		}
+		require.Equal(t, id, added.ID, "fixture ids did not collide")
+
+		err := CheckAddition(current, paths, added)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "id", "CheckAddition collision error")
+		assert.Contains(t, err.Error(), pair[0], "CheckAddition collision error")
+		assert.Contains(t, err.Error(), pair[1], "CheckAddition collision error")
 	}
 }
 
@@ -125,13 +112,12 @@ func TestCheckAdditionOverlapUsesPathComponents(t *testing.T) {
 		filesTarget("sibling-prefix", model.RootHome, "dottie-notes", model.SelectionDirectory),
 		filesTarget("longer-sibling", model.RootHome, "bc", model.SelectionDirectory),
 	} {
-		if err := CheckAddition(current, paths, added); err != nil {
-			t.Errorf("sibling %q incorrectly overlaps: %v", added.Root.Path, err)
-		}
+		assert.NoError(t, CheckAddition(current, paths, added), "sibling %q incorrectly overlaps", added.Root.Path)
 	}
-	if err := CheckAddition(current, paths, filesTarget("child", model.RootHome, "dottie/child", model.SelectionDirectory)); err == nil || !strings.Contains(err.Error(), "overlaps") {
-		t.Fatalf("child overlap error = %v", err)
-	}
+
+	err := CheckAddition(current, paths, filesTarget("child", model.RootHome, "dottie/child", model.SelectionDirectory))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlaps", "child overlap error")
 }
 
 func TestCheckAdditionRejectsContainingAndNestedDottieDirectories(t *testing.T) {
@@ -141,72 +127,56 @@ func TestCheckAdditionRejectsContainingAndNestedDottieDirectories(t *testing.T) 
 	paths.StateHome = filepath.Join(selected, "state")
 	paths.CacheHome = filepath.Join(selected, "cache")
 	paths.DataHome = filepath.Join(selected, "data")
-	if err := os.MkdirAll(selected, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(selected, 0o700))
+
 	root, err := ResolveSelection(paths, selected)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckAddition(Default(), paths, Target{ID: "container", Source: model.SourceFiles, Root: &root}); err == nil || !strings.Contains(err.Error(), "Dottie") {
-		t.Fatalf("containing self-capture error = %v", err)
-	}
+	require.NoError(t, err)
+	err = CheckAddition(Default(), paths, Target{ID: "container", Source: model.SourceFiles, Root: &root})
+	require.Error(t, err, "containing self-capture accepted")
+	assert.Contains(t, err.Error(), "Dottie", "containing self-capture error")
 
 	inside := filepath.Join(paths.Home, "outside-config")
-	if err := os.Mkdir(inside, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(inside, 0o700))
 	paths.ConfigHome = inside
 	child := filepath.Join(inside, "dottie", "nested")
-	if err := os.MkdirAll(child, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(child, 0o700))
+
 	root, err = ResolveSelection(paths, child)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckAddition(Default(), paths, Target{ID: "nested", Source: model.SourceFiles, Root: &root}); err == nil || !strings.Contains(err.Error(), "Dottie") {
-		t.Fatalf("nested self-capture error = %v", err)
-	}
+	require.NoError(t, err)
+	err = CheckAddition(Default(), paths, Target{ID: "nested", Source: model.SourceFiles, Root: &root})
+	require.Error(t, err, "nested self-capture accepted")
+	assert.Contains(t, err.Error(), "Dottie", "nested self-capture error")
 }
 
 func TestCheckAdditionSelfCaptureThroughSymlinkedXDG(t *testing.T) {
 	paths := testPaths(t)
 	actualConfig := filepath.Join(t.TempDir(), "actual-config")
-	if err := os.Mkdir(actualConfig, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(actualConfig, 0o700))
 	linkedConfig := filepath.Join(paths.Home, ".config-link")
-	if err := os.Symlink(actualConfig, linkedConfig); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(actualConfig, linkedConfig))
 	paths.ConfigHome = linkedConfig
 	selected := filepath.Join(actualConfig, "dottie", "sync")
-	if err := os.MkdirAll(selected, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(selected, 0o700))
+
 	root, err := ResolveSelection(paths, selected)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	candidate := Target{ID: "self", Source: model.SourceFiles, Root: &root}
-	if err := CheckAddition(Default(), paths, candidate); err == nil || !strings.Contains(err.Error(), "Dottie") {
-		t.Fatalf("self-capture error = %v", err)
-	}
+	err = CheckAddition(Default(), paths, candidate)
+	require.Error(t, err, "self-capture through a symlinked XDG base accepted")
+	assert.Contains(t, err.Error(), "Dottie", "self-capture error")
 }
 
 func TestCheckAdditionFailsClosedForUnavailableStoredRoot(t *testing.T) {
 	paths := testPaths(t)
 	broken := filepath.Join(paths.Home, "broken")
-	if err := os.Symlink(filepath.Join(paths.Home, "missing"), broken); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(filepath.Join(paths.Home, "missing"), broken))
 	current := Default()
 	current.Targets = []Target{filesTarget("offline", model.RootHome, "broken/selected", model.SelectionDirectory)}
 	added := filesTarget("other", model.RootHome, "new", model.SelectionDirectory)
-	if err := CheckAddition(current, paths, added); err == nil || !strings.Contains(err.Error(), "stored root") {
-		t.Fatalf("unavailable existing root error = %v", err)
-	}
+
+	err := CheckAddition(current, paths, added)
+	require.Error(t, err, "unavailable existing root accepted")
+	assert.Contains(t, err.Error(), "stored root", "unavailable existing root error")
 }
 
 func TestCheckAdditionRejectsLocalPolicyAndKinds(t *testing.T) {
@@ -216,33 +186,36 @@ func TestCheckAdditionRejectsLocalPolicyAndKinds(t *testing.T) {
 		{ID: "mode", Source: model.SourceFiles, Mode: "always", Root: &Root{Base: model.RootHome, Path: "x", Kind: model.SelectionDirectory}},
 		{ID: "exclude", Source: model.SourceFiles, Root: &Root{Base: model.RootHome, Path: "x", Kind: model.SelectionDirectory, Exclude: []string{"/absolute"}}},
 	} {
-		if err := CheckAddition(Default(), paths, target); err == nil {
-			t.Errorf("invalid target accepted: %#v", target)
-		}
+		assert.Error(t, CheckAddition(Default(), paths, target), "invalid target accepted: %#v", target)
 	}
 }
 
 func TestModelConversionDoesNotCarryLocalFields(t *testing.T) {
 	root := &Root{Base: model.RootHome, Path: "dotfiles", Kind: model.SelectionDirectory, Exclude: []string{"secret"}}
 	target := Target{ID: "same-id", Source: model.SourceFiles, Mode: AutoApply, Root: root}
+
 	portable, err := target.Model()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if portable.ID != target.ID || portable.Source != model.SourceFiles || portable.SourceVersion != 1 || portable.Root == nil || portable.Root.Base != root.Base || portable.Root.Path != root.Path || portable.Root.Kind != root.Kind {
-		t.Fatalf("portable fields = %#v", portable)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, target.ID, portable.ID, "ID")
+	assert.Equal(t, model.SourceFiles, portable.Source, "Source")
+	assert.Equal(t, uint32(1), portable.SourceVersion, "SourceVersion")
+	require.NotNil(t, portable.Root, "Root")
+	assert.Equal(t, root.Base, portable.Root.Base, "Root.Base")
+	assert.Equal(t, root.Path, portable.Root.Path, "Root.Path")
+	assert.Equal(t, root.Kind, portable.Root.Kind, "Root.Kind")
+
 	gnome, err := (Target{ID: "gnome-id", Source: model.SourceGNOME, Mode: Review}).Model()
-	if err != nil || gnome.ID != "gnome-id" || gnome.Source != model.SourceGNOME || gnome.Root != nil || gnome.SourceVersion != 1 {
-		t.Fatalf("GNOME model = %#v, %v", gnome, err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "gnome-id", gnome.ID, "ID")
+	assert.Equal(t, model.SourceGNOME, gnome.Source, "Source")
+	assert.Nil(t, gnome.Root, "Root")
+	assert.Equal(t, uint32(1), gnome.SourceVersion, "SourceVersion")
 }
 
 func TestConcurrentSaveAndLoadSupplemental(t *testing.T) {
 	paths := testPaths(t)
-	if err := Save(paths, Default()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, Save(paths, Default()))
+
 	var group sync.WaitGroup
 	for writer := 0; writer < 2; writer++ {
 		group.Add(1)
@@ -251,17 +224,15 @@ func TestConcurrentSaveAndLoadSupplemental(t *testing.T) {
 			for i := 0; i < 8; i++ {
 				value := Default()
 				value.Targets = []Target{{ID: fmt.Sprintf("writer-%d-%d", writer, i), Source: model.SourceGNOME}}
-				if err := Save(paths, value); err != nil {
-					t.Errorf("Save: %v", err)
+				if !assert.NoError(t, Save(paths, value), "Save") {
 					return
 				}
 			}
 		}(writer)
 	}
 	for i := 0; i < 8; i++ {
-		if _, err := Load(paths); err != nil {
-			t.Errorf("Load: %v", err)
-		}
+		_, err := Load(paths)
+		assert.NoError(t, err, "Load")
 	}
 	group.Wait()
 }

@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolve(t *testing.T) {
@@ -24,97 +27,68 @@ func TestResolve(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Resolve(func(key string) string { return tt.env[key] })
 			if tt.bad {
-				if err == nil {
-					t.Fatal("Resolve succeeded")
-				}
+				require.Error(t, err, "Resolve succeeded")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tt.want {
-				t.Fatalf("Resolve() = %#v, want %#v", got, tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got, "Resolve()")
 		})
 	}
 }
 
 func TestAppDirectories(t *testing.T) {
 	p := Paths{ConfigHome: "/config", StateHome: "/state", CacheHome: "/cache", DataHome: "/data"}
-	if p.AppConfigDir() != "/config/dottie" || p.AppStateDir() != "/state/dottie" || p.AppCacheDir() != "/cache/dottie" || p.AppDataDir() != "/data/dottie" {
-		t.Fatalf("unexpected app directories: %#v", p)
-	}
+	assert.Equal(t, "/config/dottie", p.AppConfigDir(), "AppConfigDir")
+	assert.Equal(t, "/state/dottie", p.AppStateDir(), "AppStateDir")
+	assert.Equal(t, "/cache/dottie", p.AppCacheDir(), "AppCacheDir")
+	assert.Equal(t, "/data/dottie", p.AppDataDir(), "AppDataDir")
 }
 
 func TestRealPathLongestExistingAncestor(t *testing.T) {
 	root := t.TempDir()
 	real := filepath.Join(root, "real")
-	if err := os.Mkdir(real, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Mkdir(real, 0o700))
 	link := filepath.Join(root, "linked")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(real, link))
+
 	got, err := RealPath(filepath.Join(link, "not-yet", "child"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(real, "not-yet", "child")
-	if got != want {
-		t.Fatalf("RealPath() = %q, want %q", got, want)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(real, "not-yet", "child"), got, "RealPath()")
 }
 
 func TestRealPathFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	broken := filepath.Join(root, "broken")
-	if err := os.Symlink(filepath.Join(root, "missing"), broken); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(filepath.Join(root, "missing"), broken))
 	for _, path := range []string{filepath.Join(broken, "tail"), filepath.Join(root, "regular", "tail")} {
 		if path == filepath.Join(root, "regular", "tail") {
-			if err := os.WriteFile(filepath.Join(root, "regular"), []byte("x"), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, os.WriteFile(filepath.Join(root, "regular"), []byte("x"), 0o600))
 		}
-		if _, err := RealPath(path); err == nil {
-			t.Errorf("RealPath(%q) succeeded", path)
-		}
+		_, err := RealPath(path)
+		assert.Error(t, err, "RealPath(%q) succeeded", path)
 	}
-	if _, err := RealPath("relative"); err == nil {
-		t.Fatal("relative path succeeded")
-	}
+	_, err := RealPath("relative")
+	assert.Error(t, err, "relative path succeeded")
 }
 
 func TestRealPathSymlinkedXDGBase(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	actual := filepath.Join(root, "actual-config")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(actual, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	require.NoError(t, os.Mkdir(actual, 0o700))
 	link := filepath.Join(home, ".config")
-	if err := os.Symlink(actual, link); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.Symlink(actual, link))
+
 	resolved, err := Resolve(func(key string) string {
 		if key == "HOME" {
 			return home
 		}
 		return ""
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	got, err := RealPath(filepath.Join(resolved.ConfigHome, "dottie"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != filepath.Join(actual, "dottie") {
-		t.Fatalf("RealPath() = %q", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(actual, "dottie"), got, "RealPath()")
 }

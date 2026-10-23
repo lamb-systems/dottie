@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRun(t *testing.T) {
@@ -30,20 +33,18 @@ func TestRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := Run(tt.args, &stdout, &stderr); code != tt.code {
-				t.Fatalf("exit code = %d, want %d", code, tt.code)
+			code := Run(tt.args, &stdout, &stderr)
+			require.Equal(t, tt.code, code, "exit code")
+
+			if tt.out == "" {
+				assert.Empty(t, stdout.String(), "unexpected stdout")
+			} else {
+				assert.Contains(t, stdout.String(), tt.out, "stdout")
 			}
-			if tt.out == "" && stdout.Len() != 0 {
-				t.Fatalf("unexpected stdout: %q", stdout.String())
-			}
-			if tt.out != "" && !strings.Contains(stdout.String(), tt.out) {
-				t.Errorf("stdout = %q, want substring %q", stdout.String(), tt.out)
-			}
-			if tt.err == "" && stderr.Len() != 0 {
-				t.Fatalf("unexpected stderr: %q", stderr.String())
-			}
-			if tt.err != "" && !strings.Contains(stderr.String(), tt.err) {
-				t.Errorf("stderr = %q, want substring %q", stderr.String(), tt.err)
+			if tt.err == "" {
+				assert.Empty(t, stderr.String(), "unexpected stderr")
+			} else {
+				assert.Contains(t, stderr.String(), tt.err, "stderr")
 			}
 		})
 	}
@@ -51,22 +52,16 @@ func TestRun(t *testing.T) {
 
 func TestRunDispatchesTargetsCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"targets"}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "expected list, add, remove or mode") {
-		t.Fatalf("targets dispatch output = %q, error = %q", stdout.String(), stderr.String())
-	}
+	require.Equal(t, 2, Run([]string{"targets"}, &stdout, &stderr), "exit code")
+	assert.Empty(t, stdout.String(), "unexpected stdout")
+	assert.Contains(t, stderr.String(), "expected list, add, remove or mode", "targets dispatch error")
 }
 
 func TestRunQuotesUntrustedArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"\x1b[2J\n"}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	if strings.ContainsRune(stderr.String(), '\x1b') || strings.Count(stderr.String(), "\n") != 1 {
-		t.Fatalf("unescaped terminal controls: %q", stderr.String())
-	}
+	require.Equal(t, 2, Run([]string{"\x1b[2J\n"}, &stdout, &stderr), "exit code")
+	assert.NotContains(t, stderr.String(), "\x1b", "unescaped terminal controls")
+	assert.Equal(t, 1, strings.Count(stderr.String(), "\n"), "unescaped terminal controls")
 }
 
 type failingWriter struct{}
@@ -78,11 +73,7 @@ func (failingWriter) Write([]byte) (int, error) {
 func TestRunOutputFailure(t *testing.T) {
 	for _, args := range [][]string{nil, {"version"}} {
 		var stderr bytes.Buffer
-		if code := Run(args, failingWriter{}, &stderr); code != 1 {
-			t.Fatalf("exit code = %d, want 1", code)
-		}
-		if !strings.Contains(stderr.String(), "cannot write command output") {
-			t.Fatalf("missing output error: %q", stderr.String())
-		}
+		require.Equal(t, 1, Run(args, failingWriter{}, &stderr), "exit code")
+		assert.Contains(t, stderr.String(), "cannot write command output", "missing output error")
 	}
 }
