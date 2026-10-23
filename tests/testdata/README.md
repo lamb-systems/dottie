@@ -1,6 +1,9 @@
 # Synthetic fixtures
 
-Add versioned synthetic Neovim/WM trees, isolated GSettings schemas and malicious
-path/envelope cases with their corresponding tests. Do not copy the developer's
-real configuration or secrets. No live fixtures or real application captures are
-present in the scaffold; this directory does not imply existing coverage.
+`gsettings/` contains isolated synthetic schemas and vendor overrides used by the
+opt-in native GIO boundary tests. Tests compile them in temporary directories and
+never modify installed or user schema locations. No real user preferences,
+application captures or credentials are present.
+
+No live application or PDS fixtures are present. Tests use temporary homes and
+synthetic data rather than developer configuration or secrets.

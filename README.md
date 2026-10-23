@@ -5,7 +5,9 @@ Atmosphere account and its PDS.
 
 **Status: scaffold only.** The binary implements help and version output. Account
 linking, capture, encryption, synchronization, restore, and the background service
-are not implemented. Do not use this scaffold to back up real data.
+are not implemented. An opt-in internal GSettings feasibility boundary tests only
+synthetic isolated memory/null backends; it is not CLI capture/apply or a production
+desktop provider. Do not use this scaffold to back up real data.
 
 ## Target design
 
@@ -34,15 +36,19 @@ or CPU-specific synchronization logic. The initial validation target is openSUSE
 Tumbleweed with GNOME 50 on x86_64 (`linux/amd64`). Other GNOME versions,
 distributions and CPU architectures are not yet validated.
 
-Native GSettings/keyring dependencies and packaging must be checked per platform.
-Filesystem targets are not inherently GNOME-specific. The initial PDS validation
-targets are independently hosted and Bluesky-hosted accounts; neither integration
-is implemented or verified yet.
+The native GSettings feasibility boundary has a documentation-derived 2.40 GIO
+API floor, set by the newest minimum version among the symbols used; runtime
+observation is limited to GIO/GLib 2.88.4. This does not validate older libraries,
+GNOME 50 or another architecture. Native dependencies and packaging must be checked
+per platform. Filesystem targets are not inherently GNOME-specific. The initial PDS
+validation targets are independently hosted and Bluesky-hosted accounts; neither
+integration is implemented or verified yet.
 
 ## Develop
 
-Requires Go 1.27+ and Git; Make is convenient. The scaffold uses only the standard
-library. A `go.sum` will be generated when external dependencies are introduced.
+Requires Go 1.27+ and Git; Make is convenient. The default CLI build uses only the
+standard library. A `go.sum` will be generated if external Go dependencies are
+introduced.
 
 ```sh
 make check
@@ -54,6 +60,10 @@ make build
 
 Unimplemented commands return a nonzero status. `make build` writes to ignored
 `bin/`. Make defaults to `GOTOOLCHAIN=local`, avoiding implicit toolchain downloads.
+The isolated native GSettings proof is separately opt-in with `make test-gnome` or
+`make test-gnome-race` and requires Linux, cgo, a C compiler, GIO development files,
+pkg-config and `glib-compile-schemas`; it does not make the CLI source provider
+operational.
 
 ## Layout
 
@@ -68,9 +78,11 @@ Unimplemented commands return a nonzero status. `make build` writes to ignored
 | `lexicons`, `web` | Record definitions and static OAuth metadata |
 | `packaging`, `tests` | Distribution and integration coverage |
 
-Only the CLI entry point and its unit tests are executable today. Other component
-directories document their responsibilities. Presets, OAuth metadata and the
-systemd unit are draft examples, not functioning integrations or deployable configuration.
+The default executable remains the CLI and its unit tests. Opt-in native tests
+exercise an isolated GSettings boundary, but no source provider is wired into the
+CLI. Other component directories document their responsibilities. Presets, OAuth
+metadata and the systemd unit are draft examples, not functioning integrations or
+deployable configuration.
 
 ## License
 

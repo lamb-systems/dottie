@@ -1,0 +1,41 @@
+<schemalist>
+  <schema id="org.dottie.Test" path="/org/dottie/test/">
+    <key name="enabled" type="b">
+      <default>false</default>
+    </key>
+    <key name="signed" type="x">
+      <default>0</default>
+    </key>
+    <key name="unsigned" type="t">
+      <default>0</default>
+    </key>
+    <key name="vendor-text" type="s">
+      <default>'schema-default'</default>
+    </key>
+    <key name="items" type="as">
+      <default>['schema-default']</default>
+    </key>
+    <key name="pair" type="(is)">
+      <default>(1, 'fixture')</default>
+    </key>
+    <key name="dictionary" type="a{sv}">
+      <default>{'kind': &lt;'fixture'&gt;}</default>
+    </key>
+    <key name="limited" type="i">
+      <range min="1" max="10"/>
+      <default>3</default>
+    </key>
+    <key name="color" type="s">
+      <choices>
+        <choice value="red"/>
+        <choice value="blue"/>
+      </choices>
+      <default>'red'</default>
+    </key>
+  </schema>
+  <schema id="org.dottie.Test.Relocatable">
+    <key name="label" type="s">
+      <default>'relocatable'</default>
+    </key>
+  </schema>
+</schemalist>
