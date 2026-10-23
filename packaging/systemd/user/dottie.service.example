@@ -1,0 +1,14 @@
+[Unit]
+Description=Dottie user preference synchronization
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dottie serve
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

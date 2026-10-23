@@ -1,0 +1,12 @@
+schema_version = 1
+id = "neovim"
+name = "Neovim"
+source = "files"
+risk = "executable-config"
+notes = ["Synchronizes configuration source, not installed plugins or separate data/cache/state."]
+
+[[roots]]
+base = "xdg-config"
+path = "nvim"
+kind = "directory"
+exclude = [".git", ".git/**"]

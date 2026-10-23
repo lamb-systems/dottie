@@ -1,0 +1,12 @@
+schema_version = 1
+id = "sway"
+name = "Sway"
+source = "files"
+risk = "executable-config"
+notes = ["Keep monitor/input configuration in an explicitly excluded local include if desired.", "Related bar/launcher roots are separate selections; external includes are not followed automatically.", "No automatic reload or package installation."]
+
+[[roots]]
+base = "xdg-config"
+path = "sway"
+kind = "directory"
+exclude = [".git", ".git/**"]

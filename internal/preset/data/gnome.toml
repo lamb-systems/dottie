@@ -1,0 +1,7 @@
+schema_version = 1
+id = "gnome"
+name = "GNOME preferences"
+source = "gnome"
+risk = "desktop-preferences"
+categories = ["appearance", "fonts", "clock"]
+notes = ["Category-to-key mappings and supported schema versions must be implemented and tested before use."]

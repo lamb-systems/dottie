@@ -1,0 +1,12 @@
+schema_version = 1
+id = "kitty"
+name = "Kitty"
+source = "files"
+risk = "executable-config"
+notes = ["Review machine-specific paths and external includes; no automatic reload."]
+
+[[roots]]
+base = "xdg-config"
+path = "kitty"
+kind = "directory"
+exclude = [".git", ".git/**"]

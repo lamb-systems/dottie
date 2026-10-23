@@ -1,0 +1,11 @@
+{
+  "client_id": "https://example.invalid/dottie/oauth-client-metadata.json",
+  "application_type": "native",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "redirect_uris": ["http://127.0.0.1/callback"],
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true,
+  "scope": "atproto repo:org.example.dottie.vault repo:org.example.dottie.head repo:org.example.dottie.snapshot blob:application/octet-stream",
+  "client_name": "Dottie scaffold example"
+}
