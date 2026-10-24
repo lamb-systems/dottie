@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	urfave "github.com/urfave/cli/v3"
 
 	"github.com/dottorblaster/dottie/internal/config"
 	"github.com/dottorblaster/dottie/internal/model"
@@ -150,10 +152,10 @@ func TestTargetsModeInheritanceAndRemoveDoesNotDeleteFiles(t *testing.T) {
 	code, _, stderr := invokeTargets(env, "add", "--id=custom", selected)
 	require.Equal(t, 0, code, "add exit code: %s", stderr)
 
-	code, out, stderr := invokeTargets(env, "targets")
-	require.Equal(t, 2, code, "nested target command dispatch exit code")
-	assert.Empty(t, out, "nested target command dispatch output")
-	assert.NotEmpty(t, stderr, "nested target command dispatch error")
+	code, out, stderr := invokeTargets(env)
+	require.Equal(t, 2, code, "targets without a subcommand exit code")
+	assert.Empty(t, out, "targets without a subcommand output")
+	assert.Equal(t, "dottie: usage: expected list, add, remove or mode\n", stderr, "targets without a subcommand error")
 
 	code, out, stderr = invokeTargets(env, "mode", "custom", "backup-only")
 	require.Equal(t, 0, code, "mode set exit code")
@@ -189,9 +191,9 @@ func TestTargetsUsageErrors(t *testing.T) {
 		{"add", "--unknown", "x", "/tmp/path"},
 		{"add", "--id", "/tmp/path"},
 		{"add", "--id=", "/tmp/path"},
+		{"add", "--mode=", "/tmp/path"},
 		{"add", "--id", "x", "--id", "y", "/tmp/path"},
 		{"add", "--mode", "review", "--mode", "backup-only", "/tmp/path"},
-		{"add", "/tmp/path", "--mode", "review"},
 		{"add", "/tmp/path", "/tmp/extra"},
 		{"remove"},
 		{"remove", "x", "extra"},
@@ -204,6 +206,160 @@ func TestTargetsUsageErrors(t *testing.T) {
 		assert.Empty(t, out, "args %v output", args)
 		assert.Contains(t, stderr, "usage:", "args %v error", args)
 	}
+}
+
+func TestTargetsAddFlagsMayFollowSelectionPath(t *testing.T) {
+	paths, env := cliEnvironment(t)
+	selected := filepath.Join(paths.Home, "after-flags")
+	require.NoError(t, os.Mkdir(selected, 0o700))
+
+	code, out, stderr := invokeTargets(env, "add", selected, "--mode", "backup-only")
+	require.Equal(t, 0, code, "add with flags after path exit code: %s", stderr)
+	assert.Equal(t, "added home-after-flags (files:home/after-flags, mode backup-only)\n", out, "add with flags after path output")
+	assert.Empty(t, stderr, "add with flags after path error")
+
+	stored, err := config.Load(paths)
+	require.NoError(t, err)
+	require.Len(t, stored.Targets, 1, "stored targets")
+	assert.Equal(t, config.BackupOnly, stored.Targets[0].Mode, "mode after path was not applied")
+}
+
+func TestTargetsAddExcludeEqualsPreservesComma(t *testing.T) {
+	paths, env := cliEnvironment(t)
+	selected := filepath.Join(paths.Home, "comma-pattern")
+	require.NoError(t, os.Mkdir(selected, 0o700))
+
+	code, _, stderr := invokeTargets(env, "add", "--exclude=a,b", selected)
+	require.Equal(t, 0, code, "add comma pattern exit code: %s", stderr)
+	assert.Empty(t, stderr, "add comma pattern error")
+
+	stored, err := config.Load(paths)
+	require.NoError(t, err)
+	require.Len(t, stored.Targets, 1, "stored targets")
+	assert.Equal(t, []string{"a,b"}, stored.Targets[0].Root.Exclude, "comma pattern was split")
+}
+
+func TestTargetsRemoveHyphenatedIDAfterTerminator(t *testing.T) {
+	paths, env := cliEnvironment(t)
+	selected := filepath.Join(paths.Home, "hyphenated-id")
+	require.NoError(t, os.Mkdir(selected, 0o700))
+
+	code, _, stderr := invokeTargets(env, "add", "--id=-custom", selected)
+	require.Equal(t, 0, code, "add hyphenated ID exit code: %s", stderr)
+	assert.Empty(t, stderr, "add hyphenated ID error")
+
+	code, out, stderr := invokeTargets(env, "remove", "--", "-custom")
+	require.Equal(t, 0, code, "remove hyphenated ID exit code: %s", stderr)
+	assert.Equal(t, "removed -custom\n", out, "remove hyphenated ID output")
+	assert.Empty(t, stderr, "remove hyphenated ID error")
+
+	stored, err := config.Load(paths)
+	require.NoError(t, err)
+	assert.Empty(t, stored.Targets, "hyphenated ID was not removed")
+}
+
+func TestTargetsHelpCommands(t *testing.T) {
+	_, env := cliEnvironment(t)
+	for _, args := range [][]string{{"list", "--help"}, {"add", "--help"}, {"remove", "--help"}, {"mode", "--help"}, {"help"}} {
+		code, out, stderr := invokeTargets(env, args...)
+		assert.Equal(t, 0, code, "args %v help exit code", args)
+		assert.NotEmpty(t, out, "args %v help output", args)
+		assert.Empty(t, stderr, "args %v help error", args)
+	}
+}
+
+func TestTargetsUnknownTokenAndFlagErrorsEscapeControls(t *testing.T) {
+	_, env := cliEnvironment(t)
+	code, out, stderr := invokeTargets(env, "unknown\x1b")
+	require.Equal(t, 2, code, "unknown targets command exit code")
+	assert.Empty(t, out, "unknown targets command output")
+	assert.Equal(t, "dottie: usage: expected list, add, remove or mode\n", stderr, "unknown targets command error")
+
+	for _, args := range [][]string{{"--bad\x1b"}, {"list", "--bad\x1b"}} {
+		code, out, stderr = invokeTargets(env, args...)
+		assert.Equal(t, 2, code, "args %q flag error exit code", args)
+		assert.Empty(t, out, "args %q flag error output", args)
+		assert.NotContains(t, stderr, "\x1b", "args %q flag error contains raw terminal control", args)
+		assert.True(t, strings.HasPrefix(stderr, "dottie: usage: "), "args %q flag error prefix = %q", args, stderr)
+		assert.Contains(t, stderr, "flag provided but not defined", "args %q urfave error wording", args)
+		assert.Equal(t, 1, strings.Count(stderr, "\n"), "args %q flag error line count", args)
+	}
+}
+
+func TestTargetsRejectShellCompletionFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"targets", "--generate-shell-completion"}, &stdout, &stderr)
+	assert.Equal(t, 2, code, "shell completion exit code")
+	assert.Empty(t, stdout.String(), "shell completion output")
+	assert.True(t, strings.HasPrefix(stderr.String(), "dottie: usage: "), "shell completion error = %q", stderr.String())
+	assert.Equal(t, 1, strings.Count(stderr.String(), "\n"), "shell completion error line count")
+}
+
+func TestTargetsCommandDisablesImplicitInputs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	root := newTargetsCommand(&stdout, &stderr, func(string) string { return "" }, &exitCode)
+	assert.Same(t, &stdout, root.Writer, "root output writer")
+	assert.Same(t, &stderr, root.ErrWriter, "root error writer")
+
+	var check func(*urfave.Command)
+	check = func(command *urfave.Command) {
+		assert.False(t, command.Suggest, "%s suggestions", command.Name)
+		assert.Empty(t, command.DefaultCommand, "%s default command", command.Name)
+		assert.False(t, command.UseShortOptionHandling, "%s short option handling", command.Name)
+		assert.False(t, command.EnableShellCompletion, "%s shell completion", command.Name)
+		assert.False(t, command.ReadArgsFromStdin, "%s stdin args", command.Name)
+		assert.NotNil(t, command.OnUsageError, "%s usage handler", command.Name)
+		for _, flag := range command.Flags {
+			switch typed := flag.(type) {
+			case *urfave.StringFlag:
+				assert.Empty(t, typed.Sources.Chain, "%s --%s sources", command.Name, typed.Name)
+			case *urfave.StringSliceFlag:
+				assert.Empty(t, typed.Sources.Chain, "%s --%s sources", command.Name, typed.Name)
+			default:
+				t.Fatalf("unexpected flag type %T on %s", flag, command.Name)
+			}
+		}
+		for _, child := range command.Commands {
+			check(child)
+		}
+	}
+	check(root)
+	add := root.Command("add")
+	require.NotNil(t, add, "add command")
+	assert.True(t, add.DisableSliceFlagSeparator, "add slice separator")
+}
+
+func TestTargetsAddEmptyAndRepeatedFlagsAreUsageErrors(t *testing.T) {
+	_, env := cliEnvironment(t)
+	for _, args := range [][]string{
+		{"add", "--id=", "/tmp/path"},
+		{"add", "--mode=", "/tmp/path"},
+		{"add", "--id", "x", "--id", "y", "/tmp/path"},
+	} {
+		code, out, stderr := invokeTargets(env, args...)
+		assert.Equal(t, 2, code, "args %q exit code", args)
+		assert.Empty(t, out, "args %q output", args)
+		assert.True(t, strings.HasPrefix(stderr, "dottie: usage: "), "args %q error = %q", args, stderr)
+		assert.Equal(t, 1, strings.Count(stderr, "\n"), "args %q error line count", args)
+		if len(args) > 3 {
+			assert.Contains(t, stderr, "can't duplicate this flag", "repeated flag urfave wording")
+		}
+	}
+}
+
+func TestTargetsMapFrameworkExitCodesToUsage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	root := newTargetsCommand(&stdout, &stderr, func(string) string { return "" }, &exitCode)
+	root.ExitErrHandler(context.Background(), root, urfave.Exit("framework failure", 3))
+	assert.Equal(t, 2, exitCode, "mapped framework exit code")
+	assert.Equal(t, "dottie: framework failure\n", stderr.String(), "mapped framework error output")
+
+	stderr.Reset()
+	root.ExitErrHandler(context.Background(), root, urfave.Exit("line\nbreak \\x1B", 1))
+	assert.Equal(t, "dottie: line\\x0Abreak \\x1B\n", stderr.String(), "single-line error output")
+	assert.Equal(t, 1, strings.Count(stderr.String(), "\n"), "error output line count")
 }
 
 func TestTargetsAddInvalidModeUsesActionableMessage(t *testing.T) {

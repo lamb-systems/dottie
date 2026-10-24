@@ -46,9 +46,8 @@ integration is implemented or verified yet.
 
 ## Develop
 
-Requires Go 1.27+ and Git; Make is convenient. The default CLI build uses only the
-standard library. Go dependencies are declared in `go.mod` and recorded in
-`go.sum`; CI verifies that metadata.
+Requires Go 1.27+ and Git; Make is convenient. The CLI uses Go dependencies declared
+in `go.mod` and recorded in `go.sum`; CI verifies that metadata.
 
 ```sh
 make check
@@ -59,8 +58,10 @@ make verify
 ./bin/dottie version
 ```
 
-Unimplemented commands return a nonzero status. `make build` writes to ignored
-`bin/`. Make defaults to `GOTOOLCHAIN=local`, avoiding implicit toolchain downloads.
+To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
+`./bin/dottie targets remove -- -custom`. Unimplemented commands return a nonzero status.
+`make build` writes to ignored `bin/`. Make defaults to `GOTOOLCHAIN=local`, avoiding
+implicit toolchain downloads.
 The isolated native GSettings proof is separately opt-in with `make test-gnome` or
 `make test-gnome-race` and requires Linux, cgo, a C compiler, GIO development files,
 pkg-config and `glib-compile-schemas`; it does not make the CLI source provider
