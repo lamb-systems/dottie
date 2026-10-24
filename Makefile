@@ -5,7 +5,10 @@ override GIO_MIN_VERSION := 2.40
 GOTOOLCHAIN ?= local
 export GOTOOLCHAIN CC PKG_CONFIG
 
-.PHONY: build test test-race vet fmt fmt-check check native-check test-gnome test-gnome-race
+.PHONY: build test test-race vet fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race
+
+FUZZ_TIME ?= 30s
+FUZZ_SMOKE_TIME ?= 5s
 
 build:
 	$(GO) build -trimpath -o bin/dottie ./cmd/dottie
@@ -27,6 +30,20 @@ fmt-check:
 	if [ -n "$$files" ]; then printf 'Run make fmt for:\n%s\n' "$$files"; exit 1; fi
 
 check: fmt-check vet test
+
+verify:
+	$(GO) mod verify
+	$(GO) mod tidy -diff
+
+fuzz:
+	$(GO) test ./internal/model -run '^$$' -fuzz '^FuzzEntryValidate$$' -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/model -run '^$$' -fuzz '^FuzzSnapshotValidate$$' -fuzztime=$(FUZZ_TIME)
+	$(GO) test ./internal/config -run '^$$' -fuzz '^FuzzLoad$$' -fuzztime=$(FUZZ_TIME)
+
+fuzz-smoke:
+	$(GO) test ./internal/model -run '^$$' -fuzz '^FuzzEntryValidate$$' -fuzztime=$(FUZZ_SMOKE_TIME)
+	$(GO) test ./internal/model -run '^$$' -fuzz '^FuzzSnapshotValidate$$' -fuzztime=$(FUZZ_SMOKE_TIME)
+	$(GO) test ./internal/config -run '^$$' -fuzz '^FuzzLoad$$' -fuzztime=$(FUZZ_SMOKE_TIME)
 
 native-check:
 	@test "$$(uname -s)" = Linux || { echo "native GSettings tests require Linux" >&2; exit 1; }

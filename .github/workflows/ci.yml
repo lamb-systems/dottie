@@ -34,24 +34,102 @@ jobs:
       - name: Download Go dependencies
         run: go mod download
       - name: Verify Go module metadata
+        run: make verify
+      - name: Check formatting and vet
         run: |
-          go mod verify
-          go mod tidy -diff
-      - name: Check formatting, vet, and tests
-        run: make check
-      - name: Run race tests
-        run: make test-race
+          make fmt-check
+          make vet
+      - name: Run default tests and detect skips
+        run: |
+          status=0
+          go test -json ./... > "$RUNNER_TEMP/default-tests.json" || status=$?
+          python3 - "$RUNNER_TEMP/default-tests.json" "$status" <<'PY'
+          import json
+          import sys
+
+          path, test_status = sys.argv[1], int(sys.argv[2])
+          skipped = []
+          with open(path, encoding="utf-8") as results:
+              for line in results:
+                  record = json.loads(line)
+                  if record.get("Test") and record.get("Action") == "skip":
+                      skipped.append(f"{record.get('Package', '')}: {record['Test']}")
+          if skipped:
+              print("unexpected skipped tests (allowlist is empty):")
+              for name in skipped:
+                  print(name)
+          else:
+              print("skip detection: no skipped tests")
+          if test_status:
+              sys.exit(test_status)
+          if skipped:
+              sys.exit(1)
+          PY
+      - name: Run race tests and detect skips
+        run: |
+          status=0
+          go test -race -json ./... > "$RUNNER_TEMP/race-tests.json" || status=$?
+          python3 - "$RUNNER_TEMP/race-tests.json" "$status" <<'PY'
+          import json
+          import sys
+
+          path, test_status = sys.argv[1], int(sys.argv[2])
+          skipped = []
+          with open(path, encoding="utf-8") as results:
+              for line in results:
+                  record = json.loads(line)
+                  if record.get("Test") and record.get("Action") == "skip":
+                      skipped.append(f"{record.get('Package', '')}: {record['Test']}")
+          if skipped:
+              print("unexpected skipped tests (allowlist is empty):")
+              for name in skipped:
+                  print(name)
+          else:
+              print("skip detection: no skipped tests")
+          if test_status:
+              sys.exit(test_status)
+          if skipped:
+              sys.exit(1)
+          PY
       - name: Build CLI
         run: make build
-      - name: Test without cgo
-        run: CGO_ENABLED=0 go test ./...
+      - name: Test without cgo and detect skips
+        run: |
+          status=0
+          CGO_ENABLED=0 go test -json ./... > "$RUNNER_TEMP/no-cgo-tests.json" || status=$?
+          python3 - "$RUNNER_TEMP/no-cgo-tests.json" "$status" <<'PY'
+          import json
+          import sys
+
+          path, test_status = sys.argv[1], int(sys.argv[2])
+          skipped = []
+          with open(path, encoding="utf-8") as results:
+              for line in results:
+                  record = json.loads(line)
+                  if record.get("Test") and record.get("Action") == "skip":
+                      skipped.append(f"{record.get('Package', '')}: {record['Test']}")
+          if skipped:
+              print("unexpected skipped tests (allowlist is empty):")
+              for name in skipped:
+                  print(name)
+          else:
+              print("skip detection: no skipped tests")
+          if test_status:
+              sys.exit(test_status)
+          if skipped:
+              sys.exit(1)
+          PY
       - name: Build without cgo
         run: CGO_ENABLED=0 go build ./...
-      - name: Smoke-test CLI without cgo
+      - name: Cross-build Linux amd64 and arm64
         run: |
-          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/dottie" ./cmd/dottie
-          "$RUNNER_TEMP/dottie" version
-          "$RUNNER_TEMP/dottie" help
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$RUNNER_TEMP/dottie-linux-amd64" ./cmd/dottie
+      - name: Smoke-test Linux amd64 binary
+        run: |
+          "$RUNNER_TEMP/dottie-linux-amd64" version
+          "$RUNNER_TEMP/dottie-linux-amd64" help
 
   gsettings:
     name: Native GSettings checks
@@ -80,7 +158,59 @@ jobs:
             libglib2.0-bin
       - name: Download Go dependencies
         run: go mod download
-      - name: Run native GSettings tests
-        run: make test-gnome
-      - name: Run native GSettings race tests
-        run: make test-gnome-race
+      - name: Check native test prerequisites
+        run: make native-check
+      - name: Vet native GSettings tests
+        run: go vet -tags gsettings ./internal/source/gnome
+      - name: Run native GSettings tests and detect skips
+        run: |
+          status=0
+          go test -json -count=1 -tags gsettings ./internal/source/gnome > "$RUNNER_TEMP/gsettings-tests.json" || status=$?
+          python3 - "$RUNNER_TEMP/gsettings-tests.json" "$status" <<'PY'
+          import json
+          import sys
+
+          path, test_status = sys.argv[1], int(sys.argv[2])
+          skipped = []
+          with open(path, encoding="utf-8") as results:
+              for line in results:
+                  record = json.loads(line)
+                  if record.get("Test") and record.get("Action") == "skip":
+                      skipped.append(f"{record.get('Package', '')}: {record['Test']}")
+          if skipped:
+              print("unexpected skipped tests (allowlist is empty):")
+              for name in skipped:
+                  print(name)
+          else:
+              print("skip detection: no skipped tests")
+          if test_status:
+              sys.exit(test_status)
+          if skipped:
+              sys.exit(1)
+          PY
+      - name: Run native GSettings race tests and detect skips
+        run: |
+          status=0
+          go test -race -json -count=1 -tags gsettings ./internal/source/gnome > "$RUNNER_TEMP/gsettings-race-tests.json" || status=$?
+          python3 - "$RUNNER_TEMP/gsettings-race-tests.json" "$status" <<'PY'
+          import json
+          import sys
+
+          path, test_status = sys.argv[1], int(sys.argv[2])
+          skipped = []
+          with open(path, encoding="utf-8") as results:
+              for line in results:
+                  record = json.loads(line)
+                  if record.get("Test") and record.get("Action") == "skip":
+                      skipped.append(f"{record.get('Package', '')}: {record['Test']}")
+          if skipped:
+              print("unexpected skipped tests (allowlist is empty):")
+              for name in skipped:
+                  print(name)
+          else:
+              print("skip detection: no skipped tests")
+          if test_status:
+              sys.exit(test_status)
+          if skipped:
+              sys.exit(1)
+          PY

@@ -54,6 +54,7 @@ standard library. Go dependencies are declared in `go.mod` and recorded in
 make check
 make test-race
 make build
+make verify
 ./bin/dottie help
 ./bin/dottie version
 ```
@@ -63,19 +64,31 @@ Unimplemented commands return a nonzero status. `make build` writes to ignored
 The isolated native GSettings proof is separately opt-in with `make test-gnome` or
 `make test-gnome-race` and requires Linux, cgo, a C compiler, GIO development files,
 pkg-config and `glib-compile-schemas`; it does not make the CLI source provider
-operational.
+operational. `make verify` checks module integrity and tidiness. `make fuzz` runs each
+fuzz target for 30 seconds by default; `FUZZ_TIME` overrides that bound. `make fuzz-smoke`
+runs each target for five seconds and is reserved for non-required scheduled/manual
+exploration. Fuzz seeds run as part of ordinary `go test` without time-bounded
+exploration.
 
 ## Continuous integration
 
-GitHub Actions runs on pull requests and pushes to `main`. Its default job verifies
-Go module metadata, runs `make check`, `make test-race` and `make build`, tests and
-builds with cgo disabled, and smoke-tests CLI version/help output. A separate Linux
-job installs native test prerequisites on its hosted runner and runs `make test-gnome`
-and `make test-gnome-race` against the isolated GSettings boundary.
+GitHub Actions runs required checks on pull requests and pushes to `main`. The default
+job verifies Go module integrity and tidiness, formatting, vet, ordinary and race test
+suites, the fuzz seed corpora, the CLI build, and cgo-disabled tests/builds. Its JSON
+skip checks count only records with a non-empty test name and `Action == "skip"`; a
+package-level `no test files` record is not treated as a skipped test. The job also
+cross-builds for Linux amd64 and arm64 with cgo disabled and runs version/help smoke
+checks on the amd64 binary only. A separate native GSettings job checks the isolated
+boundary and race tests, with the same test-level skip detection.
 
-These checks do not exercise a real desktop session or PDS account. The workflow
-does not yet run fuzz targets, validate future preset/schema contracts, or check
-release artifacts.
+A separate workflow, not a required check, runs bounded fuzz exploration on a schedule
+or manual dispatch. It has no credentials or dependency cache. CI proves builds and
+checks on its configured hosted runner, but this patch has no hosted-run evidence: an
+owner-triggered run is still needed. The arm64 result is compile-only; arm64 runtime
+behaviour is unproven. These checks do not exercise a real desktop session, real user
+preferences or a PDS account. Preset and manifest validators are deferred to DOT-L03's
+versioned preset-catalog task; the source-comment policy remains a review concern, not
+an automated check. CI does not build release artifacts, sign or publish anything.
 
 ## Layout
 
