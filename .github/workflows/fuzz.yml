@@ -26,7 +26,5 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: false
-      - name: Download Go dependencies
-        run: go mod download
-      - name: Run bounded fuzz exploration
-        run: make fuzz-smoke
+      - name: Explore
+        run: make fuzz
