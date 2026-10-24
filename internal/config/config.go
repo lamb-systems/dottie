@@ -4,9 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
-	"unicode/utf8"
 
+	"github.com/dottorblaster/dottie/internal/ignore"
 	"github.com/dottorblaster/dottie/internal/model"
 	"github.com/dottorblaster/dottie/internal/platform"
 )
@@ -85,10 +84,8 @@ func validateTarget(target Target) error {
 		if target.Root.Path == "." {
 			return errors.New("selects a whole base, which is not allowed")
 		}
-		for _, pattern := range target.Root.Exclude {
-			if !validExclude(pattern) {
-				return errors.New("has an invalid exclude pattern")
-			}
+		if _, err := ignore.Compile(target.Root.Exclude); err != nil {
+			return fmt.Errorf("invalid exclude patterns: %w", err)
 		}
 	}
 	return nil
@@ -167,18 +164,6 @@ func (c Config) ResolveTargets(paths platform.Paths) (map[string]string, error) 
 
 func validModeOrEmpty(mode Mode) bool {
 	return mode == "" || mode == AutoApply || mode == Review || mode == BackupOnly
-}
-
-func validExclude(pattern string) bool {
-	if pattern == "" || len(pattern) > 4096 || !utf8.ValidString(pattern) || strings.IndexByte(pattern, 0) >= 0 || strings.ContainsRune(pattern, '\\') || strings.HasPrefix(pattern, "/") {
-		return false
-	}
-	for _, segment := range strings.Split(pattern, "/") {
-		if segment == ".." {
-			return false
-		}
-	}
-	return true
 }
 
 func normalizeExcludes(excludes []string) []string {

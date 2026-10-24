@@ -24,10 +24,14 @@ func restoreFaults(t *testing.T) {
 	oldStat := statPath
 	oldList := listDirectory
 	oldRead := readFile
+	oldOpen := openEntry
+	oldReadLink := readLink
 	t.Cleanup(func() {
 		statPath = oldStat
 		listDirectory = oldList
 		readFile = oldRead
+		openEntry = oldOpen
+		readLink = oldReadLink
 	})
 }
 
@@ -123,41 +127,45 @@ func TestCaptureDeterminism(t *testing.T) {
 	assert.True(t, sort.SliceIsSorted(paths, func(i, j int) bool { return pathLess(paths[i], paths[j]) }))
 }
 
-func TestCaptureSkipsOnlySymlinksAndSpecialFiles(t *testing.T) {
+func TestCaptureRepresentsInternalLinksAndSkipsExternalAndSpecialFiles(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
 	makeDirectory(t, root, 0o700)
 	inside := filepath.Join(root, "inside")
 	makeDirectory(t, inside, 0o700)
 	writeFile(t, filepath.Join(inside, "child.txt"), []byte("inside"), 0o600)
-	outsideDirectory := t.TempDir()
 	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
 	writeFile(t, outsideFile, []byte("outside"), 0o600)
-	require.NoError(t, os.Symlink(inside, filepath.Join(root, "inside-link")))
-	require.NoError(t, os.Symlink(outsideFile, filepath.Join(root, "outside-link")))
-	require.NoError(t, os.Symlink(filepath.Join(outsideDirectory, "missing"), filepath.Join(root, "dangling-link")))
+	require.NoError(t, os.Symlink("inside", filepath.Join(root, "inside-link")))
+	require.NoError(t, os.Symlink("missing-target", filepath.Join(root, "dangling-link")))
+	require.NoError(t, os.Symlink("../outside.txt", filepath.Join(root, "escaping-link")))
+	require.NoError(t, os.Symlink(outsideFile, filepath.Join(root, "absolute-link")))
 	require.NoError(t, syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600))
 
 	result, err := Capture(captureRoot(root, model.SelectionDirectory))
 	require.NoError(t, err)
-	skips := make(map[string]SkipReason, len(result.Skipped))
+	skips := make(map[string]Skip, len(result.Skipped))
 	for _, skipped := range result.Skipped {
-		skips[skipped.Path] = skipped.Reason
+		skips[skipped.Path] = skipped
 	}
-	assert.Equal(t, map[string]SkipReason{
-		"dangling-link": SkipSymlink,
-		"inside-link":   SkipSymlink,
-		"outside-link":  SkipSymlink,
-		"pipe":          SkipSpecialFile,
-	}, skips)
-	paths := make(map[string]bool, len(result.Observations))
+	assert.Equal(t, Skip{Path: "absolute-link", Reason: SkipExternalLink, Detail: outsideFile}, skips["absolute-link"])
+	assert.Equal(t, Skip{Path: "escaping-link", Reason: SkipExternalLink, Detail: "../outside.txt"}, skips["escaping-link"])
+	assert.Equal(t, Skip{Path: "pipe", Reason: SkipSpecialFile}, skips["pipe"])
+	assert.Len(t, skips, 3)
+
+	entries := make(map[string]model.FileEntry)
 	for _, observation := range result.Observations {
 		require.NoError(t, observation.Validate())
-		paths[observation.Identity.FilePath] = true
+		if observation.Entry != nil && observation.Entry.File != nil {
+			entries[observation.Identity.FilePath] = *observation.Entry.File
+		}
 	}
-	assert.True(t, paths["inside"])
-	assert.True(t, paths["inside/child.txt"])
-	for _, path := range []string{"inside-link", "inside-link/child.txt", "outside-link", "dangling-link", "pipe"} {
-		assert.False(t, paths[path], "skipped path %q was observed", path)
+	assert.Equal(t, "inside", entries["inside-link"].LinkTarget)
+	assert.Equal(t, model.FileSymlink, entries["inside-link"].Kind)
+	assert.Equal(t, "missing-target", entries["dangling-link"].LinkTarget)
+	assert.Equal(t, model.FileDirectory, entries["inside"].Kind)
+	assert.Equal(t, model.FileRegular, entries["inside/child.txt"].Kind)
+	for _, path := range []string{"inside-link/child.txt", "escaping-link", "absolute-link", "pipe"} {
+		assert.NotContains(t, entries, path)
 	}
 }
 
@@ -346,7 +354,7 @@ func TestCaptureSingleFileUsesRootIdentity(t *testing.T) {
 	assert.Equal(t, uint32(0o640), observation.Entry.File.Mode)
 }
 
-func TestCaptureSingleFileSymlinkIsSkipped(t *testing.T) {
+func TestCaptureSingleFileInternalSymlinkIsRepresented(t *testing.T) {
 	parent := t.TempDir()
 	target := filepath.Join(parent, "target")
 	writeFile(t, target, []byte("target bytes"), 0o600)
@@ -354,8 +362,11 @@ func TestCaptureSingleFileSymlinkIsSkipped(t *testing.T) {
 	require.NoError(t, os.Symlink("target", selected))
 	result, err := Capture(captureRoot(selected, model.SelectionFile))
 	require.NoError(t, err)
-	assert.Empty(t, result.Observations)
-	assert.Equal(t, []Skip{{Path: ".", Reason: SkipSymlink}}, result.Skipped)
+	assert.Empty(t, result.Skipped)
+	require.Len(t, result.Observations, 1)
+	require.NotNil(t, result.Observations[0].Entry)
+	assert.Equal(t, model.FileSymlink, result.Observations[0].Entry.File.Kind)
+	assert.Equal(t, "target", result.Observations[0].Entry.File.LinkTarget)
 }
 
 func TestCaptureSingleFileInvalidParentIsUnknown(t *testing.T) {

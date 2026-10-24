@@ -268,6 +268,22 @@ func TestSaveCommitPointFailures(t *testing.T) {
 	}
 }
 
+func TestExcludeValidationUsesSharedMatcherDiagnostics(t *testing.T) {
+	target := filesTarget("named-target", model.RootHome, "dotfiles", model.SelectionDirectory)
+	target.Root.Exclude = []string{"[a-c]x"}
+	current := Default()
+	current.Targets = []Target{target}
+	require.NoError(t, current.Validate())
+
+	target.Root.Exclude = []string{"valid", "{a,b}"}
+	current.Targets = []Target{target}
+	err := current.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `target "named-target"`)
+	assert.Contains(t, err.Error(), "pattern 1")
+	assert.Contains(t, err.Error(), `"{a,b}"`)
+}
+
 func TestTargetModelConversion(t *testing.T) {
 	files := filesTarget("portable-id", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	files.Mode = AutoApply

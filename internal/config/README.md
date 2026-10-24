@@ -46,7 +46,11 @@ new addition to fail closed; loading and listing do not require roots to exist.
 Adding an already-selected logical root is a no-op unless the supplied identifier,
 mode or excludes would change its stored entry; such changes require the explicit mode
 or remove command. Removing a selection only stops tracking it and never deletes user
-files. Excludes are validated and deduplicated in order, but are not interpreted yet.
+files. Excludes are validated by `internal/ignore` when a config is loaded or validated,
+and are deduplicated in order when normalized. The shared matcher supports `*`, `**`,
+`?` and `[class]`; braces and `!` negation are rejected instead of being silently treated
+as non-matching text. Validation errors identify the target id, pattern index and pattern
+text. Capture applies these local patterns; they are not serialized into portable targets.
 
 Updates are written to a same-directory temporary file, synchronized and atomically
 renamed. Rename is the visibility commit point: pre-rename errors preserve the previous

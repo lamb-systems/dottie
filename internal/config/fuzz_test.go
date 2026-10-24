@@ -3,11 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dottorblaster/dottie/internal/platform"
@@ -28,17 +28,11 @@ func FuzzLoad(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		root := t.TempDir()
 		paths := fuzzPaths(root)
-		if !pathsAreWithin(root, paths) {
-			t.Fatal("fuzz paths escaped the iteration temp directory")
-		}
-		if err := os.MkdirAll(paths.AppConfigDir(), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		require.True(t, pathsAreWithin(root, paths), "fuzz paths escaped the iteration temp directory")
+		require.NoError(t, os.MkdirAll(paths.AppConfigDir(), 0o700))
 		configPath := filepath.Join(paths.AppConfigDir(), FileName)
 
-		if err := os.WriteFile(configPath, input, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, os.WriteFile(configPath, input, 0o600))
 		loaded, err := Load(paths)
 		if err != nil {
 			return
@@ -46,31 +40,17 @@ func FuzzLoad(f *testing.F) {
 
 		var decoded Config
 		metadata, err := toml.Decode(string(input), &decoded)
-		if err != nil {
-			t.Fatalf("Load accepted TOML that the oracle could not decode: %v", err)
-		}
-		if undecoded := metadata.Undecoded(); len(undecoded) != 0 {
-			t.Fatalf("Load accepted a discarded key: %q", undecoded[0].String())
-		}
+		require.NoError(t, err, "Load accepted TOML that the oracle could not decode")
+		require.Empty(t, metadata.Undecoded(), "Load accepted a discarded key")
 
 		encoded, err := encodeConfig(loaded)
-		if err != nil {
-			t.Fatalf("cannot re-encode accepted config: %v", err)
-		}
+		require.NoError(t, err, "cannot re-encode accepted config")
 		var roundTrip Config
 		reencodedMetadata, err := toml.Decode(string(encoded), &roundTrip)
-		if err != nil {
-			t.Fatalf("cannot decode re-encoded config: %v", err)
-		}
-		if undecoded := reencodedMetadata.Undecoded(); len(undecoded) != 0 {
-			t.Fatalf("re-encoded config contains a discarded key: %q", undecoded[0].String())
-		}
-		if err := roundTrip.Validate(); err != nil {
-			t.Fatalf("re-encoded config is invalid: %v", err)
-		}
-		if !reflect.DeepEqual(loaded, normalizeConfig(roundTrip)) {
-			t.Fatalf("re-encoding changed accepted config: before %#v after %#v", loaded, roundTrip)
-		}
+		require.NoError(t, err, "cannot decode re-encoded config")
+		require.Empty(t, reencodedMetadata.Undecoded(), "re-encoded config contains a discarded key")
+		require.NoError(t, roundTrip.Validate(), "re-encoded config is invalid")
+		assert.Equal(t, loaded, normalizeConfig(roundTrip), "re-encoding changed accepted config")
 	})
 }
 

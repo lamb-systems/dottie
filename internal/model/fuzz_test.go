@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func FuzzEntryValidate(f *testing.F) {
@@ -21,9 +24,7 @@ func FuzzEntryValidate(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, entry := range knownInvalidEntries() {
-			if err := entry.Validate(); err == nil {
-				t.Fatalf("known-invalid entry was accepted: %#v", entry)
-			}
+			require.Error(t, entry.Validate(), "known-invalid entry was accepted: %#v", entry)
 		}
 
 		var entry Entry
@@ -33,9 +34,7 @@ func FuzzEntryValidate(f *testing.F) {
 		if err := entry.Validate(); err != nil {
 			return
 		}
-		if err := independentlyCheckEntry(entry); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, independentlyCheckEntry(entry))
 	})
 }
 
@@ -145,9 +144,7 @@ func FuzzSnapshotValidate(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, snapshot := range knownInvalidSnapshots() {
-			if err := snapshot.Validate(); err == nil {
-				t.Fatalf("known-invalid snapshot was accepted: %#v", snapshot)
-			}
+			require.Error(t, snapshot.Validate(), "known-invalid snapshot was accepted: %#v", snapshot)
 		}
 
 		var snapshot Snapshot
@@ -157,9 +154,7 @@ func FuzzSnapshotValidate(f *testing.F) {
 		if err := snapshot.Validate(); err != nil {
 			return
 		}
-		if err := independentlyCheckSnapshot(snapshot); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, independentlyCheckSnapshot(snapshot))
 	})
 }
 
@@ -360,12 +355,8 @@ func TestIndependentlyCheckSnapshotScopesTreesPerTarget(t *testing.T) {
 			{TargetID: "b", File: &FileEntry{Path: "a/b", State: FilePresent, Kind: FileRegular, Content: []byte{}}},
 		},
 	}
-	if err := snapshot.Validate(); err != nil {
-		t.Fatalf("production rejected a per-target-scoped snapshot: %v", err)
-	}
-	if err := independentlyCheckSnapshot(snapshot); err != nil {
-		t.Fatalf("oracle rejected a per-target-scoped snapshot: %v", err)
-	}
+	assert.NoError(t, snapshot.Validate(), "production rejected a per-target-scoped snapshot")
+	assert.NoError(t, independentlyCheckSnapshot(snapshot), "oracle rejected a per-target-scoped snapshot")
 }
 
 func TestIndependentlyCheckSnapshotRejectsRootAncestorFile(t *testing.T) {
@@ -377,10 +368,6 @@ func TestIndependentlyCheckSnapshotRejectsRootAncestorFile(t *testing.T) {
 			{TargetID: "files", File: &FileEntry{Path: "a/b", State: FilePresent, Kind: FileRegular, Content: []byte{}}},
 		},
 	}
-	if err := snapshot.Validate(); err == nil {
-		t.Fatal("production accepted a non-directory root ancestor")
-	}
-	if err := independentlyCheckSnapshot(snapshot); err == nil {
-		t.Fatal("oracle accepted a non-directory root ancestor")
-	}
+	assert.Error(t, snapshot.Validate(), "production accepted a non-directory root ancestor")
+	assert.Error(t, independentlyCheckSnapshot(snapshot), "oracle accepted a non-directory root ancestor")
 }

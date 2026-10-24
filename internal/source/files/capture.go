@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/dottorblaster/dottie/internal/ignore"
 	"github.com/dottorblaster/dottie/internal/model"
 )
 
@@ -33,20 +34,25 @@ func (e *BudgetError) Error() string {
 type SkipReason string
 
 const (
-	SkipSymlink     SkipReason = "symlink"
-	SkipSpecialFile SkipReason = "special-file"
+	SkipSymlink      SkipReason = "symlink"
+	SkipSpecialFile  SkipReason = "special-file"
+	SkipExternalLink SkipReason = "external-link"
+	SkipExcluded     SkipReason = "excluded"
 )
 
 type Skip struct {
 	Path   string
 	Reason SkipReason
+	Detail string
 }
 
 type Root struct {
-	TargetID string
-	Path     string
-	Kind     model.SelectionKind
-	Budget   Budget
+	TargetID      string
+	Path          string
+	Kind          model.SelectionKind
+	Budget        Budget
+	Exclude       []string
+	AllowExternal []string
 }
 
 type Result struct {
@@ -58,7 +64,7 @@ var statPath = func(root *os.Root, name string) (os.FileInfo, error) {
 	return root.Lstat(name)
 }
 var listDirectory = func(root *os.Root, name string, inspected os.FileInfo) ([]os.DirEntry, error) {
-	directory, err := root.Open(name)
+	directory, err := root.OpenFile(name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +89,9 @@ var listDirectory = func(root *os.Root, name string, inspected os.FileInfo) ([]o
 var readFile = func(root *os.Root, name string, file *os.File, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(file, limit))
 }
+var openEntry = func(root *os.Root, name string) (*os.File, error) {
+	return root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+}
 
 func DefaultBudget() Budget {
 	return Budget{MaxEntries: 20000, MaxDepth: 32, MaxFileBytes: 8 * 1024 * 1024, MaxTotalBytes: 256 * 1024 * 1024}
@@ -97,6 +106,17 @@ func Capture(selection Root) (Result, error) {
 	}
 	if selection.Budget == (Budget{}) {
 		selection.Budget = DefaultBudget()
+	}
+	matcher, err := ignore.Compile(selection.Exclude)
+	if err != nil {
+		return Result{}, fmt.Errorf("invalid excludes: %w", err)
+	}
+	allowExternal := make(map[string]struct{}, len(selection.AllowExternal))
+	for _, linkPath := range selection.AllowExternal {
+		if !validRelativePath(linkPath, true) {
+			return Result{}, fmt.Errorf("invalid external-link approval path %q", linkPath)
+		}
+		allowExternal[linkPath] = struct{}{}
 	}
 	if selection.Budget.MaxEntries <= 0 || selection.Budget.MaxDepth <= 0 || selection.Budget.MaxFileBytes <= 0 || selection.Budget.MaxTotalBytes <= 0 {
 		return Result{}, errors.New("capture budget limits must be positive")
@@ -117,7 +137,7 @@ func Capture(selection Root) (Result, error) {
 		}
 	}
 	anchoredRoot, err := os.OpenRoot(anchorPath)
-	state := captureState{root: selection, handle: anchoredRoot}
+	state := captureState{root: selection, handle: anchoredRoot, matcher: matcher, allowExternal: allowExternal}
 	if err != nil {
 		if addErr := state.addUnknown("."); addErr != nil {
 			return Result{}, addErr
@@ -134,7 +154,9 @@ func Capture(selection Root) (Result, error) {
 		return state.finish()
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		state.result.Skipped = append(state.result.Skipped, Skip{Path: ".", Reason: SkipSymlink})
+		if err := state.captureLink(name, ".", ".", info); err != nil {
+			return Result{}, err
+		}
 		return state.finish()
 	}
 	if !info.IsDir() && !info.Mode().IsRegular() {
@@ -171,11 +193,13 @@ func Capture(selection Root) (Result, error) {
 }
 
 type captureState struct {
-	root       Root
-	handle     *os.Root
-	result     Result
-	entries    int
-	totalBytes int64
+	root          Root
+	handle        *os.Root
+	matcher       ignore.Matcher
+	allowExternal map[string]struct{}
+	result        Result
+	entries       int
+	totalBytes    int64
 }
 
 func (s *captureState) finish() (Result, error) {
@@ -227,11 +251,21 @@ func (s *captureState) captureDirectory(name, relative string, inspected os.File
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
-		childName := joinRelative(name, entry.Name())
-		childRelative := joinRelative(relative, entry.Name())
+		childName, err := JoinRelative(name, entry.Name())
+		if err != nil {
+			return err
+		}
+		childRelative, err := JoinRelative(relative, entry.Name())
+		if err != nil {
+			return err
+		}
 		childDepth := depth + 1
 		if err := s.consume(childRelative, childDepth); err != nil {
 			return err
+		}
+		if pattern, excluded := s.matcher.Exclude(childRelative); excluded {
+			s.result.Skipped = append(s.result.Skipped, Skip{Path: childRelative, Reason: SkipExcluded, Detail: safeDetail(pattern)})
+			continue
 		}
 		childInfo, statErr := statPath(s.handle, childName)
 		if statErr != nil {
@@ -241,7 +275,9 @@ func (s *captureState) captureDirectory(name, relative string, inspected os.File
 			continue
 		}
 		if childInfo.Mode()&os.ModeSymlink != 0 {
-			s.result.Skipped = append(s.result.Skipped, Skip{Path: childRelative, Reason: SkipSymlink})
+			if err := s.captureLink(childName, childRelative, relative, childInfo); err != nil {
+				return err
+			}
 			continue
 		}
 		switch {
@@ -277,7 +313,7 @@ func (s *captureState) captureRegular(name, relative string, inspected os.FileIn
 		if inspected.Size() > int64(s.root.Budget.MaxFileBytes) {
 			return &BudgetError{Limit: "MaxFileBytes", Path: relative, Observed: inspected.Size()}
 		}
-		file, err := s.handle.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+		file, err := openEntry(s.handle, name)
 		if err != nil {
 			return s.addUnknown(relative)
 		}
@@ -352,13 +388,6 @@ func (s *captureState) addPresent(path string, file model.FileEntry) error {
 	}
 	s.result.Observations = append(s.result.Observations, observation)
 	return nil
-}
-
-func joinRelative(parent, name string) string {
-	if parent == "." {
-		return name
-	}
-	return parent + "/" + name
 }
 
 func sameIdentity(a, b os.FileInfo) bool {
