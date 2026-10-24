@@ -128,7 +128,7 @@ func TestCaptureInspectReadlinkSwapBecomesUnknown(t *testing.T) {
 	readLink = func(handle *os.Root, name string) (string, error) {
 		readAttempts++
 		require.Equal(t, "link", name)
-		require.NoError(t, os.Remove(linkPath))
+		require.NoError(t, os.Rename(linkPath, linkPath+".original"))
 		require.NoError(t, os.Symlink(outside, linkPath))
 		return originalReadLink(handle, name)
 	}
