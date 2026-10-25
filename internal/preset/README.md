@@ -1,18 +1,25 @@
-# Preset catalog — draft data only
+# Declarative preset catalog
 
-No loader or runtime preset support exists yet. `data/` contains illustrative TOML
-for selecting an existing source provider, logical roots or GNOME categories,
-exclusion suggestions, risk labels and portability notes.
+`data/` is an embedded, versioned TOML catalog. `Catalog` and `Lookup` validate the
+closed schema, return presets sorted by id, and return deep copies. Unknown ids are
+reported with the sorted known ids. Presets declare roots and exclusion suggestions;
+they cannot contain commands, hooks, downloads, package requests, or consent overrides.
 
-Presets cannot execute hooks, install applications or silently expand consent.
-Accepted selections are materialized into local configuration. Updates must not
-add roots, enable automatic apply or follow external links without approval.
+`BuildPreview` validates caller-supplied presets, resolves file roots against the
+provided HOME and XDG paths, reports the destination's effective default mode, and
+performs no filesystem mutation or config write. GNOME presets retain their catalog
+information but return a structured `ErrSourceNotCapturable` reason until DOT-G01; a
+preset cannot report whether anything is captured locally.
 
-The directory is the selection unit: ordinary new files inside an approved root
-join synchronization automatically. Exclusion changes and untracking must not
-delete local files. Explain why paths are excluded; do not blanket-exclude Lua,
-hidden files or `plugin/` directories that can contain actual user configuration.
+`Materialize` returns a configuration proposal and never writes it. Each new target has
+an empty mode and inherits the destination default, which may be `auto-apply`; presets
+cannot grant or widen consent. Proposed roots pass both `config.CheckAddition` and
+`config.Config.Validate`. Existing identical logical roots are no-ops that preserve
+their stored id, mode, and excludes. Different excludes for an existing root are
+rejected rather than replacing local policy. IDs are derived only for new roots.
 
-Neovim configuration is handled as ordinary bytes and paths, not evaluated code.
-Custom roots need no catalog entry. Finalize a versioned, validated schema before
-using these examples at runtime.
+The Neovim preset selects exactly the `xdg-config/nvim` directory and excludes `.git`
+and `.git/**`. Neovim configuration is synchronized as ordinary files and bytes: there
+is no Lua awareness, plugin management, execution, or installation. Custom roots are
+valid configuration selections and need no preset. Exclusions do not delete local
+files, and external links are not authorized by preset data.
