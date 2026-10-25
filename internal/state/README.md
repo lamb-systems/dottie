@@ -1,8 +1,9 @@
-# Local state — not implemented
+# Local state
 
-SQLite bases, queues, conflicts, checkpoints and the apply journal live under private
-XDG state storage. Merge bases and pending work are durable, not disposable cache.
-Operational credentials belong in the keyring.
+The state database and immutable payloads live under `$XDG_STATE_HOME/dottie/`; neither bases nor pending work resolve into `AppCacheDir`. `payloads/` contains files named by their SHA-256 digest. Payloads are written before a row references them. Referenced payloads are retained indefinitely; deleting unreferenced payloads is not implemented. This retention rule keeps a stored base, intent, conflict or journal backup readable after cache cleanup and restart.
 
-Migrations must preserve existing state and recover safely from interruption. The
-coordinator must hold exclusive ownership before modifying this state.
+The directory is private (`0700`), and the database, WAL/SHM sidecars and coordinator lock are private (`0600`). The state store owns one SQLite connection and holds `state.db.lock` for its lifetime. The lock is an advisory local-filesystem coordinator lock, not a distributed lock; NFS cross-host exclusion is unsupported.
+
+Migration DDL and its `schema_version` bump run in one transaction. Initial migration 1 does not rebuild tables. A future migration that rebuilds a table must use SQLite's 12-step order: set `foreign_keys=OFF` before `BEGIN`; create and populate the replacement and run `PRAGMA foreign_key_check` inside the transaction; commit; then restore `foreign_keys=ON`. `PRAGMA foreign_keys=OFF` inside a transaction has no effect. Failed migration transactions leave the prior schema version and rows intact. A database newer than the migration set is refused without downgrade.
+
+The schema stores portable target descriptors, full entry keys and fingerprints, and durable payload references for applied bases, outbound intents, conflicts and apply-journal backups. Checkpoint timestamps and record timestamps are caller-supplied Unix seconds. This package provides persistence only; it does not merge, apply, access the network, or read a clock. Credentials, tokens, keys and passwords do not belong in this database or payload API; operational credentials belong in the keyring.

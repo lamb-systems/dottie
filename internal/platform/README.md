@@ -14,3 +14,10 @@ Dottie's own data locations.
 Secret Service integration and private IPC locations are not implemented. A locked or
 missing keyring must pause secure work; credentials must never be silently stored in a
 selected directory.
+
+`LockFile` opens a private lock file with `O_CLOEXEC` (Go's default) specified explicitly,
+so exec'd helpers do not inherit the lock descriptor, and uses non-blocking exclusive
+`flock`. Lock ownership is
+per open file description and is released when the lock is closed or the process exits.
+This is an advisory coordinator lock for local filesystems; NFS cross-host exclusion is
+unsupported.
