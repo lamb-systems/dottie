@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dottorblaster/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 const LatestSchemaVersion = 1

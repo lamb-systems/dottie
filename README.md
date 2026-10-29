@@ -114,6 +114,6 @@ deployable configuration.
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-The canonical repository and Go module path is `github.com/dottorblaster/dottie`.
+The canonical repository and Go module path is `github.com/lamb-systems/dottie`.
 An owned Lexicon namespace and OAuth metadata host remain to be selected; the
 example metadata is not production configuration.

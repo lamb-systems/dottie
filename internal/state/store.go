@@ -18,8 +18,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/dottorblaster/dottie/internal/model"
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 type Store struct {

@@ -1,0 +1,12 @@
+{
+  "client_id": "https://dottie.lamb.systems/client-metadata.json",
+  "client_name": "Dottie",
+  "client_uri": "https://dottie.lamb.systems/",
+  "application_type": "native",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true,
+  "redirect_uris": ["http://127.0.0.1/callback"],
+  "scope": "atproto repo:systems.lamb.dottie.vaultHead repo:systems.lamb.dottie.vaultSnapshot repo:systems.lamb.dottie.vaultControl blob:application/octet-stream"
+}

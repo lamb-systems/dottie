@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 	urfave "github.com/urfave/cli/v3"
 
-	"github.com/dottorblaster/dottie/internal/config"
-	"github.com/dottorblaster/dottie/internal/model"
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/config"
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 func cliEnvironment(t *testing.T) (platform.Paths, func(string) string) {

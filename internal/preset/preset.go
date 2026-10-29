@@ -11,10 +11,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
-	"github.com/dottorblaster/dottie/internal/config"
-	"github.com/dottorblaster/dottie/internal/ignore"
-	"github.com/dottorblaster/dottie/internal/model"
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/config"
+	"github.com/lamb-systems/dottie/internal/ignore"
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 var (

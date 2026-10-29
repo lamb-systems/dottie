@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dottorblaster/dottie/internal/config"
-	"github.com/dottorblaster/dottie/internal/model"
-	"github.com/dottorblaster/dottie/internal/platform"
-	"github.com/dottorblaster/dottie/internal/preset"
-	"github.com/dottorblaster/dottie/internal/source/files"
-	"github.com/dottorblaster/dottie/internal/state"
-	"github.com/dottorblaster/dottie/internal/vault"
+	"github.com/lamb-systems/dottie/internal/config"
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/preset"
+	"github.com/lamb-systems/dottie/internal/source/files"
+	"github.com/lamb-systems/dottie/internal/state"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func testPaths(t *testing.T) platform.Paths {

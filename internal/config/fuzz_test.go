@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 func FuzzLoad(f *testing.F) {

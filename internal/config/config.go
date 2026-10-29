@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/dottorblaster/dottie/internal/ignore"
-	"github.com/dottorblaster/dottie/internal/model"
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/ignore"
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 const Version uint32 = 1

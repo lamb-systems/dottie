@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dottorblaster/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 const (

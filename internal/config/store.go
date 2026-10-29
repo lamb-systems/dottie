@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
-	"github.com/dottorblaster/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 var renameFile = os.Rename

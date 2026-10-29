@@ -1,4 +1,4 @@
-module github.com/dottorblaster/dottie
+module github.com/lamb-systems/dottie
 
 go 1.27.0
 

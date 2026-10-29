@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/dottorblaster/dottie/internal/ignore"
-	"github.com/dottorblaster/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/ignore"
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 type Budget struct {

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dottorblaster/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestRoundTripAcrossTargetsSettingsAndTombstones(t *testing.T) {

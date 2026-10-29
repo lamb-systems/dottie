@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/dottorblaster/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 var readLink = func(root *os.Root, name string) (string, error) {
