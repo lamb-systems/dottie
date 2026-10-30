@@ -1,8 +1,8 @@
-# Native AT Protocol OAuth boundary
+# Native AT Protocol remote boundary
 
-The package implements the OAuth identity boundary only. It does not publish records, blobs,
-heads or controls, and it does not prove that records belong to one repository revision. Those
-operations remain subject to the remote transaction and ciphertext rules owned by later work.
+The package implements the OAuth identity boundary, bounded repository proofs and one fenced
+`applyWrites` publication operation. It does not provide generic record or blob CRUD, encrypt
+snapshot content, or wire synchronization into the CLI.
 
 ## Discovery and identity binding
 
@@ -77,6 +77,65 @@ seconds, and the complete request timeout is thirty seconds. Response bodies are
 and over-limit reads fail. The authenticated client uses the native `NewAuthMethod`; the anonymous
 client has no auth method. An offline integration test proves redirect targets are not followed.
 
+## Bounded repository proofs and fenced publication
+
+Verification is not hand-rolled: bounded CAR/MST/signature checking uses Indigo's
+`atproto/repo`, `atproto/repo/mst` and `atproto/atcrypto` plus `go-car`, which grows `go.sum`
+from 118 to 360 lines and the module graph to 264 modules. That footprint is the price of not
+writing our own MST and signature verification, and it must be revisited if the dependency set
+ever becomes a release concern.
+
+A revision read has at most three attempts. Each attempt obtains `getLatestCommit`, streams a full
+`getRepo` response without `since`, then obtains `getLatestCommit` again. The CAR root must equal
+the authenticated commit CID and both advertised CIDs before the revision is returned. The commit
+must pass Indigo structure and signature verification, and its DID must equal both the requested
+DID and the DID-document id. Exactly one DID verification method with the `#atproto` id (document-
+relative or `<DID>#atproto`), matching controller and a `publicKeyMultibase` is accepted;
+`Multikey` and the legacy
+`EcdsaSecp256r1VerificationKey2019`/`EcdsaSecp256k1VerificationKey2019` type names are accepted, then
+the parsed multibase key must be one of the curves Indigo verifies: **P-256 or secp256k1**. The live
+network currently publishes secp256k1 `Multikey` entries, so a P-256-only rule breaks interop while
+adding no security; the binding that matters is the DID-scoped `#atproto` method plus a verified
+commit signature. Other curves are rejected. No `getRecord` call contributes to proof membership.
+
+The CAR is capped while its response stream is read, before `LoadRepoFromCAR` can materialise it.
+`DefaultBudgets()` uses 8 MiB total CAR bytes, 8192 blocks, 1 MiB per block, 4096 membership
+records and MST depth 32. The bounded pre-pass rejects malformed roots, duplicate blocks and
+oversized blocks. After loading, a partial MST is rejected; every membership key is unique, its
+record bytes must exist in the CAR, and the bytes are re-hashed to the membership CID. Any bound or
+integrity failure returns a typed error and no partial revision. These defaults are proof-task
+limits sized for a small preferences repository; a real account CAR may be larger. DOT-P03 must
+revisit the defaults before production reads.
+
+A verified revision carries a read-only `(NSID, rkey) -> record CID` membership view and record
+bytes sourced only from that CAR. `PublishFenced` emits one `com.atproto.repo.applyWrites` batch
+containing the first blob-reference record, head, control and any explicitly supplied additional
+records atomically in one transaction. Its `swapCommit` is always the verified revision CID; there
+is no unfenced fallback. A
+structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
+classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
+is never blindly retried.
+
+The live fence harness uses provisional test-only records: `systems.lamb.dottie.vaultSnapshot` at
+`probe-<base32>` with `{$type, probe, blob, createdAt}`; `systems.lamb.dottie.vaultHead` at
+`self` with `{$type, snapshotRkey, snapshotCid, updatedAt}`; and `systems.lamb.dottie.vaultControl`
+at `self` with `{$type, devices:[{did,role}], policyEpoch, updatedAt}`. These fixtures are not
+DOT-P01 schemas and must not be used as production vault records. They are confined to integration
+tests and are deleted and verified by deferred cleanup.
+
+The error categories are `ErrFenceLost` for structured `InvalidSwap`, `ErrRevisionMoving` after
+three changing reads, `ErrUnprovenMembership` for partial trees or unprovable record bytes/CIDs,
+`ErrUntrustedCar` for malformed or over-budget CARs, `ErrSignature` for an invalid repository
+signature, `ErrKeyBinding` for DID/key-purpose/algorithm binding failures, `ErrBatchRejected` for
+record preparation or definitive non-fence rejection, and `ErrAmbiguousTransport` for unknown
+transport outcomes and server failures.
+
+The only current revision claim is membership at a PDS-asserted commit, not global freshness.
+Rollback and equivocation defence require independent checkpoints in DOT-V05. A fence prevents
+exposure through our writes under an honest-but-racing provider; a malicious PDS colluding with a
+revoked keyholder can still reference temporary blobs outside our writes. Device authorship and
+role enforcement remain DOT-V03/V04.
+
 ## Probe isolation and live PDS matrix
 
 The PDS probe code exists only in `tests/integration`. `internal/remote/atproto` contains no generic
@@ -89,6 +148,23 @@ The live test is `TestLivePDSMatrix`. It skips unless `DOTTIE_LIVE_PDS=1`, uses 
 session from the Secret Service keyring, and accepts only `dottiethrowaway.bsky.social` or
 `dottie.wallera.computer` as `DOTTIE_HANDLE`. Any other handle fails closed. It must be run only
 with explicit disposable-account authorization; no live run was performed for this implementation.
+
+The F04 live harness is `TestLiveFence`; it skips unless `DOTTIE_LIVE_FENCE=1`, uses the same
+allowlist and existing keyring sessions, and was not run for this implementation. Run only with
+explicit disposable-account authorization, one provider at a time:
+
+```sh
+DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottiethrowaway.bsky.social go test -count=1 -run TestLiveFence ./tests/integration -v
+DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottie.wallera.computer go test -count=1 -run TestLiveFence ./tests/integration -v
+```
+
+Its six rows report initial atomic creation, two stale-writer losses (including the simulated
+control transition), stale-cache rejection, bounded mixed-view retries and blob-processing
+rollback. Stale rows include captured `swapCommit` and the competing commit; the fence rejection
+must be `InvalidSwap`, and post-failure rows verify both unreferenced membership and anonymous CID
+unreachability. Failures write the existing redacted mode-0600 failure artifact with provider,
+criterion, evidence, DOT-F07 decision and cloud-release hold. Deferred cleanup deletes and verifies
+every record created or unexpectedly created by a publication.
 
 The controlled D2 experiment runs in this order on the selected PDS: fetch the unreferenced
 uploaded blob anonymously; create the single D3 probe record; repeat the identical anonymous fetch
@@ -201,3 +277,23 @@ the effective width of the grant can be verified rather than assumed.
 The authorization server's own `scopes_supported` is treated as informational: it currently
 advertises `atproto` and the `transition:*` family only, and a client that validated that list
 with its own grammar would refuse to start.
+
+## Candidate disclosure on a rejected batch (measured, owner-accepted)
+
+Live experiments on both the Bluesky-hosted shard and an independently hosted PDS showed that a
+batch rejected **after** blob processing leaves the referenced blob anonymously retrievable by
+CID, while no record references it and a never-referenced control blob stays refused
+(`200` with the exact staged bytes, versus `400` for the control). A fence lost to `InvalidSwap`
+is checked before blob processing and does **not** expose the candidate.
+
+Consequences encoded in this package:
+
+- `PublishFenced` reports `ErrCandidateMayBeDisclosed` for every post-submission failure except a
+  lost fence, so callers can never treat "the batch failed" as "nothing is public".
+- Publication is validated exhaustively before sending (record shapes, required writes, duplicate
+  targets, blob reference presence) so that the only expected provider-side failure is
+  `InvalidSwap`. Anything else must be treated as possible disclosure of the staged candidate.
+- Staged ciphertext must be encrypted under the **new** epoch only. Uploading under an epoch a
+  revoked device can still decrypt would turn this provider behaviour into a real leak; that
+  constraint belongs to the vault epoch work and is recorded here because this task is where the
+  window was measured.

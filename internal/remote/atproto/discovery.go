@@ -36,6 +36,8 @@ func (e *DiscoveryError) Unwrap() error {
 type Identity struct {
 	Handle                string
 	DID                   string
+	DIDDocumentID         string
+	VerificationMethods   []VerificationMethod
 	PDS                   string
 	Issuer                string
 	AuthorizationEndpoint string
@@ -44,10 +46,18 @@ type Identity struct {
 	ScopesSupported       []string
 }
 
+type VerificationMethod struct {
+	ID                 string `json:"id"`
+	Type               string `json:"type"`
+	Controller         string `json:"controller"`
+	PublicKeyMultibase string `json:"publicKeyMultibase"`
+}
+
 type didDocument struct {
-	ID          string       `json:"id"`
-	AlsoKnownAs []string     `json:"alsoKnownAs"`
-	Service     []didService `json:"service"`
+	ID                 string               `json:"id"`
+	AlsoKnownAs        []string             `json:"alsoKnownAs"`
+	VerificationMethod []VerificationMethod `json:"verificationMethod"`
+	Service            []didService         `json:"service"`
 }
 
 type didService struct {
@@ -138,6 +148,8 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 	return Identity{
 		Handle:                handle,
 		DID:                   did,
+		DIDDocumentID:         document.ID,
+		VerificationMethods:   append([]VerificationMethod(nil), document.VerificationMethod...),
 		PDS:                   pds,
 		Issuer:                server,
 		AuthorizationEndpoint: metadata.AuthorizationEndpoint,
