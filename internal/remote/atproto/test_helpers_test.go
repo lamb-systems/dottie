@@ -53,7 +53,20 @@ type fakeOAuth struct {
 	tokenRequests         int
 	resourceProof         string
 	resourceAuth          string
+	resourceResponses     []fakeResourceResponse
+	resourceRequests      []fakeResourceRequest
 	followedRedirect      int
+}
+
+type fakeResourceResponse struct {
+	status int
+	header http.Header
+	body   string
+}
+
+type fakeResourceRequest struct {
+	authorization string
+	proof         string
 }
 
 type rewriteTransport struct {
@@ -217,6 +230,26 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 		f.resourceProof = request.Header.Get("DPoP")
 		f.resourceAuth = request.Header.Get("Authorization")
 		writer.WriteHeader(http.StatusNoContent)
+	case host == pdsHost && request.URL.Path == "/resource":
+		f.resourceProof = request.Header.Get("DPoP")
+		f.resourceAuth = request.Header.Get("Authorization")
+		f.resourceRequests = append(f.resourceRequests, fakeResourceRequest{authorization: f.resourceAuth, proof: f.resourceProof})
+		index := len(f.resourceRequests) - 1
+		var configured fakeResourceResponse
+		if index < len(f.resourceResponses) {
+			configured = f.resourceResponses[index]
+		}
+		for name, values := range configured.header {
+			for _, value := range values {
+				writer.Header().Add(name, value)
+			}
+		}
+		status := configured.status
+		if status == 0 {
+			status = http.StatusNoContent
+		}
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, configured.body)
 	case host == issuerHost && request.URL.Path == "/should-not-follow":
 		f.followedRedirect++
 		writer.WriteHeader(http.StatusNoContent)
