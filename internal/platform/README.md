@@ -21,3 +21,12 @@ so exec'd helpers do not inherit the lock descriptor, and uses non-blocking excl
 per open file description and is released when the lock is closed or the process exits.
 This is an advisory coordinator lock for local filesystems; NFS cross-host exclusion is
 unsupported.
+
+## Secret Service
+
+`keyring_linux.go` talks to `org.freedesktop.secrets` over D-Bus. It resolves the **default**
+collection only: custom collection aliases are not portable (gnome-keyring rejects them with
+`Only the 'default' alias is supported`), so Dottie never creates, renames or relabels a
+collection and instead scopes its items with `application=dottie` and `name=<item>` attributes.
+A missing or locked collection yields a typed error and no plaintext fallback; the underlying
+D-Bus failure is included in the message.
