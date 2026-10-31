@@ -136,6 +136,126 @@ exposure through our writes under an honest-but-racing provider; a malicious PDS
 revoked keyholder can still reference temporary blobs outside our writes. Device authorship and
 role enforcement remain DOT-V03/V04.
 
+## DOT-F05 contention and ambiguous-failure measurement
+
+`tests/integration/contention_harness_test.go` is a test-only measurement harness.
+`TestLiveContention` skips unless `DOTTIE_LIVE_CONTENTION=1`, and uses only the F03/F04
+disposable identity allowlist. It must not be run without explicit disposable-account
+authorization. The separately budgeted long referenceability run additionally requires
+`DOTTIE_LIVE_EXPIRY=1`; it has its own context and timeout. Before opening credentials or sending
+requests, the test requires at least 30 minutes remaining for the short schedule, or 110 minutes
+when short and long schedules are selected together. No live F05 result has been measured by this
+implementation.
+
+Authorized invocations, only after explicit disposable-account approval, are:
+
+```sh
+DOTTIE_LIVE_CONTENTION=1 DOTTIE_HANDLE=dottiethrowaway.bsky.social go test -count=1 -timeout=35m -run TestLiveContention ./tests/integration -v
+DOTTIE_LIVE_CONTENTION=1 DOTTIE_HANDLE=dottie.wallera.computer go test -count=1 -timeout=35m -run TestLiveContention ./tests/integration -v
+DOTTIE_LIVE_CONTENTION=1 DOTTIE_LIVE_EXPIRY=1 DOTTIE_HANDLE=dottiethrowaway.bsky.social go test -count=1 -timeout=2h -run TestLiveContention ./tests/integration -v
+DOTTIE_LIVE_CONTENTION=1 DOTTIE_LIVE_EXPIRY=1 DOTTIE_HANDLE=dottie.wallera.computer go test -count=1 -timeout=2h -run TestLiveContention ./tests/integration -v
+```
+
+The 35-minute short command covers up to 5 minutes of setup, the 20-minute measurement context
+(including the two possible five-minute waits), and 2 minutes for cleanup. The 2-hour long command
+covers the short schedule, the 75-minute long-expiry context, and cleanup allowance.
+
+The D1 outcome classifier is ordered and assigns one state to each attempted publication:
+
+1. `rejected-local`: client-side validation stopped the attempt before sending.
+2. `not-sent`: a failure was positively established before transport dispatch. A missing
+   `WroteRequest` callback after dispatch is not proof of no send and resolves as `unknown`.
+3. `unknown`: transport error after send, any 5xx, unparseable body, or a 2xx with no commit CID.
+   This precedence wins over an error name in the body, including `InvalidSwap` in a 500 response.
+4. `rejected-pre-blob`: a structured 4xx `error` field is exactly `InvalidSwap`.
+5. `rejected-other`: every other 4xx; treat as possible staged-blob disclosure.
+6. `committed`: a 2xx has a commit CID and the publication marker is proven in a fresh verified
+   revision.
+
+The D2 marker is the unique snapshot `(collection, rkey)` plus its locally computed expected
+record CID. A fresh verified revision containing that exact key-to-CID pair resolves to `committed`;
+if head/control no longer bind to that publication it is recorded as `committed-but-superseded`,
+never retried. After `unknown`, a verified revision with the marker absent resolves to `not-landed`
+and records retry evidence eligibility; a revision read that cannot be fully verified resolves to
+`unavailable` and stops. A response-suppression decorator's verification result is carried into that
+attempt, so unavailable evidence is terminal and does not trigger a second read. A known `not-sent` outcome is also retry-evidence eligible because no
+request bytes reached the provider. The harness records eligibility only and has no retry loop.
+
+The live matrix records two separate atclient/HTTP clients, a rendezvous barrier, successful
+request-write-to-first-response-byte intervals measured after release, and a distinct DPoP-nonce
+contention stratum. Incomplete or inconsistent trace intervals are inconclusive; the race is
+inconclusive if the observed intervals do not overlap. Replay-after-success and racing-identical-
+batch rows retain every HTTP result and each validated returned commit CID, including the required
+`2xx/2xx` row. Final exact-marker membership and individual CIDs are evidence; they do not prove the
+historical at-most-one-effect invariant when they cannot distinguish one commit from two. Experiment
+4 uses a test-only transport decorator to verify commit before synthetic response loss, verify absence
+before suppressing a forwarded response, and record live cancellation as `INCONCLUSIVE` when its
+processing point is unknown. Experiment 4a reports the committed-but-response-lost claim only
+when the forwarded publication was verified committed and response suppression actually occurred;
+failed construction is explicitly unmeasured/inconclusive. The rejected-batch duration fixture
+contains a valid staged blob plus a valid-shaped reference to a never-uploaded blob, matching F04. Duration is measured only if a fresh
+verified revision establishes that no record references the candidate CID and the exact staged bytes
+first become anonymously reachable after rejection; every aged probe compares exact bytes and reports
+its timestamp and elapsed age from the rejection response. Any failed prerequisite is `unmeasured`.
+
+Latency repetition count is registered by `DOTTIE_LIVE_LATENCY_N` (default 50, hard maximum 100);
+each update uses one dedicated snapshot rkey, a fresh verified revision and its own `swapCommit`.
+The effective N is printed and capped by the remaining verified-revision budget at two reads per
+sample (the fresh revision plus outcome resolution). A typed budget stop prints the partial profile
+and its caveat rather than failing the test. Success and error samples are separate. Percentiles use nearest rank: sorted ascending, rank
+`ceil(p*n)`, one-indexed. The decision-grade minimum is 200 observations per provider; below it the
+record reports the measured percentiles next to the literal
+`insufficient sample - not decision-grade`. Thus the default 50-sample profile is exploratory, not
+decision-grade.
+
+The enforced per-provider short-run budget has a 120-call logical applyWrites cap and a separate
+120-request wire cap at the HTTP dispatch boundary, including authentication replays and cleanup.
+Every budget-counted transport clones `http.DefaultTransport` and disables HTTP/2 while retaining
+TLS and request `GetBody`; this prevents Go's HTTP/2 transport from silently retransmitting a POST
+below the cap, while the authentication layer's explicit nonce/token replay remains supported. The
+latency stratum is therefore measured over HTTP/1.1 and its reported percentiles are h1 measurements,
+not provider HTTP/2 behavior.
+Two wire dispatches are held for the cleanup batch, allowing its single authentication replay; it also
+allows 12 contention/ambiguity publication attempts, 12 such cleanup deletes, 160 verified revision
+reads and 600 HTTP dispatches. Logical calls and wire requests are reported separately. The long expiry run has a separate 34-request HTTP/wire budget, a two-dispatch applyWrites cleanup
+reserve, and an 8-request HTTP cleanup reserve. The arithmetic for both ages, even when both
+references commit, is 3 initial verified-read requests + 2 blob-staging requests + 2 x (1 anonymous
+probe + 3 verified-read requests + 1 applyWrites + 3 post-commit verification requests) = 21
+measurement requests, including 6 resolution reads. Cleanup reserves 8 requests (initial verified
+read 3 + challenged delete and one nonce replay 2 + final verified read 3), for 29 of 34 total and
+5 requests of headroom. Those 5 remaining requests are the entire allowance for DPoP nonce
+challenges and auth replays across the run. The eight-request cleanup reserve is the minimum for
+its initial read, one challenged delete/replay and final verification; additional refreshes or a
+moving revision may still require manual reconciliation. If the five-slot allowance is exceeded, the
+expiry run stops and reports `referenceability=unmeasured: budget exhausted` for remaining ages rather
+than overrunning. It has no per-run override. A typed budget stop
+prints `referenceability=unmeasured: budget exhausted` for every remaining age and returns cleanly.
+No cap is increased without owner approval recorded in Logseq. Expiry is measured by referenceability
+with one attempt per fresh randomized specimen at immediate, +1m and +5m; the optional long run adds
++15m and +60m.
+The checked-in result remains **unmeasured until run** for every provider and age:
+
+| Provider | Immediate | +1m | +5m | +15m | +60m |
+| --- | --- | --- | --- | --- | --- |
+| Bluesky-hosted | unmeasured until run | unmeasured until run | unmeasured until run | unmeasured until run | unmeasured until run |
+| Independently hosted | unmeasured until run | unmeasured until run | unmeasured until run | unmeasured until run | unmeasured until run |
+
+D8 viability is not inferred from the harness source. The measurement record must decide whether
+(a) stale/duplicate writers lose deterministically on both providers, (b) every attempt has exactly
+one D1 state and no outcome is silently treated as success, and (c) no post-blob disclosure beyond
+the F04-measured window was observed, while recording how long a rejected candidate remains
+reachable. Failure of any criterion means `not viable as designed`, with the alternative named.
+Expiry of a never-referenced blob is reported separately from rejected-candidate disclosure
+duration.
+
+Every applyWrites target is tracked and printed with a run identifier before its first send. If
+cleanup cannot verify or delete, output includes the complete run-id tracked pair set and instructs
+reconciliation against a fresh verified revision without deleting unrelated records. An aborted run
+can therefore be reconciled from output alone. The test refuses to overwrite a pre-existing
+head/control `self`; this is an intentional restart hazard because those records may belong to a
+prior aborted run. These are integration-test mechanisms only: **no production retry or recovery loop
+exists**.
+
 ## Probe isolation and live PDS matrix
 
 The PDS probe code exists only in `tests/integration`. `internal/remote/atproto` contains no generic
