@@ -10,6 +10,9 @@ its contents at the site root, so the files here are public.
 - `CNAME` — the custom domain. Removing it silently moves the site back to
   `<org>.github.io`, which breaks the `client_id`.
 - `.nojekyll` — disables Jekyll processing so files are served exactly as committed.
+- `adr/` — architecture decision records. Public by construction: they carry identifiers and
+  measurements, never tokens, session material or plaintext. Adding a decision here publishes it
+  from `main`, so review it for disclosure before committing.
 
 Deployment is a plain branch-source Pages build from `docs/` on `main`. There is no deploy
 workflow, no write permission and nothing fork-triggerable; pushing to `main` is the deploy.
