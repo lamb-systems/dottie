@@ -10,7 +10,7 @@ as if the design arrived fully formed is not useful to anyone reading it later.
 | ADR | Decision |
 | --- | --- |
 | [004](004-admission-before-upload.md) | Admit a snapshot before uploading it, on the encrypted length |
-| [005](005-confidentiality-and-epochs.md) | One defense per threat; encryption before upload is the only one that exists |
+| [005](005-confidentiality-and-epochs.md) | One defense per threat, and none of them is implemented |
 | [006](006-publication-contract.md) | What a verified revision proves, and what publication must record |
 | [007](007-three-authorities.md) | Account, device and recovery authority are separate |
 | [008](008-dependencies-and-native-boundary.md) | Dependencies, and the two build boundaries |

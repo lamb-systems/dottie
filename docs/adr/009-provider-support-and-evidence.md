@@ -5,43 +5,45 @@ Status: accepted, 2026-10-31.
 ## Context
 
 "Supported" is a word that hides its own evidence. A provider can accept our transport calls and still
-reject a large blob, answer a missing blob with a 500, or expose a rejected candidate for longer than
+reject a large blob, answer a missing blob with a 500, or keep a rejected candidate reachable longer than
 another provider does. A single label flattens all of that into a claim nobody can check.
 
 ## Decision
 
-Every provider is described by requirement, not labeled. Each row records the observed pass, the
-observed failure, the advertised limit, and the requirement that remains unmeasured.
+Every provider is described by requirement, not labeled. The matrix below records what was observed, on
+which hosting category, and what remains unmeasured. Observations are from 2026-10-30 and 2026-10-31.
 
-Facts pinned by measurement so far:
+| Requirement | Bluesky-hosted (shard) | Independently hosted |
+| --- | --- | --- |
+| Unreferenced blob retrievable | no | no |
+| Referenced blob returns exact bytes | yes, 200 | yes, 200 |
+| Blob still enumerated after last-reference removal | no | no |
+| Advertised `blobUploadLimit` | 300 MiB on the resolved shard; none on the entryway | 100 MiB |
+| Size rejection boundary | unmeasured | unmeasured |
+| MIME policy | unmeasured; `text/plain` rejection was a scope limitation | unmeasured |
+| Account quota | unmeasured | unmeasured |
+| Missing blob status | 500 | 4xx |
+| Stale writer loses on the structured fence | yes | yes |
+| Two accepted identical batches | unproven | unproven |
+| Rejected candidate reachable after 5 minutes | yes | yes |
+| `applyWrites` p50, n=50 | about 307 ms | about 56 ms |
 
-- The blob ceiling is advertised by the resolved PDS. The entryway descriptor is not the PDS descriptor
-  and must not be used as the source.
-- A missing blob answers 500 on one provider and 4xx on another. Neither is evidence of absence.
-- Upload rejection for `text/plain` is a scope limitation, not a MIME policy finding.
-- After last-reference removal the blob is no longer fetchable or enumerated. Physical deletion was not
-  observed and is not claimed.
-- Size, MIME and account-quota enforcement are unmeasured.
-- Accepted-duplicate behaviour is unproven, because the two-acceptance case never occurred.
-- `applyWrites` latency at n=50 is exploratory and not decision-grade, and the two providers differ by
-  roughly five times: about 307 ms p50 against about 56 ms p50.
+The ceiling must be read from the resolved PDS. The entryway descriptor is not the PDS descriptor, and
+the entryway in this case advertises no limit at all.
 
-A provider is usable for the transport primitives when it passes the blob, fence and contention
-probes. It is not thereby certified for confidentiality or for snapshots above its advertised ceiling.
+A provider is usable for the transport primitives when its blob, fence and contention rows pass. It is
+not thereby certified for confidentiality, and not certified above its advertised ceiling.
 
-Freshness is a separate limitation and is stated wherever a provider is described: the only claim we
-can make is membership at a commit the provider asserted. Rollback and equivocation defence require
-independent checkpoints in DOT-V05.
+Freshness is stated wherever a provider is described: the only claim available is membership at a commit
+the provider asserted. Rollback and equivocation defence require independent checkpoints in DOT-V05.
 
 ## Consequences
 
-Support statements become longer, and that is the point: a reader can see which requirement is proven
-and which is assumed.
+A reader can see which requirement is proven, on which host, and which is assumed.
 
-A provider advertising no limit cannot be used for uploads at all, because admission fails closed rather
-than guessing.
+A provider advertising no limit cannot be used for uploads, because admission fails closed rather than
+guessing.
 
 ## Alternatives
 
-A boolean "supported" flag was rejected because it makes the unmeasured parts invisible, and because
-the existing provider differences are exactly the kind that a flag would erase.
+A boolean "supported" flag was rejected: it erases exactly the provider differences recorded above.

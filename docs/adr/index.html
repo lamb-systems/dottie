@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dottie — architecture decisions</title>
+<meta name="description" content="Architecture decision records for Dottie: what was decided, what forced it, and what was rejected.">
+<style>
+:root { color-scheme: light dark }
+body { font: 16px/1.55 system-ui, sans-serif; max-width: 38rem; margin: 3rem auto; padding: 0 1.25rem }
+h1 { font-size: 1.5rem; margin-bottom: .25rem }
+p.lede { color: #666; margin-top: 0 }
+li { margin-bottom: .35rem }
+code { font-size: .9em }
+</style>
+</head>
+<body>
+<h1>Architecture decisions</h1>
+<p class="lede">What was decided, what forced it, and what was rejected.</p>
+<p>Each record states the constraint that forced a decision, what was decided, what becomes true as a
+result, and which alternatives were rejected. Where a decision came after a wrong turn, the turn is
+recorded.</p>
+<ul>
+  <li><a href="004-admission-before-upload.md">004 Admit a snapshot before uploading it, on the encrypted length</a></li>
+  <li><a href="005-confidentiality-and-epochs.md">005 One defense per threat, and none of them is implemented</a></li>
+  <li><a href="006-publication-contract.md">006 What a verified revision proves, and what publication records</a></li>
+  <li><a href="007-three-authorities.md">007 Account, device and recovery authority are separate</a></li>
+  <li><a href="008-dependencies-and-native-boundary.md">008 Dependencies, and the two build boundaries</a></li>
+  <li><a href="009-provider-support-and-evidence.md">009 Describe providers, do not label them</a></li>
+  <li><a href="010-spaces.md">010 Spaces stays out of scope, with a dated reassessment</a></li>
+  <li><a href="011-operator-visible-states.md">011 "local only" is not one state</a></li>
+  <li><a href="012-resource-growth.md">012 Bounded proofs, bounded growth, safe pruning</a></li>
+  <li><a href="013-feasibility-verdict.md">013 The feasibility verdict, in three permissions</a></li>
+</ul>
+<p>Decisions 001 to 003 predate this directory. Source:
+<a href="https://github.com/lamb-systems/dottie/tree/main/docs/adr">github.com/lamb-systems/dottie</a>.</p>
+<p><a href="/">Back to the project page</a></p>
+</body>
+</html>
