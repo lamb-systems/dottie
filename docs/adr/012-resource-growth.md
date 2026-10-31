@@ -30,8 +30,9 @@ ours to collect, but nothing there decides how much referenced snapshot history 
 Pruning is explicit and safe. It preserves checkpoint lineage and the last complete recovery point, and
 it never prunes the only copy of something a restore needs.
 
-Epoch keys follow ADR 005: the last N epochs required for restore are kept and older ones deleted. N is a
-setting, and reduced restore depth is the stated cost of reduced retroactive exposure.
+Epoch keys are governed by **ADR 014**, which supersedes the count-based rule previously stated here: a
+device keeps the epochs its retained recovery points need and deletes the rest, and retention is an
+obligation on every authorized device rather than a local setting.
 
 These limits and the quota state are decisions for DOT-P03, DOT-P04 and DOT-L06 work that is not built
 yet.

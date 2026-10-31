@@ -19,6 +19,8 @@ as if the design arrived fully formed is not useful to anyone reading it later.
 | [011](011-operator-visible-states.md) | "Local only" is not one state |
 | [012](012-resource-growth.md) | Bounded proofs, bounded growth, safe pruning |
 | [013](013-feasibility-verdict.md) | The feasibility verdict, in three permissions |
+| [014](014-vault-state-machine.md) | The vault authorization and key state machine |
+| [015](015-envelope-and-primitives.md) | Snapshot envelope, primitives and signed bytes |
 
 Decisions 001 to 003 predate this directory and are preserved in the planning graph. These continue the
 numbering rather than restarting it.

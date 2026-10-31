@@ -37,13 +37,16 @@ A candidate staged before an epoch or policy change, or staged without an envelo
 never promoted. Promotion after a rejected or ambiguous attempt requires revalidation against the exact
 current policy and epoch.
 
-Epoch granularity is not decided here. The plan requires the currently authorized epoch and revalidation
-after an ambiguous result; it does not specify whether epochs are scoped to a rotation or to a shorter
-unit. That choice belongs to DOT-V04, and this record states only the constraint on top of it: an epoch
-a revoked device holds is never used for staging.
+Epoch granularity is now decided in **ADR 014**, which supersedes this paragraph: an epoch is one
+administrative transition plus a bounded publication count or age. This record keeps only the achievable constraint on top of it:
+no candidate is promoted under a stale epoch, and a candidate transmitted during a concurrent revocation is
+disclosed to the pre-revocation recipient set. ADR 014 states the three linearization points and why
+transmission cannot be undone.
 
-Epoch keys are pruned once superseded. We keep the last N epochs required for restore and delete older
-ones, where N is a configuration value. Pruning costs restore depth: with N retained, a working restore
+Epoch keys are pruned once superseded. **ADR 014 supersedes the retention rule here**: a device keeps the
+epochs its retained recovery points need and deletes the rest, so the tunable is a recovery-point count
+rather than an epoch count. The reasoning below about what deletion does and does not achieve still
+applies, and ADR 014 states it more precisely. Pruning costs restore depth: with N retained, a working restore
 reaches back N epochs and no further. Without pruning, a device compromised in a year would expose every
 candidate from every epoch it ever held, and accepting disclosed ciphertext would not be defensible.
 

@@ -1,6 +1,7 @@
 # 006 — What a verified revision proves, and what publication must record
 
-Status: accepted, 2026-10-31.
+Status: accepted, 2026-10-31. Amended by ADR 014, which adopts this record's durable attempt contract and
+outcome taxonomy as the normative recovery path for vault transitions.
 
 ## Context
 

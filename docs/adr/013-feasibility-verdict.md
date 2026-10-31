@@ -30,8 +30,8 @@ Release prerequisites, each with an owner and a pass rule:
 | Condition | Owner | Passes when |
 | --- | --- | --- |
 | Encryption precedes upload | DOT-V02 | A test proves no candidate reaches `uploadBlob` without an envelope under the authorized epoch, and the stop fires for a plaintext candidate |
-| Epoch discipline | DOT-V04 | An upload-precondition test proves staging never uses an epoch a revoked device holds, and a policy or epoch change forces discard and re-encryption instead of promotion |
-| Epoch key pruning | DOT-V04 | A test proves superseded epoch keys beyond the restore window are deleted, since accepting disclosed ciphertext depends on that bound |
+| Epoch discipline | DOT-V04 | An upload-precondition test proves no candidate is promoted under a stale epoch, that a policy or epoch change forces discard and re-encryption, and that stale-candidate transmission is reported as a disclosure rather than prevented, as ADR 014 defines the bound |
+| Epoch key pruning | DOT-V04 | A test proves superseded epoch keys beyond the retained recovery points are deleted and attested, and the attestation path exists for restore-only devices as ADR 014 defines it |
 | Vault authorization | DOT-V03 | Signed device role, exact policy digest and recipient set are checked at one revision, and a revoked device cannot publish |
 | Disclosure remeasured | DOT-R03 | A dedicated experiment measures rejected-candidate disclosure with fresh candidates, verified unreferenced state, exact-byte probes and recorded ages; a still-reachable result is recorded as such, not as a pass |
 | Ceiling conformance | DOT-P03, DOT-P04 | Admission compares the final encrypted blob length against the discovered limit before upload, and fails closed when the limit is unadvertised |
