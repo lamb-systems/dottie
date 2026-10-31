@@ -3,6 +3,8 @@ package atproto
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestDiscoverDIDWebUsesHTTPSWellKnownDocument(t *testing.T) {
@@ -12,9 +14,9 @@ func TestDiscoverDIDWebUsesHTTPSWellKnownDocument(t *testing.T) {
 	fake.serviceID = fake.did + "#atproto_pds"
 	identity, err := client.Discover(context.Background(), testHandle)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if identity.DID != fake.did || identity.PDS != fake.pds {
-		t.Fatalf("did:web discovery result = %+v", identity)
+		require.False(t, identity.DID != fake.did || identity.PDS != fake.pds, "did:web discovery result = %+v", identity)
 	}
 }

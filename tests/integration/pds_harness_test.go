@@ -23,6 +23,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atclient"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const pdsProbeCollection = "systems.lamb.dottie.vaultSnapshot"
@@ -52,52 +54,52 @@ func TestLivePDSMatrix(t *testing.T) {
 	}
 	handle := os.Getenv("DOTTIE_HANDLE")
 	if !allowedPDSHandle(handle) {
-		t.Fatalf("DOTTIE_HANDLE %q is not in the live PDS disposable-identity allowlist", handle)
+		require.True(t, allowedPDSHandle(handle), "DOTTIE_HANDLE %q is not in the live PDS disposable-identity allowlist", handle)
 	}
 	byteProbe, ceiling, err := livePDSByteProbeConfig(os.Getenv("DOTTIE_LIVE_PDS_BYTES"), os.Getenv("DOTTIE_LIVE_PDS_BYTE_CEILING"))
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	provider := pdsProviderName(handle)
 	keyring, err := platform.NewKeyring()
 	if err != nil {
-		t.Fatalf("open Secret Service keyring: %v", err)
+		require.NoError(t, err, "open Secret Service keyring: %v", err)
 	}
 	defer keyring.Close()
 	client, err := atproto.NewClient("https://dottie.lamb.systems/client-metadata.json", keyring)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	identity, err := client.Discover(ctx, handle)
 	if err != nil {
 		pdsRecordFailure(t, provider, "unknown", "D13-discovery", redactText(err.Error()))
-		t.Fatalf("discover %s: %v", handle, err)
+		require.NoError(t, err, "discover %s: %v", handle, err)
 	}
 	session, err := client.LoadSession(ctx, identity.DID)
 	if err != nil {
-		t.Fatalf("load existing scoped OAuth session for %s: %v", handle, err)
+		require.NoError(t, err, "load existing scoped OAuth session for %s: %v", handle, err)
 	}
 	for _, required := range []string{"atproto", "repo:" + pdsProbeCollection, "blob:application/octet-stream"} {
 		if !hasPDScope(session.Scopes, required) {
-			t.Fatalf("loaded session does not include required scope %q", required)
+			require.True(t, hasPDScope(session.Scopes, required), "loaded session does not include required scope %q", required)
 		}
 	}
 	if hasPDScope(session.Scopes, "account:email") {
-		t.Fatalf("loaded session includes account:email; the D6 data-minimisation observation requires that scope to be absent")
+		require.False(t, hasPDScope(session.Scopes, "account:email"), "loaded session includes account:email; the D6 data-minimisation observation requires that scope to be absent")
 	}
 	auth, err := atproto.NewAuthMethod(client, identity, handle, session)
 	if err != nil {
-		t.Fatalf("construct PDS auth method: %v", err)
+		require.NoError(t, err, "construct PDS auth method: %v", err)
 	}
 	authenticated, err := newPDSAPIClient(identity.PDS, auth, nil)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	anonymous, err := newPDSAPIClient(identity.PDS, nil, nil)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	runLivePDSMatrix(t, ctx, provider, identity, session, authenticated, anonymous, byteProbe, ceiling)
 }
@@ -887,10 +889,10 @@ func pdsRecordFailure(t *testing.T, provider, intendedPDS, criterion, evidence s
 	}
 	path, err := writePDSFailureArtifact("", artifact)
 	if err != nil {
-		t.Errorf("failure artifact write for %s: %v", criterion, err)
+		assert.NoError(t, err, "failure artifact write for %s: %v", criterion, err)
 		return
 	}
-	t.Errorf("PDS criterion %s failed for %s; cloud release is held; failure artifact: %s", criterion, provider, path)
+	assert.True(t, false, "PDS criterion %s failed for %s; cloud release is held; failure artifact: %s", criterion, provider, path)
 }
 
 func ctxOrBackground(ctx context.Context) context.Context {
@@ -903,12 +905,12 @@ func ctxOrBackground(ctx context.Context) context.Context {
 func TestPDSHandleAllowlist(t *testing.T) {
 	for _, handle := range []string{"dottiethrowaway.bsky.social", "dottie.wallera.computer"} {
 		if !allowedPDSHandle(handle) {
-			t.Errorf("allowlist rejected %q", handle)
+			assert.True(t, allowedPDSHandle(handle), "allowlist rejected %q", handle)
 		}
 	}
 	for _, handle := range []string{"", "alice.example", "DOTTIEthrowaway.bsky.social", "dottiethrowaway.bsky.social.evil"} {
 		if allowedPDSHandle(handle) {
-			t.Errorf("allowlist accepted %q", handle)
+			assert.False(t, allowedPDSHandle(handle), "allowlist accepted %q", handle)
 		}
 	}
 }
@@ -923,38 +925,42 @@ func TestPDSFailureArtifactIsRedactedAndHoldsCloudRelease(t *testing.T) {
 		CloudReleaseHold: true,
 	})
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("failure artifact mode=%o", info.Mode().Perm())
+		require.Equal(t, 0o600, info.Mode().Perm(), "failure artifact mode=%o", info.Mode().Perm())
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if bytes.Contains(body, []byte("private@example.invalid")) || bytes.Contains(body, []byte("signature12345678")) {
-		t.Fatalf("failure artifact leaked evidence: %s", body)
+		require.NotContains(t, string(body), "private@example.invalid", "failure artifact leaked evidence: %s", body)
+		require.NotContains(t, string(body), "signature12345678", "failure artifact leaked evidence: %s", body)
 	}
 	var artifact pdsFailureArtifact
 	if err := json.Unmarshal(body, &artifact); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if !artifact.CloudReleaseHold || artifact.Provider != "Bluesky-hosted" || artifact.Criterion != "D2-positive-control" || artifact.IntendedPDS != "https://pds.example" {
-		t.Fatalf("failure artifact fields=%+v", artifact)
+		require.True(t, artifact.CloudReleaseHold, "failure artifact fields=%+v", artifact)
+		require.Equal(t, "Bluesky-hosted", artifact.Provider, "failure artifact fields=%+v", artifact)
+		require.Equal(t, "D2-positive-control", artifact.Criterion, "failure artifact fields=%+v", artifact)
+		require.Equal(t, "https://pds.example", artifact.IntendedPDS, "failure artifact fields=%+v", artifact)
 	}
 }
 
 func TestPDSIdentityDataMinimisationReportsFieldNamesOnly(t *testing.T) {
 	fields := unrequestedPDSIdentityFields([]byte(`{"did":"did:plc:abc","email":"private@example.invalid","emailConfirmed":true,"profile":{"phone":"+15555550123"}}`))
 	if got := strings.Join(fields, ","); got != "email,emailConfirmed,phone" {
-		t.Fatalf("unrequested identity fields=%q", got)
+		require.Equal(t, "email,emailConfirmed,phone", got, "unrequested identity fields=%q", got)
 	}
 	if fields := unrequestedPDSIdentityFields([]byte(`{"did":"did:plc:abc","handle":"dottie.example"}`)); len(fields) != 0 {
-		t.Fatalf("unexpected identity fields=%v", fields)
+		require.Len(t, fields, 0, "unexpected identity fields=%v", fields)
 	}
 }
 
@@ -973,7 +979,9 @@ func TestPDSBoundaryAttemptSizeNeverExceedsCeiling(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := pdsBoundaryAttemptSize(test.advertised, test.known, test.ceiling)
 			if err != nil || got != test.want || got > test.ceiling {
-				t.Fatalf("attempt size=%d error=%v want=%d ceiling=%d", got, err, test.want, test.ceiling)
+				require.NoError(t, err, "attempt size=%d error=%v want=%d ceiling=%d", got, err, test.want, test.ceiling)
+				require.Equal(t, test.want, got, "attempt size=%d error=%v want=%d ceiling=%d", got, err, test.want, test.ceiling)
+				require.LessOrEqual(t, got, test.ceiling, "attempt size=%d error=%v want=%d ceiling=%d", got, err, test.want, test.ceiling)
 			}
 		})
 	}
@@ -986,7 +994,7 @@ func TestPDSBoundaryAttemptSizeNeverExceedsCeiling(t *testing.T) {
 		{advertised: 10, known: true, ceiling: 0},
 	} {
 		if _, err := pdsBoundaryAttemptSize(test.advertised, test.known, test.ceiling); err == nil {
-			t.Errorf("invalid size inputs accepted: %+v", test)
+			assert.Error(t, err, "invalid size inputs accepted: %+v", test)
 		}
 	}
 }
@@ -995,20 +1003,21 @@ func TestPDSRepeatReaderYieldsExactlyRequestedSize(t *testing.T) {
 	reader := newPDSRepeatReader(47)
 	data, err := io.ReadAll(reader)
 	if err != nil || len(data) != 47 {
-		t.Fatalf("repeat reader returned %d bytes, error=%v", len(data), err)
+		require.NoError(t, err, "repeat reader returned %d bytes, error=%v", len(data), err)
+		require.Len(t, data, 47, "repeat reader returned %d bytes, error=%v", len(data), err)
 	}
 	if _, err := reader.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		t.Fatalf("repeat reader after boundary error=%v", err)
+		require.ErrorIs(t, err, io.EOF, "repeat reader after boundary error=%v", err)
 	}
 }
 
 func TestPDSUploadRequestSetsExplicitOctetStreamContentType(t *testing.T) {
 	request, err := pdsRequest(http.MethodPost, "com.atproto.repo.uploadBlob", nil, []byte("fixture"), "application/octet-stream")
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if request.Headers.Get("Content-Type") != "application/octet-stream" {
-		t.Fatalf("upload Content-Type=%q", request.Headers.Get("Content-Type"))
+		require.Equal(t, "application/octet-stream", request.Headers.Get("Content-Type"), "upload Content-Type=%q", request.Headers.Get("Content-Type"))
 	}
 }
 
@@ -1024,7 +1033,7 @@ func TestPDSResponseClassificationDistinguishesAuthorizationAndValidation(t *tes
 		{status: http.StatusOK, want: "success"},
 	} {
 		if got := classifyPDSResult(test.status, []byte(test.body), nil); got != test.want {
-			t.Errorf("status=%d body=%s class=%q want=%q", test.status, test.body, got, test.want)
+			assert.Equal(t, test.want, got, "status=%d body=%s class=%q want=%q", test.status, test.body, got, test.want)
 		}
 	}
 }
@@ -1032,15 +1041,23 @@ func TestPDSResponseClassificationDistinguishesAuthorizationAndValidation(t *tes
 func TestLivePDSByteProbeConfigRequiresExplicitCeiling(t *testing.T) {
 	for _, value := range []string{"", "0", "-1", "+1", "1.5", "1e6", " 12", "9223372036854775808"} {
 		if _, _, err := livePDSByteProbeConfig("1", value); err == nil || !strings.Contains(err.Error(), "DOTTIE_LIVE_PDS_BYTES") || !strings.Contains(err.Error(), "DOTTIE_LIVE_PDS_BYTE_CEILING") {
-			t.Errorf("ceiling %q error = %v", value, err)
+			assert.Error(t, err, "ceiling %q error = %v", value, err)
+			if err != nil {
+				assert.Contains(t, err.Error(), "DOTTIE_LIVE_PDS_BYTES", "ceiling %q error = %v", value, err)
+				assert.Contains(t, err.Error(), "DOTTIE_LIVE_PDS_BYTE_CEILING", "ceiling %q error = %v", value, err)
+			}
 		}
 	}
 	enabled, ceiling, err := livePDSByteProbeConfig("1", "123")
 	if err != nil || !enabled || ceiling != 123 {
-		t.Fatalf("valid size-probe config = %t %d %v", enabled, ceiling, err)
+		require.NoError(t, err, "valid size-probe config = %t %d %v", enabled, ceiling, err)
+		require.True(t, enabled, "valid size-probe config = %t %d %v", enabled, ceiling, err)
+		require.Equal(t, 123, ceiling, "valid size-probe config = %t %d %v", enabled, ceiling, err)
 	}
 	enabled, ceiling, err = livePDSByteProbeConfig("", "not-a-number")
 	if err != nil || enabled || ceiling != 0 {
-		t.Fatalf("disabled size-probe config = %t %d %v", enabled, ceiling, err)
+		require.NoError(t, err, "disabled size-probe config = %t %d %v", enabled, ceiling, err)
+		require.False(t, enabled, "disabled size-probe config = %t %d %v", enabled, ceiling, err)
+		require.Equal(t, 0, ceiling, "disabled size-probe config = %t %d %v", enabled, ceiling, err)
 	}
 }

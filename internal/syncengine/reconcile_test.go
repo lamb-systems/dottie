@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/stretchr/testify/require"
 )
 
 func fileBinding(t *testing.T) Options {
@@ -22,7 +23,7 @@ func fileBinding(t *testing.T) Options {
 		Root:          &model.FileRoot{Base: model.RootHome, Path: "prefs", Kind: model.SelectionDirectory},
 	})
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	return Options{Bindings: []TargetBinding{binding}}
 }
@@ -31,7 +32,7 @@ func settingsBinding(t *testing.T) Options {
 	t.Helper()
 	binding, err := NewTargetBinding(model.Target{ID: "settings", Source: model.SourceGNOME, SourceVersion: model.SourceVersion})
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	return Options{Bindings: []TargetBinding{binding}}
 }
@@ -70,7 +71,7 @@ func entrySlice(entry *model.Entry) []model.Entry {
 func onlyDecision(t *testing.T, plan Plan) Decision {
 	t.Helper()
 	if len(plan.Decisions) != 1 {
-		t.Fatalf("got %d decisions, want one", len(plan.Decisions))
+		require.Len(t, plan.Decisions, 1, "got %d decisions, want one", len(plan.Decisions))
 	}
 	return plan.Decisions[0]
 }
@@ -88,7 +89,7 @@ func reconcileOne(t *testing.T, status BaseStatus, base, local, remote *model.En
 		options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	return onlyDecision(t, plan)
 }
@@ -131,7 +132,8 @@ func TestReconcileDecisionTable(t *testing.T) {
 			}
 			decision := reconcileOne(t, test.status, test.base, test.local, test.remote, options)
 			if decision.Action != test.action || decision.Reason != test.reason {
-				t.Fatalf("decision = %s/%s, want %s/%s", decision.Action, decision.Reason, test.action, test.reason)
+				require.Equal(t, test.action, decision.Action, "decision = %s/%s, want %s/%s", decision.Action, decision.Reason, test.action, test.reason)
+				require.Equal(t, test.reason, decision.Reason, "decision = %s/%s, want %s/%s", decision.Action, decision.Reason, test.action, test.reason)
 			}
 		})
 	}
@@ -142,19 +144,21 @@ func TestReconcileKnownAbsentSettingsDeletionRequiresCoverage(t *testing.T) {
 	value := setting(model.SettingPresent, "b", "true")
 	plan, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{value}}, LocalView{}, []model.Entry{value}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.Action != ActionBlocked || decision.Reason != ReasonCoverage {
-		t.Fatalf("uncovered setting deletion = %+v", decision)
+		require.Equal(t, ActionBlocked, decision.Action, "uncovered setting deletion = %+v", decision)
+		require.Equal(t, ReasonCoverage, decision.Reason, "uncovered setting deletion = %+v", decision)
 	}
 	plan, err = Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{value}}, LocalView{Coverage: []string{"settings"}}, []model.Entry{value}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision = onlyDecision(t, plan)
 	if decision.Action != ActionDeleteRemote || decision.States.Local != ValueKnownAbsent {
-		t.Fatalf("covered setting deletion = %+v", decision)
+		require.Equal(t, ActionDeleteRemote, decision.Action, "covered setting deletion = %+v", decision)
+		require.Equal(t, ValueKnownAbsent, decision.States.Local, "covered setting deletion = %+v", decision)
 	}
 }
 
@@ -169,11 +173,12 @@ func TestReconcileSettingsResetAndCanonicalTypedText(t *testing.T) {
 		[]model.Entry{remote}, options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.Action != ActionUpload || decision.States.Local != ValueSettingReset {
-		t.Fatalf("reset decision = %+v", decision)
+		require.Equal(t, ActionUpload, decision.Action, "reset decision = %+v", decision)
+		require.Equal(t, ValueSettingReset, decision.States.Local, "reset decision = %+v", decision)
 	}
 	remoteChange := setting(model.SettingPresent, "b", "false")
 	plan, err = Reconcile(
@@ -182,11 +187,12 @@ func TestReconcileSettingsResetAndCanonicalTypedText(t *testing.T) {
 		[]model.Entry{remoteChange}, options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision = onlyDecision(t, plan)
 	if decision.Action != ActionConflict || decision.Reason != ReasonDivergence {
-		t.Fatalf("reset versus present setting divergence = %+v", decision)
+		require.Equal(t, ActionConflict, decision.Action, "reset versus present setting divergence = %+v", decision)
+		require.Equal(t, ReasonDivergence, decision.Reason, "reset versus present setting divergence = %+v", decision)
 	}
 
 	exact := setting(model.SettingPresent, "b", "true")
@@ -194,10 +200,11 @@ func TestReconcileSettingsResetAndCanonicalTypedText(t *testing.T) {
 	typeDifference := setting(model.SettingPresent, "s", "true")
 	exactCopy := setting(model.SettingPresent, "b", "true")
 	if !entriesEqual(&exact, &exactCopy) {
-		t.Fatal("same canonical type and text must be equal")
+		require.True(t, entriesEqual(&exact, &exactCopy), "same canonical type and text must be equal")
 	}
 	if entriesEqual(&exact, &textDifference) || entriesEqual(&exact, &typeDifference) {
-		t.Fatal("setting equality must compare canonical Type and Text exactly")
+		require.False(t, entriesEqual(&exact, &textDifference), "setting equality must compare canonical Type and Text exactly")
+		require.False(t, entriesEqual(&exact, &typeDifference), "setting equality must compare canonical Type and Text exactly")
 	}
 }
 
@@ -215,14 +222,16 @@ func TestReconcileUnknownPropagationAndUntracked(t *testing.T) {
 			[]model.Entry{root, a, child, other}, options,
 		)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 		if len(plan.Decisions) != 4 {
-			t.Fatalf("got %d decisions", len(plan.Decisions))
+			require.Len(t, plan.Decisions, 4, "got %d decisions", len(plan.Decisions))
 		}
 		for _, decision := range plan.Decisions {
 			if decision.Action != ActionBlocked || decision.Reason != ReasonUnknown || decision.States.Local != ValueUnknown {
-				t.Fatalf("root unknown did not block %s: %+v", decision.Key.FilePath, decision)
+				require.Equal(t, ActionBlocked, decision.Action, "root unknown did not block %s: %+v", decision.Key.FilePath, decision)
+				require.Equal(t, ReasonUnknown, decision.Reason, "root unknown did not block %s: %+v", decision.Key.FilePath, decision)
+				require.Equal(t, ValueUnknown, decision.States.Local, "root unknown did not block %s: %+v", decision.Key.FilePath, decision)
 			}
 		}
 	})
@@ -236,15 +245,16 @@ func TestReconcileUnknownPropagationAndUntracked(t *testing.T) {
 			[]model.Entry{directory("a"), regular("a/file", "child"), regular("other", "other")}, options,
 		)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 		for _, decision := range plan.Decisions {
 			if decision.Key.FilePath == "other" {
 				if decision.Action != ActionDownload {
-					t.Fatalf("unrelated key decision = %+v", decision)
+					require.Equal(t, ActionDownload, decision.Action, "unrelated key decision = %+v", decision)
 				}
 			} else if decision.Action != ActionBlocked || decision.Reason != ReasonUnknown {
-				t.Fatalf("unknown directory did not block %s: %+v", decision.Key.FilePath, decision)
+				require.Equal(t, ActionBlocked, decision.Action, "unknown directory did not block %s: %+v", decision.Key.FilePath, decision)
+				require.Equal(t, ReasonUnknown, decision.Reason, "unknown directory did not block %s: %+v", decision.Key.FilePath, decision)
 			}
 		}
 	})
@@ -259,11 +269,13 @@ func TestReconcileUnknownPropagationAndUntracked(t *testing.T) {
 			[]model.Entry{value}, options,
 		)
 		if err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 		decision := onlyDecision(t, plan)
 		if decision.Action != ActionBlocked || decision.Reason != ReasonUntracked || decision.States.Local != ValueUntracked {
-			t.Fatalf("untracked key decision = %+v", decision)
+			require.Equal(t, ActionBlocked, decision.Action, "untracked key decision = %+v", decision)
+			require.Equal(t, ReasonUntracked, decision.Reason, "untracked key decision = %+v", decision)
+			require.Equal(t, ValueUntracked, decision.States.Local, "untracked key decision = %+v", decision)
 		}
 	})
 }
@@ -277,11 +289,12 @@ func TestReconcileCoverageBlocksDeletion(t *testing.T) {
 		[]model.Entry{value}, options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.Action != ActionBlocked || decision.Reason != ReasonCoverage {
-		t.Fatalf("uncovered deletion = %+v", decision)
+		require.Equal(t, ActionBlocked, decision.Action, "uncovered deletion = %+v", decision)
+		require.Equal(t, ReasonCoverage, decision.Reason, "uncovered deletion = %+v", decision)
 	}
 
 	plan, err = Reconcile(
@@ -290,11 +303,11 @@ func TestReconcileCoverageBlocksDeletion(t *testing.T) {
 		[]model.Entry{value}, options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision = onlyDecision(t, plan)
 	if decision.Action != ActionDeleteRemote {
-		t.Fatalf("covered deletion = %+v", decision)
+		require.Equal(t, ActionDeleteRemote, decision.Action, "covered deletion = %+v", decision)
 	}
 }
 
@@ -308,28 +321,31 @@ func TestReconcileStaleBaseConservatism(t *testing.T) {
 		[]model.Entry{base}, options,
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.Action != ActionConflict || decision.Reason != ReasonStaleBase {
-		t.Fatalf("stale deletion = %+v", decision)
+		require.Equal(t, ActionConflict, decision.Action, "stale deletion = %+v", decision)
+		require.Equal(t, ReasonStaleBase, decision.Reason, "stale deletion = %+v", decision)
 	}
 	if decision.Action == ActionDeleteLocal || decision.Action == ActionDeleteRemote {
-		t.Fatalf("stale base emitted deletion action: %+v", decision)
+		require.NotEqual(t, ActionDeleteLocal, decision.Action, "stale base emitted deletion action: %+v", decision)
+		require.NotEqual(t, ActionDeleteRemote, decision.Action, "stale base emitted deletion action: %+v", decision)
 	}
 
 	local := regular("config", "local")
 	remote := regular("config", "remote")
 	stale, err := Reconcile(BaseView{Status: BaseStale, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	ordinary, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if onlyDecision(t, stale).Reason != ReasonStaleBase || onlyDecision(t, ordinary).Reason != ReasonDivergence {
-		t.Fatalf("stale and ordinary divergence were not distinguished: %s / %s", onlyDecision(t, stale).Reason, onlyDecision(t, ordinary).Reason)
+		require.Equal(t, ReasonStaleBase, onlyDecision(t, stale).Reason, "stale and ordinary divergence were not distinguished: %s / %s", onlyDecision(t, stale).Reason, onlyDecision(t, ordinary).Reason)
+		require.Equal(t, ReasonDivergence, onlyDecision(t, ordinary).Reason, "stale and ordinary divergence were not distinguished: %s / %s", onlyDecision(t, stale).Reason, onlyDecision(t, ordinary).Reason)
 	}
 }
 
@@ -354,17 +370,18 @@ func TestReconcileStructuralPass(t *testing.T) {
 				[]model.Entry{parent, child}, options,
 			)
 			if err != nil {
-				t.Fatal(err)
+				require.NoError(t, err)
 			}
 			if len(plan.Decisions) != 2 {
-				t.Fatalf("got %d decisions", len(plan.Decisions))
+				require.Len(t, plan.Decisions, 2, "got %d decisions", len(plan.Decisions))
 			}
 			for _, decision := range plan.Decisions {
 				if decision.Action != ActionConflict || decision.Reason != ReasonStructural {
-					t.Fatalf("decision was not promoted to structural conflict: %+v", decision)
+					require.Equal(t, ActionConflict, decision.Action, "decision was not promoted to structural conflict: %+v", decision)
+					require.Equal(t, ReasonStructural, decision.Reason, "decision was not promoted to structural conflict: %+v", decision)
 				}
 				if decision.Key.FilePath == "parent" && decision.States.Local != test.wantLocal {
-					t.Fatalf("parent local state = %s, want %s", decision.States.Local, test.wantLocal)
+					require.False(t, decision.Key.FilePath == "parent" && decision.States.Local != test.wantLocal, "parent local state = %s, want %s", decision.States.Local, test.wantLocal)
 				}
 			}
 		})
@@ -377,27 +394,31 @@ func TestReconcileBindingsFingerprintsAndValidation(t *testing.T) {
 	local := regular("config", "local payload")
 	decision := reconcileOne(t, BaseKnown, &base, &local, &base, options)
 	if decision.Action != ActionUpload {
-		t.Fatalf("decision = %+v", decision)
+		require.Equal(t, ActionUpload, decision.Action, "decision = %+v", decision)
 	}
 	if err := decision.Binding.Validate(); err != nil {
-		t.Fatalf("decision lost validated target binding: %v", err)
+		require.NoError(t, err, "decision lost validated target binding: %v", err)
 	}
 	if decision.Binding.Fingerprint == "" || decision.Fingerprints.Base == nil || decision.Fingerprints.Local == nil || decision.Fingerprints.Remote == nil {
-		t.Fatalf("decision lost target or entry fingerprints: %+v", decision)
+		require.NotEqual(t, "", decision.Binding.Fingerprint, "decision lost target or entry fingerprints: %+v", decision)
+		require.NotNil(t, decision.Fingerprints.Base, "decision lost target or entry fingerprints: %+v", decision)
+		require.NotNil(t, decision.Fingerprints.Local, "decision lost target or entry fingerprints: %+v", decision)
+		require.NotNil(t, decision.Fingerprints.Remote, "decision lost target or entry fingerprints: %+v", decision)
 	}
 	baseDigest := sha256.Sum256([]byte("base payload"))
 	if decision.Fingerprints.Base.Digest != hex.EncodeToString(baseDigest[:]) || decision.Fingerprints.Local.Size != int64(len("local payload")) {
-		t.Fatalf("incorrect view fingerprints: %+v", decision.Fingerprints)
+		require.Equal(t, hex.EncodeToString(baseDigest[:]), decision.Fingerprints.Base.Digest, "incorrect view fingerprints: %+v", decision.Fingerprints)
+		require.Equal(t, int64(len("local payload")), decision.Fingerprints.Local.Size, "incorrect view fingerprints: %+v", decision.Fingerprints)
 	}
 	local.File.Content[0] = 'X'
 	if string(decision.Local.File.Content) != "local payload" {
-		t.Fatal("plan content aliases mutable input view")
+		require.Equal(t, "local payload", string(decision.Local.File.Content), "plan content aliases mutable input view")
 	}
 
 	bad := options.Bindings[0]
 	bad.Fingerprint = strings.Repeat("0", 64)
 	if _, err := Reconcile(BaseView{Status: BaseMissing}, LocalView{}, nil, Options{Bindings: []TargetBinding{bad}}); err == nil {
-		t.Fatal("invalid target fingerprint accepted")
+		require.Error(t, err, "invalid target fingerprint accepted")
 	}
 }
 
@@ -408,33 +429,36 @@ func TestReconcileDiagnosticRedactsPayload(t *testing.T) {
 	remote := regular("config", "secret-remote-payload")
 	plan, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	encoded, err := EncodeDiagnostic(plan)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	for _, secret := range []string{"secret-base-payload", "secret-local-payload", "secret-remote-payload"} {
 		if bytes.Contains(encoded, []byte(secret)) || bytes.Contains(encoded, []byte(base64.StdEncoding.EncodeToString([]byte(secret)))) {
-			t.Fatalf("diagnostic exposed payload %q: %s", secret, encoded)
+			require.NotContains(t, encoded, []byte(secret), "diagnostic exposed payload %q: %s", secret, encoded)
+			require.NotContains(t, encoded, []byte(base64.StdEncoding.EncodeToString([]byte(secret))), "diagnostic exposed payload %q: %s", secret, encoded)
 		}
 	}
 	planJSON, err := json.Marshal(plan)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if !bytes.Contains(planJSON, []byte(base64.StdEncoding.EncodeToString([]byte("secret-local-payload")))) {
-		t.Fatalf("test plan did not contain serializable payload bytes: %s", planJSON)
+		require.Contains(t, planJSON, []byte(base64.StdEncoding.EncodeToString([]byte("secret-local-payload"))), "test plan did not contain serializable payload bytes: %s", planJSON)
 	}
 	if bytes.Equal(encoded, planJSON) {
-		t.Fatal("diagnostic encoder emitted the plan rather than the redacted diagnostic")
+		require.NotEqual(t, planJSON, encoded, "diagnostic encoder emitted the plan rather than the redacted diagnostic")
 	}
 	var diagnostic Diagnostic
 	if err := json.Unmarshal(encoded, &diagnostic); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if len(diagnostic.Decisions) != 1 || diagnostic.Decisions[0].LocalDigest == "" || diagnostic.Decisions[0].Action != ActionConflict {
-		t.Fatalf("diagnostic omitted expected key/action/reason/digest data: %+v", diagnostic)
+		require.Len(t, diagnostic.Decisions, 1, "diagnostic omitted expected key/action/reason/digest data: %+v", diagnostic)
+		require.NotEqual(t, "", diagnostic.Decisions[0].LocalDigest, "diagnostic omitted expected key/action/reason/digest data: %+v", diagnostic)
+		require.Equal(t, ActionConflict, diagnostic.Decisions[0].Action, "diagnostic omitted expected key/action/reason/digest data: %+v", diagnostic)
 	}
 }
 
@@ -445,14 +469,14 @@ func TestReconcileDeterminismAndClockIndependence(t *testing.T) {
 	remote := regular("config", "remote")
 	first, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	second, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if !reflect.DeepEqual(first, second) {
-		t.Fatalf("identical inputs produced different plans: %+v / %+v", first, second)
+		require.Equal(t, second, first, "identical inputs produced different plans: %+v / %+v", first, second)
 	}
 }
 
@@ -480,11 +504,11 @@ func TestReconcilePropertyTableAgainstIndependentOracle(t *testing.T) {
 						entrySlice(remote), options,
 					)
 					if err != nil {
-						t.Fatalf("status=%s base=%d local=%d remote=%d: %v", status, baseIndex, localIndex, remoteIndex, err)
+						require.NoError(t, err, "status=%s base=%d local=%d remote=%d: %v", status, baseIndex, localIndex, remoteIndex, err)
 					}
 					if baseCopy == nil && local == nil && remote == nil {
 						if len(plan.Decisions) != 0 {
-							t.Fatalf("empty inputs produced decisions: %+v", plan)
+							require.Len(t, plan.Decisions, 0, "empty inputs produced decisions: %+v", plan)
 						}
 						continue
 					}
@@ -494,14 +518,16 @@ func TestReconcilePropertyTableAgainstIndependentOracle(t *testing.T) {
 						entrySlice(remote), options,
 					)
 					if err != nil || !reflect.DeepEqual(plan, repeated) {
-						t.Fatalf("non-deterministic row: status=%s base=%d local=%d remote=%d: %v", status, baseIndex, localIndex, remoteIndex, err)
+						require.NoError(t, err, "non-deterministic row: status=%s base=%d local=%d remote=%d: %v", status, baseIndex, localIndex, remoteIndex, err)
+						require.Equal(t, repeated, plan, "non-deterministic row: status=%s base=%d local=%d remote=%d: %v", status, baseIndex, localIndex, remoteIndex, err)
 					}
 					decision := onlyDecision(t, plan)
 					if decision.Action != wantAction || decision.Reason != wantReason {
-						t.Fatalf("status=%s base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", status, baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
+						require.Equal(t, wantAction, decision.Action, "status=%s base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", status, baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
+						require.Equal(t, wantReason, decision.Reason, "status=%s base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", status, baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
 					}
 					if status == BaseStale && (decision.Action == ActionDeleteLocal || decision.Action == ActionDeleteRemote) {
-						t.Fatalf("stale case emitted deletion: status=%s base=%d local=%d remote=%d", status, baseIndex, localIndex, remoteIndex)
+						require.False(t, status == BaseStale && (decision.Action == ActionDeleteLocal || decision.Action == ActionDeleteRemote), "stale case emitted deletion: status=%s base=%d local=%d remote=%d", status, baseIndex, localIndex, remoteIndex)
 					}
 				}
 			}
@@ -518,27 +544,29 @@ func TestReconcilePropertyTableAgainstIndependentOracle(t *testing.T) {
 					entrySlice(remote), options,
 				)
 				if err != nil {
-					t.Fatalf("missing base local=%d remote=%d: %v", localIndex, remoteIndex, err)
+					require.NoError(t, err, "missing base local=%d remote=%d: %v", localIndex, remoteIndex, err)
 				}
 				if local == nil && remote == nil {
 					if len(plan.Decisions) != 0 {
-						t.Fatalf("empty missing-base inputs produced decisions: %+v", plan)
+						require.Len(t, plan.Decisions, 0, "empty missing-base inputs produced decisions: %+v", plan)
 					}
 					continue
 				}
 				repeated, err := Reconcile(BaseView{Status: BaseMissing}, LocalView{Entries: entrySlice(local), Coverage: []string{"files"}}, entrySlice(remote), options)
 				if err != nil || !reflect.DeepEqual(plan, repeated) {
-					t.Fatalf("non-deterministic missing-base row local=%d remote=%d: %v", localIndex, remoteIndex, err)
+					require.NoError(t, err, "non-deterministic missing-base row local=%d remote=%d: %v", localIndex, remoteIndex, err)
+					require.Equal(t, repeated, plan, "non-deterministic missing-base row local=%d remote=%d: %v", localIndex, remoteIndex, err)
 				}
 				decision := onlyDecision(t, plan)
 				if decision.Action != wantAction || decision.Reason != wantReason {
-					t.Fatalf("missing base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
+					require.Equal(t, wantAction, decision.Action, "missing base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
+					require.Equal(t, wantReason, decision.Reason, "missing base=%d local=%d remote=%d => %s/%s, oracle wants %s/%s", baseIndex, localIndex, remoteIndex, decision.Action, decision.Reason, wantAction, wantReason)
 				}
 			}
 		}
 	}
 	if cases != 275 {
-		t.Fatalf("oracle checked %d cases, want 275", cases)
+		require.Equal(t, 275, cases, "oracle checked %d cases, want 275", cases)
 	}
 }
 
@@ -649,7 +677,7 @@ func TestReconcileRejectsInvalidViews(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := Reconcile(test.base, test.local, test.other, options); err == nil {
-				t.Fatal("invalid view was accepted")
+				require.Error(t, err, "invalid view was accepted")
 			}
 		})
 	}
@@ -662,7 +690,7 @@ func TestReconcileOrdering(t *testing.T) {
 	a := regular("a", "a")
 	plan, err := Reconcile(BaseView{Status: BaseMissing}, LocalView{}, []model.Entry{z, root, a}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	got := make([]string, len(plan.Decisions))
 	for index, decision := range plan.Decisions {
@@ -670,7 +698,7 @@ func TestReconcileOrdering(t *testing.T) {
 	}
 	want := []string{".", "a", "z"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("decision order %v, want %v", got, want)
+		require.Equal(t, want, got, "decision order %v, want %v", got, want)
 	}
 }
 
@@ -681,15 +709,16 @@ func TestReconcileNoLostEditUsesOracle(t *testing.T) {
 	remote := regular("config", "remote-edit")
 	wantAction, wantReason := oracleDecision(BaseKnown, &base, &local, &remote)
 	if wantAction != ActionConflict {
-		t.Fatalf("independent oracle did not preserve the concurrent edit: %s/%s", wantAction, wantReason)
+		require.Equal(t, ActionConflict, wantAction, "independent oracle did not preserve the concurrent edit: %s/%s", wantAction, wantReason)
 	}
 	plan, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{remote}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.Action != wantAction || decision.Reason != wantReason {
-		t.Fatalf("distinguishable concurrent edits disagree with oracle: got %s/%s, oracle %s/%s", decision.Action, decision.Reason, wantAction, wantReason)
+		require.Equal(t, wantAction, decision.Action, "distinguishable concurrent edits disagree with oracle: got %s/%s, oracle %s/%s", decision.Action, decision.Reason, wantAction, wantReason)
+		require.Equal(t, wantReason, decision.Reason, "distinguishable concurrent edits disagree with oracle: got %s/%s, oracle %s/%s", decision.Action, decision.Reason, wantAction, wantReason)
 	}
 }
 
@@ -700,7 +729,7 @@ func TestReconcileFingerprintDoesNotDependOnClockOrInode(t *testing.T) {
 	first := reconcileOne(t, BaseMissing, nil, &firstEntry, nil, options)
 	second := reconcileOne(t, BaseMissing, nil, &secondEntry, nil, options)
 	if !reflect.DeepEqual(first.Fingerprints.Local, second.Fingerprints.Local) {
-		t.Fatalf("identical entry fingerprints differ: %+v / %+v", first.Fingerprints.Local, second.Fingerprints.Local)
+		require.Equal(t, second.Fingerprints.Local, first.Fingerprints.Local, "identical entry fingerprints differ: %+v / %+v", first.Fingerprints.Local, second.Fingerprints.Local)
 	}
 }
 
@@ -710,28 +739,28 @@ func TestReconcileAllStateClassifications(t *testing.T) {
 	local := tombstone("config")
 	plan, err := Reconcile(BaseView{Status: BaseKnown, Entries: []model.Entry{base}}, LocalView{Entries: []model.Entry{local}, Coverage: []string{"files"}}, []model.Entry{base}, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	decision := onlyDecision(t, plan)
 	if decision.States != (SideStates{Base: ValuePresent, Local: ValueTombstone, Remote: ValuePresent}) {
-		t.Fatalf("classification = %+v", decision.States)
+		require.Equal(t, (SideStates{Base: ValuePresent, Local: ValueTombstone, Remote: ValuePresent}), decision.States, "classification = %+v", decision.States)
 	}
 
 	root := model.EntryKey{TargetID: "files", Source: model.SourceFiles, FilePath: "."}
 	plan, err = Reconcile(BaseView{Status: BaseMissing}, LocalView{Unknown: []model.EntryKey{root}}, nil, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if onlyDecision(t, plan).States.Local != ValueUnknown {
-		t.Fatalf("unknown was not classified: %+v", onlyDecision(t, plan).States)
+		require.Equal(t, ValueUnknown, onlyDecision(t, plan).States.Local, "unknown was not classified: %+v", onlyDecision(t, plan).States)
 	}
 
 	plan, err = Reconcile(BaseView{Status: BaseMissing}, LocalView{Untracked: []model.EntryKey{root}}, nil, options)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if onlyDecision(t, plan).States.Local != ValueUntracked {
-		t.Fatalf("untracked was not classified: %+v", onlyDecision(t, plan).States)
+		require.Equal(t, ValueUntracked, onlyDecision(t, plan).States.Local, "untracked was not classified: %+v", onlyDecision(t, plan).States)
 	}
 }
 
@@ -739,7 +768,7 @@ func TestReconcileTargetSourceBinding(t *testing.T) {
 	options := fileBinding(t)
 	settingEntry := model.Entry{TargetID: "files", Setting: &model.SettingEntry{SchemaID: "org.example.Settings", Path: "/", Key: "enabled", State: model.SettingReset}}
 	if _, err := Reconcile(BaseView{Status: BaseKnown}, LocalView{Entries: []model.Entry{settingEntry}}, nil, options); err == nil {
-		t.Fatal("entry source mismatch accepted")
+		require.Error(t, err, "entry source mismatch accepted")
 	}
 }
 
@@ -751,16 +780,17 @@ func TestReconcileStateTableRowsAreTotal(t *testing.T) {
 				for _, remote := range []*model.Entry{nil, entryPtr(tombstone("config")), entryPtr(regular("config", "remote"))} {
 					plan, err := Reconcile(BaseView{Status: status, Entries: entrySlice(base)}, LocalView{Entries: entrySlice(local), Coverage: []string{"files"}}, entrySlice(remote), options)
 					if err != nil {
-						t.Fatalf("%s: %v", status, err)
+						require.NoError(t, err, "%s: %v", status, err)
 					}
 					if base == nil && local == nil && remote == nil {
 						if len(plan.Decisions) != 0 {
-							t.Fatalf("empty row produced decisions: %+v", plan)
+							require.Len(t, plan.Decisions, 0, "empty row produced decisions: %+v", plan)
 						}
 						continue
 					}
 					if len(plan.Decisions) != 1 || plan.Decisions[0].Action == "" {
-						t.Fatalf("non-total row: status=%s base=%v local=%v remote=%v plan=%+v", status, base, local, remote, plan)
+						require.Len(t, plan.Decisions, 1, "non-total row: status=%s base=%v local=%v remote=%v plan=%+v", status, base, local, remote, plan)
+						require.NotEqual(t, Action(""), plan.Decisions[0].Action, "non-total row: status=%s base=%v local=%v remote=%v plan=%+v", status, base, local, remote, plan)
 					}
 				}
 			}

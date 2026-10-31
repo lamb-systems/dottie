@@ -317,7 +317,7 @@ func TestTargetsCommandDisablesImplicitInputs(t *testing.T) {
 			case *urfave.StringSliceFlag:
 				assert.Empty(t, typed.Sources.Chain, "%s --%s sources", command.Name, typed.Name)
 			default:
-				t.Fatalf("unexpected flag type %T on %s", flag, command.Name)
+				require.FailNow(t, "unexpected flag type %T on %s", flag, command.Name)
 			}
 		}
 		for _, child := range command.Commands {

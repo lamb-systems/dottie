@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -333,17 +332,11 @@ func TestStateLockHelperProcess(t *testing.T) {
 	store, err := Open(paths)
 	expectLocked := os.Getenv("DOTTIE_STATE_HELPER_EXPECT") == "locked"
 	if expectLocked {
-		if !errors.Is(err, ErrStateLocked) {
-			t.Fatalf("expected locked state, got store=%v err=%v", store, err)
-		}
+		require.ErrorIs(t, err, ErrStateLocked, "expected locked state, got store=%v err=%v", store, err)
 		return
 	}
-	if err != nil {
-		t.Fatalf("expected lock to be available: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "expected lock to be available: %v", err)
+	require.NoError(t, store.Close())
 }
 
 func TestCrossProcessLockAndReacquire(t *testing.T) {

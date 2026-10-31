@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T) {
@@ -18,7 +21,7 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 	key := generateTestKey(t)
 	privateKey, err := marshalPrivateKey(key)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	session := &Session{
 		DID:            testDID,
@@ -30,7 +33,7 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 		DPoPPrivateKey: privateKey,
 	}
 	if err := client.SaveSession(context.Background(), session); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	clientID := client.ClientID
 	restarted, err := NewClient(clientID, store,
@@ -39,38 +42,38 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 		WithRandom(&counterReader{}),
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	loaded, err := restarted.LoadSession(context.Background(), testDID)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if loaded.AccessToken.Reveal() != "" || loaded.RefreshToken.Reveal() != "old-refresh-token-shape" {
-		t.Fatalf("restart did not load the one-item refresh session: %#v", loaded)
+		require.False(t, loaded.AccessToken.Reveal() != "" || loaded.RefreshToken.Reveal() != "old-refresh-token-shape", "restart did not load the one-item refresh session: %#v", loaded)
 	}
 	fake.tokenRefresh = "rotated-refresh-token-shape"
 	fake.tokenAccess = "rotated-access-token-shape"
 	refreshed, err := restarted.Refresh(context.Background(), testHandle, loaded)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" || refreshed.AccessToken.Reveal() != "rotated-access-token-shape" {
-		t.Fatal("refresh response did not replace the rotated tokens")
+		require.False(t, refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" || refreshed.AccessToken.Reveal() != "rotated-access-token-shape", "refresh response did not replace the rotated tokens")
 	}
 	reloaded, err := restarted.LoadSession(context.Background(), testDID)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if reloaded.RefreshToken.Reveal() != "rotated-refresh-token-shape" {
-		t.Fatal("rotated refresh token did not survive the restart boundary")
+		require.Equal(t, "rotated-refresh-token-shape", reloaded.RefreshToken.Reveal(), "rotated refresh token did not survive the restart boundary")
 	}
 	envelope := store.raw(sessionItemName(clientID, testDID))
 	if strings.Contains(string(envelope), "rotated-access-token-shape") {
-		t.Fatal("access token was persisted in the session envelope")
+		require.NotContains(t, string(envelope), "rotated-access-token-shape", "access token was persisted in the session envelope")
 	}
 	var persisted sessionEnvelope
 	if err := json.Unmarshal(envelope, &persisted); err != nil || persisted.RefreshToken != "rotated-refresh-token-shape" {
-		t.Fatalf("invalid atomic session envelope: %+v, %v", persisted, err)
+		require.False(t, err != nil || persisted.RefreshToken != "rotated-refresh-token-shape", "invalid atomic session envelope: %+v, %v", persisted, err)
 	}
 }
 
@@ -82,10 +85,10 @@ func TestLoadSessionRejectsPartialAndWrongVersionEnvelopes(t *testing.T) {
 		`{"version":2,"did":"` + testDID + `","issuer":"https://bsky.social","token_endpoint":"https://bsky.social/token","scopes":["atproto"],"refresh_token":"refresh","dpop_private_key":"not-a-key"}`,
 	} {
 		if err := store.Save(context.Background(), name, []byte(encoded)); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 		if _, err := client.LoadSession(context.Background(), testDID); err != ErrSessionUnavailable {
-			t.Fatalf("LoadSession error = %v, want forced re-login", err)
+			require.ErrorIs(t, err, ErrSessionUnavailable, "LoadSession error = %v, want forced re-login", err)
 		}
 	}
 }
@@ -94,19 +97,19 @@ func TestRefreshRejectsChangedIssuerOrTokenEndpoint(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
 	key, err := marshalPrivateKey(generateTestKey(t))
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	session := &Session{DID: testDID, Issuer: "https://other.example", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, RefreshToken: NewSecret("refresh"), DPoPPrivateKey: key}
 	if _, err := client.Refresh(context.Background(), testHandle, session); err == nil {
-		t.Fatal("refresh accepted a changed issuer")
+		require.Error(t, err, "refresh accepted a changed issuer")
 	}
 	session.Issuer = fake.metadataIssuer
 	session.TokenEndpoint = "https://other.example/token"
 	if _, err := client.Refresh(context.Background(), testHandle, session); err == nil {
-		t.Fatal("refresh accepted a changed token endpoint")
+		require.Error(t, err, "refresh accepted a changed token endpoint")
 	}
 	if fake.tokenRequests != 0 {
-		t.Fatalf("changed discovery caused %d credential-bearing requests", fake.tokenRequests)
+		require.Equal(t, 0, fake.tokenRequests, "changed discovery caused %d credential-bearing requests", fake.tokenRequests)
 	}
 }
 
@@ -114,17 +117,17 @@ func TestNoTokenMaterialIsWrittenUnderStateCacheOrConfig(t *testing.T) {
 	_, client, _ := newFakeOAuth(t)
 	key, err := marshalPrivateKey(generateTestKey(t))
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	session := &Session{DID: testDID, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, AccessToken: NewSecret("access-token-shaped-value"), RefreshToken: NewSecret("refresh-token-shaped-value"), DPoPPrivateKey: key}
 	if err := client.SaveSession(context.Background(), session); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	root := t.TempDir()
 	for _, name := range []string{"state", "cache", "config"} {
 		path := filepath.Join(root, name)
 		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 		if err := filepath.WalkDir(path, func(file string, entry os.DirEntry, err error) error {
 			if err != nil {
@@ -144,7 +147,7 @@ func TestNoTokenMaterialIsWrittenUnderStateCacheOrConfig(t *testing.T) {
 			}
 			return nil
 		}); err != nil {
-			t.Fatal(err)
+			require.NoError(t, err)
 		}
 	}
 }
@@ -159,24 +162,24 @@ func TestSecretRedactionFormattingAndJSONMatrix(t *testing.T) {
 	for _, format := range []string{"%v", "%+v", "%s", "%q", "%#v"} {
 		output := fmt.Sprintf(format, record)
 		if !strings.Contains(output, redactionMarker) {
-			t.Errorf("format %s omitted redaction marker: %s", format, output)
+			assert.Contains(t, output, redactionMarker, "format %s omitted redaction marker: %s", format, output)
 		}
 		for _, raw := range []string{"authorization-code-secret", "access-token-secret", "refresh-token-secret", "private-key-secret"} {
 			if strings.Contains(output, raw) {
-				t.Errorf("format %s leaked %s", format, raw)
+				assert.NotContains(t, output, raw, "format %s leaked %s", format, raw)
 			}
 		}
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if strings.Count(string(encoded), redactionMarker) != 4 || strings.Contains(string(encoded), "private-key-secret") {
-		t.Fatalf("JSON did not structurally redact secrets: %s", encoded)
+		require.False(t, strings.Count(string(encoded), redactionMarker) != 4 || strings.Contains(string(encoded), "private-key-secret"), "JSON did not structurally redact secrets: %s", encoded)
 	}
 	text, err := record.Code.MarshalText()
 	if err != nil || string(text) != redactionMarker {
-		t.Fatalf("MarshalText = %q, %v", text, err)
+		require.False(t, err != nil || string(text) != redactionMarker, "MarshalText = %q, %v", text, err)
 	}
 }
 
@@ -185,10 +188,10 @@ func TestSessionKeyNameBindsClientAndDID(t *testing.T) {
 	rightClient := sessionItemName("https://other.example/client", testDID)
 	rightDID := sessionItemName("https://dottie.example/client", "did:plc:zyxwvutsrqponmlkjihgfe00")
 	if left == rightClient || left == rightDID {
-		t.Fatal("keyring item name does not bind both client id and DID")
+		require.False(t, left == rightClient || left == rightDID, "keyring item name does not bind both client id and DID")
 	}
 	digest := sha256.Sum256([]byte("https://dottie.example/client\x00" + testDID))
 	if left != "session:"+base64.RawURLEncoding.EncodeToString(digest[:]) {
-		t.Fatalf("unexpected item name derivation: %q", left)
+		require.Equal(t, "session:"+base64.RawURLEncoding.EncodeToString(digest[:]), left, "unexpected item name derivation: %q", left)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCallbackAttemptsAreBounded(t *testing.T) {
@@ -13,7 +15,7 @@ func TestCallbackAttemptsAreBounded(t *testing.T) {
 	client.callbackAttempts = 2
 	flow, err := client.Begin(context.Background(), testHandle, []string{"atproto"}, []string{"atproto"})
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	defer flow.Close()
 	for attempt := 0; attempt < 2; attempt++ {
@@ -24,6 +26,6 @@ func TestCallbackAttemptsAreBounded(t *testing.T) {
 		_ = response.Body.Close()
 	}
 	if _, err := flow.Wait(context.Background()); err == nil || !strings.Contains(err.Error(), "attempt limit") {
-		t.Fatalf("callback attempt exhaustion error = %v", err)
+		require.ErrorContains(t, err, "attempt limit", "callback attempt exhaustion error = %v", err)
 	}
 }

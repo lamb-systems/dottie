@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 const testDID = "did:plc:abcdefghijklmnopqrstuvwx"
@@ -166,7 +168,7 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *Client, *memoryStore) {
 	t.Cleanup(fake.server.Close)
 	serverURL, err := url.Parse(fake.server.URL)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	store := newMemoryStore()
 	client, err := NewClient("https://dottie.example/client-metadata.json", store,
@@ -176,7 +178,7 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *Client, *memoryStore) {
 		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errorsNewNotFound{} }),
 	)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	return fake, client, store
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atclient"
 	"github.com/bluesky-social/indigo/atproto/syntax"
+	"github.com/stretchr/testify/require"
 )
 
 var errPDSResponseTooLarge = errors.New("PDS response body exceeds the configured limit")
@@ -173,14 +174,15 @@ func TestPDSAPIClientDoesNotFollowRedirect(t *testing.T) {
 	}))
 	api, err := newPDSAPIClient(server.URL, nil, server.Client().Transport)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	response, _, _, err := pdsDo(context.Background(), api, http.MethodGet, "com.atproto.server.describeServer", nil, nil, "")
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if response.StatusCode != http.StatusFound || followed != 0 {
-		t.Fatalf("redirect response status=%d followed=%d", response.StatusCode, followed)
+		require.Equal(t, http.StatusFound, response.StatusCode, "redirect response status=%d followed=%d", response.StatusCode, followed)
+		require.Equal(t, 0, followed, "redirect response status=%d followed=%d", response.StatusCode, followed)
 	}
 }
 
@@ -190,11 +192,11 @@ func TestPDSAPIClientBoundsResponseBodies(t *testing.T) {
 	}))
 	api, err := newPDSAPIClient(server.URL, nil, server.Client().Transport)
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	_, _, _, err = pdsDo(context.Background(), api, http.MethodGet, "com.atproto.server.describeServer", nil, nil, "")
 	if !errors.Is(err, errPDSResponseTooLarge) {
-		t.Fatalf("bounded response error = %v", err)
+		require.ErrorIs(t, err, errPDSResponseTooLarge, "bounded response error = %v", err)
 	}
 }
 

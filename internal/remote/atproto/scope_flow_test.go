@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/url"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestScopeGrantFailuresPreventSessionStorage(t *testing.T) {
@@ -22,15 +24,15 @@ func TestScopeGrantFailuresPreventSessionStorage(t *testing.T) {
 			fake.tokenScope = test.granted
 			flow, err := client.Begin(context.Background(), testHandle, test.requested, test.required)
 			if err != nil {
-				t.Fatal(err)
+				require.NoError(t, err)
 			}
 			defer flow.Close()
 			callbackFlow(t, flow, url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"scope-test-code"}})
 			if _, err := flow.Wait(context.Background()); err == nil {
-				t.Fatal("invalid scope grant was accepted")
+				require.Error(t, err, "invalid scope grant was accepted")
 			}
 			if len(store.items) != 0 {
-				t.Fatal("invalid scope grant was stored")
+				require.Len(t, store.items, 0, "invalid scope grant was stored")
 			}
 		})
 	}

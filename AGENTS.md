@@ -15,6 +15,11 @@
   override invalid signatures, wrong keys or failed policy checks.
 - Use synthetic fixtures and temporary homes, never real user dotfiles in tests.
   Live PDS tests require explicit disposable-account authorization.
+- All test assertions use testify: require for conditions that stop the test,
+  assert for ones that continue, with expected values first in Equal. Never call
+  require inside a goroutine; use assert plus an explicit return there. A missing
+  assertion means a bug, not a style choice, so `fmt.Errorf` is error
+  construction and stays unchanged; never gate on a `t.Error` substring grep.
 - Run make check, make test-race and make build for executable Go changes.
   Distinguish actual tests from unimplemented or skipped integration coverage.
 - Do not add source comments unless absolutely necessary. Put explanations in

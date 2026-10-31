@@ -2,8 +2,9 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type fakeKeyringBackend struct {
@@ -41,43 +42,29 @@ func (f *fakeKeyringBackend) Delete(_ context.Context, name string) error {
 func TestKeyringSaveReplacesExistingSameNamedItem(t *testing.T) {
 	backend := &fakeKeyringBackend{items: map[string][]byte{"client-did": []byte("old")}}
 	keyring, err := NewKeyringWithBackend(backend)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := keyring.Save(context.Background(), "client-did", []byte("new")); err != nil {
-		t.Fatal(err)
-	}
-	if len(backend.items) != 1 || string(backend.items["client-did"]) != "new" {
-		t.Fatalf("save did not replace the matching item: %#v", backend.items)
-	}
+	require.NoError(t, err)
+	require.NoError(t, keyring.Save(context.Background(), "client-did", []byte("new")))
+	require.Len(t, backend.items, 1, "save did not replace the matching item: %#v", backend.items)
+	require.Equal(t, "new", string(backend.items["client-did"]), "save did not replace the matching item: %#v", backend.items)
 	loaded, err := keyring.Load(context.Background(), "client-did")
-	if err != nil || string(loaded) != "new" {
-		t.Fatalf("load = %q, %v", loaded, err)
-	}
-	if err := keyring.Delete(context.Background(), "client-did"); err != nil {
-		t.Fatal(err)
-	}
-	if err := keyring.Delete(context.Background(), "client-did"); err != nil {
-		t.Fatalf("delete must be idempotent: %v", err)
-	}
+	require.NoError(t, err, "load = %q, %v", loaded, err)
+	require.Equal(t, "new", string(loaded), "load = %q, %v", loaded, err)
+	require.NoError(t, keyring.Delete(context.Background(), "client-did"))
+	err = keyring.Delete(context.Background(), "client-did")
+	require.NoError(t, err, "delete must be idempotent: %v", err)
 }
 
 func TestKeyringPreservesLockedAndUnavailableErrors(t *testing.T) {
 	for _, failure := range []error{ErrKeyringLocked, ErrKeyringUnavailable} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			keyring, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}, err: failure})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := keyring.Save(context.Background(), "item", []byte("secret")); !errors.Is(err, failure) {
-				t.Fatalf("Save error = %v, want %v", err, failure)
-			}
-			if _, err := keyring.Load(context.Background(), "item"); !errors.Is(err, failure) {
-				t.Fatalf("Load error = %v, want %v", err, failure)
-			}
-			if err := keyring.Delete(context.Background(), "item"); !errors.Is(err, failure) {
-				t.Fatalf("Delete error = %v, want %v", err, failure)
-			}
+			require.NoError(t, err)
+			err = keyring.Save(context.Background(), "item", []byte("secret"))
+			require.ErrorIs(t, err, failure, "Save error = %v, want %v", err, failure)
+			_, err = keyring.Load(context.Background(), "item")
+			require.ErrorIs(t, err, failure, "Load error = %v, want %v", err, failure)
+			err = keyring.Delete(context.Background(), "item")
+			require.ErrorIs(t, err, failure, "Delete error = %v, want %v", err, failure)
 		})
 	}
 }

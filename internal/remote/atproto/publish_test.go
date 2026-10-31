@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func validPublication(blobCID string) FencedPublication {
@@ -22,22 +24,23 @@ func TestPublishFencedAlwaysEncodesSwapCommit(t *testing.T) {
 	transport := &proofTransport{doStatus: 200, doBody: []byte(`{"commit":{"cid":"bafybeigdyrzt5sfp7udm7hu76uhy26nfjpy2ytma2if42f2qht6lmtkq3u"}}`)}
 	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
 	if err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	if transport.requestMethod != "POST" || transport.requestPath != "com.atproto.repo.applyWrites" {
-		t.Fatalf("applyWrites request=%s %s", transport.requestMethod, transport.requestPath)
+		require.False(t, transport.requestMethod != "POST" || transport.requestPath != "com.atproto.repo.applyWrites", "applyWrites request=%s %s", transport.requestMethod, transport.requestPath)
 	}
 	var input map[string]json.RawMessage
 	if err := json.Unmarshal(transport.requestBody, &input); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	var swapCommit string
-	if raw, ok := input["swapCommit"]; !ok || json.Unmarshal(raw, &swapCommit) != nil || swapCommit != fixture.root.String() {
-		t.Fatalf("encoded applyWrites input omitted or changed swapCommit: %s", transport.requestBody)
-	}
+	raw, ok := input["swapCommit"]
+	require.True(t, ok, "encoded applyWrites input omitted or changed swapCommit: %s", transport.requestBody)
+	require.NoError(t, json.Unmarshal(raw, &swapCommit), "encoded applyWrites input omitted or changed swapCommit: %s", transport.requestBody)
+	require.Equal(t, fixture.root.String(), swapCommit, "encoded applyWrites input omitted or changed swapCommit: %s", transport.requestBody)
 	var writes []json.RawMessage
 	if err := json.Unmarshal(input["writes"], &writes); err != nil || len(writes) != 3 {
-		t.Fatalf("encoded batch writes=%d error=%v", len(writes), err)
+		require.False(t, err != nil || len(writes) != 3, "encoded batch writes=%d error=%v", len(writes), err)
 	}
 }
 
@@ -58,7 +61,7 @@ func TestPublishFencedClassifiesOnlyStructuredInvalidSwap(t *testing.T) {
 			transport := &proofTransport{doStatus: test.status, doBody: []byte(test.body)}
 			_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
 			if !errors.Is(err, test.want) {
-				t.Fatalf("publish error=%v want %v", err, test.want)
+				require.ErrorIs(t, err, test.want, "publish error=%v want %v", err, test.want)
 			}
 		})
 	}
@@ -68,9 +71,8 @@ func TestPublishFencedDoesNotRetryAmbiguousTransport(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	transport := &proofTransport{doError: errors.New("timeout")}
 	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
-	if !errors.Is(err, ErrAmbiguousTransport) || transport.requestPath != "com.atproto.repo.applyWrites" {
-		t.Fatalf("publish transport error=%v path=%q", err, transport.requestPath)
-	}
+	require.ErrorIs(t, err, ErrAmbiguousTransport, "publish transport error=%v path=%q", err, transport.requestPath)
+	require.Equal(t, "com.atproto.repo.applyWrites", transport.requestPath, "publish transport error=%v path=%q", err, transport.requestPath)
 }
 
 func TestPublishFencedRejectsInvalidBatchBeforeTransport(t *testing.T) {
@@ -79,9 +81,8 @@ func TestPublishFencedRejectsInvalidBatchBeforeTransport(t *testing.T) {
 	publication.VaultHead.Record = json.RawMessage(`not json`)
 	transport := &proofTransport{}
 	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, publication)
-	if !errors.Is(err, ErrBatchRejected) || transport.requestPath != "" {
-		t.Fatalf("invalid batch error=%v request=%q", err, transport.requestPath)
-	}
+	require.ErrorIs(t, err, ErrBatchRejected, "invalid batch error=%v request=%q", err, transport.requestPath)
+	require.Equal(t, "", transport.requestPath, "invalid batch error=%v request=%q", err, transport.requestPath)
 }
 
 func TestPostSubmissionFailuresSignalCandidateDisclosureRisk(t *testing.T) {
@@ -102,10 +103,10 @@ func TestPostSubmissionFailuresSignalCandidateDisclosureRisk(t *testing.T) {
 			revision := &Revision{did: proofTestDID, commitCID: fixture.root.String()}
 			_, err := PublishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
 			if !errors.Is(err, testCase.want) {
-				t.Fatalf("error = %v, want %v", err, testCase.want)
+				require.ErrorIs(t, err, testCase.want, "error = %v, want %v", err, testCase.want)
 			}
 			if !errors.Is(err, ErrCandidateMayBeDisclosed) {
-				t.Fatalf("post-submission failure must signal possible candidate disclosure: %v", err)
+				require.ErrorIs(t, err, ErrCandidateMayBeDisclosed, "post-submission failure must signal possible candidate disclosure: %v", err)
 			}
 		})
 	}
@@ -117,9 +118,9 @@ func TestLostFenceDoesNotSignalCandidateDisclosureRisk(t *testing.T) {
 	revision := &Revision{did: proofTestDID, commitCID: fixture.root.String()}
 	_, err := PublishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
 	if !errors.Is(err, ErrFenceLost) {
-		t.Fatalf("error = %v, want ErrFenceLost", err)
+		require.ErrorIs(t, err, ErrFenceLost, "error = %v, want ErrFenceLost", err)
 	}
 	if errors.Is(err, ErrCandidateMayBeDisclosed) {
-		t.Fatalf("a lost fence is checked before blob processing and must not be reported as disclosure risk: %v", err)
+		require.False(t, errors.Is(err, ErrCandidateMayBeDisclosed), "a lost fence is checked before blob processing and must not be reported as disclosure risk: %v", err)
 	}
 }
