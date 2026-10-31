@@ -1,6 +1,7 @@
 # 015 — Snapshot envelope, primitives and signed bytes
 
-Status: accepted, 2026-10-31. The cryptographic half of ADR 014.
+Status: accepted, 2026-10-31. The cryptographic half of ADR 014. Amended by DOT-V02 in three
+byte-level places, each marked: the format identifier, the genesis parent, and the commitment input.
 
 ## Context
 
@@ -47,15 +48,15 @@ Fields in this order. Unknown fields are rejected.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | uint8 | envelope version, currently 1 |
+| `magic` | 4 bytes | `0x44 0x54 0x45 0x01` — `DTE` plus the format version. **Amended by DOT-V02** from a bare uint8 `v`, so the format identifier and its version cannot be separated. |
 | `purpose` | uint8 | `1` snapshot, `2` policy, `3` control, `4` certificate, `5` checkpoint, `6` attestation |
 | `vault` | 32 bytes | vault identifier |
 | `publication_id` | 16 bytes | random, allocated before encryption |
 | `epoch_seq` | uint64 big-endian | epoch owning the content key |
 | `policy_digest` | 32 bytes | digest of the policy the content is valid under |
-| `parent` | full CID bytes, variable length, or the one-byte genesis sentinel `0x00` | previous snapshot CID |
+| `parent` | uint16 length + full CID bytes; length 0 means genesis. **Amended by DOT-V02** from a one-byte sentinel, because a zero-length field is unambiguous and needs no reserved value. |
 | `signer` | `{device_id, key_id}` | the publishing device, inside the signed preimage |
-| `commit` | 32 bytes | `SHA-256("dottie/v1/commit" ‖ K)` |
+| `commit` | 32 bytes | `SHA-256("dottie/v1/commit" ‖ K ‖ vault ‖ epoch_seq)`. **Amended by DOT-V02**: binding the vault and epoch stops a key being accepted as a commitment answer in a different context. |
 | `recipients` | array, ≤ 64 | `{key_id, ephemeral_pub 32, wrap_nonce 24, wrapped_key}`, sorted by `key_id` |
 | `nonce` | 24 bytes | content nonce |
 | `ciphertext`, `tag` | bytes | content encryption output |
@@ -78,11 +79,12 @@ the ciphertext. `signer` is present because a verifier cannot otherwise decide w
 
 Four distinct preimages, none of which includes its own output:
 
-- **Content associated data**: `"dottie/v1/ad"` ‖ `v` ‖ `purpose` ‖ `vault` ‖ `publication_id` ‖
+- **Content associated data**: `"dottie/v1/ad"` ‖ `magic` ‖ `purpose` ‖ `vault` ‖ `publication_id` ‖
   `epoch_seq` ‖ `policy_digest` ‖ `parent` ‖ `commit`. It excludes `nonce`, `ciphertext`, `tag` and
   `signature`, because the tag would otherwise authenticate itself.
-- **Envelope signature**: `"dottie/v1/sig"` ‖ every field above up to and including `recipients`, then
-  `nonce` ‖ `ciphertext` ‖ `tag`. It excludes only `signature`.
+- **Envelope signature**: `"dottie/v1/sig"` ‖ the serialized envelope from the first byte through the end of
+  `tag`. Stated as a byte range rather than a field list, so no future field can be signed by accident or
+  omitted by enumeration error.
 - **Policy digest**: `SHA-256("dottie/v1/policy" ‖ deterministic encoding of the policy object)`.
 - **Wrap associated data**: `"dottie/v1/wrapad"` ‖ `vault` ‖ `key_id` ‖ `epoch_seq` ‖ `purpose` ‖
   recipient public key ‖ ephemeral public key.
