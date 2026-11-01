@@ -88,20 +88,11 @@ func RecoverInterrupted(ctx context.Context, store *state.Store, filesystem file
 		}
 		switch {
 		case observationMatches(observed, entry.Postimage):
-			backup, backupErr := store.Payload(entry.BackupRef)
-			if backupErr != nil || !backupMatchesPreimage(backup, entry.Preimage) {
-				if transitionErr := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); transitionErr != nil {
-					return report, errors.Join(backupErr, transitionErr)
-				}
-				result.Outcome = "indeterminate"
-				result.Reason = "destination matches postimage but rollback backup is unavailable or invalid"
-			} else {
-				if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "applied", state.JournalStageVerified); err != nil {
-					return report, err
-				}
-				result.Outcome = "applied"
-				result.Reason = "destination matches intended postimage; backup retained"
+			if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+				return report, err
 			}
+			result.Outcome = "indeterminate"
+			result.Reason = "destination matches the postimage but cannot be distinguished from an identical user edit"
 		case observationMatches(observed, entry.Preimage):
 			if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "failed", state.JournalStagePrecondition); err != nil {
 				return report, err
@@ -145,12 +136,49 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 		return RollbackReport{}, err
 	}
 	report := RollbackReport{Entries: make([]JournalResult, 0), Pruned: pruned}
+	blockedDestinations := make(map[string]bool)
 	for index := len(entries) - 1; index >= 0; index-- {
 		entry := entries[index]
 		if entry.State != "applied" {
 			continue
 		}
 		result := journalResult(entry)
+		destination := entry.RootPath + "\x00" + entry.DestinationPath
+		if blockedDestinations[destination] {
+			result.Outcome = "skipped-newer-edit"
+			result.Reason = "newer journal history was left unresolved; older history was not restored"
+			report.Entries = append(report.Entries, result)
+			continue
+		}
+		if entry.Stage == state.JournalStageRollbackSkipped {
+			blockedDestinations[destination] = true
+			result.Outcome = "skipped-newer-edit"
+			result.Reason = "a previous rollback preserved a newer edit; this outcome is durable"
+			report.Entries = append(report.Entries, result)
+			continue
+		}
+		if entry.Stage == state.JournalStageRollbackPending || entry.Stage == state.JournalStageRollbackIndeterminate || entry.Stage != state.JournalStageVerified {
+			if entry.Stage == state.JournalStageRollbackPending || entry.Stage == state.JournalStageVerified {
+				if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
+					return report, err
+				}
+			}
+			blockedDestinations[destination] = true
+			result.Outcome = "indeterminate"
+			result.Reason = "a previous or unresolved rollback attempt has no durable completion proof"
+			report.Entries = append(report.Entries, result)
+			continue
+		}
+		markIndeterminate := func(reason string) error {
+			if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
+				return err
+			}
+			blockedDestinations[destination] = true
+			result.Outcome = "indeterminate"
+			result.Reason = reason
+			report.Entries = append(report.Entries, result)
+			return nil
+		}
 		if entry.BackupRef == "" {
 			result.Outcome = "applied"
 			result.Reason = "rollback backup expired or was already pruned"
@@ -158,22 +186,23 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 			continue
 		}
 		if err := verifyJournalRoot(filesystem, entry); err != nil {
-			result.Outcome = "indeterminate"
-			result.Reason = "destination root missing or changed"
-			report.Entries = append(report.Entries, result)
+			if markErr := markIndeterminate("destination root missing or changed"); markErr != nil {
+				return report, markErr
+			}
 			continue
 		}
 		observed, err := files.ObserveFile(filesystem, entry.RootPath, entry.DestinationPath)
 		if err != nil {
-			result.Outcome = "indeterminate"
-			result.Reason = "destination could not be observed"
-			report.Entries = append(report.Entries, result)
+			if markErr := markIndeterminate("destination could not be observed"); markErr != nil {
+				return report, markErr
+			}
 			continue
 		}
 		if !observationMatches(observed, entry.Postimage) {
 			if err := store.RecordJournalRollbackSkipped(ctx, entry.ID); err != nil {
 				return report, err
 			}
+			blockedDestinations[destination] = true
 			result.Outcome = "skipped-newer-edit"
 			result.Reason = "destination no longer matches intended postimage; left unchanged"
 			report.Entries = append(report.Entries, result)
@@ -181,51 +210,66 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 		}
 		backup, err := store.Payload(entry.BackupRef)
 		if err != nil {
-			result.Outcome = "indeterminate"
-			result.Reason = "rollback backup is unavailable"
-			report.Entries = append(report.Entries, result)
+			if markErr := markIndeterminate("rollback backup is unavailable"); markErr != nil {
+				return report, markErr
+			}
 			continue
 		}
 		if !backupMatchesPreimage(backup, entry.Preimage) {
-			result.Outcome = "indeterminate"
-			result.Reason = "rollback backup does not match recorded preimage"
-			report.Entries = append(report.Entries, result)
-			continue
-		}
-		if err := verifyJournalRoot(filesystem, entry); err != nil {
-			result.Outcome = "indeterminate"
-			result.Reason = "destination root changed before restore"
-			report.Entries = append(report.Entries, result)
+			if markErr := markIndeterminate("rollback backup does not match recorded preimage"); markErr != nil {
+				return report, markErr
+			}
 			continue
 		}
 		current, err := files.ObserveFile(filesystem, entry.RootPath, entry.DestinationPath)
 		if err == nil {
 			err = verifyJournalRoot(filesystem, entry)
 		}
-		if err != nil || !observationMatches(current, entry.Postimage) {
-			if err != nil {
-				result.Reason = "destination could not be rechecked before restore"
-			} else {
-				if recordErr := store.RecordJournalRollbackSkipped(ctx, entry.ID); recordErr != nil {
-					return report, recordErr
-				}
-				result.Outcome = "skipped-newer-edit"
-				result.Reason = "destination changed before restore; left unchanged"
+		if err != nil {
+			if markErr := markIndeterminate("destination could not be rechecked before restore"); markErr != nil {
+				return report, markErr
 			}
-			if result.Outcome == "" {
-				result.Outcome = "indeterminate"
+			continue
+		}
+		if !observationMatches(current, entry.Postimage) {
+			if err := store.RecordJournalRollbackSkipped(ctx, entry.ID); err != nil {
+				return report, err
 			}
+			blockedDestinations[destination] = true
+			result.Outcome = "skipped-newer-edit"
+			result.Reason = "destination changed before restore; left unchanged"
 			report.Entries = append(report.Entries, result)
 			continue
 		}
+		if err := store.BeginJournalRollback(ctx, entry.ID); err != nil {
+			return report, err
+		}
 		if err := restorePreimage(filesystem, entry, backup); err != nil {
-			result.Outcome = "indeterminate"
-			result.Reason = "restore failed"
+			var precondition *files.PreconditionError
+			if errors.As(err, &precondition) {
+				if err := store.RecordJournalRollbackSkipped(ctx, entry.ID); err != nil {
+					return report, err
+				}
+				blockedDestinations[destination] = true
+				result.Outcome = "skipped-newer-edit"
+				result.Reason = "destination changed at the filesystem precondition check; left unchanged"
+			} else {
+				if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
+					return report, err
+				}
+				blockedDestinations[destination] = true
+				result.Outcome = "indeterminate"
+				result.Reason = "restore failed"
+			}
 			report.Entries = append(report.Entries, result)
 			continue
 		}
 		verified, err := files.ObserveFile(filesystem, entry.RootPath, entry.DestinationPath)
 		if err != nil || !observationMatches(verified, entry.Preimage) {
+			if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
+				return report, err
+			}
+			blockedDestinations[destination] = true
 			result.Outcome = "indeterminate"
 			result.Reason = "restored destination did not verify against preimage"
 			report.Entries = append(report.Entries, result)
@@ -303,11 +347,12 @@ func backupMatchesPreimage(backup []byte, preimage state.Fingerprint) bool {
 }
 
 func restorePreimage(filesystem files.ApplyFileSystem, entry state.JournalEntry, backup []byte) error {
+	expected := files.ExpectedPreimage{Exists: entry.Postimage.State == string(model.FilePresent), Digest: entry.Postimage.Digest, Mode: entry.Postimage.Mode}
 	if entry.Preimage.State == string(model.FileDeleted) {
-		return files.DeleteFile(filesystem, entry.RootPath, entry.DestinationPath)
+		return files.DeleteFile(filesystem, entry.RootPath, entry.DestinationPath, expected)
 	}
 	if entry.Preimage.State == string(model.FilePresent) && entry.Preimage.Kind == model.FileRegular {
-		return files.ReplaceFile(filesystem, entry.RootPath, entry.DestinationPath, backup, os.FileMode(entry.Preimage.Mode))
+		return files.ReplaceFile(filesystem, entry.RootPath, entry.DestinationPath, backup, os.FileMode(entry.Preimage.Mode), expected)
 	}
 	return errors.New("journal preimage cannot be restored by the filesystem apply path")
 }

@@ -58,7 +58,7 @@ func TestRecoverInterruptedClassifiesPendingEntriesAndIsIdempotent(t *testing.T)
 		resolvedState string
 	}{
 		{name: "preimage", actual: []byte("old"), outcome: "failed", resolvedState: "failed"},
-		{name: "postimage", actual: []byte("new"), outcome: "applied", resolvedState: "applied"},
+		{name: "postimage", actual: []byte("new"), outcome: "indeterminate", resolvedState: "indeterminate"},
 		{name: "unrecognised", actual: []byte("user edit"), outcome: "indeterminate", resolvedState: "indeterminate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestRecoverInterruptedAfterReadbackBeforeJournalUpdate(t *testing.T) {
 	report, err := RecoverInterrupted(context.Background(), store, nil, request.Now)
 	require.NoError(t, err)
 	require.Len(t, report.Entries, 1)
-	assert.Equal(t, "applied", report.Entries[0].Outcome)
+	assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
 }
 
 func TestRollbackAppliedReportsEachEntryAndSkipsNewerEdits(t *testing.T) {
@@ -207,6 +207,74 @@ func journalStateFor(t *testing.T, entries []state.JournalEntry, path string) st
 	return state.JournalEntry{}
 }
 
+func TestRollbackSkippedNewerEditBlocksOlderSameDestinationHistory(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	writeApplyFile(t, path, []byte("A"), 0o600)
+	firstEntry, firstPostimage := applyEntry("file", PreviewChange, []byte("B"), 0o600, []byte("A"), 0o600)
+	firstRequest := applyRequest(root, []PreviewEntry{firstEntry}, []Postimage{firstPostimage})
+	firstRequest.Now = func() time.Time { return time.Unix(100, 0) }
+	require.NoError(t, Apply(context.Background(), store, firstRequest))
+	secondEntry, secondPostimage := applyEntry("file", PreviewChange, []byte("C"), 0o600, []byte("B"), 0o600)
+	secondRequest := applyRequest(root, []PreviewEntry{secondEntry}, []Postimage{secondPostimage})
+	secondRequest.Now = func() time.Time { return time.Unix(200, 0) }
+	require.NoError(t, Apply(context.Background(), store, secondRequest))
+	writeApplyFile(t, path, []byte("B"), 0o600)
+
+	now := func() time.Time { return time.Unix(300, 0) }
+	report, err := RollbackApplied(context.Background(), store, nil, now)
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 2)
+	assert.Equal(t, "skipped-newer-edit", report.Entries[0].Outcome)
+	assert.Equal(t, "skipped-newer-edit", report.Entries[1].Outcome)
+	assert.Equal(t, []byte("B"), readApplyFile(t, path))
+	rows := journalEntriesFor(t, store)
+	require.Len(t, rows, 2)
+	skippedRecorded := false
+	for _, row := range rows {
+		if row.Stage == state.JournalStageRollbackSkipped {
+			skippedRecorded = true
+		}
+		assert.Equal(t, "applied", row.State, "skipped and blocked rollback history must stay applied")
+	}
+	assert.True(t, skippedRecorded, "newest skipped rollback outcome must be durable")
+
+	report, err = RollbackApplied(context.Background(), store, nil, now)
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 2)
+	assert.Equal(t, []byte("B"), readApplyFile(t, path), "durable skipped outcome must not become a later restore")
+}
+
+func TestRollbackUnresolvedRestoreRetainsBackupPastRetention(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	writeApplyFile(t, path, []byte("old"), 0o600)
+	entry, postimage := applyEntry("file", PreviewChange, []byte("new"), 0o600, []byte("old"), 0o600)
+	require.NoError(t, Apply(context.Background(), store, applyRequest(root, []PreviewEntry{entry}, []Postimage{postimage})))
+	request := applyRequest(root, nil, nil)
+	request.FileSystem = &faultApplyFS{base: files.DefaultApplyFileSystem(), fault: "rename"}
+	report, err := RollbackApplied(context.Background(), store, request.FileSystem, request.Now)
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 1)
+	assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
+	journal := journalEntriesFor(t, store)
+	require.Len(t, journal, 1)
+	assert.Equal(t, state.JournalStageRollbackIndeterminate, journal[0].Stage)
+	backupRef := journal[0].BackupRef
+
+	late := func() time.Time { return time.Unix(100, 0).Add(state.JournalBackupRetention + time.Hour) }
+	report, err = RollbackApplied(context.Background(), store, nil, late)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("new"), readApplyFile(t, path))
+	journal = journalEntriesFor(t, store)
+	assert.Equal(t, backupRef, journal[0].BackupRef, "unresolved rollback backup must not expire")
+	backup, err := store.Payload(backupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("old"), backup)
+}
+
 func TestRollbackUsesResolvedDirectoryForSingleFileTarget(t *testing.T) {
 	store := applyTestStore(t)
 	root := filepath.Join(t.TempDir(), "selected-file")
@@ -231,7 +299,7 @@ func TestRollbackRestoresDeletedFileAndRemovesCreatedFile(t *testing.T) {
 		path := filepath.Join(root, "file")
 		writeApplyFile(t, path, []byte("old"), 0o640)
 		digest := sha256.Sum256([]byte("old"))
-		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "file"}, Action: PreviewDelete, Preimage: &PreviewPreimage{Digest: fmtDigest(digest[:]), Mode: 0o640}}
+		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "file"}, Action: PreviewDelete, DecisionAction: ActionDeleteLocal, Preimage: &PreviewPreimage{Digest: fmtDigest(digest[:]), Mode: 0o640}}
 		require.NoError(t, Apply(context.Background(), store, applyRequest(root, []PreviewEntry{entry}, nil)))
 		_, err := os.Stat(path)
 		assert.ErrorIs(t, err, os.ErrNotExist)

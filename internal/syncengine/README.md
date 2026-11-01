@@ -36,11 +36,13 @@ is a content-free `Preview` with targets ordered by target ID and entries ordere
 identity order. It retains names, actions, states, reason codes, sizes and, when available, the
 local observation's digest and mode; it never retains an entry's file content or setting value.
 
-The reconciler remains authoritative for decisions. Upload/download decisions map to create or
-change, delete decisions map to delete, conflicts remain a conflict state with a conflict reason,
-and local absence is represented as missing with a missing reason. Unknown remains a state with
-no action. An untracked observation maps to create in this preview contract. There is no
-`unapplied` state in this version because no journal result supplies one.
+The reconciler remains authoritative for decisions. Preview keeps the exact reconciliation action
+(upload, download, delete-local, delete-remote, unchanged, blocked or conflict) separately from its
+create/change/delete display action. Upload/download decisions map to create or change, delete
+decisions map to delete, conflicts remain a conflict state with a conflict reason, and local absence
+is represented as missing with a missing reason. Unknown remains a state with no action. An
+untracked observation can have a create display action, but retains its blocked decision. There is
+no `unapplied` state in this version because no journal result supplies one.
 
 Entry and total bytes use `vault.Estimate`, the same payload accounting used by snapshot packing.
 Per-entry `size` and `transfer_bytes` account create/change payloads that would move; deletes add no
@@ -146,8 +148,10 @@ produce the redacted diagnostic form; it contains only entry keys, actions, reas
 That diagnostic form is the only representation suitable for logs.
 
 `conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The
-journaled apply path refuses an incomplete or unresolved preview and any action other than create,
-change or file delete.
+journaled local apply path permits only `download` and `delete-local` reconciliation actions;
+uploads, remote deletes and blocked, untracked, unknown or conflict entries are not local writes.
+An entry's supplied postimage digest checks that the bytes match the caller-supplied digest; it does
+not independently establish that those bytes are the right candidate for the reconciled action.
 
 ## Precedence, as implemented
 
@@ -175,23 +179,35 @@ restrictive `0600` default and optional per-target overrides; an incoming conten
 that local choice and is never transplanted.
 
 Before acting, apply observes all requested paths and compares each available preview digest and
-mode; it repeats the comparison immediately before each journaled operation. A changed preimage
-returns `ErrPreconditionChanged`. Each file operation records a pending state row and an immutable
-backup before touching the destination. The journal stores the resolved destination directory and
-its device/inode identity, so recovery does not re-resolve a target from changed configuration.
-Replacements use same-directory temp-and-rename, then read back the bytes and mode. Success marks
-the entry applied and retains its backup for seven days; operational failure records failed with
-its stage and keeps the backup. A caller must invoke `RecoverInterrupted(ctx, store, filesystem, clock)` before beginning new apply work; `Apply` returns `ErrRecoveryRequired` while pending rows remain. Recovery classifies every pending row independently:
-postimage means applied, preimage means failed, and neither means indeterminate with the file left
-alone. Missing or changed destination roots are indeterminate and untouched. Re-running recovery is
-idempotent. Older journal rows without a resolved root are reported indeterminate rather than
-redirected through current target configuration.
+mode; it repeats the comparison immediately before each journaled operation. The filesystem operation
+also receives the expected preimage and re-hashes/re-checks its mode immediately before rename or
+remove. A mismatch returns `ErrPreconditionChanged` and leaves the destination and staged replacement
+untouched. For replacement, this moves the check past temporary-file writing and fsync, shrinking the
+race window from that whole interval to the final stat-to-rename instant; deletion has the equivalent
+stat-to-remove interval. These are check-then-mutate operations, not atomic conditional writes: a
+concurrent edit in that final syscall window is still possible and cannot be guaranteed impossible.
+Each file operation records a pending state row and an immutable backup before touching the
+destination. The journal stores the resolved destination directory and its device/inode identity, so
+recovery does not re-resolve a target from changed configuration. Replacements use same-directory
+temp-and-rename, then read back the bytes and mode. Success marks the entry applied and retains its
+backup for seven days. Failure marks an entry failed only when the preimage is still present;
+otherwise it remains indeterminate with its backup retained. A caller must invoke
+`RecoverInterrupted(ctx, store, filesystem, clock)` before beginning new apply work; `Apply` returns
+`ErrRecoveryRequired` while pending rows remain. Recovery classifies every pending row independently:
+a preimage match means failed, a destination matching neither fingerprint is indeterminate, and a
+postimage match is also indeterminate because a user's identical edit cannot be distinguished from
+Dottie's completed write using the current journal evidence. Missing or changed destination roots
+are indeterminate and untouched. Re-running recovery is idempotent. Older journal rows without a
+resolved root are reported indeterminate rather than redirected through current target configuration.
 
 `RollbackApplied` is also local-only and reports one result per entry. It restores an entry only
 while the destination still matches that entry's postimage; a newer edit is left untouched and
-reported as `skipped-newer-edit`. Each restore is verified against the recorded preimage before
-being marked rolled-back. Verified rolled-back material is pruned; verified applied backups expire
-after seven days. Failed and indeterminate backups are never pruned. The global rollback-material
+reported as `skipped-newer-edit`. That skip is durable, blocks restoration of older journal history
+for the same destination, and retains the backup. Rollback intent is persisted before mutation;
+interrupted or indeterminate restores are not retried as successful restores and their backups are
+not expired. Each restore is verified against the recorded preimage before being marked rolled-back.
+Verified rolled-back material is pruned; verified applied backups expire after seven days. Failed
+and indeterminate backups are never pruned. The global rollback-material
 limit is 256 MiB until targets are associated with vaults; an apply that would exceed it fails with
 a typed error naming the entries holding existing material, and no existing backup is dropped to
 make room. Age cleanup and bound checks use the injected clock. If a future case is unclear, retain

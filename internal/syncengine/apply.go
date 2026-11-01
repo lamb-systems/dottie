@@ -18,6 +18,7 @@ import (
 )
 
 var ErrPreconditionChanged = errors.New("apply precondition changed")
+var ErrNotActionable = errors.New("preview entry is not actionable for local apply")
 var ErrRecoveryRequired = errors.New("pending apply journal entries require recovery before apply")
 
 type UnsupportedApplyEntryError struct {
@@ -27,6 +28,19 @@ type UnsupportedApplyEntryError struct {
 
 func (e *UnsupportedApplyEntryError) Error() string {
 	return fmt.Sprintf("unsupported apply entry %s/%s: %s", e.Key.TargetID, e.Key.FilePath, e.Reason)
+}
+
+type NotActionableError struct {
+	Key    model.EntryKey
+	Action Action
+}
+
+func (e *NotActionableError) Error() string {
+	return fmt.Sprintf("%s: %s/%s has reconciliation action %q", ErrNotActionable, e.Key.TargetID, e.Key.FilePath, e.Action)
+}
+
+func (e *NotActionableError) Unwrap() error {
+	return ErrNotActionable
 }
 
 type Postimage struct {
@@ -59,6 +73,7 @@ type applyOperation struct {
 	rootDevice      int64
 	rootInode       int64
 	postimage       *Postimage
+	filesystem      files.ApplyFileSystem
 	post            state.Fingerprint
 	operation       string
 	destination     os.FileMode
@@ -147,12 +162,17 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
 			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
 		}
+		expected := files.ExpectedPreimage{Exists: current.Exists, Digest: current.Digest, Mode: current.Mode}
 		if operation.operation == "delete" {
-			err = files.DeleteFile(filesystem, operation.root, operation.entry.Key.FilePath)
+			err = files.DeleteFile(filesystem, operation.root, operation.entry.Key.FilePath, expected)
 		} else {
-			err = files.ReplaceFile(filesystem, operation.root, operation.entry.Key.FilePath, operation.postimage.Data, operation.destination)
+			err = files.ReplaceFile(filesystem, operation.root, operation.entry.Key.FilePath, operation.postimage.Data, operation.destination, expected)
 		}
 		if err != nil {
+			var precondition *files.PreconditionError
+			if errors.As(err, &precondition) {
+				err = fmt.Errorf("%w: %w", ErrPreconditionChanged, err)
+			}
 			return failApply(ctx, store, operation, journalStage(err, operation.operation), err)
 		}
 		verified, err := files.ObserveFile(filesystem, operation.root, operation.entry.Key.FilePath)
@@ -174,6 +194,16 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 }
 
 func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]applyOperation, error) {
+	for _, target := range request.Preview.Targets {
+		for _, entry := range target.Entries {
+			if entry.DecisionAction == ActionUnchanged && entry.Action == "" {
+				continue
+			}
+			if entry.DecisionAction != ActionDownload && entry.DecisionAction != ActionDeleteLocal {
+				return nil, &NotActionableError{Key: entry.Key, Action: entry.DecisionAction}
+			}
+		}
+	}
 	if !request.Preview.Complete || request.Preview.UnresolvedEntries != 0 {
 		return nil, errors.New("cannot apply an incomplete preview")
 	}
@@ -214,10 +244,13 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 			}
 			seen[id] = struct{}{}
 			if entry.Action == "" {
-				if entry.State != PreviewStateUnchanged {
-					return nil, unsupportedApply(entry.Key, "entry has no resolved action")
+				if entry.State != PreviewStateUnchanged || (entry.DecisionAction != "" && entry.DecisionAction != ActionUnchanged) {
+					return nil, unsupportedApply(entry.Key, "entry has no resolved local action")
 				}
 				continue
+			}
+			if entry.DecisionAction != ActionDownload && entry.DecisionAction != ActionDeleteLocal {
+				return nil, &NotActionableError{Key: entry.Key, Action: entry.DecisionAction}
 			}
 			if entry.Action != PreviewCreate && entry.Action != PreviewChange && entry.Action != PreviewDelete {
 				return nil, unsupportedApply(entry.Key, "action is not applicable")
@@ -234,7 +267,7 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 			if !ok || !filepath.IsAbs(root) {
 				return nil, unsupportedApply(entry.Key, "target has no absolute destination root")
 			}
-			operation := applyOperation{entry: entry, root: filepath.Clean(root)}
+			operation := applyOperation{entry: entry, root: filepath.Clean(root), filesystem: filesystem}
 			rootPath, destinationPath, rootDevice, rootInode, resolveErr := resolveApplyDestination(filesystem, operation.root, entry.Key.FilePath)
 			if resolveErr != nil {
 				return nil, unsupportedApply(entry.Key, resolveErr.Error())
@@ -333,14 +366,27 @@ func fingerprintForObservation(observed files.ApplyObservation) state.Fingerprin
 
 func failApply(ctx context.Context, store *state.Store, operation *applyOperation, stage string, cause error) error {
 	if operation.journalAdded {
-		if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
-			return errors.Join(cause, fmt.Errorf("mark apply journal failed: %w", err))
+		observed, observeErr := files.ObserveFile(operation.filesystem, operation.root, operation.entry.Key.FilePath)
+		if operation.entry.Preimage != nil && observeErr == nil && observed.Exists && observed.Digest == operation.entry.Preimage.Digest && observed.Mode == operation.entry.Preimage.Mode {
+			if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
+				return errors.Join(cause, fmt.Errorf("mark apply journal failed: %w", err))
+			}
+		} else if operation.entry.Preimage == nil && observeErr == nil && !observed.Exists {
+			if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
+				return errors.Join(cause, fmt.Errorf("mark apply journal failed: %w", err))
+			}
+		} else if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+			return errors.Join(cause, fmt.Errorf("mark apply journal indeterminate: %w", err))
 		}
 	}
 	return cause
 }
 
 func journalStage(err error, operation string) string {
+	var precondition *files.PreconditionError
+	if errors.As(err, &precondition) {
+		return state.JournalStagePrecondition
+	}
 	var applyError *files.ApplyError
 	if errors.As(err, &applyError) {
 		switch applyError.Stage {

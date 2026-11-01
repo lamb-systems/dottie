@@ -34,7 +34,11 @@ func applyTestStore(t *testing.T) *state.Store {
 }
 
 func applyEntry(path string, action PreviewAction, data []byte, mode os.FileMode, before []byte, beforeMode os.FileMode) (PreviewEntry, Postimage) {
-	entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: path}, Action: action}
+	decisionAction := ActionDownload
+	if action == PreviewDelete {
+		decisionAction = ActionDeleteLocal
+	}
+	entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: path}, Action: action, DecisionAction: decisionAction}
 	if before != nil {
 		digest := sha256.Sum256(before)
 		entry.Preimage = &PreviewPreimage{Digest: fmtDigest(digest[:]), Mode: uint32(beforeMode.Perm())}
@@ -190,9 +194,9 @@ func TestApplyLeavesPendingJournalAcrossCrashBoundaries(t *testing.T) {
 		report, err := RecoverInterrupted(context.Background(), store, nil, request.Now)
 		require.NoError(t, err)
 		require.Len(t, report.Entries, 1)
-		assert.Equal(t, "applied", report.Entries[0].Outcome)
+		assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
 		entries = journalEntriesFor(t, store)
-		assert.Equal(t, "applied", entries[0].State)
+		assert.Equal(t, "indeterminate", entries[0].State)
 		assert.NotEmpty(t, entries[0].BackupRef)
 		report, err = RecoverInterrupted(context.Background(), store, nil, request.Now)
 		require.NoError(t, err)
@@ -201,7 +205,7 @@ func TestApplyLeavesPendingJournalAcrossCrashBoundaries(t *testing.T) {
 }
 
 func TestApplyFaultsKeepDestinationWholeAndJournalRecoverable(t *testing.T) {
-	for _, fault := range []string{"partial-write", "disk-full", "permission-denied", "rename"} {
+	for _, fault := range []string{"partial-write", "disk-full", "permission-denied", "rename", "sync-directory"} {
 		t.Run(fault, func(t *testing.T) {
 			store := applyTestStore(t)
 			root := t.TempDir()
@@ -212,10 +216,18 @@ func TestApplyFaultsKeepDestinationWholeAndJournalRecoverable(t *testing.T) {
 			request.FileSystem = &faultApplyFS{base: files.DefaultApplyFileSystem(), fault: fault}
 			err := Apply(context.Background(), store, request)
 			require.Error(t, err)
-			assert.Equal(t, []byte("original"), readApplyFile(t, path))
+			expectedData := []byte("original")
+			if fault == "sync-directory" {
+				expectedData = []byte("replacement")
+			}
+			assert.Equal(t, expectedData, readApplyFile(t, path))
 			entries := journalEntriesFor(t, store)
 			require.Len(t, entries, 1)
-			assert.Equal(t, "failed", entries[0].State)
+			expectedState := "failed"
+			if fault == "sync-directory" {
+				expectedState = "indeterminate"
+			}
+			assert.Equal(t, expectedState, entries[0].State)
 			assert.NotEmpty(t, entries[0].Stage)
 			backup, err := store.Payload(entries[0].BackupRef)
 			require.NoError(t, err)
@@ -231,7 +243,7 @@ func TestApplyRefusesDirectoriesRootDeletionAndCapturedMode(t *testing.T) {
 		directory := filepath.Join(root, "dir")
 		require.NoError(t, os.Mkdir(directory, 0o700))
 		emptyDigest := sha256.Sum256(nil)
-		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "dir"}, Action: PreviewDelete, Preimage: &PreviewPreimage{Digest: fmtDigest(emptyDigest[:]), Mode: 0}}
+		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "dir"}, Action: PreviewDelete, DecisionAction: ActionDeleteLocal, Preimage: &PreviewPreimage{Digest: fmtDigest(emptyDigest[:]), Mode: 0}}
 		err := Apply(context.Background(), store, applyRequest(root, []PreviewEntry{entry}, nil))
 		require.Error(t, err)
 		info, statErr := os.Stat(directory)
@@ -244,7 +256,7 @@ func TestApplyRefusesDirectoriesRootDeletionAndCapturedMode(t *testing.T) {
 		store := applyTestStore(t)
 		root := t.TempDir()
 		emptyDigest := sha256.Sum256(nil)
-		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "."}, Action: PreviewDelete, Preimage: &PreviewPreimage{Digest: fmtDigest(emptyDigest[:]), Mode: 0}}
+		entry := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "."}, Action: PreviewDelete, DecisionAction: ActionDeleteLocal, Preimage: &PreviewPreimage{Digest: fmtDigest(emptyDigest[:]), Mode: 0}}
 		err := Apply(context.Background(), store, applyRequest(root, []PreviewEntry{entry}, nil))
 		require.Error(t, err)
 		assert.Empty(t, journalEntriesFor(t, store))
@@ -269,7 +281,7 @@ func TestApplyDeletesOnlyPreviewedFileAndNeverDirectory(t *testing.T) {
 	writeApplyFile(t, path, []byte("remove"), 0o600)
 	writeApplyFile(t, filepath.Join(root, "unpreviewed"), []byte("keep"), 0o600)
 	entry := PreviewEntry{
-		Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "remove"}, Action: PreviewDelete,
+		Key: model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "remove"}, Action: PreviewDelete, DecisionAction: ActionDeleteLocal,
 		Preimage: &PreviewPreimage{Digest: digestHex([]byte("remove")), Mode: 0o600},
 	}
 	err := Apply(context.Background(), store, applyRequest(root, []PreviewEntry{entry}, nil))
@@ -297,7 +309,7 @@ func TestApplyRequiresExactPostimageSetAndRejectsSettings(t *testing.T) {
 	assert.Error(t, Apply(context.Background(), store, request))
 	request = applyRequest(root, []PreviewEntry{entry}, []Postimage{postimage, {TargetID: "target", Key: "extra"}})
 	assert.Error(t, Apply(context.Background(), store, request))
-	setting := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceGNOME, SchemaID: "org.example", SettingsPath: "/", SettingKey: "enabled"}, Action: PreviewChange}
+	setting := PreviewEntry{Key: model.EntryKey{TargetID: "target", Source: model.SourceGNOME, SchemaID: "org.example", SettingsPath: "/", SettingKey: "enabled"}, Action: PreviewChange, DecisionAction: ActionDownload}
 	assert.Error(t, Apply(context.Background(), store, applyRequest(root, []PreviewEntry{setting}, nil)))
 	assert.Empty(t, journalEntriesFor(t, store))
 }
@@ -324,7 +336,8 @@ type faultApplyRoot struct {
 
 type faultApplyFile struct {
 	files.ApplyFile
-	fs *faultApplyFS
+	fs        *faultApplyFS
+	directory bool
 }
 
 func (f *faultApplyFS) Lstat(path string) (os.FileInfo, error) {
@@ -363,16 +376,16 @@ func (r *faultApplyRoot) OpenFile(name string, flag int, mode os.FileMode) (file
 	}
 	if r.fs.fault == "crash-before-readback" && name == "file" && flag&os.O_WRONLY == 0 {
 		r.fs.destReads++
-		if r.fs.destReads == 4 {
+		if r.fs.destReads == 5 {
 			panic("crash before read-back")
 		}
 	}
-	if r.fs.fault == "sync-directory" && strings.HasSuffix(name, "root") {
+	if r.fs.fault == "sync-directory" && flag&syscall.O_DIRECTORY != 0 {
 		file, err := r.base.OpenFile(name, flag, mode)
 		if err != nil {
 			return nil, err
 		}
-		return &faultApplyFile{ApplyFile: file, fs: r.fs}, nil
+		return &faultApplyFile{ApplyFile: file, fs: r.fs, directory: true}, nil
 	}
 	return r.base.OpenFile(name, flag, mode)
 }
@@ -415,7 +428,7 @@ func (f *faultApplyFile) Write(data []byte) (int, error) {
 }
 
 func (f *faultApplyFile) Sync() error {
-	if f.fs.fault == "sync-directory" {
+	if f.fs.fault == "sync-directory" && f.directory {
 		return syscall.EIO
 	}
 	return f.ApplyFile.Sync()

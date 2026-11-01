@@ -53,15 +53,16 @@ type PreviewPreimage struct {
 }
 
 type PreviewEntry struct {
-	Key           model.EntryKey   `json:"key"`
-	Action        PreviewAction    `json:"action,omitempty"`
-	State         PreviewState     `json:"state,omitempty"`
-	Reason        PreviewReason    `json:"reason,omitempty"`
-	Detail        string           `json:"detail,omitempty"`
-	Size          int64            `json:"size"`
-	SnapshotBytes int64            `json:"resulting_snapshot_bytes"`
-	Preimage      *PreviewPreimage `json:"preimage,omitempty"`
-	Risks         []PreviewReason  `json:"risks,omitempty"`
+	Key            model.EntryKey   `json:"key"`
+	Action         PreviewAction    `json:"action,omitempty"`
+	DecisionAction Action           `json:"decision_action,omitempty"`
+	State          PreviewState     `json:"state,omitempty"`
+	Reason         PreviewReason    `json:"reason,omitempty"`
+	Detail         string           `json:"detail,omitempty"`
+	Size           int64            `json:"size"`
+	SnapshotBytes  int64            `json:"resulting_snapshot_bytes"`
+	Preimage       *PreviewPreimage `json:"preimage,omitempty"`
+	Risks          []PreviewReason  `json:"risks,omitempty"`
 }
 
 type PreviewTarget struct {
@@ -267,7 +268,7 @@ func validateDecisionObservation(decision Decision, observation model.Observatio
 }
 
 func previewDecision(decision Decision, observation model.Observation, hasObservation bool) (PreviewEntry, *model.Entry, *model.Entry, bool) {
-	entry := PreviewEntry{Key: decision.Key}
+	entry := PreviewEntry{Key: decision.Key, DecisionAction: decision.Action}
 	if decision.States.Local == ValueUnknown || (hasObservation && observation.State == model.ObservationUnknown) {
 		entry.State = PreviewStateUnknown
 		entry.Reason = PreviewReasonUnknown

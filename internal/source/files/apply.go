@@ -43,6 +43,22 @@ type ApplyObservation struct {
 	Mode   uint32
 }
 
+type ExpectedPreimage struct {
+	Exists bool
+	Digest string
+	Mode   uint32
+}
+
+type PreconditionError struct {
+	Path     string
+	Expected ExpectedPreimage
+	Actual   ExpectedPreimage
+}
+
+func (e *PreconditionError) Error() string {
+	return fmt.Sprintf("filesystem precondition changed for %q", e.Path)
+}
+
 type ApplyStage string
 
 const (
@@ -137,6 +153,10 @@ func ObserveFile(filesystem ApplyFileSystem, targetRoot, key string) (ApplyObser
 		return ApplyObservation{}, err
 	}
 	defer location.close()
+	return observeApplyLocation(location, key)
+}
+
+func observeApplyLocation(location applyLocation, key string) (ApplyObservation, error) {
 	info, err := location.root.Lstat(location.name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ApplyObservation{}, nil
@@ -176,7 +196,7 @@ func ObserveFile(filesystem ApplyFileSystem, targetRoot, key string) (ApplyObser
 	return ApplyObservation{Exists: true, Data: data, Digest: hex.EncodeToString(digest[:]), Mode: uint32(opened.Mode().Perm() & 0o777)}, nil
 }
 
-func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte, mode os.FileMode) error {
+func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte, mode os.FileMode, expected ExpectedPreimage) error {
 	if err := validateApplyMode(mode); err != nil {
 		return &ApplyError{Stage: ApplyStageSetMode, Err: err}
 	}
@@ -185,13 +205,6 @@ func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte
 		return err
 	}
 	defer location.close()
-	if info, statErr := location.root.Lstat(location.name); statErr == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return &UnsupportedPathError{Path: key, Reason: "destination is not a regular file"}
-		}
-	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return &ApplyError{Stage: ApplyStageObserve, Err: statErr}
-	}
 	temporary, err := temporaryName(location.name)
 	if err != nil {
 		return &ApplyError{Stage: ApplyStageCreateTemp, Err: err}
@@ -221,41 +234,44 @@ func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte
 	if err := file.Close(); err != nil {
 		return &ApplyError{Stage: ApplyStageClose, Err: err}
 	}
+	if err := verifyExpectedPreimage(location, key, expected); err != nil {
+		return err
+	}
 	if err := location.root.Rename(temporary, location.name); err != nil {
 		return &ApplyError{Stage: ApplyStageRename, Err: err}
 	}
 	committed = true
-	directory, err := location.root.OpenFile(location.directory, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return &ApplyError{Stage: ApplyStageSyncDirectory, Err: err}
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	if syncErr != nil {
-		return &ApplyError{Stage: ApplyStageSyncDirectory, Err: syncErr}
-	}
-	if closeErr != nil {
-		return &ApplyError{Stage: ApplyStageSyncDirectory, Err: closeErr}
-	}
-	return nil
+	return syncApplyDirectory(location)
 }
 
-func DeleteFile(filesystem ApplyFileSystem, targetRoot, key string) error {
+func DeleteFile(filesystem ApplyFileSystem, targetRoot, key string, expected ExpectedPreimage) error {
 	location, err := openApplyLocation(filesystem, targetRoot, key)
 	if err != nil {
 		return err
 	}
 	defer location.close()
-	info, err := location.root.Lstat(location.name)
-	if err != nil {
-		return &ApplyError{Stage: ApplyStageDelete, Err: err}
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return &UnsupportedPathError{Path: key, Reason: "only regular files can be deleted"}
+	if err := verifyExpectedPreimage(location, key, expected); err != nil {
+		return err
 	}
 	if err := location.root.Remove(location.name); err != nil {
 		return &ApplyError{Stage: ApplyStageDelete, Err: err}
 	}
+	return syncApplyDirectory(location)
+}
+
+func verifyExpectedPreimage(location applyLocation, key string, expected ExpectedPreimage) error {
+	observed, err := observeApplyLocation(location, key)
+	if err != nil {
+		return &PreconditionError{Path: key, Expected: expected}
+	}
+	actual := ExpectedPreimage{Exists: observed.Exists, Digest: observed.Digest, Mode: observed.Mode}
+	if expected.Exists && actual != expected || !expected.Exists && actual.Exists {
+		return &PreconditionError{Path: key, Expected: expected, Actual: actual}
+	}
+	return nil
+}
+
+func syncApplyDirectory(location applyLocation) error {
 	directory, err := location.root.OpenFile(location.directory, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return &ApplyError{Stage: ApplyStageSyncDirectory, Err: err}
