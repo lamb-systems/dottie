@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/lamb-systems/dottie/internal/model"
@@ -17,6 +18,7 @@ import (
 )
 
 var ErrPreconditionChanged = errors.New("apply precondition changed")
+var ErrRecoveryRequired = errors.New("pending apply journal entries require recovery before apply")
 
 type UnsupportedApplyEntryError struct {
 	Key    model.EntryKey
@@ -46,28 +48,47 @@ type ApplyRequest struct {
 	ModePolicy ModePolicy
 	Content    []Postimage
 	FileSystem files.ApplyFileSystem
+	Now        func() time.Time
 }
 
 type applyOperation struct {
-	entry        PreviewEntry
-	root         string
-	postimage    *Postimage
-	post         state.Fingerprint
-	operation    string
-	destination  os.FileMode
-	journalID    string
-	journalAdded bool
+	entry           PreviewEntry
+	root            string
+	rootPath        string
+	destinationPath string
+	rootDevice      int64
+	rootInode       int64
+	postimage       *Postimage
+	post            state.Fingerprint
+	operation       string
+	destination     os.FileMode
+	journalID       string
+	journalAdded    bool
 }
 
 func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error {
 	if store == nil {
 		return errors.New("apply state store is required")
 	}
+	if request.Now == nil {
+		return errors.New("apply clock is required")
+	}
+	pending, err := store.PendingJournalEntries(ctx)
+	if err != nil {
+		return err
+	}
+	if len(pending) != 0 {
+		return ErrRecoveryRequired
+	}
 	filesystem := request.FileSystem
 	if filesystem == nil {
 		filesystem = files.DefaultApplyFileSystem()
 	}
 	operations, err := prepareApply(request, filesystem)
+	if err != nil {
+		return err
+	}
+	backupUsage, err := store.JournalBackupUsage(ctx)
 	if err != nil {
 		return err
 	}
@@ -83,30 +104,47 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 		if err := checkPreviewPreimage(operation.entry, current); err != nil {
 			return err
 		}
+		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
+			return fmt.Errorf("recheck destination root before apply: %w", err)
+		}
 		id, err := newJournalID()
 		if err != nil {
 			return err
 		}
 		operation.journalID = id
+		if err := checkJournalBackupUsage(backupUsage, current.Data, MaxRollbackMaterialBytes); err != nil {
+			return err
+		}
 		entry := state.JournalEntry{
-			ID:        id,
-			Operation: operation.operation,
-			State:     "pending",
-			Stage:     state.JournalStagePending,
-			Identity:  operation.entry.Key,
-			Preimage:  fingerprintForObservation(current),
-			Postimage: operation.post,
-			CreatedAt: time.Now().Unix(),
+			ID:              id,
+			Operation:       operation.operation,
+			State:           "pending",
+			Stage:           state.JournalStagePending,
+			Identity:        operation.entry.Key,
+			RootPath:        operation.rootPath,
+			DestinationPath: operation.destinationPath,
+			RootDevice:      operation.rootDevice,
+			RootInode:       operation.rootInode,
+			Preimage:        fingerprintForObservation(current),
+			Postimage:       operation.post,
+			CreatedAt:       request.Now().Unix(),
 		}
 		if _, err := store.AppendJournal(ctx, entry, current.Data); err != nil {
 			return fmt.Errorf("journal %s before apply: %w", operation.entry.Key.FilePath, err)
 		}
+		addJournalBackupUsage(&backupUsage, current.Data, operation.journalID)
 		operation.journalAdded = true
+		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
+			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
+		}
 		current, err = files.ObserveFile(filesystem, operation.root, operation.entry.Key.FilePath)
 		if err != nil {
 			return failApply(ctx, store, operation, state.JournalStagePrecondition, fmt.Errorf("recheck %s after journaling: %w", operation.entry.Key.FilePath, err))
 		}
 		if err := checkPreviewPreimage(operation.entry, current); err != nil {
+			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
+		}
+		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
 			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
 		}
 		if operation.operation == "delete" {
@@ -130,9 +168,6 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 		}
 		if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "applied", state.JournalStageVerified); err != nil {
 			return fmt.Errorf("mark apply journal %s applied: %w", operation.entry.Key.FilePath, err)
-		}
-		if err := store.PruneJournalBackup(ctx, operation.journalID); err != nil {
-			return fmt.Errorf("prune verified backup for %s: %w", operation.entry.Key.FilePath, err)
 		}
 	}
 	return nil
@@ -200,6 +235,14 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 				return nil, unsupportedApply(entry.Key, "target has no absolute destination root")
 			}
 			operation := applyOperation{entry: entry, root: filepath.Clean(root)}
+			rootPath, destinationPath, rootDevice, rootInode, resolveErr := resolveApplyDestination(filesystem, operation.root, entry.Key.FilePath)
+			if resolveErr != nil {
+				return nil, unsupportedApply(entry.Key, resolveErr.Error())
+			}
+			operation.rootPath = rootPath
+			operation.destinationPath = destinationPath
+			operation.rootDevice = rootDevice
+			operation.rootInode = rootInode
 			switch entry.Action {
 			case PreviewCreate, PreviewChange:
 				postimage, exists := content[id]
@@ -355,6 +398,91 @@ func equalDigest(left, right []byte) bool {
 
 func postimageID(targetID, key string) string {
 	return targetID + "\x00" + key
+}
+
+func resolveApplyDestination(filesystem files.ApplyFileSystem, targetRoot, key string) (string, string, int64, int64, error) {
+	rootInfo, rootErr := filesystem.Lstat(targetRoot)
+	if rootErr != nil && !errors.Is(rootErr, os.ErrNotExist) {
+		return "", "", 0, 0, rootErr
+	}
+	anchor := targetRoot
+	destination := key
+	singleFile := errors.Is(rootErr, os.ErrNotExist)
+	if rootErr == nil {
+		if rootInfo.Mode()&os.ModeSymlink != 0 {
+			return "", "", 0, 0, errors.New("target root is a symbolic link")
+		}
+		if rootInfo.IsDir() {
+			singleFile = false
+		} else if rootInfo.Mode().IsRegular() {
+			singleFile = true
+		} else {
+			return "", "", 0, 0, errors.New("target root is not a directory or regular file")
+		}
+	}
+	if singleFile {
+		if key != "." {
+			return "", "", 0, 0, errors.New("single-file targets only support the root entry")
+		}
+		anchor = filepath.Dir(targetRoot)
+		destination = filepath.Base(targetRoot)
+	}
+	anchor = filepath.Clean(anchor)
+	info, err := filesystem.Lstat(anchor)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", "", 0, 0, errors.New("apply root is not a real directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev > uint64(^uint64(0)>>1) || stat.Ino > uint64(^uint64(0)>>1) {
+		return "", "", 0, 0, errors.New("apply root has no supported device and inode identity")
+	}
+	return anchor, filepath.ToSlash(destination), int64(stat.Dev), int64(stat.Ino), nil
+}
+
+func checkJournalBackupCapacityLimit(ctx context.Context, store *state.Store, backup []byte, limit int64) error {
+	usage, err := store.JournalBackupUsage(ctx)
+	if err != nil {
+		return err
+	}
+	return checkJournalBackupUsage(usage, backup, limit)
+}
+
+func checkJournalBackupUsage(usage state.JournalBackupUsage, backup []byte, limit int64) error {
+	reference := journalBackupReference(backup)
+	for _, holder := range usage.Holders {
+		if holder.Reference == reference {
+			return nil
+		}
+	}
+	requested := int64(len(backup))
+	if limit < 0 || usage.Bytes > limit || requested > limit-usage.Bytes {
+		entries := make([]string, 0)
+		for _, holder := range usage.Holders {
+			entries = append(entries, holder.Entries...)
+		}
+		return &RollbackMaterialLimitError{LimitBytes: limit, CurrentBytes: usage.Bytes, RequestedBytes: requested, Entries: entries}
+	}
+	return nil
+}
+
+func addJournalBackupUsage(usage *state.JournalBackupUsage, backup []byte, entryID string) {
+	reference := journalBackupReference(backup)
+	for index := range usage.Holders {
+		if usage.Holders[index].Reference == reference {
+			usage.Holders[index].Entries = append(usage.Holders[index].Entries, entryID)
+			return
+		}
+	}
+	usage.Bytes += int64(len(backup))
+	usage.Holders = append(usage.Holders, state.JournalBackupHolder{Reference: reference, Size: int64(len(backup)), Entries: []string{entryID}})
+}
+
+func journalBackupReference(backup []byte) string {
+	digest := sha256.Sum256(backup)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func newJournalID() (string, error) {

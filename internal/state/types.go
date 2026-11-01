@@ -10,8 +10,8 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 5
-const PayloadRetention = "Referenced payloads are retained; verified apply backups are pruned when no other record references them."
+const LatestSchemaVersion = 6
+const PayloadRetention = "Referenced payloads are retained; journal backups are pruned only after verified rollback or expiry when no other record references them."
 
 var ErrStateLocked = errors.New("state is already locked")
 var ErrUnsupportedSchema = errors.New("unsupported state schema")
@@ -191,15 +191,30 @@ type VaultPublicationObservation struct {
 }
 
 type JournalEntry struct {
-	ID        string
-	Operation string
-	State     string
-	Stage     string
-	Identity  model.EntryKey
-	Preimage  Fingerprint
-	Postimage Fingerprint
-	BackupRef string
-	CreatedAt int64
+	ID              string
+	Operation       string
+	State           string
+	Stage           string
+	Identity        model.EntryKey
+	RootPath        string
+	DestinationPath string
+	RootDevice      int64
+	RootInode       int64
+	Preimage        Fingerprint
+	Postimage       Fingerprint
+	BackupRef       string
+	CreatedAt       int64
+}
+
+type JournalBackupHolder struct {
+	Reference string
+	Size      int64
+	Entries   []string
+}
+
+type JournalBackupUsage struct {
+	Bytes   int64
+	Holders []JournalBackupHolder
 }
 
 const (

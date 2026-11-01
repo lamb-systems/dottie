@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
@@ -23,15 +24,17 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	_, err := store.AppendJournal(context.Background(), JournalEntry{
 		ID: "existing-journal", Operation: "replace", State: "pending", Identity: identity,
 		Preimage: preimage, Postimage: postimage, CreatedAt: 1,
-	}, []byte("backup"))
+	}, []byte("before"))
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("ALTER TABLE apply_journal DROP COLUMN stage")
-	require.NoError(t, err)
+	for _, column := range []string{"root_path", "destination_path", "root_device", "root_inode", "stage"} {
+		_, err = raw.Exec("ALTER TABLE apply_journal DROP COLUMN " + column)
+		require.NoError(t, err)
+	}
 	_, err = raw.Exec("UPDATE schema_version SET version = 4 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
@@ -49,7 +52,7 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	assert.Empty(t, entries[0].Stage)
 	payload, err := migrated.Payload(entries[0].BackupRef)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("backup"), payload)
+	assert.Equal(t, []byte("before"), payload)
 }
 
 func TestJournalTransitionsAndBackupPruning(t *testing.T) {
@@ -61,13 +64,14 @@ func TestJournalTransitionsAndBackupPruning(t *testing.T) {
 	entry, err := store.AppendJournal(context.Background(), JournalEntry{
 		ID: "apply-1", Operation: "replace", State: "pending", Stage: JournalStagePending,
 		Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
-	}, []byte("backup"))
+	}, []byte("before"))
 	require.NoError(t, err)
 	require.Equal(t, "pending", entry.State)
 	assert.Error(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "applied", JournalStageWrite))
 	assert.Error(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "failed", JournalStageVerified))
 	require.NoError(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "applied", JournalStageVerified))
-	require.NoError(t, store.PruneJournalBackup(context.Background(), entry.ID))
+	assert.Error(t, store.PruneJournalBackup(context.Background(), entry.ID, time.Unix(1, 0).Add(JournalBackupRetention-time.Second)))
+	require.NoError(t, store.PruneJournalBackup(context.Background(), entry.ID, time.Unix(1, 0).Add(JournalBackupRetention)))
 	entries, err := store.JournalEntries(context.Background(), "target")
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -89,18 +93,23 @@ func TestJournalPruningPreservesSharedBackupPayload(t *testing.T) {
 		_, err := store.AppendJournal(context.Background(), JournalEntry{
 			ID: id, Operation: "replace", State: "pending", Stage: JournalStagePending,
 			Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
-		}, []byte("shared backup"))
+		}, []byte("before"))
 		require.NoError(t, err)
 	}
 	entries := journalEntriesForTest(t, store)
 	require.Len(t, entries, 2)
+	usage, err := store.JournalBackupUsage(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(len("before")), usage.Bytes)
+	require.Len(t, usage.Holders, 1)
+	assert.Len(t, usage.Holders[0].Entries, 2)
 	require.NoError(t, store.TransitionJournalEntry(context.Background(), "shared-one", "pending", "applied", JournalStageVerified))
-	require.NoError(t, store.PruneJournalBackup(context.Background(), "shared-one"))
+	require.NoError(t, store.PruneJournalBackup(context.Background(), "shared-one", time.Unix(1, 0).Add(JournalBackupRetention)))
 	payload, err := store.Payload(entries[0].BackupRef)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("shared backup"), payload)
+	assert.Equal(t, []byte("before"), payload)
 	require.NoError(t, store.TransitionJournalEntry(context.Background(), "shared-two", "pending", "applied", JournalStageVerified))
-	require.NoError(t, store.PruneJournalBackup(context.Background(), "shared-two"))
+	require.NoError(t, store.PruneJournalBackup(context.Background(), "shared-two", time.Unix(1, 0).Add(JournalBackupRetention)))
 	_, err = store.Payload(entries[1].BackupRef)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
@@ -112,6 +121,42 @@ func journalEntriesForTest(t *testing.T, store *Store) []JournalEntry {
 	return entries
 }
 
+func TestJournalExpiryPrunesOnlyVerifiedAppliedAndRolledBackMaterial(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
+	identity := fileIdentity("prefs.toml")
+	preimage := NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("before"))
+	postimage := NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("after"))
+	for _, id := range []string{"expired-applied", "expired-failed", "expired-indeterminate"} {
+		_, err := store.AppendJournal(context.Background(), JournalEntry{
+			ID: id, Operation: "replace", State: "pending", Stage: JournalStagePending,
+			Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
+		}, []byte("before"))
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), "expired-applied", "pending", "applied", JournalStageVerified))
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), "expired-failed", "pending", "failed", JournalStageRename))
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), "expired-indeterminate", "pending", "indeterminate", JournalStageIndeterminate))
+	now := time.Unix(1, 0).Add(JournalBackupRetention + 24*time.Hour)
+	pruned, err := store.PruneExpiredJournalBackups(context.Background(), now)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"expired-applied"}, pruned)
+	entries, err := store.JournalEntries(context.Background(), "target")
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	for _, entry := range entries {
+		switch entry.ID {
+		case "expired-applied":
+			assert.Empty(t, entry.BackupRef)
+		case "expired-failed", "expired-indeterminate":
+			assert.NotEmpty(t, entry.BackupRef)
+			payload, err := store.Payload(entry.BackupRef)
+			require.NoError(t, err)
+			assert.Equal(t, []byte("before"), payload)
+		}
+	}
+}
+
 func TestJournalFailedTransitionKeepsBackupForRecovery(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
@@ -121,7 +166,7 @@ func TestJournalFailedTransitionKeepsBackupForRecovery(t *testing.T) {
 	entry, err := store.AppendJournal(context.Background(), JournalEntry{
 		ID: "apply-failed", Operation: "replace", State: "pending", Stage: JournalStagePending,
 		Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
-	}, []byte("recovery"))
+	}, []byte("before"))
 	require.NoError(t, err)
 	require.NoError(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "failed", JournalStageRename))
 	entries, err := store.JournalEntries(context.Background(), "target")
@@ -131,7 +176,7 @@ func TestJournalFailedTransitionKeepsBackupForRecovery(t *testing.T) {
 	assert.Equal(t, JournalStageRename, entries[0].Stage)
 	payload, err := store.Payload(entries[0].BackupRef)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("recovery"), payload)
-	assert.Error(t, store.PruneJournalBackup(context.Background(), entry.ID))
+	assert.Equal(t, []byte("before"), payload)
+	assert.Error(t, store.PruneJournalBackup(context.Background(), entry.ID, time.Unix(1, 0).Add(JournalBackupRetention)))
 	assert.Error(t, store.TransitionJournalEntry(context.Background(), entry.ID, "failed", "applied", JournalStageVerified))
 }

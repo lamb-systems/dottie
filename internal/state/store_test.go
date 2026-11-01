@@ -226,7 +226,7 @@ func TestRestartPreservesRecordsAndPayloadsAfterCacheDeletion(t *testing.T) {
 	require.NoError(t, store.AppendCheckpoint(context.Background(), Checkpoint{ID: "checkpoint-1", Counter: 9, CID: "bafy-test", RecordedAt: 13}))
 	preimage := NewFingerprint("present", model.FileRegular, 0o600, "", "", "", []byte("before"))
 	postimage := NewFingerprint("present", model.FileRegular, 0o640, "", "", "", []byte("after"))
-	journal, err := store.AppendJournal(context.Background(), JournalEntry{ID: "journal-1", Operation: "replace", State: "prepared", Identity: fileIdentity("journal.toml"), Preimage: preimage, Postimage: postimage, CreatedAt: 14}, []byte("backup bytes"))
+	journal, err := store.AppendJournal(context.Background(), JournalEntry{ID: "journal-1", Operation: "replace", State: "prepared", Identity: fileIdentity("journal.toml"), Preimage: preimage, Postimage: postimage, CreatedAt: 14}, []byte("before"))
 	require.NoError(t, err)
 	cacheFile := filepath.Join(paths.AppCacheDir(), "discardable")
 	require.NoError(t, os.MkdirAll(filepath.Dir(cacheFile), 0o700))
@@ -274,7 +274,7 @@ func TestRestartPreservesRecordsAndPayloadsAfterCacheDeletion(t *testing.T) {
 	require.Equal(t, []JournalEntry{journal}, journalEntries)
 	payload, err = reopened.Payload(journalEntries[0].BackupRef)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("backup bytes"), payload)
+	assert.Equal(t, []byte("before"), payload)
 }
 
 func TestFailedMigrationIsAtomicAndGoodRetrySucceeds(t *testing.T) {
@@ -346,7 +346,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 5")
+	assert.Contains(t, err.Error(), "supports version 6")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

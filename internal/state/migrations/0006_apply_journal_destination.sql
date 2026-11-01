@@ -1,0 +1,4 @@
+ALTER TABLE apply_journal ADD COLUMN root_path TEXT NOT NULL DEFAULT '';
+ALTER TABLE apply_journal ADD COLUMN destination_path TEXT NOT NULL DEFAULT '';
+ALTER TABLE apply_journal ADD COLUMN root_device INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE apply_journal ADD COLUMN root_inode INTEGER NOT NULL DEFAULT 0;

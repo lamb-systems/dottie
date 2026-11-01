@@ -618,7 +618,11 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 	if err := entry.Postimage.Validate(entry.Identity); err != nil {
 		return JournalEntry{}, fmt.Errorf("invalid postimage: %w", err)
 	}
-	ref, _ := payloadReference(backup)
+	backupReference, backupDigest := payloadReference(backup)
+	if int64(len(backup)) != entry.Preimage.Size || backupDigest != entry.Preimage.Digest {
+		return JournalEntry{}, errors.New("journal backup does not match the recorded preimage")
+	}
+	ref := backupReference
 	if entry.BackupRef != "" && entry.BackupRef != ref {
 		return JournalEntry{}, errors.New("journal backup reference does not match payload")
 	}
@@ -630,10 +634,12 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 	entry.BackupRef = ref
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO apply_journal(id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
+root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			entry.ID, entry.Operation, entry.State, entry.Stage, entry.Identity.TargetID, entry.Identity.Source, entry.Identity.FilePath, entry.Identity.SchemaID, entry.Identity.SettingsPath, entry.Identity.SettingKey,
+			entry.RootPath, entry.DestinationPath, entry.RootDevice, entry.RootInode,
 			entry.Preimage.State, entry.Preimage.Kind, entry.Preimage.Mode, entry.Preimage.LinkTarget, entry.Preimage.ValueType, entry.Preimage.ValueText, entry.Preimage.Size, entry.Preimage.Digest,
 			entry.Postimage.State, entry.Postimage.Kind, entry.Postimage.Mode, entry.Postimage.LinkTarget, entry.Postimage.ValueType, entry.Postimage.ValueText, entry.Postimage.Size, entry.Postimage.Digest, entry.BackupRef, entry.CreatedAt)
 		return err
@@ -642,22 +648,43 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 }
 
 func (s *Store) JournalEntries(ctx context.Context, targetID string) ([]JournalEntry, error) {
-	var values []JournalEntry
-	err := s.query(ctx, func(conn *sql.Conn) error {
-		rows, err := conn.QueryContext(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
+	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
+root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
 FROM apply_journal WHERE target_id = ? ORDER BY created_at, id`, targetID)
+}
+
+func (s *Store) JournalEntriesAll(ctx context.Context) ([]JournalEntry, error) {
+	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
+root_path, destination_path, root_device, root_inode,
+preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
+FROM apply_journal ORDER BY created_at, id`)
+}
+
+func (s *Store) PendingJournalEntries(ctx context.Context) ([]JournalEntry, error) {
+	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
+root_path, destination_path, root_device, root_inode,
+preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
+FROM apply_journal WHERE state = 'pending' ORDER BY created_at, id`)
+}
+
+func (s *Store) readJournalEntries(ctx context.Context, query string, args ...any) ([]JournalEntry, error) {
+	var values []JournalEntry
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var value JournalEntry
-			var source string
-			var preKind, postKind string
+			var source, preKind, postKind string
 			var preMode, postMode uint32
 			if err := rows.Scan(&value.ID, &value.Operation, &value.State, &value.Stage, &value.Identity.TargetID, &source, &value.Identity.FilePath, &value.Identity.SchemaID, &value.Identity.SettingsPath, &value.Identity.SettingKey,
+				&value.RootPath, &value.DestinationPath, &value.RootDevice, &value.RootInode,
 				&value.Preimage.State, &preKind, &preMode, &value.Preimage.LinkTarget, &value.Preimage.ValueType, &value.Preimage.ValueText, &value.Preimage.Size, &value.Preimage.Digest,
 				&value.Postimage.State, &postKind, &postMode, &value.Postimage.LinkTarget, &value.Postimage.ValueType, &value.Postimage.ValueText, &value.Postimage.Size, &value.Postimage.Digest, &value.BackupRef, &value.CreatedAt); err != nil {
 				return err

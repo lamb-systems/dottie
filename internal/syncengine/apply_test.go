@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -60,7 +61,7 @@ func fmtDigest(digest []byte) string {
 func applyRequest(root string, entries []PreviewEntry, content []Postimage) ApplyRequest {
 	return ApplyRequest{
 		Preview: Preview{Targets: []PreviewTarget{{ID: "target", Entries: entries}}, Complete: true},
-		Roots:   map[string]string{"target": root}, ModePolicy: ModePolicy{Default: 0o600}, Content: content,
+		Roots:   map[string]string{"target": root}, ModePolicy: ModePolicy{Default: 0o600}, Content: content, Now: func() time.Time { return time.Unix(100, 0) },
 	}
 }
 
@@ -143,6 +144,32 @@ func TestApplyLeavesPendingJournalAcrossCrashBoundaries(t *testing.T) {
 		require.Len(t, entries, 1)
 		assert.Equal(t, "pending", entries[0].State)
 		assert.Equal(t, state.JournalStagePending, entries[0].Stage)
+		report, err := RecoverInterrupted(context.Background(), store, nil, request.Now)
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "failed", report.Entries[0].Outcome)
+		assert.Equal(t, []byte("old"), readApplyFile(t, filepath.Join(root, "file")))
+		report, err = RecoverInterrupted(context.Background(), store, nil, request.Now)
+		require.NoError(t, err)
+		assert.Empty(t, report.Entries)
+	})
+
+	t.Run("mid-write", func(t *testing.T) {
+		store := applyTestStore(t)
+		root := t.TempDir()
+		writeApplyFile(t, filepath.Join(root, "file"), []byte("old"), 0o600)
+		entry, postimage := applyEntry("file", PreviewChange, []byte("new data"), 0o600, []byte("old"), 0o600)
+		request := applyRequest(root, []PreviewEntry{entry}, []Postimage{postimage})
+		request.FileSystem = &faultApplyFS{base: files.DefaultApplyFileSystem(), fault: "crash-mid-write"}
+		assert.Panics(t, func() { _ = Apply(context.Background(), store, request) })
+		assert.Equal(t, []byte("old"), readApplyFile(t, filepath.Join(root, "file")))
+		entries := journalEntriesFor(t, store)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "pending", entries[0].State)
+		report, err := RecoverInterrupted(context.Background(), store, nil, request.Now)
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "failed", report.Entries[0].Outcome)
 	})
 
 	t.Run("write before readback", func(t *testing.T) {
@@ -160,6 +187,16 @@ func TestApplyLeavesPendingJournalAcrossCrashBoundaries(t *testing.T) {
 		backup, err := store.Payload(entries[0].BackupRef)
 		require.NoError(t, err)
 		assert.Equal(t, []byte("old"), backup)
+		report, err := RecoverInterrupted(context.Background(), store, nil, request.Now)
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "applied", report.Entries[0].Outcome)
+		entries = journalEntriesFor(t, store)
+		assert.Equal(t, "applied", entries[0].State)
+		assert.NotEmpty(t, entries[0].BackupRef)
+		report, err = RecoverInterrupted(context.Background(), store, nil, request.Now)
+		require.NoError(t, err)
+		assert.Empty(t, report.Entries)
 	})
 }
 
@@ -246,7 +283,10 @@ func TestApplyDeletesOnlyPreviewedFileAndNeverDirectory(t *testing.T) {
 	journal := journalEntriesFor(t, store)
 	require.Len(t, journal, 1)
 	assert.Equal(t, "applied", journal[0].State)
-	assert.Empty(t, journal[0].BackupRef)
+	assert.NotEmpty(t, journal[0].BackupRef)
+	backup, err := store.Payload(journal[0].BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("remove"), backup)
 }
 
 func TestApplyRequiresExactPostimageSetAndRejectsSettings(t *testing.T) {
@@ -349,6 +389,8 @@ func (r *faultApplyRoot) Close() error             { return r.base.Close() }
 
 func (f *faultApplyFile) Write(data []byte) (int, error) {
 	switch f.fs.fault {
+	case "crash-mid-write":
+		panic("crash during temporary-file write")
 	case "partial-write":
 		count := len(data) / 2
 		if count == 0 {

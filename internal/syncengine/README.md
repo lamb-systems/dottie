@@ -177,10 +177,27 @@ that local choice and is never transplanted.
 Before acting, apply observes all requested paths and compares each available preview digest and
 mode; it repeats the comparison immediately before each journaled operation. A changed preimage
 returns `ErrPreconditionChanged`. Each file operation records a pending state row and an immutable
-backup before touching the destination. Replacements use same-directory temp-and-rename, then read
-back the bytes and mode. Success transitions the row to applied and prunes its backup; operational
-failure records failed with its stage and keeps the backup. A process crash can leave pending:
-before the write the destination remains at its preimage, while after rename the intended digest and
-saved backup let a later recovery path classify the result. A failing entry stops the sequence;
-later entries are not applied. The apply path never infers deletion from absence and never deletes
-directories or files absent from the preview.
+backup before touching the destination. The journal stores the resolved destination directory and
+its device/inode identity, so recovery does not re-resolve a target from changed configuration.
+Replacements use same-directory temp-and-rename, then read back the bytes and mode. Success marks
+the entry applied and retains its backup for seven days; operational failure records failed with
+its stage and keeps the backup. A caller must invoke `RecoverInterrupted(ctx, store, filesystem, clock)` before beginning new apply work; `Apply` returns `ErrRecoveryRequired` while pending rows remain. Recovery classifies every pending row independently:
+postimage means applied, preimage means failed, and neither means indeterminate with the file left
+alone. Missing or changed destination roots are indeterminate and untouched. Re-running recovery is
+idempotent. Older journal rows without a resolved root are reported indeterminate rather than
+redirected through current target configuration.
+
+`RollbackApplied` is also local-only and reports one result per entry. It restores an entry only
+while the destination still matches that entry's postimage; a newer edit is left untouched and
+reported as `skipped-newer-edit`. Each restore is verified against the recorded preimage before
+being marked rolled-back. Verified rolled-back material is pruned; verified applied backups expire
+after seven days. Failed and indeterminate backups are never pruned. The global rollback-material
+limit is 256 MiB until targets are associated with vaults; an apply that would exceed it fails with
+a typed error naming the entries holding existing material, and no existing backup is dropped to
+make room. Age cleanup and bound checks use the injected clock. If a future case is unclear, retain
+the backup rather than deleting it on a judgment call.
+
+Apply and rollback are per-entry operations, not a transaction. A failing entry stops the apply
+sequence; earlier entries may already be applied and later entries are not. A rollback may restore
+some entries and skip or fail others, and its report states the result for each. The apply path
+never infers deletion from absence and never deletes directories or files absent from the preview.

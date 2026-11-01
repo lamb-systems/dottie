@@ -7,29 +7,44 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 )
 
 const (
-	JournalStagePending       = "pending"
-	JournalStagePrecondition  = "precondition"
-	JournalStageCreateTemp    = "create-temp"
-	JournalStageSetMode       = "set-mode"
-	JournalStageWrite         = "write"
-	JournalStageSyncFile      = "sync-file"
-	JournalStageClose         = "close"
-	JournalStageRename        = "rename"
-	JournalStageSyncDirectory = "sync-directory"
-	JournalStageDelete        = "delete"
-	JournalStageReadBack      = "read-back"
-	JournalStageVerified      = "verified"
+	JournalStagePending         = "pending"
+	JournalStagePrecondition    = "precondition"
+	JournalStageCreateTemp      = "create-temp"
+	JournalStageSetMode         = "set-mode"
+	JournalStageWrite           = "write"
+	JournalStageSyncFile        = "sync-file"
+	JournalStageClose           = "close"
+	JournalStageRename          = "rename"
+	JournalStageSyncDirectory   = "sync-directory"
+	JournalStageDelete          = "delete"
+	JournalStageReadBack        = "read-back"
+	JournalStageVerified        = "verified"
+	JournalStageIndeterminate   = "indeterminate"
+	JournalStageRolledBack      = "rolled-back"
+	JournalStageRollbackSkipped = "skipped-newer-edit"
+	JournalBackupRetention      = 7 * 24 * time.Hour
 )
 
 func (s *Store) TransitionJournalEntry(ctx context.Context, id, from, to, stage string) error {
 	if err := validateID(id, "journal id"); err != nil {
 		return err
 	}
-	if from != "pending" || (to != "applied" && to != "failed") || !validJournalStage(stage) ||
-		(to == "applied" && stage != JournalStageVerified) || (to == "failed" && stage == JournalStageVerified) {
+	valid := false
+	switch from {
+	case "pending":
+		valid = (to == "applied" && stage == JournalStageVerified) ||
+			(to == "failed" && validJournalFailureStage(stage)) ||
+			(to == "indeterminate" && stage == JournalStageIndeterminate) ||
+			(to == "rolled-back" && stage == JournalStageRolledBack)
+	case "applied":
+		valid = to == "rolled-back" && stage == JournalStageRolledBack
+	}
+	if !valid {
 		return fmt.Errorf("%w: %q to %q at %q", ErrInvalidJournalTransition, from, to, stage)
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
@@ -42,13 +57,33 @@ func (s *Store) TransitionJournalEntry(ctx context.Context, id, from, to, stage 
 			return err
 		}
 		if changed != 1 {
-			return fmt.Errorf("%w: journal entry %q is missing or not pending", ErrInvalidJournalTransition, id)
+			return fmt.Errorf("%w: journal entry %q is missing or not %s", ErrInvalidJournalTransition, id, from)
 		}
 		return nil
 	})
 }
 
-func (s *Store) PruneJournalBackup(ctx context.Context, id string) error {
+func (s *Store) RecordJournalRollbackSkipped(ctx context.Context, id string) error {
+	if err := validateID(id, "journal id"); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied'", JournalStageRollbackSkipped, id)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			return fmt.Errorf("%w: journal entry %q is missing or not applied", ErrInvalidJournalTransition, id)
+		}
+		return nil
+	})
+}
+
+func (s *Store) PruneJournalBackup(ctx context.Context, id string, now time.Time) error {
 	if err := validateID(id, "journal id"); err != nil {
 		return err
 	}
@@ -58,16 +93,19 @@ func (s *Store) PruneJournalBackup(ctx context.Context, id string) error {
 	var remove bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		var state, stage string
-		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference); err != nil {
+		var createdAt int64
+		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt); err != nil {
 			return err
-		}
-		if state != "applied" || stage != JournalStageVerified {
-			return errors.New("journal backup can only be pruned after verification")
 		}
 		if reference == "" {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = 'applied'", id); err != nil {
+		rolledBack := state == "rolled-back" && stage == JournalStageRolledBack
+		aged := (state == "applied" && (stage == JournalStageVerified || stage == JournalStageRollbackSkipped) || rolledBack) && !now.Before(time.Unix(createdAt, 0).Add(JournalBackupRetention))
+		if !rolledBack && !aged {
+			return errors.New("journal backup can only be pruned after verified rollback or seven-day expiry of a verified apply")
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = ?", id, state); err != nil {
 			return err
 		}
 		var references int
@@ -95,11 +133,79 @@ func (s *Store) PruneJournalBackup(ctx context.Context, id string) error {
 	return syncDirectory(s.payloadDir)
 }
 
-func validJournalStage(stage string) bool {
+func (s *Store) JournalBackupUsage(ctx context.Context) (JournalBackupUsage, error) {
+	entries, err := s.JournalEntriesAll(ctx)
+	if err != nil {
+		return JournalBackupUsage{}, err
+	}
+	byReference := make(map[string]*JournalBackupHolder)
+	for _, entry := range entries {
+		if entry.BackupRef == "" {
+			continue
+		}
+		holder := byReference[entry.BackupRef]
+		if holder == nil {
+			holder = &JournalBackupHolder{Reference: entry.BackupRef, Size: entry.Preimage.Size}
+			byReference[entry.BackupRef] = holder
+		} else if holder.Size != entry.Preimage.Size {
+			return JournalBackupUsage{}, fmt.Errorf("journal backup %q has conflicting sizes", entry.BackupRef)
+		}
+		holder.Entries = append(holder.Entries, entry.ID)
+	}
+	references := make([]string, 0, len(byReference))
+	for reference := range byReference {
+		references = append(references, reference)
+	}
+	sort.Strings(references)
+	usage := JournalBackupUsage{Holders: make([]JournalBackupHolder, 0, len(references))}
+	for _, reference := range references {
+		holder := byReference[reference]
+		if holder.Size < 0 || usage.Bytes > int64(^uint64(0)>>1)-holder.Size {
+			return JournalBackupUsage{}, errors.New("journal backup size overflows")
+		}
+		usage.Bytes += holder.Size
+		usage.Holders = append(usage.Holders, *holder)
+	}
+	return usage, nil
+}
+
+func (s *Store) PruneExpiredJournalBackups(ctx context.Context, now time.Time) ([]string, error) {
+	entries, err := s.JournalEntriesAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pruned := make([]string, 0)
+	for _, entry := range entries {
+		if entry.BackupRef == "" || (entry.State != "applied" && entry.State != "rolled-back") {
+			continue
+		}
+		if now.Before(time.Unix(entry.CreatedAt, 0).Add(JournalBackupRetention)) {
+			continue
+		}
+		if err := s.PruneJournalBackup(ctx, entry.ID, now); err != nil {
+			return pruned, fmt.Errorf("prune expired journal backup %s: %w", entry.ID, err)
+		}
+		pruned = append(pruned, entry.ID)
+	}
+	return pruned, nil
+}
+
+func validJournalFailureStage(stage string) bool {
 	switch stage {
 	case JournalStagePrecondition, JournalStageCreateTemp, JournalStageSetMode, JournalStageWrite,
 		JournalStageSyncFile, JournalStageClose, JournalStageRename, JournalStageSyncDirectory, JournalStageDelete,
-		JournalStageReadBack, JournalStageVerified:
+		JournalStageReadBack:
+		return true
+	default:
+		return false
+	}
+}
+
+func validJournalStage(stage string) bool {
+	switch stage {
+	case JournalStagePending, JournalStagePrecondition, JournalStageCreateTemp, JournalStageSetMode, JournalStageWrite,
+		JournalStageSyncFile, JournalStageClose, JournalStageRename, JournalStageSyncDirectory, JournalStageDelete,
+		JournalStageReadBack, JournalStageVerified, JournalStageIndeterminate, JournalStageRolledBack, JournalStageRollbackSkipped:
 		return true
 	default:
 		return false
