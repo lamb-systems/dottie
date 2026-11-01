@@ -388,12 +388,12 @@ func TestVaultRecordContextRequiresEntriesAndChecksCrossRecordBindings(t *testin
 	snapshotBytes, err := EncodeRecord(byType[VaultSnapshotNSID].record)
 	require.NoError(t, err)
 	snapshotRecord := byType[VaultSnapshotNSID].record.(SnapshotRecord)
-	snapshotCID, err := recordCID(snapshotBytes)
+	_, err = recordCID(snapshotBytes)
 	require.NoError(t, err)
 	blobCID := cid.Cid(snapshotRecord.Blob.Ref).Bytes()
 
 	head := byType[VaultHeadNSID].record.(HeadRecord)
-	head.SnapshotCID = bytes.Clone(snapshotCID)
+	head.SnapshotCID = bytes.Clone(blobCID)
 	head.BlobCID = bytes.Clone(blobCID)
 	headBytes, err := EncodeRecord(head)
 	require.NoError(t, err)
@@ -405,7 +405,7 @@ func TestVaultRecordContextRequiresEntriesAndChecksCrossRecordBindings(t *testin
 	assert.NoError(t, VerifyRecordContext(headBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes}))
 
 	control := byType[VaultControlNSID].record.(ControlRecord)
-	control.HeadSnapshotCID = bytes.Clone(snapshotCID)
+	control.HeadSnapshotCID = bytes.Clone(blobCID)
 	controlBytes, err = EncodeRecord(control)
 	require.NoError(t, err)
 	assert.NoError(t, VerifyRecordContext(controlBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes}))
@@ -778,4 +778,35 @@ func attestationRecordFromObject(value vault.Attestation) AttestationRecord {
 
 func fixtureSigningKey(seed byte) ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
+}
+
+func TestSnapshotCidDenotesTheEnvelopeNotTheRecord(t *testing.T) {
+	fixtures := v02RecordFixtures(t)
+	byType := make(map[string]recordFixture, len(fixtures))
+	for _, fixture := range fixtures {
+		byType[fixture.record.LexiconID()] = fixture
+	}
+	snapshotBytes, err := EncodeRecord(byType[VaultSnapshotNSID].record)
+	require.NoError(t, err)
+	snapshot := byType[VaultSnapshotNSID].record.(SnapshotRecord)
+	envelopeCID := cid.Cid(snapshot.Blob.Ref).Bytes()
+	recordCIDValue, err := recordCID(snapshotBytes)
+	require.NoError(t, err)
+	policyBytes, err := EncodeRecord(byType[VaultPolicyNSID].record)
+	require.NoError(t, err)
+
+	head := byType[VaultHeadNSID].record.(HeadRecord)
+	head.SnapshotCID = bytes.Clone(envelopeCID)
+	head.BlobCID = bytes.Clone(envelopeCID)
+	headBytes, err := EncodeRecord(head)
+	require.NoError(t, err)
+	assert.NoError(t, VerifyRecordContext(headBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes}),
+		"head.snapshotCid denotes the envelope CID")
+
+	drifted := head
+	drifted.SnapshotCID = bytes.Clone(recordCIDValue)
+	driftedBytes, err := EncodeRecord(drifted)
+	require.NoError(t, err)
+	assert.Error(t, VerifyRecordContext(driftedBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes}),
+		"the snapshot record CID is a different identifier and must not satisfy the binding")
 }

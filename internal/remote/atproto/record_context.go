@@ -351,15 +351,11 @@ func snapshotContextCIDs(data []byte) ([]byte, []byte, error) {
 	if !ok {
 		return nil, nil, &RecordContextError{Entry: "Snapshot", Field: "wrongType"}
 	}
-	snapshotCID, err := recordCID(data)
-	if err != nil || len(snapshotCID) > vault.MaxParentBytes {
-		return nil, nil, &RecordContextError{Entry: "Snapshot", Field: "CID"}
-	}
 	blobCID := cid.Cid(snapshot.Blob.Ref).Bytes()
 	if len(blobCID) > vault.MaxParentBytes {
 		return nil, nil, &RecordContextError{Entry: "Snapshot", Field: "blobCid"}
 	}
-	return snapshotCID, blobCID, nil
+	return blobCID, blobCID, nil
 }
 
 func allZero(value []byte) bool {
