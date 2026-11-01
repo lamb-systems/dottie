@@ -78,11 +78,11 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err := matchPolicyIdentity(value.Vault, value.PolicyDigest, policy); err != nil {
 			return err
 		}
-		snapshotCID, _, err := snapshotContextCIDs(context.Snapshot)
+		snapshotRecord, err := snapshotContextRecord(context.Snapshot)
 		if err != nil {
 			return err
 		}
-		if !bytes.Equal(value.HeadSnapshotCID, snapshotCID) {
+		if value.EpochSeq != snapshotRecord.EpochSeq || !bytes.Equal(value.PolicyDigest[:], snapshotRecord.PolicyDigest) {
 			return &RecordContextError{Field: "headSnapshotCid"}
 		}
 		return nil
@@ -167,7 +167,7 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err != nil || !bytes.Equal(value.ControlCID, controlCID) {
 			return &RecordContextError{Field: "controlCid"}
 		}
-		if !bytes.Equal(value.SnapshotCID, control.HeadSnapshotCID) {
+		if value.EpochSeq != control.EpochSeq || !bytes.Equal(value.PolicyDigest, control.PolicyDigest) {
 			return &RecordContextError{Field: "snapshotCid"}
 		}
 		if !allZero(value.Anchor) {
@@ -334,6 +334,18 @@ func policyCertificateFields(certificate CertificateRecord, policy PolicyRecord)
 		return &RecordContextError{Field: "encryptionPublicKey"}
 	}
 	return nil
+}
+
+func snapshotContextRecord(data []byte) (SnapshotRecord, error) {
+	decoded, err := DecodeRecord(data)
+	if err != nil {
+		return SnapshotRecord{}, &RecordContextError{Entry: "Snapshot", Field: "invalid"}
+	}
+	record, ok := decoded.(SnapshotRecord)
+	if !ok {
+		return SnapshotRecord{}, &RecordContextError{Entry: "Snapshot", Field: "wrongType"}
+	}
+	return record, nil
 }
 
 func snapshotContextCIDs(data []byte) ([]byte, []byte, error) {

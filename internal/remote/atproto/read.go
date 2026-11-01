@@ -484,7 +484,7 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	if policy.EpochSeq != control.EpochSeq || policy.EpochSeq != head.EpochSeq || policy.EpochSeq != envelope.EpochSeq || control.PolicyDigest != policyDigest || head.PolicyDigest != policyDigest || envelope.PolicyDigest != policyDigest {
 		return errors.New("epoch or policy digest disagrees")
 	}
-	if !bytes.Equal(head.SnapshotCID, cidBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, cidBytes(envelopeBytes)) || !bytes.Equal(control.HeadSnapshotCID, head.SnapshotCID) {
+	if !bytes.Equal(head.SnapshotCID, cidBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, cidBytes(envelopeBytes)) || head.EpochSeq != control.EpochSeq || head.PolicyDigest != control.PolicyDigest {
 		return errors.New("head and snapshot linkage disagrees")
 	}
 	policySigner, err := authorizedReadSigner(policy.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RoleRoot)

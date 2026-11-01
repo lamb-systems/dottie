@@ -810,3 +810,42 @@ func TestSnapshotCidDenotesTheEnvelopeNotTheRecord(t *testing.T) {
 	assert.Error(t, VerifyRecordContext(driftedBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes}),
 		"the snapshot record CID is a different identifier and must not satisfy the binding")
 }
+
+func TestHeadMayAdvanceWithinAnEpochWithoutAControlWrite(t *testing.T) {
+	fixtures := v02RecordFixtures(t)
+	byType := make(map[string]recordFixture, len(fixtures))
+	for _, fixture := range fixtures {
+		byType[fixture.record.LexiconID()] = fixture
+	}
+	snapshotBytes, err := EncodeRecord(byType[VaultSnapshotNSID].record)
+	require.NoError(t, err)
+	snapshot := byType[VaultSnapshotNSID].record.(SnapshotRecord)
+	envelopeCID := cid.Cid(snapshot.Blob.Ref).Bytes()
+	policyBytes, err := EncodeRecord(byType[VaultPolicyNSID].record)
+	require.NoError(t, err)
+	controlBytes, err := EncodeRecord(byType[VaultControlNSID].record)
+	require.NoError(t, err)
+
+	advanced := byType[VaultHeadNSID].record.(HeadRecord)
+	advanced.SnapshotCID = bytes.Clone(envelopeCID)
+	advanced.BlobCID = bytes.Clone(envelopeCID)
+	advancedBytes, err := EncodeRecord(advanced)
+	require.NoError(t, err)
+
+	control, err := DecodeRecord(controlBytes)
+	require.NoError(t, err)
+	controlValue := control.(ControlRecord)
+	require.NotEqual(t, controlValue.HeadSnapshotCID, advanced.SnapshotCID,
+		"this fixture is only meaningful when the head has moved past the epoch's opening snapshot")
+
+	assert.NoError(t, VerifyRecordContext(advancedBytes, RecordContext{
+		Policy:   policyBytes,
+		Control:  controlBytes,
+		Snapshot: snapshotBytes,
+	}), "a head advanced within an epoch is coherent with a control that names the epoch's first snapshot")
+
+	assert.NoError(t, VerifyRecordContext(controlBytes, RecordContext{
+		Policy:   policyBytes,
+		Snapshot: snapshotBytes,
+	}), "the control record stays coherent when the supplied snapshot is the advanced head, not the one it names")
+}

@@ -660,7 +660,7 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte) (vault.Pr
 		if err := VerifyRecordBinding(headProven.Data, headBytes); err != nil {
 			return vault.Predecessor{}, err
 		}
-		if !bytes.Equal(headObject.SnapshotCID, controlObject.HeadSnapshotCID) || !bytes.Equal(headObject.BlobCID, headObject.SnapshotCID) {
+		if headObject.EpochSeq != controlObject.EpochSeq || headObject.PolicyDigest != controlObject.PolicyDigest || !bytes.Equal(headObject.BlobCID, headObject.SnapshotCID) {
 			return vault.Predecessor{}, fmt.Errorf("%w: current head does not match control", ErrRecord)
 		}
 		signerCertificate, exists := certificateForVaultSigner(certificates, headObject.Signer.DeviceID, headObject.Signer.KeyID)
@@ -709,7 +709,7 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte) (vault.Pr
 		}
 		headCID = bytes.Clone(headObject.SnapshotCID)
 	}
-	if !bytes.Equal(controlObject.HeadSnapshotCID, headCID) {
+	if len(headCID) == 0 && len(controlObject.HeadSnapshotCID) != 0 {
 		return vault.Predecessor{}, fmt.Errorf("%w: control and current head disagree", ErrRecord)
 	}
 	if len(headCID) > 0 {

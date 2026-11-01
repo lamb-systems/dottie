@@ -39,6 +39,13 @@ Four objects are signed. Fields are normative; encodings are in the envelope spe
 | **Policy** | `v`, `vault`, `epoch_seq`, `roles[]` (`device_id`, role), `recipients[]` (`device_id`, `key_id`, X25519 public key), `policy_retention_floor`, `retained_recovery_points`, `max_publications`, `max_epoch_age`, `recovery_anchor` (kit anchor fingerprint), `prev_policy_digest` |
 | **Control** | `v`, `vault`, `epoch_seq`, `policy_digest`, `head_snapshot_cid`, `revoked[]` (`device_id`, `cert_epoch`), `prev_control_cid`, `signer` |
 | **Head** | `v`, `vault`, `epoch_seq`, `policy_digest`, `snapshot_cid`, `blob_cid`, `publication_count`, `prev_head_cid`, `signer` |
+
+`control.head_snapshot_cid` names the snapshot the epoch **began** with, at the last administrative
+transition — not the live head. An ordinary publication advances the head within the epoch and writes no
+control record, so the two differ by design after the first publication. A reader requires the head's
+`epoch_seq` and `policy_digest` to equal the control's, and must **not** require the snapshot identifiers
+to match: an earlier draft did, which made the first publication render the vault unreadable and block
+every later transition.
 | **Certificate** | `v`, `vault`, `device_id`, `key_id`, Ed25519 public key, X25519 public key, role, `cert_epoch`, `issuer` (`device_id` of the signing root, or the bootstrap anchor), `revocation_ref` |
 | **Checkpoint** | `v`, `vault`, `snapshot_cid`, `epoch_seq`, `policy_digest`, `anchor` (root signing-key fingerprint the kit vouches for), `control_cid`, `signer` |
 
