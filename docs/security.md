@@ -14,8 +14,8 @@ for someone deciding whether to trust the tool with their configuration.
 | Blob lifecycle and fenced publication | yes, harness and library | wired into a product command |
 | Encryption and signatures | **no** | ADR 015 |
 | Device roles, revocation, epochs | **no** | ADR 014 |
-| Recovery kit, checkpoints, export | **no** | DOT-V05, V06 |
-| GNOME settings capture and apply | boundary only, opt-in cgo | DOT-G01 to G04 |
+| Recovery kit, checkpoints, export | **no** | checkpoints and recovery, V06 |
+| GNOME settings capture and apply | boundary only, opt-in cgo | the GNOME capture work to G04 |
 
 The CLI currently exposes target selection only. Account linking exists as an internal OAuth boundary with
 an unsupported login path, not as a command you can run. No real data should be stored with this build.
@@ -53,7 +53,7 @@ From live runs on two hosting categories.
 - A batch rejected after blob processing leaves its candidate anonymously retrievable by exact bytes. A
   never-referenced control blob stays unreachable, so the negative result is meaningful.
 - A rejected candidate was reachable at one minute and at five minutes. The end of that window has not been
-  measured and nothing here bounds it. These are the historical DOT-F04/F05 rejected-candidate observations;
+  measured and nothing here bounds it. These are the historical the fence work/F05 rejected-candidate observations;
   the checked-in harness's long referenceability schedule has not been run, and it measures a different
   property.
 - A lost response cannot be distinguished from a request that was never sent without a re-read.
@@ -138,5 +138,5 @@ take away its ability to unwrap ciphertext that was already wrapped to it.
 
 ## Coverage
 
-ADR 014 and ADR 015 define the target contract. DOT-V07 owns the adversarial tests; every residual risk
+ADR 014 and ADR 015 define the target contract. The adversarial testing work owns the adversarial tests; every residual risk
 above names the limit it accepts rather than a test that would clear it.

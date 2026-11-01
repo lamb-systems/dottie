@@ -13,13 +13,13 @@ exists in the code today.
 | Threat | What it obtains | Defense | Status |
 | --- | --- | --- | --- |
 | Anonymous holder of a CID | the staged blob | encryption before upload | not implemented |
-| Revoked device | a ciphertext staged under an epoch it holds | never stage under an epoch a revoked device holds | planned, DOT-V04 |
+| Revoked device | a ciphertext staged under an epoch it holds | never stage under an epoch a revoked device holds | planned, the epoch-transition work |
 | Provider without the epoch key | ciphertext only | encryption before upload | not implemented |
 | Colluding provider holding the epoch key | plaintext | none available | recorded as accepted risk |
 
 Staging under a new epoch is a key-selection rule. It decides which epoch encrypts a candidate, and it
 does not cause a rejected candidate to be non-promoted. Non-promotion is precisely the condition under
-which DOT-F05 measured disclosure, so the rule cannot be a defense against that disclosure.
+which the contention measurements measured disclosure, so the rule cannot be a defense against that disclosure.
 
 Independent checkpoints are not on this table. They address authenticated history and rollback
 detection, which is a different property. A checkpoint cannot stop a provider from handing out bytes it
@@ -56,12 +56,12 @@ failure and on any 5xx, so a caller cannot mistake an unknown outcome for a clea
 
 ## Consequences
 
-Nothing is protected today. `internal/vault` has neither encryption nor signing, and DOT-F05 measured
+Nothing is protected today. `internal/vault` has neither encryption nor signing, and the contention measurements measured
 exact staged bytes, with no envelope.
 
 Real data and cloud release are held against the complete checklist in ADR 013. This record is not the
 gate by itself. Synthetic use of the transport requires explicit disposable-account authorization, which is how
-DOT-F02 to DOT-F06 were run.
+the account-authorization work to the native settings boundary were run.
 
 ## Risk ledger
 

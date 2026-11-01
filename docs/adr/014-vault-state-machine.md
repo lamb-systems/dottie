@@ -7,7 +7,7 @@ than cited, so a public reader is not sent to a document they cannot open.
 ## Context
 
 A fence protects promotion, not transmission. `uploadBlob` happens before the `applyWrites` the fence
-guards, and DOT-F04 and DOT-F05 measured that a candidate rejected after blob processing stays anonymously
+guards, and the fence work and the contention measurements measured that a candidate rejected after blob processing stays anonymously
 retrievable. An earlier draft claimed epoch equality made "never stage under an epoch a revoked device
 holds" a checkable predicate. It does not; the ordering section states what is available instead.
 
@@ -32,7 +32,7 @@ Every section below is normative. Terms and object schemas come first because th
 
 ## Signed objects
 
-Four objects are signed. Fields are normative; encodings are in DOT-V015.
+Four objects are signed. Fields are normative; encodings are in the envelope specification.
 
 | Object | Fields |
 | --- | --- |
@@ -224,7 +224,7 @@ the current plaintext. Three artifacts are therefore required for full recovery,
 them because "recovery" without them is a promise the design cannot keep:
 
 1. the kit, for authorization;
-2. the independent complete export from DOT-V06, which carries the snapshot payloads; and
+2. the independent complete export, which carries the snapshot payloads; and
 3. a secret that can decrypt that export, since the export is encrypted under an epoch key the kit does not
    hold.
 

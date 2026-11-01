@@ -34,7 +34,7 @@ Errors reused from the implementation, all present in `internal/remote/atproto/p
 `ErrBatchRejected`, `ErrAmbiguousTransport`, `ErrCandidateMayBeDisclosed`.
 
 Errors that do not exist yet and must be added by named tasks: a policy digest or epoch mismatch error
-(DOT-V03), a quota exhaustion error (DOT-P04), and a keyring or reauthorization failure (DOT-P02). These
+(device enrollment), a quota exhaustion error (publication), and a keyring or reauthorization failure (persistent authorization). These
 are listed as planned so no reader assumes they are available.
 
 Stops that must be represented, each with a message and a resume condition: keyring unavailable or
@@ -47,7 +47,7 @@ distinguished from a pause that resolves without intervention.
 
 Every new failure path owes a row. A path without one is an unfinished error.
 
-Unsupported browserless or device-flow login needs its own row when DOT-P02 lands, because a
+Unsupported browserless or device-flow login needs its own row when persistent authorization lands, because a
 headless user currently has no way forward and no way to see why.
 
 ## Alternatives

@@ -30,14 +30,14 @@ retransmission. Budget-counted transports are pinned to HTTP/1.1 with ALPN set e
 ## Decision
 
 A verified revision is evidence of membership at a PDS-asserted commit. Nothing more. Freshness,
-rollback resistance and equivocation defence belong to DOT-V05 independent checkpoints, and no code in
+rollback resistance and equivocation defence belong to checkpoints and recovery independent checkpoints, and no code in
 the cloud track may present a verified revision as proof of authorship or global currency.
 
 Wall-clock time never authorizes a vault action. Authorization and revocation are ordered by signed
 epoch and policy. Clock skew and DPoP nonce handling are protocol concerns handled separately, and they
 cannot move a device into or out of an authorized role.
 
-Commit evidence follows the DOT-F05 taxonomy: `rejected-local`, `not-sent`, `unknown`,
+Commit evidence follows the the contention measurements taxonomy: `rejected-local`, `not-sent`, `unknown`,
 `rejected-pre-blob`, `rejected-other`, `committed`. A 5xx or an unparseable body is `unknown` whatever
 error name it carries. A 2xx counts as `committed` only when the attempt's unique marker rkey and its
 expected record CID are proven present in a freshly verified revision. Head and control records live at
@@ -45,13 +45,13 @@ rkey `self`, so their presence proves nothing and is never evidence that our bat
 
 Publication writes the first blob reference, the head and the control record at one revision, with one
 active head. There is no blind resend. `unavailable` is terminal for that recovery decision, and retry is
-bounded, jittered and gated on classification in DOT-P05.
+bounded, jittered and gated on classification in crash-safe publication.
 
 Durable state records, before the send that could create referenced state: run identifier, marker rkey,
 expected record CID, candidate blob CID, epoch, policy digest, the outcome when known, and the evidence
 used to decide it. Unknown outcomes survive restart and are resolved by a verified re-read, never by
-resending. These fields are not built yet; the store and its migrations come from DOT-L06, and the
-publication identity is specified here so DOT-L06 does not have to invent it.
+resending. These fields are not built yet; the store and its migrations come from the state store, and the
+publication identity is specified here so the state store does not have to invent it.
 
 ## Consequences
 

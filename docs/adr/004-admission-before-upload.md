@@ -13,7 +13,7 @@ advertised by the resolved Bluesky shard and 100 MiB by the independently hosted
 advertises no limit at all, which is why the value has to come from the resolved PDS and not from the
 handle's host. None of these values is a tested rejection boundary.
 
-Ordering matters more than the arithmetic. DOT-F04 showed that a batch rejected after blob processing
+Ordering matters more than the arithmetic. The fence work showed that a batch rejected after blob processing
 leaves the candidate anonymously retrievable, while a never-referenced control stays unreachable. A
 check performed at `applyWrites` time therefore happens after the data is already disclosable by CID.
 

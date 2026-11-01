@@ -8,14 +8,14 @@ Three different things grant power in this system, and conflating them produces 
 that look stronger than the evidence.
 
 The OAuth account authority is real and proven: four-hop discovery, PKCE, PAR, DPoP, `iss` and `sub`
-binding, strict scope enforcement, one atomic Secret Service envelope. DOT-F02 ran it live on two
+binding, strict scope enforcement, one atomic Secret Service envelope. The account-authorization work ran it live on two
 identities.
 
 The vault device authority does not exist yet. There are no signed roles, no recipient authorization, no
-exact signed-policy binding. DOT-F04's control transition was simulated, and `proofs.go` authenticates
+exact signed-policy binding. The fence work's control transition was simulated, and `proofs.go` authenticates
 repository membership, not authorship or role. The atproto README says the same.
 
-The offline recovery authority does not exist yet either. DOT-V05 owns it.
+The offline recovery authority does not exist yet either. Checkpoints and recovery owns it.
 
 ## Decision
 
@@ -26,19 +26,19 @@ Credentials are stored in Secret Service only: one atomic envelope per session, 
 items scoped to `application=dottie`, tokens and response bodies redacted structurally. When the keyring
 cannot deliver a session the tool fails closed with a typed error rather than degrading.
 
-The provider-required atproto base scope does not widen write access. DOT-F03 demonstrated that
-out-of-scope writes are denied, which closes the question DOT-F02 left for this task. Out-of-scope reads
+The provider-required atproto base scope does not widen write access. The blob-lifecycle work demonstrated that
+out-of-scope writes are denied, which closes the question the account-authorization work left for this task. Out-of-scope reads
 are public data, so a denial is not implied, and the anonymous control returned 200 as well.
 
 Wall-clock time does not participate in authorization. Role and revocation order come from signed epoch
 and policy, as pinned in ADR 006.
 
 Vault authorization, revocation and role checking are release prerequisites, not existing evidence. A
-revoked device must be unable to publish, and proving that is DOT-V03's job rather than a claim made here.
+revoked device must be unable to publish, and proving that belongs to device enrollment rather than a claim made here.
 
 ## Consequences
 
-Until DOT-V03 lands, the system can publish to an account but cannot say which device should be allowed
+Until device enrollment lands, the system can publish to an account but cannot say which device should be allowed
 to. That is acceptable for synthetic development and unacceptable for real data.
 
 Revocation cannot be described as working. What exists is a repository fence that stops a stale writer. A

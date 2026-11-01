@@ -87,9 +87,8 @@ or manual dispatch. It has no credentials or dependency cache. CI proves builds 
 checks on its configured hosted runner, but this patch has no hosted-run evidence: an
 owner-triggered run is still needed. The arm64 result is compile-only; arm64 runtime
 behaviour is unproven. These checks do not exercise a real desktop session, real user
-preferences or a PDS account. Preset and manifest validators are deferred to DOT-L03's
-versioned preset-catalog task; the source-comment policy remains a review concern, not
-an automated check. CI does not build release artifacts, sign or publish anything.
+preferences or a PDS account. Preset and manifest validators are deferred to the versioned preset-catalog
+work; the source-comment policy remains a review concern, not an automated check. CI does not build release artifacts, sign or publish anything.
 
 ## Layout
 

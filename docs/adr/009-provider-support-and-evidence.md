@@ -35,7 +35,7 @@ A provider is usable for the transport primitives when its blob, fence and conte
 not thereby certified for confidentiality, and not certified above its advertised ceiling.
 
 Freshness is stated wherever a provider is described: the only claim available is membership at a commit
-the provider asserted. Rollback and equivocation defence require independent checkpoints in DOT-V05.
+the provider asserted. Rollback and equivocation defence require independent checkpoints in checkpoints and recovery.
 
 ## Consequences
 

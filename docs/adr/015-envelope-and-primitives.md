@@ -1,6 +1,6 @@
 # 015 — Snapshot envelope, primitives and signed bytes
 
-Status: accepted, 2026-10-31. The cryptographic half of ADR 014. Amended by DOT-V02 in three
+Status: accepted, 2026-10-31. The cryptographic half of ADR 014. Amended by the envelope implementation in three
 byte-level places, each marked: the format identifier, the genesis parent, and the commitment input.
 
 ## Context
@@ -48,7 +48,7 @@ Fields in this order. Unknown fields are rejected.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `magic` | 3 bytes | `0x44 0x54 0x45` (`DTE`). **Amended by DOT-V02** from a bare uint8 `v`. |
+| `magic` | 3 bytes | `0x44 0x54 0x45` (`DTE`). **Amended by the envelope implementation** from a bare uint8 `v`. |
 | `version` | uint8 | format version, currently `1` |
 | `kind` | uint8 | 1 envelope, 2 policy, 3 control, 4 certificate, 5 checkpoint, 6 attestation. Required because an envelope's `purpose` and an object's `kind` would otherwise occupy one byte and be ambiguous. |
 | `purpose` | uint8 | `1` snapshot, `2` policy, `3` control, `4` certificate, `5` checkpoint, `6` attestation. Present only when `kind` is 1. |
@@ -56,9 +56,9 @@ Fields in this order. Unknown fields are rejected.
 | `publication_id` | 16 bytes | random, allocated before encryption |
 | `epoch_seq` | uint64 big-endian | epoch owning the content key |
 | `policy_digest` | 32 bytes | digest of the policy the content is valid under |
-| `parent` | uint16 length + full CID bytes; length 0 means genesis. **Amended by DOT-V02** from a one-byte sentinel, because a zero-length field is unambiguous and needs no reserved value. |
+| `parent` | uint16 length + full CID bytes; length 0 means genesis. **Amended by the envelope implementation** from a one-byte sentinel, because a zero-length field is unambiguous and needs no reserved value. |
 | `signer` | `{device_id, key_id}` | the publishing device, inside the signed preimage |
-| `commit` | 32 bytes | `SHA-256("dottie/v1/commit" ‖ K ‖ vault ‖ epoch_seq)`. **Amended by DOT-V02**: binding the vault and epoch stops a key being accepted as a commitment answer in a different context. |
+| `commit` | 32 bytes | `SHA-256("dottie/v1/commit" ‖ K ‖ vault ‖ epoch_seq)`. **Amended by the envelope implementation**: binding the vault and epoch stops a key being accepted as a commitment answer in a different context. |
 | `recipients` | array, ≤ 64 | `{key_id, ephemeral_pub 32, wrap_nonce 24, wrapped_key}`, sorted by `key_id` |
 | `nonce` | 24 bytes | content nonce |
 | `ciphertext`, `tag` | bytes | content encryption output |
@@ -133,14 +133,14 @@ digest the existing snapshot payload carries. No plaintext-derived value appears
 only provider-visible fields are those in the envelope table above, each of which is structural or already
 public.
 
-## Byte-level contract, deferred to DOT-V02
+## Byte-level contract, deferred to the envelope implementation
 
 The field order, the four preimages and their exclusions are normative here. The byte-level details are
 not, and this record says so instead of pretending otherwise: exact widths for `device_id` and `key_id`,
 the concrete Ed25519ctx `Context` strings, the wrap AEAD choice with its key, output and tag lengths,
 nonce generation and entropy-failure behaviour, and the deterministic encoding of the policy object.
 
-Those belong with the code that implements them, because prose cannot validate them. DOT-V02 delivers the
+Those belong with the code that implements them, because prose cannot validate them. The envelope implementation delivers the
 encodings **together with test vectors** for every signed object and every digest, and review of that
 task checks the vectors rather than the sentences. A specification that pins bytes without vectors is a
 claim nobody can check.
@@ -156,7 +156,7 @@ Each limit is separate because they fail for different reasons.
 | --- | --- | --- |
 | Encrypted blob length | provider ceiling and local cap, whichever is smaller | before the upload request, on the final serialized length (ADR 004) |
 | Entry plaintext | 256 MiB, the existing `MaxTotalBytes` default | while decoding |
-| Decrypted container | 256 MiB plus manifest, tar headers and padding, computed by DOT-V02 | while decoding |
+| Decrypted container | 256 MiB plus manifest, tar headers and padding, computed by the envelope implementation | while decoding |
 | Encrypted blob | the decrypted container plus envelope overhead, checked against the provider ceiling | before upload |
 | Recipients | 64 | before allocation |
 | Certificate chain | 3 links | before allocation |
@@ -167,7 +167,7 @@ Each limit is separate because they fail for different reasons.
 Repository proofs are a separate budget and are often confused with this one. A repository CAR carries
 records and blob references, not blob payloads, so an envelope that exceeds the 8 MiB CAR or 4096-record
 membership budget is not made unverifiable by its own size; it is the record and membership counts that
-matter there, and those are DOT-P03's defaults to revisit.
+matter there, and those are defaults for the read path to revisit.
 
 ## Consequences
 
