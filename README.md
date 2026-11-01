@@ -71,6 +71,10 @@ runs each target for five seconds and is reserved for non-required scheduled/man
 exploration. Fuzz seeds run as part of ordinary `go test` without time-bounded
 exploration.
 
+## Local restore gate
+
+[`tests/local/restore_gate_test.go`](tests/local/restore_gate_test.go) composes filesystem capture, reconciliation preview, journaled apply and rollback on a synthetic Neovim tree plus a custom WM root under temporary directories. It checks automatic module inclusion, combined file edits, rename planning, missing-root and unsafe-link refusals, local-only exclusions, convergence, repeatability, and preservation of a newer edit during rollback. Run it offline with `go test -v ./tests/local`. This is an internal integration proof, not a CLI workflow; it does not exercise GNOME, network services, remote publication or a real home directory.
+
 ## Continuous integration
 
 GitHub Actions runs required checks on pull requests and pushes to `main`. The default
