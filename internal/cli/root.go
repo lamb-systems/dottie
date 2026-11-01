@@ -17,6 +17,7 @@ Usage:
   dottie targets add [--id ID] [--mode MODE] [--exclude PATTERN]... <absolute-path>
   dottie targets remove <id>
   dottie targets mode <id> <auto-apply|review|backup-only>
+  dottie plan --from FILE [--json]
   dottie account bootstrap --vault-name NAME --device-id ID
   dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX]
 
@@ -35,6 +36,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "targets" {
 		return runTargets(args[1:], stdout, stderr, os.Getenv)
+	}
+	if args[0] == "plan" {
+		return runPlan(args[1:], stdout, stderr)
 	}
 	if args[0] == "account" {
 		return runAccount(args[1:], stdout, stderr, func() (accountKeyring, error) {

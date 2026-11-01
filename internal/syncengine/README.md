@@ -27,6 +27,36 @@ not parse or canonicalize GVariant text. Reconciliation compares setting state, 
 exactly; differently represented text is not equal even if another layer might interpret it as an
 equivalent value.
 
+## Preview
+
+`BuildPreview` consumes the existing reconciliation `Plan`, the supplied target definitions and
+observations. It does not reconcile again, read data, write state or mutate its inputs. The result
+is a content-free `Preview` with targets ordered by target ID and entries ordered by the existing
+identity order. It retains names, actions, states, reason codes, sizes and, when available, the
+local observation's digest and mode; it never retains an entry's file content or setting value.
+
+The reconciler remains authoritative for decisions. Upload/download decisions map to create or
+change, delete decisions map to delete, conflicts remain a conflict state with a conflict reason,
+and local absence is represented as missing with a missing reason. Unknown remains a state with
+no action. An untracked observation maps to create in this preview contract. There is no
+`unapplied` state in this version because no journal result supplies one.
+
+Entry and total bytes use `vault.Estimate`, the same payload accounting used by snapshot packing.
+Per-entry `size` and `transfer_bytes` account create/change payloads that would move; deletes add no
+payload. Per-entry `resulting_snapshot_bytes` and the plan's `resulting_snapshot_bytes` account
+resolved present entries, including unchanged entries. `complete` is false while any conflict,
+unknown or unmatched entry remains, and `unresolved_entries` gives the count. The resulting size is
+then a lower bound over resolved entries, not a constructed candidate snapshot or a promise about
+the remote.
+
+The current observation model cannot express a reset: `ObservationPresent` accepts only present
+file or setting entries, and a `SettingReset` is rejected. Reset is therefore not a preview action
+in v1. Unsupported file kinds are likewise rejected during model validation before a reconciliation
+decision exists, so unsupported is not a preview outcome here. A later model/reconciler change must
+make each state representable before preview can distinguish it. This pure layer does not inspect
+target roots, so it cannot infer a disappeared-root risk from supplied decisions. The CLI's JSON
+bundle is only a caller-supplied seam; it does not make capture or synchronization operational.
+
 ## State classification and precedence
 
 Every key has exactly one classified state per side:
