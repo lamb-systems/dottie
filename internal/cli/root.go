@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 const help = `Dottie — directory-first preference sync for Linux and GNOME
@@ -15,10 +17,13 @@ Usage:
   dottie targets add [--id ID] [--mode MODE] [--exclude PATTERN]... <absolute-path>
   dottie targets remove <id>
   dottie targets mode <id> <auto-apply|review|backup-only>
+  dottie account bootstrap --vault-name NAME --device-id ID
+  dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX]
 
 This is a scaffold, not a working synchronizer.
-Account linking, capture, restore, encryption, and the background service
-are not implemented. Target selections and consent policy are persisted locally.
+Account linking, capture, restore, and the background service are not implemented.
+Account bootstrap and enrollment prepare local vault material only; no provider calls
+or synchronization are performed. Target selections and consent policy are persisted locally.
 Capture, apply and synchronization are not implemented.
 
 See README.md for build instructions and current status.
@@ -30,6 +35,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "targets" {
 		return runTargets(args[1:], stdout, stderr, os.Getenv)
+	}
+	if args[0] == "account" {
+		return runAccount(args[1:], stdout, stderr, func() (accountKeyring, error) {
+			return platform.NewKeyring()
+		})
 	}
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "dottie: expected one command; run 'dottie help'")

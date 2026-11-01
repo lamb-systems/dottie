@@ -1,10 +1,17 @@
 package platform
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/ed25519"
+	"encoding/hex"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type fakeKeyringBackend struct {
@@ -26,7 +33,7 @@ func (f *fakeKeyringBackend) Load(_ context.Context, name string) ([]byte, error
 	}
 	payload, ok := f.items[name]
 	if !ok {
-		return nil, ErrKeyringUnavailable
+		return nil, ErrKeyringItemNotFound
 	}
 	return append([]byte(nil), payload...), nil
 }
@@ -52,6 +59,53 @@ func TestKeyringSaveReplacesExistingSameNamedItem(t *testing.T) {
 	require.NoError(t, keyring.Delete(context.Background(), "client-did"))
 	err = keyring.Delete(context.Background(), "client-did")
 	require.NoError(t, err, "delete must be idempotent: %v", err)
+}
+
+func TestDeviceKeysUseOneNamedKeyringItem(t *testing.T) {
+	backend := &fakeKeyringBackend{items: map[string][]byte{}}
+	keyring, err := NewKeyringWithBackend(backend)
+	require.NoError(t, err)
+	vaultID := [32]byte(bytes.Repeat([]byte{0x41}, 32))
+	signing := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
+	recipient, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{0x33}, 32))
+	require.NoError(t, err)
+	material := vault.DeviceMaterial{DeviceID: "device-a", KeyID: []byte("key-a"), Signing: signing, Recipient: recipient}
+	require.NoError(t, keyring.StoreDeviceKeys(context.Background(), vaultID, material))
+	name := "dottie:device:" + hex.EncodeToString(vaultID[:]) + ":device-a"
+	require.Len(t, backend.items, 1, "device key material was not stored in exactly one item")
+	_, exists := backend.items[name]
+	require.True(t, exists, "device key item name did not include vault and device identity")
+	loaded, err := keyring.LoadDeviceKeys(context.Background(), vaultID, "device-a")
+	require.NoError(t, err)
+	assert.Equal(t, material.DeviceID, loaded.DeviceID, "device id")
+	assert.Equal(t, material.KeyID, loaded.KeyID, "key id")
+	assert.Equal(t, material.Signing, loaded.Signing, "signing private key")
+	assert.Equal(t, material.Recipient.Bytes(), loaded.Recipient.Bytes(), "recipient private key")
+}
+
+func TestDeviceKeysReturnTypedAbsenceAndUnavailableErrors(t *testing.T) {
+	vaultID := [32]byte(bytes.Repeat([]byte{0x51}, 32))
+	missing, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}})
+	require.NoError(t, err)
+	_, err = missing.LoadDeviceKeys(context.Background(), vaultID, "absent")
+	require.ErrorIs(t, err, ErrKeyringItemNotFound, "missing item error")
+
+	unavailable, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}, err: ErrKeyringUnavailable})
+	require.NoError(t, err)
+	_, err = unavailable.LoadDeviceKeys(context.Background(), vaultID, "device-a")
+	require.ErrorIs(t, err, ErrKeyringUnavailable, "unavailable item error")
+	err = unavailable.StoreDeviceKeys(context.Background(), vaultID, vault.DeviceMaterial{
+		DeviceID: "device-a", KeyID: []byte("key-a"), Signing: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize)),
+		Recipient: mustPlatformRecipient(t, 0x33),
+	})
+	require.ErrorIs(t, err, ErrKeyringUnavailable, "unavailable store error")
+}
+
+func mustPlatformRecipient(t *testing.T, seed byte) *ecdh.PrivateKey {
+	t.Helper()
+	key, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{seed}, 32))
+	require.NoError(t, err)
+	return key
 }
 
 func TestKeyringPreservesLockedAndUnavailableErrors(t *testing.T) {

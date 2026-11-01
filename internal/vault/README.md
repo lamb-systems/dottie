@@ -175,6 +175,53 @@ Recipient keys must be the policy-authorized certificate keys; the signer must b
 for the selected purpose. `SealPrepared` has the same invariants and is intended for fixed-key
 test vectors, not production entropy handling.
 
+## DOT-V03 bootstrap and device transitions
+
+Bootstrap is deterministic over its inputs. Device Ed25519 and X25519 keys are generated separately
+with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. A 32-byte recovery kit
+and vault name derive the vault identifier. The root device's certificate is self-signed by its
+Ed25519 key. The kit-derived signing key signs only the genesis checkpoint, whose `anchor` is the
+SHA-256 fingerprint of the root signing public key. Genesis policy and control are root-signed,
+and genesis has no snapshot head.
+
+On first use, the operator supplies the kit and treats it as the root of trust:
+`RecoveryKitSigningPublicKey` derives the verifier key and `VerifyCheckpoint` checks the
+checkpoint's kit signer, key fingerprint and signature. The verified checkpoint's `anchor`
+then becomes the `TrustAnchor` used for certificate-chain verification. This is the operator's
+assertion that the vault is theirs, not a provider-derived fact. A stolen kit can vouch for an
+attacker's root. A checkpoint older than unseen history cannot reveal that missing history;
+anything below the pinned anchor is still rejected. Later starts use a checkpoint already held
+by the device. `dottie account bootstrap` prints the grouped kit plus vault, anchor, checkpoint
+and kit-public-key fingerprints for independent recording. Durable checkpoint storage is
+DOT-L06's responsibility; V03 stops at verification.
+
+`PrepareTransition` currently implements enrollment. It binds the authenticated predecessor's
+control CID, policy digest, epoch and head CID to a successor root-signed policy, control,
+enrollment certificate and head, plus the sealed snapshot bytes and the recipient certificate
+set. It seals caller-provided packed state for a genesis predecessor, or caller-provided current
+plaintext for an existing head, under the successor epoch. The caller supplies the content key,
+publication ID, content nonce and one ephemeral key and wrap nonce per successor recipient, so the
+prepared bundle can be reproduced without hidden entropy. The transition digest is SHA-256 over
+length-delimited policy, control, certificate, head and snapshot encodings in that order. No
+private key material is returned. Non-enrollment transition kinds return `ErrUnsupportedTransition`.
+
+`ValidateTransition` authenticates the predecessor and checks, in order: (1) observed revision
+identity; (2) predecessor-policy authority for the proposer; (3) exact one-step epoch advance;
+(4) policy ancestry; (5) control ancestry; (6) predecessor-root certificate issuer and permitted
+enrollment role; (7) exact certified-recipient identity set against policy and envelope recipient
+key IDs; (8) snapshot epoch and policy digest; (9) head/snapshot linkage and zero initial
+publication count; and (10) a supplied checkpoint's anchor. It verifies successor signatures
+under their permitted role keys before committing to the corresponding semantic checks and returns
+a specific typed error for each revalidation failure. The first ten checks have no implication
+about transactionality: check 11, atomic fenced publication of the complete write set, belongs to
+V04 and is not implemented here.
+
+Check 7 proves recipient identity binding only: each envelope key ID maps to the certified key
+named by policy, with no extras or omissions. It cannot prove that encryption used that recipient's
+key correctly without the recipient's private key. Snapshot record schemas and record-to-blob
+binding remain DOT-P01 work; this package prepares encoded signed objects and raw CIDs without
+introducing a competing snapshot-record codec.
+
 ### Current-format test vectors
 
 The lowercase-hex vectors in `testdata/` are current version-1 examples; they are not

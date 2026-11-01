@@ -11,9 +11,8 @@ non-directory ancestors and inaccessible ancestors fail closed rather than falli
 to lexical path cleaning. This resolution is used when comparing selected roots and
 Dottie's own data locations.
 
-Secret Service integration and private IPC locations are not implemented. A locked or
-missing keyring must pause secure work; credentials must never be silently stored in a
-selected directory.
+Private IPC locations are not implemented. Secret Service keyring failures must pause
+secure work; credentials and device keys are never silently stored in a selected directory.
 
 `LockFile` opens a private lock file with `O_CLOEXEC` (Go's default) specified explicitly,
 so exec'd helpers do not inherit the lock descriptor, and uses non-blocking exclusive
@@ -28,5 +27,12 @@ unsupported.
 collection only: custom collection aliases are not portable (gnome-keyring rejects them with
 `Only the 'default' alias is supported`), so Dottie never creates, renames or relabels a
 collection and instead scopes its items with `application=dottie` and `name=<item>` attributes.
-A missing or locked collection yields a typed error and no plaintext fallback; the underlying
-D-Bus failure is included in the message.
+A missing or locked collection yields a typed error and no plaintext fallback. Device signing
+and X25519 recipient private keys are encoded together in one item whose attributes are
+`application=dottie` and `name=dottie:device:<vault-hex>:<device-id>`. Missing device items return
+`ErrKeyringItemNotFound`; keyring service failures return `ErrKeyringUnavailable` (a locked
+collection remains `ErrKeyringLocked`). There is no file fallback.
+
+Secret Service is at-rest protection, not an authority boundary against a compromised session.
+A process running in the unlocked user session can access secrets that the user can access; a
+keyring does not make an already-compromised session trustworthy.

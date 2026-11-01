@@ -1,12 +1,20 @@
 package platform
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/ed25519"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 var ErrKeyringLocked = errors.New("Dottie keyring collection is locked")
@@ -76,6 +84,80 @@ func (k *Keyring) Delete(ctx context.Context, itemName string) error {
 		return ErrKeyringUnavailable
 	}
 	return classifyKeyringError(k.backend.Delete(ctx, itemName))
+}
+
+func (k *Keyring) StoreDeviceKeys(ctx context.Context, vaultID [32]byte, material vault.DeviceMaterial) error {
+	if k == nil || k.backend == nil || material.DeviceID == "" || len(material.DeviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(material.DeviceID) || len(material.KeyID) == 0 || len(material.KeyID) > vault.MaxKeyIDBytes || material.Recipient == nil || len(material.Signing) != ed25519.PrivateKeySize || len(material.Recipient.Bytes()) != 32 || !validDeviceSigningKey(material.Signing) {
+		return ErrKeyringUnavailable
+	}
+	name := deviceKeyringItemName(vaultID, material.DeviceID)
+	payload := encodeDeviceKeyMaterial(material)
+	return k.Save(ctx, name, payload)
+}
+
+func (k *Keyring) LoadDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+		return vault.DeviceMaterial{}, ErrKeyringUnavailable
+	}
+	payload, err := k.Load(ctx, deviceKeyringItemName(vaultID, deviceID))
+	if err != nil {
+		return vault.DeviceMaterial{}, err
+	}
+	material, err := decodeDeviceKeyMaterial(deviceID, payload)
+	if err != nil {
+		return vault.DeviceMaterial{}, fmt.Errorf("%w: invalid device key item", ErrKeyringUnavailable)
+	}
+	return material, nil
+}
+
+func (k *Keyring) DeleteDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) error {
+	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+		return ErrKeyringUnavailable
+	}
+	return k.Delete(ctx, deviceKeyringItemName(vaultID, deviceID))
+}
+
+func deviceKeyringItemName(vaultID [32]byte, deviceID string) string {
+	return "dottie:device:" + hex.EncodeToString(vaultID[:]) + ":" + deviceID
+}
+
+func encodeDeviceKeyMaterial(material vault.DeviceMaterial) []byte {
+	payload := make([]byte, 0, 4+2+len(material.KeyID)+ed25519.PrivateKeySize+32)
+	payload = append(payload, 'D', 'D', 'K', 1)
+	var length [2]byte
+	binary.BigEndian.PutUint16(length[:], uint16(len(material.KeyID)))
+	payload = append(payload, length[:]...)
+	payload = append(payload, material.KeyID...)
+	payload = append(payload, material.Signing...)
+	payload = append(payload, material.Recipient.Bytes()...)
+	return payload
+}
+
+func decodeDeviceKeyMaterial(deviceID string, payload []byte) (vault.DeviceMaterial, error) {
+	if len(payload) < 4+2+1+ed25519.PrivateKeySize+32 || string(payload[:4]) != "DDK\x01" {
+		return vault.DeviceMaterial{}, ErrKeyringUnavailable
+	}
+	keyIDLength := int(binary.BigEndian.Uint16(payload[4:6]))
+	if keyIDLength == 0 || keyIDLength > vault.MaxKeyIDBytes || len(payload) != 4+2+keyIDLength+ed25519.PrivateKeySize+32 {
+		return vault.DeviceMaterial{}, ErrKeyringUnavailable
+	}
+	offset := 6
+	keyID := append([]byte(nil), payload[offset:offset+keyIDLength]...)
+	offset += keyIDLength
+	signing := append(ed25519.PrivateKey(nil), payload[offset:offset+ed25519.PrivateKeySize]...)
+	if !validDeviceSigningKey(signing) {
+		return vault.DeviceMaterial{}, ErrKeyringUnavailable
+	}
+	offset += ed25519.PrivateKeySize
+	recipient, err := ecdh.X25519().NewPrivateKey(payload[offset:])
+	if err != nil {
+		return vault.DeviceMaterial{}, err
+	}
+	return vault.DeviceMaterial{DeviceID: deviceID, KeyID: keyID, Signing: signing, Recipient: recipient}, nil
+}
+
+func validDeviceSigningKey(key ed25519.PrivateKey) bool {
+	return len(key) == ed25519.PrivateKeySize && bytes.Equal(ed25519.NewKeyFromSeed(key[:ed25519.SeedSize]), key)
 }
 
 func (k *Keyring) Close() error {

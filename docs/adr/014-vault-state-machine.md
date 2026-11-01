@@ -173,9 +173,12 @@ the publisher may author: it names its subject `device_id`, the vault, the polic
 retention floor, the recovery points still held, and the control CID it was made against. The device's own
 signature is what makes it an attestation; a publisher relaying it cannot alter it without invalidating it.
 
-A publisher device includes its own attestation in its next ordinary control write. A restore-only device,
-which may not publish, hands its signed attestation to a publisher over the local IPC channel, and the
-publisher relays the bytes unchanged. Relaying is a transport detail, not an authority.
+Attestations are published as their own record (ADR 015's attestation object), never inside the control
+record. An earlier draft had publishers append attestations to ordinary control updates, which quietly
+required publisher authority to write a root-authorized record — the same defect that kept the publication
+counter in control. A restore-only device hands its signed attestation to a publisher over the local IPC
+channel, and the publisher publishes those bytes unchanged. Relaying is a transport detail, not an
+authority.
 
 A declared floor below the `policy retention floor` is surfaced to the user and the device is treated as
 compromised for confidentiality purposes. Nothing here revokes anything: a revoked or offline device that
