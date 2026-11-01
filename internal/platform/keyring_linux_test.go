@@ -6,8 +6,11 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/godbus/dbus/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -121,4 +124,20 @@ func TestKeyringPreservesLockedAndUnavailableErrors(t *testing.T) {
 			require.ErrorIs(t, err, failure, "Delete error = %v, want %v", err, failure)
 		})
 	}
+}
+
+func TestKeyringErrorsCarryNoRemoteText(t *testing.T) {
+	secret := "opaque-key-material-9f2c"
+	hostile := dbus.Error{Name: "org.freedesktop.Secret.Error", Body: []any{secret}}
+	for _, err := range []error{
+		fmt.Errorf("%w: connect to session bus: %s", ErrKeyringUnavailable, keyringErrorClass(hostile)),
+		fmt.Errorf("%w: %s", ErrKeyringUnavailable, keyringErrorClass(hostile)),
+	} {
+		assert.NotContains(t, err.Error(), secret,
+			"a service that echoes a payload in its error body must not leak it into our message")
+		assert.Contains(t, err.Error(), "org.freedesktop.Secret.Error",
+			"the D-Bus error name is kept, so the failure stays diagnosable")
+	}
+	assert.Equal(t, "transport", keyringErrorClass(errors.New("plain failure")))
+	assert.Equal(t, "context", keyringErrorClass(context.DeadlineExceeded))
 }

@@ -41,10 +41,21 @@ type Keyring struct {
 	backend KeyringBackend
 }
 
+func keyringErrorClass(err error) string {
+	var dbusErr dbus.Error
+	if errors.As(err, &dbusErr) {
+		return dbusErr.Name
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "context"
+	}
+	return "transport"
+}
+
 func NewKeyring() (*Keyring, error) {
 	connection, err := dbus.ConnectSessionBus()
 	if err != nil {
-		return nil, fmt.Errorf("%w: connect to session bus: %v", ErrKeyringUnavailable, err)
+		return nil, fmt.Errorf("%w: connect to session bus: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	backend := &secretServiceBackend{connection: connection}
 	if _, err := backend.collection(context.Background()); err != nil {
@@ -174,7 +185,7 @@ func classifyKeyringError(err error) error {
 	if err == nil || errors.Is(err, ErrKeyringLocked) || errors.Is(err, ErrKeyringUnavailable) || errors.Is(err, ErrKeyringItemNotFound) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", ErrKeyringUnavailable, err)
+	return fmt.Errorf("%w: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 }
 
 type secretServiceBackend struct {
@@ -200,7 +211,7 @@ func (b *secretServiceBackend) collection(ctx context.Context) (dbus.ObjectPath,
 	object := b.connection.Object(secretServiceName, secretServicePath)
 	var collection dbus.ObjectPath
 	if err := object.CallWithContext(ctx, secretServiceInterface+".ReadAlias", 0, secretDefaultAlias).Store(&collection); err != nil {
-		return "", fmt.Errorf("%w: read default collection alias: %v", ErrKeyringUnavailable, err)
+		return "", fmt.Errorf("%w: read default collection alias: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	if collection == "/" || collection == "" {
 		return "", fmt.Errorf("%w: no default secret collection; unlock or create one in the desktop keyring", ErrKeyringUnavailable)
@@ -214,7 +225,7 @@ func (b *secretServiceBackend) collection(ctx context.Context) (dbus.ObjectPath,
 func (b *secretServiceBackend) ensureUnlocked(ctx context.Context, path dbus.ObjectPath) error {
 	var locked dbus.Variant
 	if err := b.connection.Object(secretServiceName, path).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Locked").Store(&locked); err != nil {
-		return fmt.Errorf("%w: read collection lock state: %v", ErrKeyringUnavailable, err)
+		return fmt.Errorf("%w: read collection lock state: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	value, ok := locked.Value().(bool)
 	if !ok {
@@ -230,7 +241,7 @@ func (b *secretServiceBackend) openSession(ctx context.Context) (dbus.ObjectPath
 	var output dbus.Variant
 	var session dbus.ObjectPath
 	if err := b.connection.Object(secretServiceName, secretServicePath).CallWithContext(ctx, secretServiceInterface+".OpenSession", 0, "plain", dbus.MakeVariant("")).Store(&output, &session); err != nil || session == "/" {
-		return "", fmt.Errorf("%w: open secret session: %v", ErrKeyringUnavailable, err)
+		return "", fmt.Errorf("%w: open secret session: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	return session, nil
 }
