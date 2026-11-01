@@ -48,8 +48,10 @@ Fields in this order. Unknown fields are rejected.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `magic` | 4 bytes | `0x44 0x54 0x45 0x01` — `DTE` plus the format version. **Amended by DOT-V02** from a bare uint8 `v`, so the format identifier and its version cannot be separated. |
-| `purpose` | uint8 | `1` snapshot, `2` policy, `3` control, `4` certificate, `5` checkpoint, `6` attestation |
+| `magic` | 3 bytes | `0x44 0x54 0x45` (`DTE`). **Amended by DOT-V02** from a bare uint8 `v`. |
+| `version` | uint8 | format version, currently `1` |
+| `kind` | uint8 | 1 envelope, 2 policy, 3 control, 4 certificate, 5 checkpoint, 6 attestation. Required because an envelope's `purpose` and an object's `kind` would otherwise occupy one byte and be ambiguous. |
+| `purpose` | uint8 | `1` snapshot, `2` policy, `3` control, `4` certificate, `5` checkpoint, `6` attestation. Present only when `kind` is 1. |
 | `vault` | 32 bytes | vault identifier |
 | `publication_id` | 16 bytes | random, allocated before encryption |
 | `epoch_seq` | uint64 big-endian | epoch owning the content key |
@@ -79,12 +81,12 @@ the ciphertext. `signer` is present because a verifier cannot otherwise decide w
 
 Four distinct preimages, none of which includes its own output:
 
-- **Content associated data**: `"dottie/v1/ad"` ‖ `magic` ‖ `purpose` ‖ `vault` ‖ `publication_id` ‖
-  `epoch_seq` ‖ `policy_digest` ‖ `parent` ‖ `commit`. It excludes `nonce`, `ciphertext`, `tag` and
+- **Content associated data**: `"dottie/v1/ad"` ‖ `magic` ‖ `version` ‖ `kind` ‖ `purpose` ‖ `vault` ‖
+  `publication_id` ‖ `epoch_seq` ‖ `policy_digest` ‖ `parent` ‖ `commit`. It excludes `nonce`, `ciphertext`, `tag` and
   `signature`, because the tag would otherwise authenticate itself.
-- **Envelope signature**: `"dottie/v1/sig"` ‖ the serialized envelope from the first byte through the end of
-  `tag`. Stated as a byte range rather than a field list, so no future field can be signed by accident or
-  omitted by enumeration error.
+- **Signature, every object**: `"dottie/v1/sig"` ‖ the serialized object from its first byte through the last
+  byte before the signature. The signature occupies the final 64 bytes of every object, so the preimage is a
+  byte range and no field list can omit a field by enumeration error.
 - **Policy digest**: `SHA-256("dottie/v1/policy" ‖ deterministic encoding of the policy object)`.
 - **Wrap associated data**: `"dottie/v1/wrapad"` ‖ `vault` ‖ `key_id` ‖ `epoch_seq` ‖ `purpose` ‖
   recipient public key ‖ ephemeral public key.
