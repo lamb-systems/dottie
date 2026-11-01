@@ -234,16 +234,81 @@ func newTransitionTestIO(predecessors ...vault.Predecessor) *transitionTestIO {
 	return &transitionTestIO{predecessors: predecessors, readErrors: make(map[int]error), resolution: "committed"}
 }
 
+func transitionPredecessorAfter(t *testing.T, predecessor vault.Predecessor, transition vault.Transition) vault.Predecessor {
+	t.Helper()
+	policyDigest, err := vault.ComputePolicyDigest(transition.Policy)
+	require.NoError(t, err)
+	head, err := vault.DecodeHead(transition.Head)
+	require.NoError(t, err)
+	return vault.Predecessor{
+		ControlCID: rawTransitionCID(transition.Control), PolicyDigest: policyDigest, EpochSeq: head.EpochSeq,
+		HeadCID: bytes.Clone(head.SnapshotCID), Head: bytes.Clone(transition.Head), Control: bytes.Clone(transition.Control),
+		Policy: bytes.Clone(transition.Policy), Certificates: cloneTransitionCertificates(transition.Recipients), TrustAnchor: predecessor.TrustAnchor,
+	}
+}
+
+func cloneTransitionCertificates(certificates [][]byte) [][]byte {
+	result := make([][]byte, len(certificates))
+	for index := range certificates {
+		result[index] = bytes.Clone(certificates[index])
+	}
+	return result
+}
+
+func prepareRevocationTestBundle(t *testing.T, fixture transitionTestFixture, id byte) (vault.Predecessor, vault.Transition) {
+	t.Helper()
+	enrollment := prepareTransitionTestBundle(t, fixture, id)
+	predecessor := transitionPredecessorAfter(t, fixture.predecessor, enrollment)
+	var rootCertificate []byte
+	var revokedDevice string
+	for _, encoded := range enrollment.Recipients {
+		certificate, err := vault.DecodeCertificate(encoded)
+		require.NoError(t, err)
+		if certificate.DeviceID == fixture.root.DeviceID {
+			rootCertificate = bytes.Clone(encoded)
+		} else {
+			revokedDevice = certificate.DeviceID
+		}
+	}
+	require.NotEmpty(t, rootCertificate)
+	require.NotEmpty(t, revokedDevice)
+	ephemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	var ephemeralPrivate [32]byte
+	copy(ephemeralPrivate[:], ephemeral.Bytes())
+	var wrapNonce [24]byte
+	_, err = rand.Read(wrapNonce[:])
+	require.NoError(t, err)
+	var contentKey [32]byte
+	_, err = rand.Read(contentKey[:])
+	require.NoError(t, err)
+	var publicationID [16]byte
+	_, err = rand.Read(publicationID[:])
+	require.NoError(t, err)
+	var nonce [24]byte
+	_, err = rand.Read(nonce[:])
+	require.NoError(t, err)
+	transition, err := vault.PrepareTransition(predecessor, vault.TransitionIntent{
+		Kind: vault.TransitionRevoke, Vault: mustTestVault(t, predecessor), Signer: fixture.root, RevokeDeviceID: revokedDevice,
+		ContentKey: contentKey[:], Recipients: [][]byte{rootCertificate},
+		Wraps:     []vault.RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: ephemeralPrivate, WrapNonce: wrapNonce}},
+		Plaintext: []byte("complete current snapshot for revocation"), PublicationID: publicationID, Nonce: nonce,
+	})
+	require.NoError(t, err)
+	return predecessor, transition
+}
+
 func TestCommitTransitionRejectsBundleStaleAtFinalRevalidation(t *testing.T) {
 	fixture := newTransitionTestFixture(t)
 	bundle := prepareTransitionTestBundle(t, fixture, 1)
-	stale := fixture.predecessor
-	stale.PolicyDigest[0] ^= 0xff
+	competingBundle := prepareTransitionTestBundle(t, fixture, 2)
+	stale := transitionPredecessorAfter(t, fixture.predecessor, competingBundle)
 	io := newTransitionTestIO(fixture.predecessor, stale)
 	store := newTransitionTestStore()
 	result, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(100, 0))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+	assert.ErrorIs(t, err, ErrPreparedPolicyMismatch)
 	assert.NotEqual(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
 	assert.Equal(t, 1, io.stageCount)
 	assert.Equal(t, 0, io.applyCount)
@@ -352,6 +417,29 @@ func TestResolveTransitionAttemptAfterUploadCrashDoesNotResend(t *testing.T) {
 	assert.ErrorIs(t, resolveErr, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeNotLanded), resolved.Outcome)
 	assert.Equal(t, 0, io.applyCount)
+}
+
+func TestCommitRevocationWritesSnapshotHeadControlAndPolicyWithoutCertificate(t *testing.T) {
+	fixture := newTransitionTestFixture(t)
+	predecessor, revocation := prepareRevocationTestBundle(t, fixture, 61)
+	policy, err := vault.DecodePolicy(revocation.Policy)
+	require.NoError(t, err)
+	io := newTransitionTestIO(predecessor)
+	store := newTransitionTestStore()
+	result, commitErr := CommitTransition(context.Background(), io, store, revocation, fixture.root.Signing, time.Unix(160, 0))
+	require.NoError(t, commitErr)
+	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
+	require.Len(t, io.publicationWrites, 1)
+	require.Len(t, io.publicationWrites[0], 4)
+	collections := make(map[string]bool)
+	for _, write := range io.publicationWrites[0] {
+		collections[write.Collection] = true
+	}
+	for _, collection := range []string{VaultSnapshotNSID, VaultHeadNSID, VaultControlNSID, VaultPolicyNSID} {
+		assert.True(t, collections[collection], "revocation omitted %s", collection)
+	}
+	assert.False(t, collections[VaultCertificateNSID])
+	assert.Len(t, policy.Recipients, 1)
 }
 
 func TestCommitTransitionSubmitsCompleteWriteSetOnce(t *testing.T) {

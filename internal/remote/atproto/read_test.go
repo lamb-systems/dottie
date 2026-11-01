@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"testing"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/repo"
 	"github.com/bluesky-social/indigo/atproto/repo/mst"
 	"github.com/ipfs/go-cid"
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -291,8 +294,42 @@ func TestVaultReaderAuthenticatesAndDecryptsPinnedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, FreshnessUnverified, result.Freshness)
 	require.Equal(t, []byte("synthetic snapshot payload"), result.Plaintext)
+	require.Equal(t, uint64(1), result.PublicationCount)
+	require.Equal(t, uint64(0), result.PublicationCountBaseline)
+	require.Equal(t, result.Head.SnapshotCID, result.HeadCID)
+	require.Equal(t, result.Head.EpochSeq, result.EpochSeq)
 	require.Equal(t, fixture.root.String(), result.Revision.CommitCID())
 	require.Equal(t, 1, fixture.transport.blobCalls)
+}
+
+func TestVaultReaderRejectsZeroCountHeadOutsideEpochBaseline(t *testing.T) {
+	fixture := newReadFixture(t)
+	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
+	headDecoded, err := DecodeRecord(fixture.records[headKey])
+	require.NoError(t, err)
+	require.IsType(t, HeadRecord{}, headDecoded)
+	headRecord := headDecoded.(HeadRecord)
+	headObject := headFromRecord(headRecord)
+	headObject.PublicationCount = 0
+	headBytes := signReadHead(t, headObject, fixtureSigningKey(12))
+	headObject, err = vault.DecodeHead(headBytes)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, headKey, headRecordFromObject(headObject))
+
+	controlKey := RecordKey{Collection: VaultControlNSID, RKey: "self"}
+	controlDecoded, err := DecodeRecord(fixture.records[controlKey])
+	require.NoError(t, err)
+	require.IsType(t, ControlRecord{}, controlDecoded)
+	controlRecord := controlDecoded.(ControlRecord)
+	controlObject := controlFromRecord(controlRecord)
+	controlObject.HeadSnapshotCID = readRawCID(t, []byte("wrong epoch baseline"))
+	controlBytes := signReadControl(t, controlObject, fixtureSigningKey(11))
+	controlObject, err = vault.DecodeControl(controlBytes)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, controlKey, controlRecordFromObject(controlObject))
+	replaceReadCAR(t, &fixture, fixture.records)
+	_, err = (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	require.ErrorIs(t, err, ErrReadVaultAuthentication)
 }
 
 func TestVaultReaderRequiresDigestBoundPredecessorPolicy(t *testing.T) {
@@ -476,4 +513,30 @@ func TestVaultReaderRejectsOversizedDeclaredBlobBeforeFetching(t *testing.T) {
 	_, err := reader.Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadBlobTooLarge)
 	assert.Zero(t, fixture.transport.blobCalls)
+}
+
+func TestCheckPublicationCountRefusesBackwardRead(t *testing.T) {
+	root := t.TempDir()
+	store, err := state.Open(platform.Paths{
+		Home: filepath.Join(root, "home"), StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"),
+	})
+	require.NoError(t, err)
+	defer store.Close()
+	vaultID := [32]byte{9}
+	headCID := readRawCID(t, []byte("head-4"))
+	result := ReadResult{
+		PublicationCount: 4, PublicationCountBaseline: 0, EpochSeq: 2, HeadCID: headCID,
+		Head: HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
+	}
+	require.NoError(t, CheckPublicationCount(context.Background(), store, vaultID, result))
+	backwardsCID := readRawCID(t, []byte("head-3"))
+	result.PublicationCount = 3
+	result.Head.PublicationCount = 3
+	result.HeadCID = backwardsCID
+	result.Head.SnapshotCID = bytes.Clone(backwardsCID)
+	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result), ErrPublicationCountBackwards)
+	result.PublicationCount = 4
+	result.Head.PublicationCount = 4
+	result.PublicationCountBaseline = 5
+	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result), ErrPublicationCountBackwards)
 }

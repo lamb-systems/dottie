@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/ipfs/go-cid"
+	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -38,6 +39,8 @@ var (
 	ErrReadUnexpectedPrevious     = errors.New("predecessor policy is unexpected at genesis")
 	ErrReadVaultAuthentication    = errors.New("vault authentication failed")
 	ErrReadDecryption             = errors.New("snapshot decryption failed")
+	ErrPublicationCountBackwards  = state.ErrVaultPublicationBackwards
+	ErrPublicationCountConflict   = state.ErrVaultPublicationConflict
 )
 
 type ReadStage string
@@ -83,21 +86,47 @@ type ReadRequest struct {
 }
 
 type ReadResult struct {
-	Revision    *Revision
-	Policy      PolicyRecord
-	Control     ControlRecord
-	Head        HeadRecord
-	Snapshot    SnapshotRecord
-	Envelope    vault.Envelope
-	EnvelopeCID string
-	Plaintext   []byte
-	Freshness   FreshnessStatus
+	Revision                 *Revision
+	Policy                   PolicyRecord
+	Control                  ControlRecord
+	Head                     HeadRecord
+	Snapshot                 SnapshotRecord
+	Envelope                 vault.Envelope
+	EnvelopeCID              string
+	PublicationCount         uint64
+	PublicationCountBaseline uint64
+	HeadCID                  []byte
+	EpochSeq                 uint64
+	Plaintext                []byte
+	Freshness                FreshnessStatus
 }
 
 type VaultReader struct {
 	Transport    Transport
 	Budgets      Budgets
 	MaxBlobBytes int64
+}
+
+type PublicationObservationStore interface {
+	RecordVaultPublicationObservation(context.Context, state.VaultPublicationObservation) error
+}
+
+func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult) error {
+	if store == nil || result.EpochSeq > uint64(^uint64(0)>>1) || result.PublicationCount > uint64(^uint64(0)>>1) || result.PublicationCount < result.PublicationCountBaseline {
+		return ErrPublicationCountBackwards
+	}
+	if result.Head.PublicationCount != result.PublicationCount || result.Head.EpochSeq != result.EpochSeq || !bytes.Equal(result.Head.SnapshotCID, result.HeadCID) {
+		return ErrReadVaultAuthentication
+	}
+	if result.PublicationCount == result.PublicationCountBaseline && !bytes.Equal(result.HeadCID, result.Control.HeadSnapshotCID) {
+		return ErrReadVaultAuthentication
+	}
+	if _, err := cid.Cast(result.HeadCID); err != nil {
+		return ErrReadVaultAuthentication
+	}
+	return store.RecordVaultPublicationObservation(ctx, state.VaultPublicationObservation{
+		Vault: vaultID, Epoch: result.EpochSeq, PublicationCount: result.PublicationCount, HeadCID: bytes.Clone(result.HeadCID),
+	})
 }
 
 type storedCertificate struct {
@@ -262,6 +291,7 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	result := ReadResult{
 		Policy: policy, Control: control, Head: head, Snapshot: snapshot,
 		Envelope: envelope, EnvelopeCID: cid.Cid(snapshot.Blob.Ref).String(), Freshness: FreshnessUnverified,
+		PublicationCount: head.PublicationCount, PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), EpochSeq: head.EpochSeq,
 	}
 	if request.DeviceKey != nil {
 		policyRecordObject, decodeErr := vault.DecodePolicy(policyObject)
@@ -486,6 +516,9 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	}
 	if !bytes.Equal(head.SnapshotCID, cidBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, cidBytes(envelopeBytes)) || head.EpochSeq != control.EpochSeq || head.PolicyDigest != control.PolicyDigest {
 		return errors.New("head and snapshot linkage disagrees")
+	}
+	if head.PublicationCount == 0 && !bytes.Equal(head.SnapshotCID, control.HeadSnapshotCID) {
+		return errors.New("head publication count is below its epoch baseline")
 	}
 	policySigner, err := authorizedReadSigner(policy.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RoleRoot)
 	if err != nil {

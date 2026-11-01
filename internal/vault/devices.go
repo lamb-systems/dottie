@@ -28,6 +28,9 @@ var (
 	ErrTransitionRecipients  = errors.New("transition recipients are invalid")
 	ErrTransitionDelta       = errors.New("transition changes more than the requested enrollment")
 	ErrRevokedDevice         = errors.New("device is revoked at the successor epoch")
+	ErrPublicationAuthority  = errors.New("publication signer is not authorized by the current policy")
+	ErrPublicationCount      = errors.New("publication count is not the predecessor count plus one")
+	ErrPublicationHead       = errors.New("publication head does not match its predecessor")
 	ErrSnapshotEpoch         = errors.New("transition snapshot epoch is invalid")
 	ErrHeadLinkage           = errors.New("transition head linkage is invalid")
 	ErrCheckpointAnchor      = errors.New("transition checkpoint anchor is invalid")
@@ -78,6 +81,7 @@ type Predecessor struct {
 	PolicyDigest [32]byte
 	EpochSeq     uint64
 	HeadCID      []byte
+	Head         []byte
 	Control      []byte
 	Policy       []byte
 	Certificates [][]byte
@@ -98,17 +102,18 @@ type RecipientWrapInput struct {
 }
 
 type TransitionIntent struct {
-	Kind          TransitionKind
-	Vault         [32]byte
-	Signer        DeviceMaterial
-	NewDevice     *DeviceMaterial
-	RequestedRole Role
-	ContentKey    []byte
-	Recipients    [][]byte
-	Wraps         []RecipientWrapInput
-	Plaintext     []byte
-	PublicationID [16]byte
-	Nonce         [24]byte
+	Kind           TransitionKind
+	Vault          [32]byte
+	Signer         DeviceMaterial
+	NewDevice      *DeviceMaterial
+	RevokeDeviceID string
+	RequestedRole  Role
+	ContentKey     []byte
+	Recipients     [][]byte
+	Wraps          []RecipientWrapInput
+	Plaintext      []byte
+	PublicationID  [16]byte
+	Nonce          [24]byte
 }
 
 type Transition struct {
@@ -124,6 +129,26 @@ type Transition struct {
 	Recipients  [][]byte
 	Checkpoint  []byte
 	Digest      [32]byte
+}
+
+type PublicationIntent struct {
+	Vault         [32]byte
+	Signer        DeviceMaterial
+	ContentKey    []byte
+	Wraps         []RecipientWrapInput
+	Plaintext     []byte
+	PublicationID [16]byte
+	Nonce         [24]byte
+}
+
+type Publication struct {
+	Predecessor  PredecessorRef
+	PolicyDigest [32]byte
+	Head         []byte
+	Snapshot     []byte
+	SnapshotCID  []byte
+	BlobCID      []byte
+	Digest       [32]byte
 }
 
 func GenerateDeviceKeys() (ed25519.PrivateKey, *ecdh.PrivateKey, error) {
@@ -240,6 +265,9 @@ func certificateForEnrollment(vaultID [32]byte, device DeviceMaterial, role Role
 }
 
 func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transition, error) {
+	if intent.Kind == TransitionRevoke {
+		return prepareRevocation(predecessor, intent)
+	}
 	if intent.Kind != TransitionEnroll {
 		return Transition{}, fmt.Errorf("%w: kind", ErrUnsupportedTransition)
 	}
@@ -425,7 +453,572 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	return transition, nil
 }
 
+func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publication, error) {
+	if err := validatePredecessor(predecessor); err != nil {
+		return Publication{}, fmt.Errorf("%w: %v", ErrPredecessor, err)
+	}
+	policy, err := DecodePolicy(predecessor.Policy)
+	if err != nil {
+		return Publication{}, fmt.Errorf("%w: policy", ErrPredecessor)
+	}
+	control, err := DecodeControl(predecessor.Control)
+	if err != nil {
+		return Publication{}, fmt.Errorf("%w: control", ErrPredecessor)
+	}
+	if intent.Vault != policy.Vault {
+		return Publication{}, fmt.Errorf("%w: vault", ErrPublicationAuthority)
+	}
+	if err := validateDeviceMaterial(intent.Signer); err != nil {
+		return Publication{}, err
+	}
+	if len(intent.ContentKey) != 32 {
+		return Publication{}, fmt.Errorf("%w: content key", ErrFormat)
+	}
+	if len(predecessor.HeadCID) == 0 || len(predecessor.Head) == 0 {
+		return Publication{}, fmt.Errorf("%w: ordinary publication requires a current head", ErrPublicationHead)
+	}
+	signer, err := validatePublicationSigner(predecessor, policy, control, intent.Signer.DeviceID, intent.Signer.KeyID)
+	if err != nil {
+		return Publication{}, err
+	}
+	if err := validatePublicationRecipients(predecessor, policy); err != nil {
+		return Publication{}, err
+	}
+	if !bytes.Equal(signer.SigningPublicKey[:], intent.Signer.Signing.Public().(ed25519.PublicKey)) {
+		return Publication{}, fmt.Errorf("%w: signer key", ErrPublicationAuthority)
+	}
+	currentHead, err := currentHeadForPublication(predecessor, policy, control)
+	if err != nil {
+		return Publication{}, err
+	}
+	if currentHead.PublicationCount == ^uint64(0) || currentHead.PublicationCount >= uint64(policy.MaxPublications) {
+		return Publication{}, ErrPublicationCount
+	}
+	wraps, err := prepareRecipientWraps(policy, intent.Wraps)
+	if err != nil {
+		return Publication{}, err
+	}
+	preparedRecipients, err := prepareSealRecipients(policy, wraps)
+	if err != nil {
+		return Publication{}, err
+	}
+	prepared := PreparedSeal{
+		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: intent.PublicationID, EpochSeq: policy.EpochSeq,
+		PolicyDigest: predecessor.PolicyDigest, Parent: bytes.Clone(currentHead.SnapshotCID), DeviceID: intent.Signer.DeviceID,
+		KeyID: bytes.Clone(intent.Signer.KeyID), Plaintext: bytes.Clone(intent.Plaintext), SigningKey: intent.Signer.Signing,
+		ContentKey: bytes.Clone(intent.ContentKey), Nonce: intent.Nonce, Recipients: preparedRecipients,
+	}
+	sealed, err := SealPrepared(prepared)
+	if err != nil {
+		return Publication{}, err
+	}
+	snapshotBytes, err := EncodeEnvelope(sealed)
+	if err != nil {
+		return Publication{}, err
+	}
+	snapshotCID, err := rawCID(snapshotBytes)
+	if err != nil {
+		return Publication{}, err
+	}
+	head := Head{
+		Vault: policy.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: predecessor.PolicyDigest,
+		SnapshotCID: bytes.Clone(snapshotCID), BlobCID: bytes.Clone(snapshotCID), PublicationCount: currentHead.PublicationCount + 1,
+		PrevHeadCID: bytes.Clone(currentHead.SnapshotCID), Signer: Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)},
+	}
+	headBytes, err := signHead(head, intent.Signer.Signing)
+	if err != nil {
+		return Publication{}, err
+	}
+	publication := Publication{
+		Predecessor:  PredecessorRef{ControlCID: bytes.Clone(predecessor.ControlCID), PolicyDigest: predecessor.PolicyDigest, EpochSeq: predecessor.EpochSeq, HeadCID: bytes.Clone(predecessor.HeadCID)},
+		PolicyDigest: predecessor.PolicyDigest, Head: headBytes, Snapshot: snapshotBytes, SnapshotCID: snapshotCID, BlobCID: bytes.Clone(snapshotCID),
+	}
+	publication.Digest = ComputePublicationDigest(publication)
+	if err := ValidatePublication(publication, predecessor); err != nil {
+		return Publication{}, err
+	}
+	return publication, nil
+}
+
+func ValidatePublication(publication Publication, predecessor Predecessor) error {
+	if err := validatePredecessor(predecessor); err != nil {
+		return fmt.Errorf("%w: %v", ErrPredecessor, err)
+	}
+	if publication.Predecessor.PolicyDigest != predecessor.PolicyDigest || publication.PolicyDigest != predecessor.PolicyDigest {
+		return ErrPolicyAncestry
+	}
+	if !bytes.Equal(publication.Predecessor.ControlCID, predecessor.ControlCID) || publication.Predecessor.EpochSeq != predecessor.EpochSeq || !bytes.Equal(publication.Predecessor.HeadCID, predecessor.HeadCID) {
+		return ErrObservedRevision
+	}
+	policy, err := DecodePolicy(predecessor.Policy)
+	if err != nil {
+		return ErrPredecessor
+	}
+	control, err := DecodeControl(predecessor.Control)
+	if err != nil {
+		return ErrPredecessor
+	}
+	head, err := DecodeHead(publication.Head)
+	if err != nil {
+		return ErrPublicationHead
+	}
+	envelope, err := DecodeEnvelope(publication.Snapshot)
+	if err != nil {
+		return ErrSnapshotEpoch
+	}
+	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != predecessor.PolicyDigest || envelope.Vault != policy.Vault || envelope.EpochSeq != policy.EpochSeq || envelope.PolicyDigest != predecessor.PolicyDigest || envelope.Purpose != PurposeSnapshot {
+		return ErrSnapshotEpoch
+	}
+	if !bytes.Equal(envelope.Parent, predecessor.HeadCID) || !bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) || !bytes.Equal(head.SnapshotCID, publication.SnapshotCID) || !bytes.Equal(head.BlobCID, publication.BlobCID) || !bytes.Equal(publication.SnapshotCID, publication.BlobCID) {
+		return ErrPublicationHead
+	}
+	actualCID, err := rawCID(publication.Snapshot)
+	if err != nil || !bytes.Equal(actualCID, publication.SnapshotCID) {
+		return ErrPublicationHead
+	}
+	previousHead, err := currentHeadForPublication(predecessor, policy, control)
+	if err != nil {
+		return err
+	}
+	if previousHead.PublicationCount == ^uint64(0) || head.PublicationCount != previousHead.PublicationCount+1 || head.PublicationCount > uint64(policy.MaxPublications) {
+		return ErrPublicationCount
+	}
+	signer, err := validatePublicationSigner(predecessor, policy, control, envelope.DeviceID, envelope.KeyID)
+	if err != nil {
+		return err
+	}
+	if err := validatePublicationRecipients(predecessor, policy); err != nil {
+		return err
+	}
+	if head.Signer.DeviceID != envelope.DeviceID || !bytes.Equal(head.Signer.KeyID, envelope.KeyID) {
+		return ErrPublicationAuthority
+	}
+	if err := verifyHeadAndEnvelopeSignatures(publication, head, envelope, signer); err != nil {
+		return err
+	}
+	if !publicationRecipientsMatch(policy, envelope) {
+		return ErrTransitionRecipients
+	}
+	if publication.Digest != ComputePublicationDigest(publication) {
+		return ErrTransitionDigest
+	}
+	return nil
+}
+
+func ComputePublicationDigest(publication Publication) [32]byte {
+	var buffer bytes.Buffer
+	for _, encoded := range [][]byte{publication.Head, publication.Snapshot} {
+		buffer.Write(appendU32(nil, uint32(len(encoded))))
+		buffer.Write(encoded)
+	}
+	return sha256.Sum256(buffer.Bytes())
+}
+
+func currentHeadForPublication(predecessor Predecessor, policy Policy, control Control) (Head, error) {
+	if len(predecessor.HeadCID) == 0 || len(predecessor.Head) == 0 {
+		return Head{}, ErrPublicationHead
+	}
+	head, err := DecodeHead(predecessor.Head)
+	if err != nil || head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != predecessor.PolicyDigest || !bytes.Equal(head.SnapshotCID, predecessor.HeadCID) || !bytes.Equal(head.BlobCID, head.SnapshotCID) || head.PublicationCount == 0 && !bytes.Equal(head.SnapshotCID, control.HeadSnapshotCID) {
+		return Head{}, ErrPublicationHead
+	}
+	signer, err := validatePublicationSigner(predecessor, policy, control, head.Signer.DeviceID, head.Signer.KeyID)
+	if err != nil {
+		return Head{}, ErrPublicationHead
+	}
+	prefix := predecessor.Head[:len(predecessor.Head)-ed25519.SignatureSize]
+	if Verify("dottie/v1/sig-head", objectSignaturePreimage(prefix), head.Signature[:], signer.SigningPublicKey[:]) != nil {
+		return Head{}, ErrPublicationHead
+	}
+	return head, nil
+}
+
+func validatePublicationRecipients(predecessor Predecessor, policy Policy) error {
+	certificates, err := decodeCertificateSet(predecessor.Certificates)
+	if err != nil || len(certificates) != len(policy.Recipients) || len(policy.Roles) != len(policy.Recipients) {
+		return ErrTransitionRecipients
+	}
+	request := OpenRequest{Vault: policy.Vault, EpochSeq: policy.EpochSeq, TrustAnchor: predecessor.TrustAnchor, Certificates: predecessor.Certificates}
+	for _, recipient := range policy.Recipients {
+		certificate, exists := certificates[recipient.DeviceID]
+		role, hasRole := policyRole(policy, recipient.DeviceID)
+		if !exists || !hasRole || certificate.Role != role || !bytes.Equal(certificate.KeyID, recipient.KeyID) || !bytes.Equal(certificate.EncryptionPublicKey[:], recipient.PublicKey[:]) || verifyCertificateChain(certificate, request, 1, make(map[string]bool)) != nil {
+			return ErrTransitionRecipients
+		}
+	}
+	return nil
+}
+
+func validatePublicationSigner(predecessor Predecessor, policy Policy, control Control, deviceID string, keyID []byte) (Certificate, error) {
+	certificate, found := findCertificate(predecessor.Certificates, deviceID, keyID)
+	if !found || !rolePermitsPublication(policy, certificate) {
+		return Certificate{}, ErrPublicationAuthority
+	}
+	for _, revoked := range control.Revoked {
+		if revoked.DeviceID == certificate.DeviceID && revoked.CertEpoch >= certificate.CertEpoch {
+			return Certificate{}, ErrPublicationAuthority
+		}
+	}
+	request := OpenRequest{Vault: policy.Vault, EpochSeq: policy.EpochSeq, TrustAnchor: predecessor.TrustAnchor, Certificates: predecessor.Certificates}
+	if verifyCertificateChain(certificate, request, 1, make(map[string]bool)) != nil {
+		return Certificate{}, ErrPublicationAuthority
+	}
+	return certificate, nil
+}
+
+func rolePermitsPublication(policy Policy, certificate Certificate) bool {
+	role, exists := policyRole(policy, certificate.DeviceID)
+	return exists && role == certificate.Role && (role == RolePublisher || role == RoleRoot)
+}
+
+func verifyHeadAndEnvelopeSignatures(publication Publication, head Head, envelope Envelope, signer Certificate) error {
+	headPrefix := publication.Head[:len(publication.Head)-ed25519.SignatureSize]
+	if Verify("dottie/v1/sig-head", objectSignaturePreimage(headPrefix), head.Signature[:], signer.SigningPublicKey[:]) != nil {
+		return ErrTransitionSignature
+	}
+	envelopePrefix, err := encodeEnvelopePrefix(envelope)
+	if err != nil || Verify(contextForPurpose(envelope.Purpose), append([]byte(preimageSig), envelopePrefix...), envelope.Signature[:], signer.SigningPublicKey[:]) != nil {
+		return ErrTransitionSignature
+	}
+	return nil
+}
+
+func publicationRecipientsMatch(policy Policy, envelope Envelope) bool {
+	if len(envelope.Recipients) != len(policy.Recipients) {
+		return false
+	}
+	allowed := make(map[string]bool, len(policy.Recipients))
+	for _, recipient := range policy.Recipients {
+		allowed[string(recipient.KeyID)] = true
+	}
+	for _, recipient := range envelope.Recipients {
+		if !allowed[string(recipient.KeyID)] {
+			return false
+		}
+		delete(allowed, string(recipient.KeyID))
+	}
+	return len(allowed) == 0
+}
+
+func prepareRevocation(predecessor Predecessor, intent TransitionIntent) (Transition, error) {
+	if intent.RevokeDeviceID == "" {
+		return Transition{}, fmt.Errorf("%w: revoked device id", ErrFormat)
+	}
+	if err := validatePredecessor(predecessor); err != nil {
+		return Transition{}, fmt.Errorf("%w: %v", ErrPredecessor, err)
+	}
+	oldPolicy, err := DecodePolicy(predecessor.Policy)
+	if err != nil {
+		return Transition{}, fmt.Errorf("%w: policy", ErrPredecessor)
+	}
+	oldControl, err := DecodeControl(predecessor.Control)
+	if err != nil {
+		return Transition{}, fmt.Errorf("%w: control", ErrPredecessor)
+	}
+	if err := validatePublicationRecipients(predecessor, oldPolicy); err != nil {
+		return Transition{}, fmt.Errorf("%w: active recipient set", ErrPredecessor)
+	}
+	if intent.Vault != oldPolicy.Vault {
+		return Transition{}, fmt.Errorf("%w: vault", ErrAuthorization)
+	}
+	if err := validateDeviceMaterial(intent.Signer); err != nil {
+		return Transition{}, err
+	}
+	if oldPolicy.EpochSeq == ^uint64(0) || len(predecessor.HeadCID) == 0 || len(predecessor.Head) == 0 {
+		return Transition{}, fmt.Errorf("%w: predecessor head or epoch", ErrAuthorization)
+	}
+	if role, exists := policyRole(oldPolicy, intent.Signer.DeviceID); !exists || role != RoleRoot || intent.Signer.DeviceID != oldPolicy.Signer.DeviceID || !bytes.Equal(intent.Signer.KeyID, oldPolicy.Signer.KeyID) {
+		return Transition{}, fmt.Errorf("%w: signer role", ErrAuthorization)
+	}
+	if len(intent.ContentKey) != 32 {
+		return Transition{}, fmt.Errorf("%w: content key", ErrFormat)
+	}
+	oldCertificates, err := decodeCertificateSet(predecessor.Certificates)
+	if err != nil {
+		return Transition{}, fmt.Errorf("%w: predecessor certificate set", ErrAuthorization)
+	}
+	targetCertificate, found := oldCertificates[intent.RevokeDeviceID]
+	if !found || targetCertificate.DeviceID == intent.Signer.DeviceID {
+		return Transition{}, fmt.Errorf("%w: revoked device is not revocable", ErrAuthorization)
+	}
+	if _, ok := policyRole(oldPolicy, intent.RevokeDeviceID); !ok {
+		return Transition{}, fmt.Errorf("%w: revoked device is not active", ErrAuthorization)
+	}
+	for _, revoked := range oldControl.Revoked {
+		if revoked.DeviceID == targetCertificate.DeviceID && revoked.CertEpoch >= targetCertificate.CertEpoch {
+			return Transition{}, ErrRevokedDevice
+		}
+	}
+	oldHead, err := currentHeadForPublication(predecessor, oldPolicy, oldControl)
+	if err != nil {
+		return Transition{}, err
+	}
+	rootCertificate, found := oldCertificates[oldPolicy.Signer.DeviceID]
+	if !found || rootCertificate.Role != RoleRoot || rootCertificate.Vault != oldPolicy.Vault || !bytes.Equal(rootCertificate.SigningPublicKey[:], intent.Signer.Signing.Public().(ed25519.PublicKey)) || !bytes.Equal(rootCertificate.KeyID, intent.Signer.KeyID) {
+		return Transition{}, fmt.Errorf("%w: proposer key", ErrAuthorization)
+	}
+	activeRecipients, err := decodeCertificateSet(intent.Recipients)
+	if err != nil || len(activeRecipients) != len(oldPolicy.Recipients)-1 {
+		return Transition{}, ErrTransitionRecipients
+	}
+	newEpoch := oldPolicy.EpochSeq + 1
+	newPolicy := oldPolicy
+	newPolicy.EpochSeq = newEpoch
+	newPolicy.Roles = make([]RoleBinding, 0, len(oldPolicy.Roles)-1)
+	for _, binding := range oldPolicy.Roles {
+		if binding.DeviceID != intent.RevokeDeviceID {
+			newPolicy.Roles = append(newPolicy.Roles, binding)
+		}
+	}
+	newPolicy.Recipients = make([]PolicyRecipient, 0, len(oldPolicy.Recipients)-1)
+	for _, recipient := range oldPolicy.Recipients {
+		if recipient.DeviceID != intent.RevokeDeviceID {
+			newPolicy.Recipients = append(newPolicy.Recipients, recipient)
+		}
+	}
+	if len(newPolicy.Roles) == len(oldPolicy.Roles) || len(newPolicy.Recipients) == len(oldPolicy.Recipients) {
+		return Transition{}, ErrTransitionDelta
+	}
+	for _, revoked := range oldControl.Revoked {
+		if revoked.DeviceID == intent.RevokeDeviceID {
+			return Transition{}, ErrRevokedDevice
+		}
+	}
+	newControlRevoked := append(append([]RevokedDevice(nil), oldControl.Revoked...), RevokedDevice{DeviceID: targetCertificate.DeviceID, CertEpoch: targetCertificate.CertEpoch})
+	newPolicy.PrevPolicyDigest = predecessor.PolicyDigest
+	newPolicy.Signer = Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)}
+	policyBytes, err := signPolicy(newPolicy, intent.Signer.Signing)
+	if err != nil {
+		return Transition{}, err
+	}
+	policyDigest, err := ComputePolicyDigest(policyBytes)
+	if err != nil {
+		return Transition{}, err
+	}
+	wraps, err := prepareRecipientWraps(newPolicy, intent.Wraps)
+	if err != nil {
+		return Transition{}, err
+	}
+	preparedRecipients, err := prepareSealRecipients(newPolicy, wraps)
+	if err != nil {
+		return Transition{}, err
+	}
+	prepared := PreparedSeal{
+		Purpose: PurposeSnapshot, Vault: newPolicy.Vault, PublicationID: intent.PublicationID, EpochSeq: newEpoch,
+		PolicyDigest: policyDigest, Parent: bytes.Clone(oldHead.SnapshotCID), DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID),
+		Plaintext: bytes.Clone(intent.Plaintext), SigningKey: intent.Signer.Signing, ContentKey: bytes.Clone(intent.ContentKey),
+		Nonce: intent.Nonce, Recipients: preparedRecipients,
+	}
+	sealed, err := SealPrepared(prepared)
+	if err != nil {
+		return Transition{}, err
+	}
+	snapshotBytes, err := EncodeEnvelope(sealed)
+	if err != nil {
+		return Transition{}, err
+	}
+	snapshotCID, err := rawCID(snapshotBytes)
+	if err != nil {
+		return Transition{}, err
+	}
+	control := Control{
+		Vault: newPolicy.Vault, EpochSeq: newEpoch, PolicyDigest: policyDigest,
+		HeadSnapshotCID: bytes.Clone(snapshotCID), Revoked: newControlRevoked, PrevControlCID: bytes.Clone(predecessor.ControlCID),
+		Signer: Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)},
+	}
+	controlBytes, err := signControl(control, intent.Signer.Signing)
+	if err != nil {
+		return Transition{}, err
+	}
+	head := Head{
+		Vault: newPolicy.Vault, EpochSeq: newEpoch, PolicyDigest: policyDigest,
+		SnapshotCID: bytes.Clone(snapshotCID), BlobCID: bytes.Clone(snapshotCID), PublicationCount: 0,
+		PrevHeadCID: bytes.Clone(oldHead.SnapshotCID), Signer: Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)},
+	}
+	headBytes, err := signHead(head, intent.Signer.Signing)
+	if err != nil {
+		return Transition{}, err
+	}
+	transition := Transition{
+		Kind:        TransitionRevoke,
+		Predecessor: PredecessorRef{ControlCID: bytes.Clone(predecessor.ControlCID), PolicyDigest: predecessor.PolicyDigest, EpochSeq: predecessor.EpochSeq, HeadCID: bytes.Clone(predecessor.HeadCID)},
+		Policy:      policyBytes, Control: controlBytes, Head: headBytes, Snapshot: snapshotBytes,
+		SnapshotCID: snapshotCID, BlobCID: bytes.Clone(snapshotCID), Recipients: cloneByteSlices(intent.Recipients),
+	}
+	transition.Digest = ComputeTransitionDigest(transition)
+	if err := ValidateTransition(transition, predecessor); err != nil {
+		return Transition{}, err
+	}
+	return transition, nil
+}
+
+func validateRevocationTransition(transition Transition, predecessor Predecessor) error {
+	if err := validatePredecessor(predecessor); err != nil {
+		return fmt.Errorf("%w: %v", ErrPredecessor, err)
+	}
+	if transition.Certificate != nil && len(transition.Certificate) != 0 {
+		return ErrCertificateAuthority
+	}
+	if !bytes.Equal(transition.Predecessor.ControlCID, predecessor.ControlCID) || transition.Predecessor.PolicyDigest != predecessor.PolicyDigest || transition.Predecessor.EpochSeq != predecessor.EpochSeq || !bytes.Equal(transition.Predecessor.HeadCID, predecessor.HeadCID) {
+		return ErrObservedRevision
+	}
+	oldPolicy, _ := DecodePolicy(predecessor.Policy)
+	oldControl, _ := DecodeControl(predecessor.Control)
+	if err := validatePublicationRecipients(predecessor, oldPolicy); err != nil {
+		return fmt.Errorf("%w: predecessor recipients", ErrPredecessor)
+	}
+	if _, err := currentHeadForPublication(predecessor, oldPolicy, oldControl); err != nil {
+		return err
+	}
+	proposer, ok := findCertificate(predecessor.Certificates, oldControl.Signer.DeviceID, oldControl.Signer.KeyID)
+	if !ok || proposer.Role != RoleRoot || policyRoleMust(oldPolicy, proposer.DeviceID) != RoleRoot {
+		return ErrProposerRole
+	}
+	if err := verifyTransitionSignatures(transition, proposer); err != nil {
+		return err
+	}
+	policy, err := DecodePolicy(transition.Policy)
+	if err != nil {
+		return fmt.Errorf("%w: policy", ErrTransitionSignature)
+	}
+	control, err := DecodeControl(transition.Control)
+	if err != nil {
+		return fmt.Errorf("%w: control", ErrTransitionSignature)
+	}
+	head, err := DecodeHead(transition.Head)
+	if err != nil {
+		return fmt.Errorf("%w: head", ErrTransitionSignature)
+	}
+	envelope, err := DecodeEnvelope(transition.Snapshot)
+	if err != nil {
+		return fmt.Errorf("%w: snapshot", ErrTransitionSignature)
+	}
+	if predecessor.EpochSeq == ^uint64(0) || policy.EpochSeq != predecessor.EpochSeq+1 {
+		return ErrTransitionEpoch
+	}
+	if policy.Vault != oldPolicy.Vault || policy.PrevPolicyDigest != predecessor.PolicyDigest || policy.Signer.DeviceID != proposer.DeviceID || !bytes.Equal(policy.Signer.KeyID, proposer.KeyID) {
+		return ErrPolicyAncestry
+	}
+	policyDigest := mustPolicyDigest(transition.Policy)
+	if control.Vault != policy.Vault || control.EpochSeq != policy.EpochSeq || control.PolicyDigest != policyDigest || !bytes.Equal(control.PrevControlCID, predecessor.ControlCID) || control.Signer.DeviceID != proposer.DeviceID || !bytes.Equal(control.Signer.KeyID, proposer.KeyID) {
+		return ErrControlAncestry
+	}
+	if err := validateRevocationDelta(oldPolicy, policy, oldControl, control, predecessor.Certificates); err != nil {
+		return err
+	}
+	if err := validateTransitionRecipients(transition, policy, predecessor, proposer, envelope); err != nil {
+		return err
+	}
+	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq || envelope.PolicyDigest != policyDigest || envelope.Vault != policy.Vault || !bytes.Equal(envelope.Parent, predecessor.HeadCID) {
+		return ErrSnapshotEpoch
+	}
+	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != policyDigest || head.PublicationCount != 0 || !bytes.Equal(head.SnapshotCID, transition.SnapshotCID) || !bytes.Equal(head.BlobCID, transition.BlobCID) || !bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) || !bytes.Equal(control.HeadSnapshotCID, transition.SnapshotCID) {
+		return ErrHeadLinkage
+	}
+	actualSnapshotCID, err := rawCID(transition.Snapshot)
+	if err != nil || !bytes.Equal(actualSnapshotCID, transition.SnapshotCID) || !bytes.Equal(actualSnapshotCID, transition.BlobCID) {
+		return ErrHeadLinkage
+	}
+	if transition.Checkpoint != nil && len(transition.Checkpoint) > 0 {
+		return ErrCheckpointAnchor
+	}
+	if transition.Digest != ComputeTransitionDigest(transition) {
+		return ErrTransitionDigest
+	}
+	return nil
+}
+
+func validateRevocationDelta(oldPolicy, policy Policy, oldControl, control Control, predecessorCertificates [][]byte) error {
+	if len(policy.Roles) != len(oldPolicy.Roles)-1 || len(policy.Recipients) != len(oldPolicy.Recipients)-1 || len(control.Revoked) != len(oldControl.Revoked)+1 {
+		return ErrTransitionDelta
+	}
+	removedDevice := ""
+	for _, binding := range oldPolicy.Roles {
+		role, exists := policyRole(policy, binding.DeviceID)
+		if exists {
+			if role != binding.Role {
+				return ErrTransitionDelta
+			}
+			continue
+		}
+		if removedDevice != "" || binding.DeviceID == oldControl.Signer.DeviceID {
+			return ErrTransitionDelta
+		}
+		removedDevice = binding.DeviceID
+	}
+	if removedDevice == "" {
+		return ErrTransitionDelta
+	}
+	for _, binding := range policy.Roles {
+		if _, exists := policyRole(oldPolicy, binding.DeviceID); !exists {
+			return ErrTransitionDelta
+		}
+	}
+	removedRecipient := ""
+	for _, recipient := range oldPolicy.Recipients {
+		current, exists := policyRecipient(policy, recipient.DeviceID)
+		if exists {
+			if !bytes.Equal(current.KeyID, recipient.KeyID) || current.PublicKey != recipient.PublicKey {
+				return ErrTransitionDelta
+			}
+			continue
+		}
+		if removedRecipient != "" {
+			return ErrTransitionDelta
+		}
+		removedRecipient = recipient.DeviceID
+	}
+	if removedRecipient != removedDevice {
+		return ErrTransitionDelta
+	}
+	for _, recipient := range policy.Recipients {
+		if _, exists := policyRecipient(oldPolicy, recipient.DeviceID); !exists {
+			return ErrTransitionDelta
+		}
+	}
+	var target Certificate
+	found := false
+	for _, encoded := range predecessorCertificates {
+		certificate, err := DecodeCertificate(encoded)
+		if err == nil && certificate.DeviceID == removedDevice {
+			target = certificate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ErrCertificateAuthority
+	}
+	for index, revoked := range oldControl.Revoked {
+		if control.Revoked[index] != revoked {
+			return ErrRevokedDevice
+		}
+	}
+	added := control.Revoked[len(control.Revoked)-1]
+	if added.DeviceID != target.DeviceID || added.CertEpoch != target.CertEpoch {
+		return ErrRevokedDevice
+	}
+	return nil
+}
+
+func policyRecipient(policy Policy, deviceID string) (PolicyRecipient, bool) {
+	for _, recipient := range policy.Recipients {
+		if recipient.DeviceID == deviceID {
+			return recipient, true
+		}
+	}
+	return PolicyRecipient{}, false
+}
+
+func policyRoleMust(policy Policy, deviceID string) Role {
+	role, _ := policyRole(policy, deviceID)
+	return role
+}
+
 func ValidateTransition(transition Transition, predecessor Predecessor) error {
+	if transition.Kind == TransitionRevoke {
+		return validateRevocationTransition(transition, predecessor)
+	}
 	if transition.Kind != TransitionEnroll {
 		return fmt.Errorf("%w: kind", ErrUnsupportedTransition)
 	}
@@ -589,8 +1182,13 @@ func verifyTransitionSignatures(transition Transition, proposer Certificate) err
 		encoded []byte
 		kind    byte
 	}{
-		{transition.Policy, objectKindPolicy}, {transition.Control, objectKindControl},
-		{transition.Certificate, objectKindCertificate}, {transition.Head, objectKindHead},
+		{transition.Policy, objectKindPolicy}, {transition.Control, objectKindControl}, {transition.Head, objectKindHead},
+	}
+	if transition.Kind != TransitionRevoke {
+		objects = append(objects, struct {
+			encoded []byte
+			kind    byte
+		}{transition.Certificate, objectKindCertificate})
 	}
 	for _, object := range objects {
 		if err := validateHeader(object.encoded, object.kind, false); err != nil {
@@ -733,12 +1331,14 @@ func validateTransitionRecipients(transition Transition, policy Policy, predeces
 			return ErrTransitionRecipients
 		}
 	}
-	transitionCertificate, err := DecodeCertificate(transition.Certificate)
-	if err != nil {
-		return ErrTransitionRecipients
-	}
-	if recipientCertificate, exists := certificates[transitionCertificate.DeviceID]; !exists || !bytes.Equal(recipientCertificate.KeyID, transitionCertificate.KeyID) || recipientCertificate.SigningPublicKey != transitionCertificate.SigningPublicKey || recipientCertificate.EncryptionPublicKey != transitionCertificate.EncryptionPublicKey || recipientCertificate.Role != transitionCertificate.Role || recipientCertificate.CertEpoch != transitionCertificate.CertEpoch || recipientCertificate.Issuer != transitionCertificate.Issuer || !bytes.Equal(recipientCertificate.RevocationRef, transitionCertificate.RevocationRef) || recipientCertificate.Signer.DeviceID != transitionCertificate.Signer.DeviceID || !bytes.Equal(recipientCertificate.Signer.KeyID, transitionCertificate.Signer.KeyID) || recipientCertificate.Signature != transitionCertificate.Signature {
-		return ErrTransitionRecipients
+	if transition.Kind != TransitionRevoke {
+		transitionCertificate, err := DecodeCertificate(transition.Certificate)
+		if err != nil {
+			return ErrTransitionRecipients
+		}
+		if recipientCertificate, exists := certificates[transitionCertificate.DeviceID]; !exists || !bytes.Equal(recipientCertificate.KeyID, transitionCertificate.KeyID) || recipientCertificate.SigningPublicKey != transitionCertificate.SigningPublicKey || recipientCertificate.EncryptionPublicKey != transitionCertificate.EncryptionPublicKey || recipientCertificate.Role != transitionCertificate.Role || recipientCertificate.CertEpoch != transitionCertificate.CertEpoch || recipientCertificate.Issuer != transitionCertificate.Issuer || !bytes.Equal(recipientCertificate.RevocationRef, transitionCertificate.RevocationRef) || recipientCertificate.Signer.DeviceID != transitionCertificate.Signer.DeviceID || !bytes.Equal(recipientCertificate.Signer.KeyID, transitionCertificate.Signer.KeyID) || recipientCertificate.Signature != transitionCertificate.Signature {
+			return ErrTransitionRecipients
+		}
 	}
 	return nil
 }

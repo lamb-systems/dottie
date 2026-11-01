@@ -7,3 +7,5 @@ Migration 1 has no table rebuild. SQLite's documented rebuild order for a future
 Migration 2 adds `transition_attempts` for the durable marker, expected record CID, candidate blob CID, epoch, policy digest, outcome and resolution evidence. It does not rebuild existing tables.
 
 Migration 3 adds `vault_checkpoints`, one row per vault, retaining the control bytes and freshness fields needed for local rollback comparison. It does not rebuild existing tables.
+
+Migration 4 adds `vault_publication_observations`, one row per vault, retaining the last authenticated epoch, publication count and head snapshot CID used for per-device replay detection. It does not rebuild existing tables.

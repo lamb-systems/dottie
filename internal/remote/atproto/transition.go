@@ -100,6 +100,24 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 	if err != nil {
 		return nil, vault.Predecessor{}, err
 	}
+	if len(predecessor.HeadCID) != 0 {
+		proven, exists := revision.records[RecordKey{Collection: VaultHeadNSID, RKey: "self"}]
+		if !exists {
+			return nil, vault.Predecessor{}, ErrUnprovenMembership
+		}
+		record, err := DecodeRecord(proven.Data)
+		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
+		headRecord, ok := record.(HeadRecord)
+		if !ok {
+			return nil, vault.Predecessor{}, ErrRecord
+		}
+		predecessor.Head, err = vault.EncodeHead(headFromRecord(headRecord))
+		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
+	}
 	return revision, predecessor, nil
 }
 
@@ -133,12 +151,15 @@ func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAtte
 	if io == nil || store == nil || len(signer) != ed25519.PrivateKeySize || now.IsZero() {
 		return TransitionCommitResult{}, fmt.Errorf("%w: transition I/O, store, signer and timestamp are required", ErrBatchRejected)
 	}
-	if transition.Kind != vault.TransitionEnroll {
+	if transition.Kind != vault.TransitionEnroll && transition.Kind != vault.TransitionRevoke {
 		return TransitionCommitResult{}, fmt.Errorf("%w: kind", vault.ErrUnsupportedTransition)
 	}
 	initialRevision, initialPredecessor, err := io.ReadCurrent(ctx)
 	if err != nil {
 		return TransitionCommitResult{}, fmt.Errorf("read current transition predecessor: %w", err)
+	}
+	if transition.Predecessor.PolicyDigest != initialPredecessor.PolicyDigest {
+		return TransitionCommitResult{}, &PreparedPolicyMismatchError{Prepared: transition.Predecessor.PolicyDigest, Current: initialPredecessor.PolicyDigest}
 	}
 	if err := vault.ValidateTransition(transition, initialPredecessor); err != nil {
 		return TransitionCommitResult{}, err
@@ -199,6 +220,12 @@ func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAtte
 		updatedEvidence := evidenceWith(string(evidence), "revalidationReadError", err.Error())
 		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
 		return transitionResult(attempt, TransitionOutcomeNotLanded, nil, updatedEvidence), errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+	}
+	if transition.Predecessor.PolicyDigest != currentPredecessor.PolicyDigest {
+		mismatch := &PreparedPolicyMismatchError{Prepared: transition.Predecessor.PolicyDigest, Current: currentPredecessor.PolicyDigest}
+		updatedEvidence := evidenceWith(string(evidence), "revalidationError", mismatch.Error())
+		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
+		return transitionResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(mismatch, updateErr, ErrCandidateMayBeDisclosed)
 	}
 	if err := vault.ValidateTransition(transition, currentPredecessor); err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "revalidationError", err.Error())
@@ -377,9 +404,12 @@ func transitionPublication(transition vault.Transition, signer ed25519.PrivateKe
 	if err != nil {
 		return FencedPublication{}, fmt.Errorf("%w: successor head", ErrBatchRejected)
 	}
-	certificateObject, err := vault.DecodeCertificate(transition.Certificate)
-	if err != nil {
-		return FencedPublication{}, fmt.Errorf("%w: successor certificate", ErrBatchRejected)
+	var certificateObject vault.Certificate
+	if transition.Kind != vault.TransitionRevoke {
+		certificateObject, err = vault.DecodeCertificate(transition.Certificate)
+		if err != nil {
+			return FencedPublication{}, fmt.Errorf("%w: successor certificate", ErrBatchRejected)
+		}
 	}
 	policyJSON, err := marshalRecord(toPolicyRecord(policy))
 	if err != nil {
@@ -393,25 +423,30 @@ func transitionPublication(transition vault.Transition, signer ed25519.PrivateKe
 	if err != nil {
 		return FencedPublication{}, err
 	}
-	certificateJSON, err := marshalRecord(toCertificateRecord(certificateObject))
-	if err != nil {
-		return FencedPublication{}, err
-	}
-	certificateRKey := transitionCertificateRKey(certificateObject)
-	if revision.HasRecord(RecordKey{Collection: VaultCertificateNSID, RKey: certificateRKey}) {
-		return FencedPublication{}, fmt.Errorf("%w: certificate record target already exists", ErrBatchRejected)
+	var certificateJSON json.RawMessage
+	certificateRKey := ""
+	if transition.Kind != vault.TransitionRevoke {
+		certificateJSON, err = marshalRecord(toCertificateRecord(certificateObject))
+		if err != nil {
+			return FencedPublication{}, err
+		}
+		certificateRKey = transitionCertificateRKey(certificateObject)
+		if revision.HasRecord(RecordKey{Collection: VaultCertificateNSID, RKey: certificateRKey}) {
+			return FencedPublication{}, fmt.Errorf("%w: certificate record target already exists", ErrBatchRejected)
+		}
 	}
 	policyAction := transitionRecordAction(revision, VaultPolicyNSID, "self")
 	controlAction := transitionRecordAction(revision, VaultControlNSID, "self")
 	headAction := transitionRecordAction(revision, VaultHeadNSID, "self")
+	additional := []RecordWrite{{Action: policyAction, Collection: VaultPolicyNSID, RKey: "self", Record: policyJSON}}
+	if transition.Kind != vault.TransitionRevoke {
+		additional = append(additional, RecordWrite{Action: RecordCreate, Collection: VaultCertificateNSID, RKey: certificateRKey, Record: certificateJSON})
+	}
 	return FencedPublication{
-		FirstBlobReference: RecordWrite{Action: RecordCreate, Collection: VaultSnapshotNSID, RKey: transitionMarkerRKey(envelope.PublicationID), Record: snapshotJSON},
+		FirstBlobReference: RecordWrite{Action: RecordCreate, Collection: VaultSnapshotNSID, RKey: transitionMarkerRKey(transition.Kind, envelope.PublicationID), Record: snapshotJSON},
 		VaultHead:          RecordWrite{Action: headAction, Collection: VaultHeadNSID, RKey: "self", Record: headJSON},
 		VaultControl:       RecordWrite{Action: controlAction, Collection: VaultControlNSID, RKey: "self", Record: controlJSON},
-		Additional: []RecordWrite{
-			{Action: policyAction, Collection: VaultPolicyNSID, RKey: "self", Record: policyJSON},
-			{Action: RecordCreate, Collection: VaultCertificateNSID, RKey: certificateRKey, Record: certificateJSON},
-		},
+		Additional:         additional,
 	}, nil
 }
 
@@ -477,8 +512,12 @@ func newTransitionAttemptID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func transitionMarkerRKey(publicationID [16]byte) string {
-	return "enroll-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(publicationID[:]))
+func transitionMarkerRKey(kind vault.TransitionKind, publicationID [16]byte) string {
+	prefix := "enroll-"
+	if kind == vault.TransitionRevoke {
+		prefix = "revoke-"
+	}
+	return prefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(publicationID[:]))
 }
 
 func transitionCertificateRKey(certificate vault.Certificate) string {

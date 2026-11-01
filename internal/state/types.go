@@ -10,7 +10,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 3
+const LatestSchemaVersion = 4
 const PayloadRetention = "Referenced payloads are retained indefinitely; unreferenced-payload collection is not implemented."
 
 var ErrStateLocked = errors.New("state is already locked")
@@ -18,6 +18,8 @@ var ErrUnsupportedSchema = errors.New("unsupported state schema")
 var ErrTargetBindingChanged = errors.New("target binding changed")
 var ErrCheckpointBackwards = errors.New("vault checkpoint update would move backwards")
 var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
+var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
+var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
 
 type TargetDescriptor struct {
 	ID            string
@@ -178,6 +180,13 @@ type VaultCheckpoint struct {
 	Epoch        uint64
 	PolicyDigest [32]byte
 	RecordedAt   int64
+}
+
+type VaultPublicationObservation struct {
+	Vault            [32]byte
+	Epoch            uint64
+	PublicationCount uint64
+	HeadCID          []byte
 }
 
 type JournalEntry struct {

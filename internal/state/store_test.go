@@ -83,7 +83,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -129,6 +129,28 @@ func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testin
 	stored, err = reopened.VaultCheckpoint(context.Background(), checkpoint.Vault)
 	require.NoError(t, err)
 	assert.Equal(t, checkpoint, stored, "checkpoint control bytes survive restart")
+}
+
+func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	first := VaultPublicationObservation{Vault: [32]byte{8}, Epoch: 2, PublicationCount: 3, HeadCID: []byte("head-3")}
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), first))
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 2, HeadCID: []byte("head-2")}), ErrVaultPublicationBackwards)
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 3, HeadCID: []byte("different-head")}), ErrVaultPublicationConflict)
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4")}))
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 3, PublicationCount: 0, HeadCID: []byte("epoch-3-head")}))
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("old-epoch-head")}), ErrVaultPublicationBackwards)
+	require.NoError(t, store.Close())
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	defer reopened.Close()
+	var epoch, count int64
+	var headCID []byte
+	require.NoError(t, reopened.conn.QueryRowContext(context.Background(), "SELECT epoch, publication_count, head_cid FROM vault_publication_observations WHERE vault = ?", first.Vault[:]).Scan(&epoch, &count, &headCID))
+	assert.Equal(t, int64(3), epoch)
+	assert.Equal(t, int64(0), count)
+	assert.Equal(t, []byte("epoch-3-head"), headCID)
 }
 
 func testVaultControlBytes(vault [32]byte, epoch uint64, digest [32]byte, snapshotCID []byte) []byte {
@@ -324,7 +346,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 3")
+	assert.Contains(t, err.Error(), "supports version 4")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

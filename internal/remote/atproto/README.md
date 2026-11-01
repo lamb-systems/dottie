@@ -137,10 +137,11 @@ revisit the defaults before production reads.
 
 A verified revision carries a read-only `(NSID, rkey) -> record CID` membership view and record
 bytes sourced only from that CAR. `PublishFenced` emits one `com.atproto.repo.applyWrites` batch
-containing the first blob-reference record, head, control and any explicitly supplied additional
-records atomically in one transaction. Its `swapCommit` is always the verified revision CID; there
-is no unfenced fallback. A
-structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
+for administrative transitions: the first blob-reference record, head, control and explicitly
+supplied policy/certificate writes are atomic. Ordinary publication uses the separate
+`PublishSnapshotFenced` path, which writes only the snapshot reference and head; it cannot encode a
+control write. Both paths use the verified revision CID as `swapCommit`, with no unfenced fallback.
+A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
 
@@ -446,43 +447,46 @@ Consequences encoded in this package:
   constraint belongs to the vault epoch work and is recorded here because this task is where the
   window was measured.
 
-## Fenced vault transition commit
+## Fenced vault publication and transitions
 
-`CommitTransition` accepts a V03 `vault.Transition`, the root signing key, a `TransitionIO` and a
+`CommitPublication` accepts a publisher- or root-authorized `vault.Publication`, a signing key, a
+`PublicationIO` and a durable attempt store. It uploads the already-sealed current-epoch snapshot
+with `application/octet-stream`, then calls `PublishSnapshotFenced` with exactly two writes: the
+snapshot reference and a head whose `publication_count` is the predecessor count plus one. It
+writes no control and changes no epoch. The prepared policy digest and predecessor head are checked
+before staging and against a fresh verified read after staging. A superseded policy is a typed
+`ErrPreparedPolicyMismatch`; the candidate must be discarded and prepared again.
+
+`CommitTransition` accepts a `vault.Transition`, the root signing key, a `TransitionIO` and a
 `TransitionAttemptStore`. `ATProtoTransitionIO` uses `RevisionReader` for verified repository reads,
 uploads the already-sealed successor-epoch snapshot with `application/octet-stream`, and commits
 with one `PublishFenced` `applyWrites` call. Enrollment writes the snapshot blob reference, head,
-control, policy and certificate together. The prepared transition is validated against an initial
-fresh read before staging, then validated again against a second freshly verified predecessor after
-staging and immediately before the fenced write. It never trusts the predecessor captured when the
-bundle was prepared.
+control, policy and certificate together. Revocation writes the snapshot reference, head, control
+and policy only. The revoked certificate remains a historical record; its device is added to the
+control revoked set and removed from successor roles and recipients. Both prepared transitions are
+checked against an initial verified predecessor before staging and a second verified predecessor
+after staging and immediately before the fenced write. A policy digest mismatch is a typed
+`ErrPreparedPolicyMismatch`; no stale bundle is reused.
 
-The local attempt row is committed before the blob upload request. It stores the unique snapshot
-marker, expected DAG-CBOR record CID, candidate blob CID, successor epoch, policy digest, outcome and
-resolution evidence, but no snapshot bytes or key material. `TransitionAttempts` enumerates rows
-for restart recovery; `ResolveTransitionAttempt` verifies current repository membership and does not
-send another batch. The only commit outcomes are `committed`, `committed-but-superseded`,
-`not-landed` and `unavailable`; only `not-landed` permits a fresh prepared attempt. A `fence-lost`
-result is separate: `TransitionFenceLostError` wraps `ErrFenceLost` and `ErrTransitionDiscarded`,
-contains the latest verified revision and predecessor when available, and never reports candidate
-disclosure. The caller must throw the old bundle away and prepare again from that observation; V04
-has no internal retry loop.
-Every other failure after candidate transmission joins `ErrCandidateMayBeDisclosed`, including an
-unknown result resolved as not landed or unavailable. A verified marker plus matching head and
-control CIDs is the evidence for commit; a present marker no longer bound by current head/control
-is recorded as committed-but-superseded.
+The local attempt row is committed before the blob upload request for both ordinary publication and
+transitions. It stores the unique snapshot marker, expected DAG-CBOR record CID, candidate blob CID,
+epoch, policy digest, outcome and resolution evidence, but no snapshot bytes or key material.
+`TransitionAttempts` enumerates rows for restart recovery; `ResolvePublicationAttempt` and
+`ResolveTransitionAttempt` verify current repository membership and do not send another batch. A
+verified marker plus matching head CID is the evidence for ordinary publication; transition commit
+additionally requires matching control CID. A present marker no longer bound by the current head/control is recorded as
+`committed-but-superseded`. The caller must throw away every candidate after a lost fence and
+prepare again from the latest verified policy and head; neither commit path has an internal retry
+loop. Every other failure after candidate transmission joins `ErrCandidateMayBeDisclosed`, including
+an unknown result resolved as not landed or unavailable.
 
 `TestLiveLedgerSharedRootRace` is gated by `DOTTIE_LIVE_LEDGER=1` and the existing disposable
-identity allowlist. It tracks cleanup targets before sending bootstrap or transition writes, uses
-two separately constructed clients, sessions, transports and HTTP clients, and prints record/blob
-identifiers only. Both clients intentionally share one root identity because V03 can issue only
-publisher or restore-only enrollment certificates and pins transition authorization to the
-predecessor control signer. The experiment is named `experiment-ledger-shared-root-race`: it tests
-process concurrency under the same device authority, not a race between distinct roots and not a
-revocation. It checks exactly one commit, a clean lost fence for the other attempt, no record
-referencing the losing blob, and exactly one added policy device. The distinct-root race remains
-untested until a future transition can enroll root-capable devices. No live ledger experiment was
-run for this implementation.
+identity allowlist. `TestLivePublicationVersusRootRevocationSharedDeviceKeys` is separately gated
+by `DOTTIE_LIVE_PUBLICATION=1`. It races the ordinary publication path against root revocation
+authority using two clients but the same root device key material, tracks every record target
+before send, and prints identifiers only. It reports the winning write, whether any record references the
+loser's candidate blob, and the control's epoch-start snapshot CID beside the live head snapshot
+CID. Both live harnesses skip by default; neither was run for this implementation.
 
 
 ## Coherent reads and authenticated retrieval
@@ -492,9 +496,13 @@ commit signature and DID verification key are checked before any vault record is
 reader then checks record-to-object bindings, fetches the envelope named by the head's snapshot CID
 (the envelope CID, not the snapshot-record CID), verifies the envelope and snapshot-record
 signatures and binding, checks cross-record context, and authenticates the vault state. Every
-repository record used by the result comes from the same verified CAR revision. The final latest-
-commit check covers the blob fetch and all validation; a moved revision discards the candidate and
-restarts within a bounded retry count. There is no older-revision fallback or partial result.
+repository record used by the result comes from the same verified CAR revision. The result exposes
+the authenticated publication count and head snapshot CID. `CheckPublicationCount` compares the
+count with the epoch baseline and the durable last observation in state, then records the new
+observation; it refuses a backwards count. Migration 0004 stores epoch, count and head CID per
+vault. The final latest-commit check covers the blob fetch and all validation; a moved revision
+discards the candidate and restarts within a bounded retry count. There is no older-revision
+fallback or partial result.
 
 The repository proof uses `DefaultBudgets`: 8 MiB CAR bytes, 4096 membership records, plus the
 existing block, MST-depth and per-block limits. Blob reads are capped before allocation by the

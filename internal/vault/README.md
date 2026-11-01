@@ -195,26 +195,36 @@ by the device. `dottie account bootstrap` prints the grouped kit plus vault, anc
 and kit-public-key fingerprints for independent recording. Durable checkpoint storage is
 the state store's responsibility; V03 stops at verification.
 
-`PrepareTransition` currently implements enrollment. It binds the authenticated predecessor's
-control CID, policy digest, epoch and head CID to a successor root-signed policy, control,
-enrollment certificate and head, plus the sealed snapshot bytes and the recipient certificate
+`PrepareTransition` supports enrollment and revocation. Enrollment binds the authenticated
+predecessor's control CID, policy digest, epoch and head CID to a successor root-signed policy,
+control, enrollment certificate and head, plus the sealed snapshot bytes and recipient certificate
 set. It seals caller-provided packed state for a genesis predecessor, or caller-provided current
-plaintext for an existing head, under the successor epoch. The caller supplies the content key,
-publication ID, content nonce and one ephemeral key and wrap nonce per successor recipient, so the
-prepared bundle can be reproduced without hidden entropy. The transition digest is SHA-256 over
-length-delimited policy, control, certificate, head and snapshot encodings in that order. No
-private key material is returned. Non-enrollment transition kinds return `ErrUnsupportedTransition`.
+plaintext for an existing head, under the successor epoch. Revocation keeps the surviving active
+recipient certificates, removes the revoked device from both policy roles and recipients, appends
+its certificate epoch to the control's revoked set, and seals the complete current plaintext under
+the successor epoch. Revocation emits no certificate. Each transition advances the epoch, resets
+the head publication count to zero and binds the control's epoch-start snapshot CID to the new
+snapshot. The caller supplies content keys, publication IDs, content nonces and one ephemeral key
+and wrap nonce per successor recipient, so the prepared bundle is reproducible without hidden
+entropy. The transition digest is SHA-256 over length-delimited policy, control, certificate,
+head and snapshot encodings in that order; the certificate slot is empty for revocation. No
+private key material is returned.
 
-`ValidateTransition` authenticates the predecessor and checks, in order: (1) observed revision
-identity; (2) predecessor-policy authority for the proposer; (3) exact one-step epoch advance;
-(4) policy ancestry; (5) control ancestry; (6) predecessor-root certificate issuer and permitted
-enrollment role; (7) exact certified-recipient identity set against policy and envelope recipient
-key IDs; (8) snapshot epoch and policy digest; (9) head/snapshot linkage and zero initial
-publication count; and (10) a supplied checkpoint's anchor. It verifies successor signatures
-under their permitted role keys before committing to the corresponding semantic checks and returns
-a specific typed error for each revalidation failure. The first ten checks have no implication
-about transactionality: check 11, atomic fenced publication of the complete write set, belongs to
-V04 and is not implemented here.
+`PreparePublication` accepts a publisher or root certificate named by the current policy and
+seals under the existing epoch and policy. The signed head advances the predecessor count by
+exactly one and points to the new snapshot; publication neither changes epoch nor writes control.
+The current head and policy are revalidated before the candidate can be committed. A count skip,
+repeat, revoked certificate or certificate absent from the policy is refused.
+
+`ValidateTransition` authenticates the predecessor, requires one-step epoch advance and policy
+and control ancestry, and verifies the successor signatures. Enrollment must add exactly its
+certificate and recipient. Revocation must remove exactly one non-root device from roles and
+recipients, preserve all other bindings, list that device and certificate epoch as revoked, and
+carry no certificate object. Both transition kinds require the successor head count to be zero,
+the snapshot and head to name the same candidate, and the control's epoch-start snapshot CID to
+match it. `ValidatePublication` checks the same-epoch policy, active signer certificate,
+predecessor head and exact count increment. These checks do not provide transactionality; the
+atproto package owns staging, durable attempts and the separate fenced write sets.
 
 Check 7 proves recipient identity binding only: each envelope key ID maps to the certified key
 named by policy, with no extras or omissions. It cannot prove that encryption used that recipient's

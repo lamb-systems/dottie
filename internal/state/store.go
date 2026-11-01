@@ -497,6 +497,37 @@ FROM vault_checkpoints WHERE vault = ?`, vault[:]).Scan(&storedVault, &anchor, &
 	return checkpoint, err
 }
 
+func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observation VaultPublicationObservation) error {
+	if len(observation.HeadCID) == 0 || len(observation.HeadCID) > 128 || observation.Epoch > uint64(^uint64(0)>>1) || observation.PublicationCount > uint64(^uint64(0)>>1) {
+		return errors.New("invalid vault publication observation")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var existingEpoch, existingCount int64
+		var existingHeadCID []byte
+		err := tx.QueryRowContext(ctx, "SELECT epoch, publication_count, head_cid FROM vault_publication_observations WHERE vault = ?", observation.Vault[:]).Scan(&existingEpoch, &existingCount, &existingHeadCID)
+		if err == nil {
+			if observation.Epoch < uint64(existingEpoch) {
+				return ErrVaultPublicationBackwards
+			}
+			if observation.Epoch == uint64(existingEpoch) {
+				if observation.PublicationCount < uint64(existingCount) {
+					return ErrVaultPublicationBackwards
+				}
+				if (observation.PublicationCount == uint64(existingCount) && !bytes.Equal(observation.HeadCID, existingHeadCID)) || (observation.PublicationCount > uint64(existingCount) && bytes.Equal(observation.HeadCID, existingHeadCID)) {
+					return ErrVaultPublicationConflict
+				}
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO vault_publication_observations(vault, epoch, publication_count, head_cid)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(vault) DO UPDATE SET epoch=excluded.epoch, publication_count=excluded.publication_count, head_cid=excluded.head_cid`,
+			observation.Vault[:], observation.Epoch, observation.PublicationCount, observation.HeadCID)
+		return err
+	})
+}
+
 func (s *Store) BeginTransitionAttempt(ctx context.Context, attempt TransitionAttempt) error {
 	if err := validateTransitionAttempt(attempt); err != nil {
 		return err
