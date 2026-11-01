@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"net/url"
 	"os"
@@ -14,8 +15,10 @@ import (
 
 	"testing/fstest"
 
+	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/multiformats/go-multihash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +83,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -94,6 +97,59 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	assert.Equal(t, 2, synchronous)
 	assert.Equal(t, 1, foreignKeys)
 	assert.Equal(t, 5000, busyTimeout)
+}
+
+func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	checkpoint := VaultCheckpoint{
+		Vault: [32]byte{1}, Anchor: [32]byte{2}, SnapshotCID: []byte("cid-snapshot-2"),
+		Epoch: 2, PolicyDigest: [32]byte{3}, RecordedAt: 123,
+	}
+	checkpoint.ControlBytes = testVaultControlBytes(checkpoint.Vault, checkpoint.Epoch, checkpoint.PolicyDigest, checkpoint.SnapshotCID)
+	checkpoint.ControlCID = testRawCID(t, checkpoint.ControlBytes)
+	require.NoError(t, store.PutVaultCheckpoint(context.Background(), checkpoint))
+	stored, err := store.VaultCheckpoint(context.Background(), checkpoint.Vault)
+	require.NoError(t, err)
+	require.Equal(t, checkpoint, stored)
+
+	backwards := checkpoint
+	backwards.Epoch = 1
+	backwards.ControlBytes = testVaultControlBytes(backwards.Vault, backwards.Epoch, backwards.PolicyDigest, backwards.SnapshotCID)
+	backwards.ControlCID = testRawCID(t, backwards.ControlBytes)
+	backwards.RecordedAt = 124
+	assert.ErrorIs(t, store.PutVaultCheckpoint(context.Background(), backwards), ErrCheckpointBackwards)
+	stored, err = store.VaultCheckpoint(context.Background(), checkpoint.Vault)
+	require.NoError(t, err)
+	assert.Equal(t, checkpoint, stored, "backwards write leaves the held checkpoint unchanged")
+	require.NoError(t, store.Close())
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	defer reopened.Close()
+	stored, err = reopened.VaultCheckpoint(context.Background(), checkpoint.Vault)
+	require.NoError(t, err)
+	assert.Equal(t, checkpoint, stored, "checkpoint control bytes survive restart")
+}
+
+func testVaultControlBytes(vault [32]byte, epoch uint64, digest [32]byte, snapshotCID []byte) []byte {
+	encoded := []byte{0x44, 0x54, 0x45, 1, 3}
+	encoded = append(encoded, vault[:]...)
+	var epochBytes [8]byte
+	binary.BigEndian.PutUint64(epochBytes[:], epoch)
+	encoded = append(encoded, epochBytes[:]...)
+	encoded = append(encoded, digest[:]...)
+	var length [2]byte
+	binary.BigEndian.PutUint16(length[:], uint16(len(snapshotCID)))
+	encoded = append(encoded, length[:]...)
+	encoded = append(encoded, snapshotCID...)
+	return append(encoded, make([]byte, 80)...)
+}
+
+func testRawCID(t *testing.T, encoded []byte) []byte {
+	t.Helper()
+	digest, err := multihash.Sum(encoded, multihash.SHA2_256, -1)
+	require.NoError(t, err)
+	return cid.NewCidV1(cid.Raw, digest).Bytes()
 }
 
 func TestTransitionAttemptSurvivesStoreRestart(t *testing.T) {
@@ -268,7 +324,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 2")
+	assert.Contains(t, err.Error(), "supports version 3")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

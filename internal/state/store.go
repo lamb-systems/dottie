@@ -1,9 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,8 +20,10 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/multiformats/go-multihash"
 )
 
 type Store struct {
@@ -416,6 +420,81 @@ func (s *Store) Checkpoints(ctx context.Context) ([]Checkpoint, error) {
 		return rows.Err()
 	})
 	return values, err
+}
+
+func (s *Store) PutVaultCheckpoint(ctx context.Context, checkpoint VaultCheckpoint) error {
+	if len(checkpoint.ControlCID) == 0 || len(checkpoint.ControlCID) > 128 || len(checkpoint.ControlBytes) == 0 || len(checkpoint.SnapshotCID) > 128 || checkpoint.Epoch > uint64(^uint64(0)>>1) {
+		return errors.New("invalid vault checkpoint")
+	}
+	if err := validateVaultCheckpointObject(checkpoint); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var existingAnchor, existingCID, existingBytes, existingSnapshot, existingDigest []byte
+		var existingEpoch int64
+		err := tx.QueryRowContext(ctx, "SELECT anchor, control_cid, control_bytes, snapshot_cid, epoch, policy_digest FROM vault_checkpoints WHERE vault = ?", checkpoint.Vault[:]).Scan(&existingAnchor, &existingCID, &existingBytes, &existingSnapshot, &existingEpoch, &existingDigest)
+		if err == nil {
+			if checkpoint.Epoch < uint64(existingEpoch) || checkpoint.Epoch == uint64(existingEpoch) && !bytes.Equal(checkpoint.ControlCID, existingCID) {
+				return ErrCheckpointBackwards
+			}
+			if checkpoint.Epoch == uint64(existingEpoch) && (!bytes.Equal(checkpoint.ControlBytes, existingBytes) || !bytes.Equal(checkpoint.Anchor[:], existingAnchor) || !bytes.Equal(checkpoint.SnapshotCID, existingSnapshot) || !bytes.Equal(checkpoint.PolicyDigest[:], existingDigest)) {
+				return errors.New("vault checkpoint fields changed at the same position")
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO vault_checkpoints(vault, anchor, control_cid, control_bytes, snapshot_cid, epoch, policy_digest, recorded_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(vault) DO UPDATE SET anchor=excluded.anchor, control_cid=excluded.control_cid, control_bytes=excluded.control_bytes, snapshot_cid=excluded.snapshot_cid, epoch=excluded.epoch, policy_digest=excluded.policy_digest, recorded_at=excluded.recorded_at`,
+			checkpoint.Vault[:], checkpoint.Anchor[:], checkpoint.ControlCID, checkpoint.ControlBytes, checkpoint.SnapshotCID, checkpoint.Epoch, checkpoint.PolicyDigest[:], checkpoint.RecordedAt)
+		return err
+	})
+}
+
+func validateVaultCheckpointObject(checkpoint VaultCheckpoint) error {
+	encoded := checkpoint.ControlBytes
+	if len(encoded) < 79 || !bytes.Equal(encoded[:3], []byte{0x44, 0x54, 0x45}) || encoded[3] != 1 || encoded[4] != 3 {
+		return errors.New("vault checkpoint control object is malformed")
+	}
+	if !bytes.Equal(encoded[5:37], checkpoint.Vault[:]) || binary.BigEndian.Uint64(encoded[37:45]) != checkpoint.Epoch || !bytes.Equal(encoded[45:77], checkpoint.PolicyDigest[:]) {
+		return errors.New("vault checkpoint fields do not match control bytes")
+	}
+	cidLength := int(binary.BigEndian.Uint16(encoded[77:79]))
+	if cidLength > 128 || len(encoded) < 79+cidLength {
+		return errors.New("vault checkpoint snapshot CID is malformed")
+	}
+	if !bytes.Equal(encoded[79:79+cidLength], checkpoint.SnapshotCID) {
+		return errors.New("vault checkpoint snapshot CID does not match control bytes")
+	}
+	digest, err := multihash.Sum(encoded, multihash.SHA2_256, -1)
+	if err != nil || !bytes.Equal(cid.NewCidV1(cid.Raw, digest).Bytes(), checkpoint.ControlCID) {
+		return errors.New("vault checkpoint CID does not match control bytes")
+	}
+	return nil
+}
+
+func (s *Store) VaultCheckpoint(ctx context.Context, vault [32]byte) (VaultCheckpoint, error) {
+	var checkpoint VaultCheckpoint
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		var storedVault, anchor, policyDigest []byte
+		var epoch int64
+		if err := conn.QueryRowContext(ctx, `SELECT vault, anchor, control_cid, control_bytes, snapshot_cid, epoch, policy_digest, recorded_at
+FROM vault_checkpoints WHERE vault = ?`, vault[:]).Scan(&storedVault, &anchor, &checkpoint.ControlCID, &checkpoint.ControlBytes, &checkpoint.SnapshotCID, &epoch, &policyDigest, &checkpoint.RecordedAt); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrVaultCheckpointNotFound
+			}
+			return err
+		}
+		if len(storedVault) != len(checkpoint.Vault) || len(anchor) != len(checkpoint.Anchor) || len(policyDigest) != len(checkpoint.PolicyDigest) || epoch < 0 {
+			return errors.New("stored vault checkpoint is malformed")
+		}
+		copy(checkpoint.Vault[:], storedVault)
+		copy(checkpoint.Anchor[:], anchor)
+		copy(checkpoint.PolicyDigest[:], policyDigest)
+		checkpoint.Epoch = uint64(epoch)
+		return nil
+	})
+	return checkpoint, err
 }
 
 func (s *Store) BeginTransitionAttempt(ctx context.Context, attempt TransitionAttempt) error {

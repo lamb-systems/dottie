@@ -161,9 +161,25 @@ func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFacto
 		},
 	})
 
+	recovery := configure(&urfave.Command{
+		Name:  "recovery",
+		Flags: []urfave.Flag{&urfave.StringFlag{Name: "vault-name", Usage: "vault name", OnlyOnce: true}, &urfave.StringFlag{Name: "checkpoint", Usage: "local signed checkpoint object", OnlyOnce: true}},
+		Action: func(_ context.Context, command *urfave.Command) error {
+			return runAccountRecovery(command)
+		},
+	})
+
+	verify := configure(&urfave.Command{
+		Name:  "verify",
+		Flags: []urfave.Flag{&urfave.StringFlag{Name: "bundle", Usage: "local verification bundle path", OnlyOnce: true}, &urfave.BoolFlag{Name: "record", Usage: "advance the local checkpoint after current or descendant verification", OnlyOnce: true}, &urfave.BoolFlag{Name: "consent", Usage: "confirm inspection/export-only continuation for unverifiable state", OnlyOnce: true}},
+		Action: func(ctx context.Context, command *urfave.Command) error {
+			return runAccountVerify(ctx, command)
+		},
+	})
+
 	root := configure(&urfave.Command{
 		Name:     "account",
-		Commands: []*urfave.Command{bootstrap, enroll},
+		Commands: []*urfave.Command{bootstrap, enroll, recovery, verify},
 		Action: func(_ context.Context, _ *urfave.Command) error {
 			return usageExit("expected bootstrap or enroll")
 		},
