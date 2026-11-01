@@ -224,7 +224,7 @@ func certificateForEnrollment(vaultID [32]byte, device DeviceMaterial, role Role
 	if role != RolePublisher && role != RoleRestoreOnly {
 		return nil, fmt.Errorf("%w: enrollment role", ErrAuthorization)
 	}
-	if len(revocationRef) == 0 || len(revocationRef) > MaxParentBytes {
+	if len(revocationRef) != 0 && len(revocationRef) > MaxParentBytes {
 		return nil, fmt.Errorf("%w: revocation reference", ErrFormat)
 	}
 	var encryptionPublic [32]byte
@@ -233,7 +233,7 @@ func certificateForEnrollment(vaultID [32]byte, device DeviceMaterial, role Role
 		Vault: vaultID, DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID),
 		SigningPublicKey:    [ed25519.PublicKeySize]byte(device.Signing.Public().(ed25519.PublicKey)),
 		EncryptionPublicKey: encryptionPublic, Role: role, CertEpoch: certEpoch, Issuer: rootDevice.DeviceID,
-		RevocationRef: bytes.Clone(revocationRef),
+		RevocationRef: nil,
 		Signer:        Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
 	}
 	return signCertificate(certificate, rootDevice.Signing)
@@ -476,7 +476,7 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 	if control.Vault != policy.Vault || control.EpochSeq != policy.EpochSeq || control.PolicyDigest != mustPolicyDigest(transition.Policy) || !bytes.Equal(control.PrevControlCID, predecessor.ControlCID) || control.Signer.DeviceID != proposer.DeviceID || !bytes.Equal(control.Signer.KeyID, proposer.KeyID) {
 		return ErrControlAncestry
 	}
-	if certificate.Vault != policy.Vault || certificate.Issuer != proposer.DeviceID || certificate.Signer.DeviceID != proposer.DeviceID || !bytes.Equal(certificate.Signer.KeyID, proposer.KeyID) || !bytes.Equal(certificate.RevocationRef, predecessor.ControlCID) || certificate.CertEpoch != policy.EpochSeq || certificate.Role != RolePublisher && certificate.Role != RoleRestoreOnly {
+	if certificate.Vault != policy.Vault || certificate.Issuer != proposer.DeviceID || certificate.Signer.DeviceID != proposer.DeviceID || !bytes.Equal(certificate.Signer.KeyID, proposer.KeyID) || len(certificate.RevocationRef) != 0 || certificate.CertEpoch != policy.EpochSeq || certificate.Role != RolePublisher && certificate.Role != RoleRestoreOnly {
 		return ErrCertificateAuthority
 	}
 	role, exists := policyRole(policy, certificate.DeviceID)

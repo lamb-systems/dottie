@@ -524,7 +524,6 @@ func TestValidateTransitionRejectsRevokedDeviceAndCheckpoint(t *testing.T) {
 	bundleControl.PrevControlCID = revokedCID
 	certificate, err := DecodeCertificate(baseline.Certificate)
 	require.NoError(t, err)
-	certificate.RevocationRef = revokedCID
 	signedCertificate := signCertificateValue(t, certificate, fixture.root.Signing)
 	bundle := baseline
 	bundle.Predecessor.ControlCID = revokedCID
@@ -554,10 +553,17 @@ func TestValidateTransitionRejectsUnauthenticatedPredecessorIdentifier(t *testin
 	fixture := newDevicesFixture(t)
 	baseline, err := PrepareTransition(fixture.predecessor, fixture.intent)
 	require.NoError(t, err)
-	tampered := baseline
-	tampered.Predecessor.ControlCID = fixtureCIDBytes(t)
-	tampered.Digest = ComputeTransitionDigest(tampered)
-	assert.Error(t, ValidateTransition(tampered, fixture.predecessor))
+
+	claimed := baseline
+	claimed.Predecessor.ControlCID = fixtureCIDBytes(t)
+	claimed.Digest = ComputeTransitionDigest(claimed)
+	assert.ErrorIs(t, ValidateTransition(claimed, fixture.predecessor), ErrObservedRevision,
+		"a bundle claiming a different predecessor is rejected at check 1")
+
+	unauthenticated := fixture.predecessor
+	unauthenticated.ControlCID = fixtureCIDBytes(t)
+	assert.ErrorIs(t, ValidateTransition(baseline, unauthenticated), ErrPredecessor,
+		"a predecessor whose identifier does not match its control bytes is not authenticated")
 }
 
 func mustPolicyDigestForTest(t *testing.T, policy Policy, fixture devicesFixture) [32]byte {
@@ -583,4 +589,35 @@ func rebuildTransition(t *testing.T, baseline Transition, rootKey ed25519.Privat
 	rebuilt.Control = signControlValue(t, control, rootKey)
 	rebuilt.Digest = ComputeTransitionDigest(rebuilt)
 	return rebuilt
+}
+
+func TestEnrolledCertificateCarriesNoRevocationReference(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	transition, err := PrepareTransition(fixture.predecessor, fixture.intent)
+	require.NoError(t, err)
+	certificate, err := DecodeCertificate(transition.Certificate)
+	require.NoError(t, err)
+	assert.Empty(t, certificate.RevocationRef,
+		"an active certificate records the epoch it was issued at, not a revocation reference")
+	assert.Equal(t, transition.Predecessor.EpochSeq+1, certificate.CertEpoch,
+		"issuance is bound by cert_epoch")
+
+	revoked := certificate
+	revoked.RevocationRef = transition.Predecessor.ControlCID
+	revokedBytes := signCertificateValue(t, revoked, fixture.root.Signing)
+	replaced := make([][]byte, 0, len(transition.Recipients))
+	for _, encoded := range transition.Recipients {
+		candidate, decodeErr := DecodeCertificate(encoded)
+		if decodeErr == nil && candidate.DeviceID == revoked.DeviceID {
+			replaced = append(replaced, revokedBytes)
+			continue
+		}
+		replaced = append(replaced, encoded)
+	}
+	bundle := transition
+	bundle.Certificate = revokedBytes
+	bundle.Recipients = replaced
+	bundle.Digest = ComputeTransitionDigest(bundle)
+	assert.ErrorIs(t, ValidateTransition(bundle, fixture.predecessor), ErrCertificateAuthority,
+		"a non-empty revocation reference marks the certificate revoked and must be refused")
 }
