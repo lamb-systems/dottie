@@ -28,6 +28,7 @@ import (
 
 type Store struct {
 	mu         sync.Mutex
+	payloadMu  sync.Mutex
 	db         *sql.DB
 	conn       *sql.Conn
 	lock       *platform.Lock
@@ -250,6 +251,8 @@ func (s *Store) PutAppliedBase(ctx context.Context, record BaseRecord, payload [
 	if record.PayloadRef != "" && record.PayloadRef != ref {
 		return BaseRecord{}, errors.New("base payload reference does not match payload")
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	if err := s.storePayload(ref, payload); err != nil {
 		return BaseRecord{}, err
 	}
@@ -302,6 +305,8 @@ func (s *Store) AppendIntent(ctx context.Context, intent Intent, payload []byte)
 	if intent.PayloadRef != "" && intent.PayloadRef != ref {
 		return Intent{}, errors.New("intent payload reference does not match payload")
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	if err := s.storePayload(ref, payload); err != nil {
 		return Intent{}, err
 	}
@@ -351,6 +356,8 @@ func (s *Store) RecordConflict(ctx context.Context, conflict Conflict, localPayl
 	if (conflict.LocalPayloadRef != "" && conflict.LocalPayloadRef != localRef) || (conflict.RemotePayloadRef != "" && conflict.RemotePayloadRef != remoteRef) {
 		return Conflict{}, errors.New("conflict payload reference does not match payload")
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	if err := s.storePayload(localRef, localPayload); err != nil {
 		return Conflict{}, err
 	}
@@ -615,16 +622,18 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 	if entry.BackupRef != "" && entry.BackupRef != ref {
 		return JournalEntry{}, errors.New("journal backup reference does not match payload")
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	if err := s.storePayload(ref, backup); err != nil {
 		return JournalEntry{}, err
 	}
 	entry.BackupRef = ref
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO apply_journal(id, operation, state, target_id, source, file_path, schema_id, settings_path, setting_key,
+		_, err := tx.ExecContext(ctx, `INSERT INTO apply_journal(id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			entry.ID, entry.Operation, entry.State, entry.Identity.TargetID, entry.Identity.Source, entry.Identity.FilePath, entry.Identity.SchemaID, entry.Identity.SettingsPath, entry.Identity.SettingKey,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			entry.ID, entry.Operation, entry.State, entry.Stage, entry.Identity.TargetID, entry.Identity.Source, entry.Identity.FilePath, entry.Identity.SchemaID, entry.Identity.SettingsPath, entry.Identity.SettingKey,
 			entry.Preimage.State, entry.Preimage.Kind, entry.Preimage.Mode, entry.Preimage.LinkTarget, entry.Preimage.ValueType, entry.Preimage.ValueText, entry.Preimage.Size, entry.Preimage.Digest,
 			entry.Postimage.State, entry.Postimage.Kind, entry.Postimage.Mode, entry.Postimage.LinkTarget, entry.Postimage.ValueType, entry.Postimage.ValueText, entry.Postimage.Size, entry.Postimage.Digest, entry.BackupRef, entry.CreatedAt)
 		return err
@@ -635,7 +644,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 func (s *Store) JournalEntries(ctx context.Context, targetID string) ([]JournalEntry, error) {
 	var values []JournalEntry
 	err := s.query(ctx, func(conn *sql.Conn) error {
-		rows, err := conn.QueryContext(ctx, `SELECT id, operation, state, target_id, source, file_path, schema_id, settings_path, setting_key,
+		rows, err := conn.QueryContext(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
 FROM apply_journal WHERE target_id = ? ORDER BY created_at, id`, targetID)
@@ -648,7 +657,7 @@ FROM apply_journal WHERE target_id = ? ORDER BY created_at, id`, targetID)
 			var source string
 			var preKind, postKind string
 			var preMode, postMode uint32
-			if err := rows.Scan(&value.ID, &value.Operation, &value.State, &value.Identity.TargetID, &source, &value.Identity.FilePath, &value.Identity.SchemaID, &value.Identity.SettingsPath, &value.Identity.SettingKey,
+			if err := rows.Scan(&value.ID, &value.Operation, &value.State, &value.Stage, &value.Identity.TargetID, &source, &value.Identity.FilePath, &value.Identity.SchemaID, &value.Identity.SettingsPath, &value.Identity.SettingKey,
 				&value.Preimage.State, &preKind, &preMode, &value.Preimage.LinkTarget, &value.Preimage.ValueType, &value.Preimage.ValueText, &value.Preimage.Size, &value.Preimage.Digest,
 				&value.Postimage.State, &postKind, &postMode, &value.Postimage.LinkTarget, &value.Postimage.ValueType, &value.Postimage.ValueText, &value.Postimage.Size, &value.Postimage.Digest, &value.BackupRef, &value.CreatedAt); err != nil {
 				return err
@@ -666,6 +675,8 @@ FROM apply_journal WHERE target_id = ? ORDER BY created_at, id`, targetID)
 }
 
 func (s *Store) Payload(reference string) ([]byte, error) {
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	name, err := payloadName(reference)
 	if err != nil {
 		return nil, err

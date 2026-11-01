@@ -346,7 +346,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 4")
+	assert.Contains(t, err.Error(), "supports version 5")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

@@ -40,3 +40,7 @@ Skip reasons emitted by this capture path are `external-link`, `excluded`, and `
 | `special-file` | FIFO, socket, block device or character device | Empty |
 
 Budgets, deterministic parent-before-child ordering, opaque file contents and the unknown-on-failure rule remain unchanged. One-time apply modes owns external-link approval UX and persistence; approvals here are caller-supplied only. Link apply/restore is deferred to the journaled apply path.
+
+## Journaled file operations
+
+The apply filesystem boundary accepts only regular files. It observes a root-relative file through an `os.Root`-anchored handle, refuses a symbolic link or non-directory parent, and returns bytes, SHA-256 digest and permission bits for precondition checks and backups. Replacement creates a unique temporary file in the destination directory, sets the caller-selected mode, writes all bytes, syncs and closes the temporary file, renames it over the destination, then syncs the directory. Rename errors, including `EXDEV`, are returned without a copy fallback. A failed operation removes its temporary file when possible; the destination is unchanged unless rename already completed. File deletion accepts only an explicit regular-file path and never removes a directory. The caller must journal a backup before invoking a destructive operation and verify the result by reading it back.

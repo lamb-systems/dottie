@@ -2,8 +2,9 @@
 
 `Reconcile` is a pure, deterministic decision function. It consumes an explicit `BaseView`, a
 `LocalView`, remote entries, and caller-supplied validated target bindings. It performs no I/O,
-uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan; this
-package does not publish, apply, resolve conflicts, or authorize filesystem access.
+uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan. The
+separate journaled `Apply` consumer accepts only supported file operations and does not change the
+reconciliation function or authorize target roots.
 
 ## Input and ownership
 
@@ -144,9 +145,9 @@ a plan is a plaintext data leak. Do not log a `Plan`. `Plan.Diagnostic` and `Enc
 produce the redacted diagnostic form; it contains only entry keys, actions, reasons, and digests.
 That diagnostic form is the only representation suitable for logs.
 
-`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The journaled apply path
-must refuse a plan containing either action unless the user has explicitly resolved it. This package
-does not implement that consumer-side enforcement.
+`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The
+journaled apply path refuses an incomplete or unresolved preview and any action other than create,
+change or file delete.
 
 ## Precedence, as implemented
 
@@ -163,3 +164,23 @@ key that was never read cannot be inferred absent from target coverage, so a cal
 GNOME target MUST list every key it did not successfully read in `LocalView.Unknown`. A key that is
 neither in `Entries` nor in `Unknown` is treated as known-absent and can drive a deletion, which is
 correct only if the caller's observation really covered it. This is the contract L10 relies on.
+
+## Journaled filesystem apply
+
+`Apply` consumes the content-free preview together with caller-resolved destination roots, an exact
+set of postimage bytes/digests/modes for create and change entries, a local `ModePolicy`, and an
+injected filesystem boundary. It refuses settings entries, directories, symlinks, root deletion,
+unmatched content and unsupported actions before writing a journal row. The mode policy has a
+restrictive `0600` default and optional per-target overrides; an incoming content mode must match
+that local choice and is never transplanted.
+
+Before acting, apply observes all requested paths and compares each available preview digest and
+mode; it repeats the comparison immediately before each journaled operation. A changed preimage
+returns `ErrPreconditionChanged`. Each file operation records a pending state row and an immutable
+backup before touching the destination. Replacements use same-directory temp-and-rename, then read
+back the bytes and mode. Success transitions the row to applied and prunes its backup; operational
+failure records failed with its stage and keeps the backup. A process crash can leave pending:
+before the write the destination remains at its preimage, while after rename the intended digest and
+saved backup let a later recovery path classify the result. A failing entry stops the sequence;
+later entries are not applied. The apply path never infers deletion from absence and never deletes
+directories or files absent from the preview.

@@ -1,0 +1,1 @@
+ALTER TABLE apply_journal ADD COLUMN stage TEXT NOT NULL DEFAULT '';

@@ -10,8 +10,8 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 4
-const PayloadRetention = "Referenced payloads are retained indefinitely; unreferenced-payload collection is not implemented."
+const LatestSchemaVersion = 5
+const PayloadRetention = "Referenced payloads are retained; verified apply backups are pruned when no other record references them."
 
 var ErrStateLocked = errors.New("state is already locked")
 var ErrUnsupportedSchema = errors.New("unsupported state schema")
@@ -20,6 +20,7 @@ var ErrCheckpointBackwards = errors.New("vault checkpoint update would move back
 var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
 var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
+var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 
 type TargetDescriptor struct {
 	ID            string
@@ -193,6 +194,7 @@ type JournalEntry struct {
 	ID        string
 	Operation string
 	State     string
+	Stage     string
 	Identity  model.EntryKey
 	Preimage  Fingerprint
 	Postimage Fingerprint
