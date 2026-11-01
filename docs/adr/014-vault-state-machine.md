@@ -37,13 +37,20 @@ Four objects are signed. Fields are normative; encodings are in DOT-V015.
 | Object | Fields |
 | --- | --- |
 | **Policy** | `v`, `vault`, `epoch_seq`, `roles[]` (`device_id`, role), `recipients[]` (`device_id`, `key_id`, X25519 public key), `policy_retention_floor`, `retained_recovery_points`, `max_publications`, `max_epoch_age`, `recovery_anchor` (kit anchor fingerprint), `prev_policy_digest` |
-| **Control** | `v`, `vault`, `epoch_seq`, `policy_digest`, `head_snapshot_cid`, `publication_count`, `revoked[]` (`device_id`, `cert_epoch`), `prev_control_cid`, `signer` |
+| **Control** | `v`, `vault`, `epoch_seq`, `policy_digest`, `head_snapshot_cid`, `revoked[]` (`device_id`, `cert_epoch`), `prev_control_cid`, `signer` |
+| **Head** | `v`, `vault`, `epoch_seq`, `policy_digest`, `snapshot_cid`, `blob_cid`, `publication_count`, `prev_head_cid`, `signer` |
 | **Certificate** | `v`, `vault`, `device_id`, `key_id`, Ed25519 public key, X25519 public key, role, `cert_epoch`, `issuer` (`device_id` of the signing root, or the bootstrap anchor), `revocation_ref` |
 | **Checkpoint** | `v`, `vault`, `snapshot_cid`, `epoch_seq`, `policy_digest`, `control_cid`, `signer` |
 
 Every object carries `prev_*` where shown, so an ancestry check is a chain of authenticated digests rather
 than a trusted counter. A verifier rejects a control record whose `prev_control_cid` is not the control it
 observed, except at bootstrap.
+
+The recovery kit vouches for an anchor; it does not issue certificates. A device root certificate is
+self-signed, and the kit-signed checkpoint pins its signing-key fingerprint, which is what a verifier is
+given as `TrustAnchor`. An earlier draft had the kit sign the root certificate itself, which no verifier
+can accept: chain resolution terminates at a self-signed certificate, so a kit-issued root would have no
+verifiable issuer.
 
 Root succession is represented as **two signatures on one control record**: the retiring root signs
 `"dottie/v1/root-retire"` and the kit signs `"dottie/v1/root-appoint"`, both over the same successor
@@ -93,9 +100,9 @@ after a policy or epoch change.
 
 | Transition | Authority | Predecessor | Successor state | Atomic write set | Lost race |
 | --- | --- | --- | --- | --- | --- |
-| **Bootstrap** | recovery kit | none | `epoch_seq=0`, genesis policy, genesis control, genesis checkpoint, root certificate; **no snapshot exists yet and the head is the explicit empty marker** | policy, control, certificate, checkpoint | re-read; kit signs again |
+| **Bootstrap** | recovery kit | none | `epoch_seq=0`, genesis policy, genesis control, genesis checkpoint, root certificate; **no snapshot exists yet and the head is the explicit empty marker**. The root certificate is **self-signed**; the kit signs the checkpoint that names its key fingerprint, and that fingerprint becomes `TrustAnchor`. | policy, control, certificate, checkpoint | re-read; kit signs again |
 | **Enroll** | root | control C, epoch E | certificate for the new device, `epoch_seq=E+1`, new wrappers, head re-encrypted under E+1 | certificate record, snapshot blob ref, head, control, policy | discard, re-encrypt under E+1 |
-| **Publish** | publisher | control C, epoch E | head advances to the new snapshot, `publication_count+1`, epoch unchanged | snapshot blob ref, head, control | re-read, discard candidate |
+| **Publish** | publisher | control C, epoch E | head advances to the new snapshot and carries `publication_count+1`; epoch and control unchanged | snapshot blob ref, head | re-read, discard candidate |
 | **Policy change** | root | control C, epoch E | new policy document, `epoch_seq=E+1`, new key, new wrappers, head re-encrypted, **reissued certificates for any device whose role changed** | certificate records, snapshot blob ref, head, control, policy | discard, re-encrypt |
 | **Revoke** | root | control C, epoch E | device added to `revoked`, `epoch_seq=E+1`, wrappers to the remaining set, head re-encrypted | snapshot blob ref, head, control, policy | discard, re-encrypt |
 | **Rotate** | root | control C, epoch E | `epoch_seq=E+1`, new wrappers, head re-encrypted | snapshot blob ref, head, control, policy | discard, re-encrypt |
@@ -135,9 +142,13 @@ An epoch rotates on every administrative transition, and after either `max_publi
 `max_epoch_age`, whichever comes first. Both thresholds are policy fields, so an implementation reads them
 rather than inventing them.
 
-`publication_count` is initialised to zero at bootstrap and resets to zero at each epoch change. It is
-incremented by the fenced control write in the same batch as the head update, which makes it authenticated
-state rather than a local guess. `max_publications` is a `uint32` in the range 1 to 100000; `max_epoch_age`
+`publication_count` lives in the **head** record, not the control record. It is initialised to zero at
+bootstrap and resets to zero at each epoch change, and it is incremented by the same fenced write that
+advances the head, so it remains authenticated state rather than a local guess.
+
+It sits in the head because ordinary publication is publisher-authorized and the control record is
+root-authorized. Keeping the counter in control would mean a publisher could not publish at all, which an
+earlier draft of this record required without noticing. `max_publications` is a `uint32` in the range 1 to 100000; `max_epoch_age`
 is a `uint32` count of seconds in the range 3600 to 31536000.
 
 The count comparison happens before preparing a publication, and a device at or above the threshold does not
