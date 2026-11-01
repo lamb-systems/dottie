@@ -10,7 +10,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 1
+const LatestSchemaVersion = 2
 const PayloadRetention = "Referenced payloads are retained indefinitely; unreferenced-payload collection is not implemented."
 
 var ErrStateLocked = errors.New("state is already locked")
@@ -176,6 +176,84 @@ type JournalEntry struct {
 	Postimage Fingerprint
 	BackupRef string
 	CreatedAt int64
+}
+
+const (
+	TransitionAttemptPrepared    = "prepared"
+	TransitionAttemptStaged      = "staged"
+	TransitionAttemptSubmitted   = "submitted"
+	TransitionAttemptCommitted   = "committed"
+	TransitionAttemptSuperseded  = "committed-but-superseded"
+	TransitionAttemptNotLanded   = "not-landed"
+	TransitionAttemptUnavailable = "unavailable"
+	TransitionAttemptFenceLost   = "fence-lost"
+)
+
+type TransitionAttempt struct {
+	ID                string
+	MarkerCollection  string
+	MarkerRKey        string
+	ExpectedRecordCID string
+	CandidateBlobCID  string
+	EpochSeq          uint64
+	PolicyDigest      string
+	Outcome           string
+	Evidence          string
+	CreatedAt         int64
+}
+
+func validateTransitionAttempt(attempt TransitionAttempt) error {
+	if !validTransitionAttemptOutcome(attempt.Outcome) || attempt.Outcome != TransitionAttemptPrepared {
+		return errors.New("transition attempt must begin in prepared outcome")
+	}
+	for _, field := range []struct {
+		value string
+		name  string
+	}{
+		{value: attempt.ID, name: "transition attempt id"},
+		{value: attempt.MarkerCollection, name: "transition marker collection"},
+		{value: attempt.MarkerRKey, name: "transition marker rkey"},
+		{value: attempt.ExpectedRecordCID, name: "transition expected record CID"},
+		{value: attempt.CandidateBlobCID, name: "transition candidate blob CID"},
+		{value: attempt.Outcome, name: "transition outcome"},
+	} {
+		if err := validateID(field.value, field.name); err != nil {
+			return err
+		}
+	}
+	if strings.IndexByte(attempt.MarkerCollection, 0) >= 0 || strings.IndexByte(attempt.MarkerRKey, 0) >= 0 || attempt.EpochSeq > uint64(^uint64(0)>>1) {
+		return errors.New("invalid transition attempt identity or epoch")
+	}
+	digest, err := hex.DecodeString(attempt.PolicyDigest)
+	if err != nil || len(digest) != sha256.Size || strings.ToLower(attempt.PolicyDigest) != attempt.PolicyDigest {
+		return errors.New("invalid transition policy digest")
+	}
+	return nil
+}
+
+func validTransitionAttemptOutcome(outcome string) bool {
+	switch outcome {
+	case TransitionAttemptPrepared, TransitionAttemptStaged, TransitionAttemptSubmitted, TransitionAttemptCommitted, TransitionAttemptSuperseded, TransitionAttemptNotLanded, TransitionAttemptUnavailable, TransitionAttemptFenceLost:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTransitionAttemptOutcomeChange(current, next string) bool {
+	if current == next {
+		return true
+	}
+	switch current {
+	case TransitionAttemptPrepared:
+		return next == TransitionAttemptStaged || next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+	case TransitionAttemptStaged:
+		return next == TransitionAttemptSubmitted || next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+	case TransitionAttemptSubmitted:
+		return next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+	default:
+		return false
+	}
 }
 
 func validateID(value, name string) error {

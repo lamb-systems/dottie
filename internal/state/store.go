@@ -418,6 +418,70 @@ func (s *Store) Checkpoints(ctx context.Context) ([]Checkpoint, error) {
 	return values, err
 }
 
+func (s *Store) BeginTransitionAttempt(ctx context.Context, attempt TransitionAttempt) error {
+	if err := validateTransitionAttempt(attempt); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO transition_attempts(id, marker_collection, marker_rkey, expected_record_cid, candidate_blob_cid, epoch_seq, policy_digest, outcome, evidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, attempt.ID, attempt.MarkerCollection, attempt.MarkerRKey, attempt.ExpectedRecordCID, attempt.CandidateBlobCID, attempt.EpochSeq, attempt.PolicyDigest, attempt.Outcome, attempt.Evidence, attempt.CreatedAt)
+		return err
+	})
+}
+
+func (s *Store) UpdateTransitionAttempt(ctx context.Context, id, outcome, evidence string) error {
+	if err := validateID(id, "transition attempt id"); err != nil {
+		return err
+	}
+	if !validTransitionAttemptOutcome(outcome) {
+		return errors.New("invalid transition attempt outcome")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT outcome FROM transition_attempts WHERE id = ?", id).Scan(&current); err != nil {
+			return err
+		}
+		if !validTransitionAttemptOutcomeChange(current, outcome) {
+			return errors.New("transition attempt outcome cannot be changed")
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE transition_attempts SET outcome = ?, evidence = ? WHERE id = ?", outcome, evidence, id)
+		return err
+	})
+}
+
+func (s *Store) TransitionAttempts(ctx context.Context) ([]TransitionAttempt, error) {
+	var attempts []TransitionAttempt
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT id, marker_collection, marker_rkey, expected_record_cid, candidate_blob_cid, epoch_seq, policy_digest, outcome, evidence, created_at
+FROM transition_attempts ORDER BY created_at, id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var attempt TransitionAttempt
+			if err := rows.Scan(&attempt.ID, &attempt.MarkerCollection, &attempt.MarkerRKey, &attempt.ExpectedRecordCID, &attempt.CandidateBlobCID, &attempt.EpochSeq, &attempt.PolicyDigest, &attempt.Outcome, &attempt.Evidence, &attempt.CreatedAt); err != nil {
+				return err
+			}
+			attempts = append(attempts, attempt)
+		}
+		return rows.Err()
+	})
+	return attempts, err
+}
+
+func (s *Store) TransitionAttempt(ctx context.Context, id string) (TransitionAttempt, error) {
+	if err := validateID(id, "transition attempt id"); err != nil {
+		return TransitionAttempt{}, err
+	}
+	var attempt TransitionAttempt
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, `SELECT id, marker_collection, marker_rkey, expected_record_cid, candidate_blob_cid, epoch_seq, policy_digest, outcome, evidence, created_at
+FROM transition_attempts WHERE id = ?`, id).Scan(&attempt.ID, &attempt.MarkerCollection, &attempt.MarkerRKey, &attempt.ExpectedRecordCID, &attempt.CandidateBlobCID, &attempt.EpochSeq, &attempt.PolicyDigest, &attempt.Outcome, &attempt.Evidence, &attempt.CreatedAt)
+	})
+	return attempt, err
+}
+
 func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []byte) (JournalEntry, error) {
 	if err := validateID(entry.ID, "journal id"); err != nil {
 		return JournalEntry{}, err

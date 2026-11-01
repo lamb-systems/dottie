@@ -80,7 +80,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -94,6 +94,36 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	assert.Equal(t, 2, synchronous)
 	assert.Equal(t, 1, foreignKeys)
 	assert.Equal(t, 5000, busyTimeout)
+}
+
+func TestTransitionAttemptSurvivesStoreRestart(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	attempt := TransitionAttempt{
+		ID: "transition-attempt-1", MarkerCollection: "systems.lamb.dottie.vaultSnapshot", MarkerRKey: "snapshot-one",
+		ExpectedRecordCID: "bafyrecord", CandidateBlobCID: "bafyblob", EpochSeq: 4,
+		PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, Evidence: `{"headRecordCid":"bafyhead"}`, CreatedAt: 123,
+	}
+	require.NoError(t, store.BeginTransitionAttempt(context.Background(), attempt))
+	require.NoError(t, store.Close())
+
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, err := reopened.TransitionAttempt(context.Background(), attempt.ID)
+	require.NoError(t, err)
+	assert.Equal(t, attempt, got)
+	attempts, err := reopened.TransitionAttempts(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []TransitionAttempt{attempt}, attempts)
+	require.NoError(t, reopened.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionAttemptStaged, `{"stage":true}`))
+	require.NoError(t, reopened.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionAttemptSubmitted, `{"submitted":true}`))
+	require.NoError(t, reopened.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionAttemptCommitted, `{"verified":true}`))
+	got, err = reopened.TransitionAttempt(context.Background(), attempt.ID)
+	require.NoError(t, err)
+	assert.Equal(t, TransitionAttemptCommitted, got.Outcome)
+	assert.Equal(t, `{"verified":true}`, got.Evidence)
+	require.Error(t, reopened.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionAttemptNotLanded, `{"verified":false}`))
 }
 
 func TestRestartPreservesRecordsAndPayloadsAfterCacheDeletion(t *testing.T) {
@@ -176,6 +206,12 @@ func TestFailedMigrationIsAtomicAndGoodRetrySucceeds(t *testing.T) {
 	_, err := store.PutAppliedBase(context.Background(), BaseRecord{Identity: fileIdentity("safe.toml"), Fingerprint: NewFingerprint("present", model.FileRegular, 0o600, "", "", "", []byte("safe")), RecordedAt: 10}, []byte("safe"))
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
+	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
+	require.NoError(t, err)
+	_, err = raw.Exec("DROP TABLE transition_attempts; UPDATE schema_version SET version = 1 WHERE singleton = 1")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	broken := fstest.MapFS{
 		"migrations/0001_initial.sql": &fstest.MapFile{Data: []byte("SELECT 1;")},
@@ -183,7 +219,7 @@ func TestFailedMigrationIsAtomicAndGoodRetrySucceeds(t *testing.T) {
 	}
 	_, err = openWithMigrations(paths, broken)
 	require.Error(t, err)
-	prior, err := Open(paths)
+	prior, err := openWithMigrations(paths, fstest.MapFS{"migrations/0001_initial.sql": &fstest.MapFile{Data: []byte("SELECT 1;")}})
 	require.NoError(t, err)
 	version, err := prior.SchemaVersion()
 	require.NoError(t, err)
@@ -232,7 +268,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 1")
+	assert.Contains(t, err.Error(), "supports version 2")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)
