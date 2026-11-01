@@ -40,7 +40,7 @@ Four objects are signed. Fields are normative; encodings are in DOT-V015.
 | **Control** | `v`, `vault`, `epoch_seq`, `policy_digest`, `head_snapshot_cid`, `revoked[]` (`device_id`, `cert_epoch`), `prev_control_cid`, `signer` |
 | **Head** | `v`, `vault`, `epoch_seq`, `policy_digest`, `snapshot_cid`, `blob_cid`, `publication_count`, `prev_head_cid`, `signer` |
 | **Certificate** | `v`, `vault`, `device_id`, `key_id`, Ed25519 public key, X25519 public key, role, `cert_epoch`, `issuer` (`device_id` of the signing root, or the bootstrap anchor), `revocation_ref` |
-| **Checkpoint** | `v`, `vault`, `snapshot_cid`, `epoch_seq`, `policy_digest`, `control_cid`, `signer` |
+| **Checkpoint** | `v`, `vault`, `snapshot_cid`, `epoch_seq`, `policy_digest`, `anchor` (root signing-key fingerprint the kit vouches for), `control_cid`, `signer` |
 
 Every object carries `prev_*` where shown, so an ancestry check is a chain of authenticated digests rather
 than a trusted counter. A verifier rejects a control record whose `prev_control_cid` is not the control it

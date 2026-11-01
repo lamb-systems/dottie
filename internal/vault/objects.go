@@ -52,15 +52,14 @@ type RevokedDevice struct {
 }
 
 type Control struct {
-	Vault            [32]byte
-	EpochSeq         uint64
-	PolicyDigest     [32]byte
-	HeadSnapshotCID  []byte
-	PublicationCount uint64
-	Revoked          []RevokedDevice
-	PrevControlCID   []byte
-	Signer           Signer
-	Signature        [ed25519.SignatureSize]byte
+	Vault           [32]byte
+	EpochSeq        uint64
+	PolicyDigest    [32]byte
+	HeadSnapshotCID []byte
+	Revoked         []RevokedDevice
+	PrevControlCID  []byte
+	Signer          Signer
+	Signature       [ed25519.SignatureSize]byte
 }
 
 type Certificate struct {
@@ -82,9 +81,22 @@ type Checkpoint struct {
 	SnapshotCID  []byte
 	EpochSeq     uint64
 	PolicyDigest [32]byte
+	Anchor       [32]byte
 	ControlCID   []byte
 	Signer       Signer
 	Signature    [ed25519.SignatureSize]byte
+}
+
+type Head struct {
+	Vault            [32]byte
+	EpochSeq         uint64
+	PolicyDigest     [32]byte
+	SnapshotCID      []byte
+	BlobCID          []byte
+	PublicationCount uint64
+	PrevHeadCID      []byte
+	Signer           Signer
+	Signature        [ed25519.SignatureSize]byte
 }
 
 type Attestation struct {
@@ -176,7 +188,6 @@ func DecodeControl(data []byte) (Control, error) {
 	fixed, _ = cursor.take(32)
 	copy(value.PolicyDigest[:], fixed)
 	value.HeadSnapshotCID = cursor.bytes16(MaxParentBytes)
-	value.PublicationCount = cursor.u64()
 	revokedCount := int(cursor.u16())
 	value.Revoked = make([]RevokedDevice, revokedCount)
 	for index := range value.Revoked {
@@ -255,6 +266,8 @@ func DecodeCheckpoint(data []byte) (Checkpoint, error) {
 	value.EpochSeq = cursor.u64()
 	fixed, _ = cursor.take(32)
 	copy(value.PolicyDigest[:], fixed)
+	fixed, _ = cursor.take(32)
+	copy(value.Anchor[:], fixed)
 	value.ControlCID = cursor.bytes16(MaxParentBytes)
 	value.Signer = decodeSigner(&cursor)
 	fixed, _ = cursor.take(ed25519.SignatureSize)
@@ -358,7 +371,6 @@ func encodeControlPrefix(value Control) ([]byte, error) {
 	buffer = appendU64(buffer, value.EpochSeq)
 	buffer = append(buffer, value.PolicyDigest[:]...)
 	buffer = appendBytes16(buffer, value.HeadSnapshotCID)
-	buffer = appendU64(buffer, value.PublicationCount)
 	buffer = appendU16(buffer, uint16(len(value.Revoked)))
 	for _, revoked := range value.Revoked {
 		if err := validateDeviceID(revoked.DeviceID); err != nil {
@@ -411,9 +423,86 @@ func encodeCheckpointPrefix(value Checkpoint) ([]byte, error) {
 	buffer = appendBytes16(buffer, value.SnapshotCID)
 	buffer = appendU64(buffer, value.EpochSeq)
 	buffer = append(buffer, value.PolicyDigest[:]...)
+	buffer = append(buffer, value.Anchor[:]...)
 	buffer = appendBytes16(buffer, value.ControlCID)
 	buffer = appendSigner(buffer, value.Signer)
 	return limitObject(buffer)
+}
+
+func EncodeHead(value Head) ([]byte, error) {
+	prefix, err := encodeHeadPrefix(value)
+	if err != nil {
+		return nil, err
+	}
+	return append(prefix, value.Signature[:]...), nil
+}
+
+func DecodeHead(data []byte) (Head, error) {
+	if err := validateHeader(data, objectKindHead, false); err != nil {
+		return Head{}, err
+	}
+	if len(data) > MaxPolicyObjectBytes {
+		return Head{}, fmt.Errorf("%w: head", ErrLimit)
+	}
+	if err := scanHead(data); err != nil {
+		return Head{}, err
+	}
+	cursor := wireCursor{data: data, offset: 5}
+	value := Head{}
+	fixed, _ := cursor.take(32)
+	copy(value.Vault[:], fixed)
+	value.EpochSeq = cursor.u64()
+	fixed, _ = cursor.take(32)
+	copy(value.PolicyDigest[:], fixed)
+	value.SnapshotCID = cursor.bytes16(MaxParentBytes)
+	value.BlobCID = cursor.bytes16(MaxParentBytes)
+	value.PublicationCount = cursor.u64()
+	value.PrevHeadCID = cursor.bytes16(MaxParentBytes)
+	value.Signer = decodeSigner(&cursor)
+	fixed, _ = cursor.take(ed25519.SignatureSize)
+	copy(value.Signature[:], fixed)
+	return value, nil
+}
+
+func encodeHeadPrefix(value Head) ([]byte, error) {
+	if len(value.SnapshotCID) > MaxParentBytes || len(value.BlobCID) > MaxParentBytes || len(value.PrevHeadCID) > MaxParentBytes {
+		return nil, fmt.Errorf("%w: head CID", ErrLimit)
+	}
+	if err := validateSigner(value.Signer); err != nil {
+		return nil, err
+	}
+	buffer := appendHeader(nil, objectKindHead)
+	buffer = append(buffer, value.Vault[:]...)
+	buffer = appendU64(buffer, value.EpochSeq)
+	buffer = append(buffer, value.PolicyDigest[:]...)
+	buffer = appendBytes16(buffer, value.SnapshotCID)
+	buffer = appendBytes16(buffer, value.BlobCID)
+	buffer = appendU64(buffer, value.PublicationCount)
+	buffer = appendBytes16(buffer, value.PrevHeadCID)
+	buffer = appendSigner(buffer, value.Signer)
+	return limitObject(buffer)
+}
+
+func scanHead(data []byte) error {
+	cursor := wireCursor{data: data, offset: 5}
+	if !cursor.skip(32 + 8 + 32) {
+		return cursor.err
+	}
+	for _, limit := range []int{MaxParentBytes, MaxParentBytes} {
+		if err := scanBytes16(&cursor, limit); err != nil {
+			return err
+		}
+	}
+	if !cursor.skip(8) {
+		return cursor.err
+	}
+	if err := scanBytes16(&cursor, MaxParentBytes); err != nil {
+		return err
+	}
+	if err := scanSigner(&cursor); err != nil {
+		return err
+	}
+	return finishObjectScan(&cursor, data)
 }
 
 func encodeAttestationPrefix(value Attestation) ([]byte, error) {
@@ -490,9 +579,6 @@ func scanControl(data []byte) error {
 	if err := scanBytes16(&cursor, MaxParentBytes); err != nil {
 		return err
 	}
-	if !cursor.skip(8) {
-		return cursor.err
-	}
 	revokedCount := int(cursor.u16())
 	if cursor.err != nil {
 		return cursor.err
@@ -558,7 +644,7 @@ func scanCheckpoint(data []byte) error {
 	if err := scanBytes16(&cursor, MaxParentBytes); err != nil {
 		return err
 	}
-	if !cursor.skip(8 + 32) {
+	if !cursor.skip(8 + 32 + 32) {
 		return cursor.err
 	}
 	if err := scanBytes16(&cursor, MaxParentBytes); err != nil {
@@ -702,6 +788,8 @@ func objectSignatureContext(kind byte) string {
 		return "dottie/v1/sig-checkpoint"
 	case objectKindAttestation:
 		return "dottie/v1/sig-attestation"
+	case objectKindHead:
+		return "dottie/v1/sig-head"
 	default:
 		return ""
 	}

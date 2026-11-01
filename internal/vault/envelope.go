@@ -55,6 +55,7 @@ const (
 	objectKindCertificate
 	objectKindCheckpoint
 	objectKindAttestation
+	objectKindHead
 )
 
 var wireMagic = [3]byte{'D', 'T', 'E'}
@@ -192,7 +193,7 @@ func Verify(label string, preimage, signature []byte, key ed25519.PublicKey) err
 
 func knownSignatureContext(label string) bool {
 	switch label {
-	case "dottie/v1/sig-snapshot", "dottie/v1/sig-record", "dottie/v1/sig-policy", "dottie/v1/sig-control", "dottie/v1/sig-certificate", "dottie/v1/sig-checkpoint", "dottie/v1/sig-attestation":
+	case "dottie/v1/sig-snapshot", "dottie/v1/sig-record", "dottie/v1/sig-policy", "dottie/v1/sig-control", "dottie/v1/sig-certificate", "dottie/v1/sig-checkpoint", "dottie/v1/sig-attestation", "dottie/v1/sig-head":
 		return true
 	default:
 		return false
@@ -233,6 +234,35 @@ func Seal(request SealRequest) (Envelope, error) {
 		})
 	}
 	return SealPrepared(prepared)
+}
+
+func SealAuthorized(request SealRequest, certificate Certificate, policy Policy) (Envelope, error) {
+	if certificate.Vault != policy.Vault || request.Vault != policy.Vault {
+		return Envelope{}, fmt.Errorf("%w: seal vault", ErrAuthorization)
+	}
+	permitted := false
+	for _, binding := range policy.Roles {
+		if binding.DeviceID == certificate.DeviceID && binding.Role == certificate.Role {
+			permitted = true
+			break
+		}
+	}
+	if !permitted {
+		return Envelope{}, fmt.Errorf("%w: seal role", ErrAuthorization)
+	}
+	if !roleMaySeal(certificate.Role, request.Purpose) {
+		return Envelope{}, fmt.Errorf("%w: seal purpose", ErrAuthorization)
+	}
+	return Seal(request)
+}
+
+func roleMaySeal(role Role, purpose Purpose) bool {
+	switch purpose {
+	case PurposeSnapshot:
+		return role == RolePublisher || role == RoleRoot
+	default:
+		return role == RoleRoot
+	}
 }
 
 func SealPrepared(prepared PreparedSeal) (Envelope, error) {
@@ -343,6 +373,9 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 	policyDigest := sha256.Sum256(append([]byte(preimagePolicy), policyBytes...))
 	if policyDigest != envelope.PolicyDigest {
 		return nil, fmt.Errorf("%w: policy_digest", ErrAuthorization)
+	}
+	if policy.EpochSeq != envelope.EpochSeq {
+		return nil, fmt.Errorf("%w: policy epoch_seq", ErrAuthorization)
 	}
 	policySigner, err := resolveTrustedCertificate(policy.Signer.DeviceID, policy.Signer.KeyID, request)
 	if err != nil || policySigner.Role != RoleRoot {

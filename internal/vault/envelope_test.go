@@ -103,6 +103,17 @@ func signCheckpointValue(t *testing.T, value Checkpoint, key ed25519.PrivateKey)
 	return encoded
 }
 
+func signHeadValue(t *testing.T, value Head, key ed25519.PrivateKey) []byte {
+	t.Helper()
+	prefix, err := encodeHeadPrefix(value)
+	require.NoError(t, err)
+	value.Signature, err = signObject(objectSignatureContext(objectKindHead), prefix, key)
+	require.NoError(t, err)
+	encoded, err := EncodeHead(value)
+	require.NoError(t, err)
+	return encoded
+}
+
 func signAttestationValue(t *testing.T, value Attestation, key ed25519.PrivateKey) []byte {
 	t.Helper()
 	prefix, err := encodeAttestationPrefix(value)
@@ -198,18 +209,25 @@ func signedVectors(t *testing.T) map[string][]byte {
 	policyBytes := fixture.policyBytes
 	controlBytes := signControlValue(t, Control{
 		Vault: fixture.policy.Vault, EpochSeq: 7, PolicyDigest: fixture.prepared.PolicyDigest,
-		HeadSnapshotCID:  fixtureCIDBytes(t),
-		PublicationCount: 9, Revoked: []RevokedDevice{{DeviceID: "retired-device", CertEpoch: 4}},
-		PrevControlCID: fixtureCIDBytes(t),
-		Signer:         Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
+		HeadSnapshotCID: fixtureCIDBytes(t),
+		Revoked:         []RevokedDevice{{DeviceID: "retired-device", CertEpoch: 4}},
+		PrevControlCID:  fixtureCIDBytes(t),
+		Signer:          Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
 	}, fixture.signingKey)
 	certificateBytes := fixture.certificateBytes
 	checkpointBytes := signCheckpointValue(t, Checkpoint{
 		Vault: fixture.policy.Vault, SnapshotCID: fixtureCIDBytes(t),
 		EpochSeq: 7, PolicyDigest: fixture.prepared.PolicyDigest,
+		Anchor:     [32]byte(fixtureBytes(71, 32)),
 		ControlCID: fixtureCIDBytes(t),
 		Signer:     Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
 	}, fixture.signingKey)
+	headBytes := signHeadValue(t, Head{
+		Vault: fixture.policy.Vault, EpochSeq: 7, PolicyDigest: fixture.prepared.PolicyDigest,
+		SnapshotCID: fixtureCIDBytes(t), BlobCID: fixtureCIDBytes(t), PublicationCount: 9,
+		PrevHeadCID: fixtureCIDBytes(t),
+		Signer:      Signer{DeviceID: "device-publisher", KeyID: []byte("signer-publisher")},
+	}, fixture.publisherKey)
 	attestationBytes := signAttestationValue(t, Attestation{
 		Vault: fixture.policy.Vault, DeviceID: "device-root", PolicyDigest: fixture.prepared.PolicyDigest,
 		RetentionFloor: 2, RetainedRecoveryPoints: 3,
@@ -217,7 +235,6 @@ func signedVectors(t *testing.T) map[string][]byte {
 		Signer:     Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
 	}, fixture.signingKey)
 	return map[string][]byte{
-		"kind-ambiguity.hex":                           kindAmbiguityVector(t),
 		"envelope-one-recipient-chain.hex":             envelopeOne,
 		"envelope-many-recipients-chain.hex":           envelopeMany,
 		"policy-root-signed-chain.hex":                 policyBytes,
@@ -227,6 +244,7 @@ func signedVectors(t *testing.T) map[string][]byte {
 		"certificate-root-self-signed.hex":             fixture.rootCertificateBytes,
 		"checkpoint-root-signed-chain.hex":             checkpointBytes,
 		"attestation-root-signed-chain.hex":            attestationBytes,
+		"head-publisher-signed-chain.hex":              headBytes,
 	}
 }
 
@@ -252,37 +270,40 @@ func TestRegenerateSignedObjectVectors(t *testing.T) {
 	}
 }
 
-func kindAmbiguityVector(t *testing.T) []byte {
-	t.Helper()
-	envelope := Envelope{Purpose: PurposeSnapshot}
-	envelope.PublicationID[0] = 0
-	envelope.Vault[31] = 0
-	envelope.Tag[12] = 0
-	envelope.Tag[13] = 0
-	envelope.Tag[14] = 0
-	envelope.Tag[15] = 0
-	encoded, err := EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	controlCIDLength := len(encoded) - 149
-	binary.BigEndian.PutUint16(envelope.PolicyDigest[17:19], uint16(controlCIDLength))
-	encoded, err = EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	return encoded
-}
-
-func TestKindByteDisambiguatesEnvelopeAndAdministrativeObject(t *testing.T) {
+func TestKindByteDisambiguatesEveryObjectType(t *testing.T) {
 	vectors := signedVectors(t)
-	encoded := vectors["kind-ambiguity.hex"]
-	stored, err := os.ReadFile(filepath.Join("testdata", "kind-ambiguity.hex"))
-	require.NoError(t, err)
-	assert.Equal(t, string(stored), hex.EncodeToString(encoded)+"\n")
-	_, err = DecodeEnvelope(encoded)
-	require.NoError(t, err)
-	assert.NoError(t, scanCheckpoint(encoded), "the administrative body also parses when the kind check is ignored")
-	checkpointEncoding := bytes.Clone(encoded)
-	checkpointEncoding[4] = objectKindCheckpoint
-	_, err = DecodeCheckpoint(checkpointEncoding)
-	assert.NoError(t, err)
+	decoders := map[byte]func([]byte) error{
+		objectKindEnvelope: func(data []byte) error { _, err := DecodeEnvelope(data); return err },
+		objectKindPolicy:   func(data []byte) error { _, err := DecodePolicy(data); return err },
+		objectKindControl:  func(data []byte) error { _, err := DecodeControl(data); return err },
+		objectKindCertificate: func(data []byte) error {
+			_, err := DecodeCertificate(data)
+			return err
+		},
+		objectKindCheckpoint:  func(data []byte) error { _, err := DecodeCheckpoint(data); return err },
+		objectKindAttestation: func(data []byte) error { _, err := DecodeAttestation(data); return err },
+		objectKindHead:        func(data []byte) error { _, err := DecodeHead(data); return err },
+	}
+	samples := map[byte][]byte{
+		objectKindEnvelope:    vectors["envelope-one-recipient-chain.hex"],
+		objectKindPolicy:      vectors["policy-root-signed-chain.hex"],
+		objectKindControl:     vectors["control-root-signed-chain.hex"],
+		objectKindCertificate: vectors["certificate-publisher-root-issued-chain.hex"],
+		objectKindCheckpoint:  vectors["checkpoint-root-signed-chain.hex"],
+		objectKindAttestation: vectors["attestation-root-signed-chain.hex"],
+		objectKindHead:        vectors["head-publisher-signed-chain.hex"],
+	}
+	for kind, data := range samples {
+		require.NoError(t, decoders[kind](data), "kind %d must decode as itself", kind)
+		for other, decode := range decoders {
+			if other == kind {
+				continue
+			}
+			altered := bytes.Clone(data)
+			altered[4] = other
+			assert.Error(t, decode(altered), "kind byte %d must not decode as kind %d", kind, other)
+		}
+	}
 }
 
 func TestSealGeneratesMaterialAndOpens(t *testing.T) {
@@ -1011,4 +1032,55 @@ func vectorSeed(name string) []byte {
 		return nil
 	}
 	return decoded
+}
+
+func TestOpenRejectsPolicyEpochMismatch(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+	shifted := fixture.policy
+	shifted.EpochSeq = fixture.policy.EpochSeq + 1
+	shiftedBytes := signPolicyValue(t, shifted, fixture.signingKey)
+	shiftedDigest, err := ComputePolicyDigest(shiftedBytes)
+	require.NoError(t, err)
+	prepared := fixture.prepared
+	prepared.PolicyDigest = shiftedDigest
+	envelope, err := SealPrepared(prepared)
+	require.NoError(t, err)
+	request := fixture.openRequest
+	request.Policy = shiftedBytes
+	request.PolicyDigest = shiftedDigest
+	_, err = Open(envelope, request)
+	assert.ErrorIs(t, err, ErrAuthorization, "a policy whose epoch differs from the envelope must not authorize it")
+}
+
+func TestSealAuthorizedEnforcesRole(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+	request := SealRequest{
+		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault,
+		PublicationID: [16]byte(fixtureBytes(101, 16)), EpochSeq: fixture.policy.EpochSeq,
+		PolicyDigest: fixture.prepared.PolicyDigest, Parent: fixtureCIDBytes(t),
+		DeviceID: fixture.certificate.DeviceID, KeyID: fixture.certificate.KeyID,
+		Plaintext: []byte("authorized sealing"), SigningKey: fixture.publisherKey,
+		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+	}
+	_, err := SealAuthorized(request, fixture.certificate, fixture.policy)
+	require.NoError(t, err, "a publisher certificate listed in the policy may seal a snapshot")
+
+	restoreOnly := fixture.certificate
+	restoreOnly.Role = RoleRestoreOnly
+	_, err = SealAuthorized(request, restoreOnly, fixture.policy)
+	assert.ErrorIs(t, err, ErrAuthorization, "a restore-only certificate must not seal")
+
+	absent := fixture.certificate
+	absent.DeviceID = "device-unknown"
+	_, err = SealAuthorized(request, absent, fixture.policy)
+	assert.ErrorIs(t, err, ErrAuthorization, "a certificate absent from the policy must not seal")
+
+	restorePolicy := fixture.policy
+	restorePolicy.Roles = append(restorePolicy.Roles, RoleBinding{DeviceID: "device-restore", Role: RoleRestoreOnly})
+	restoreCert := fixture.certificate
+	restoreCert.DeviceID = "device-restore"
+	restoreCert.Role = RoleRestoreOnly
+	_, err = SealAuthorized(request, restoreCert, restorePolicy)
+	assert.ErrorIs(t, err, ErrAuthorization,
+		"a restore-only device the policy does name must still be refused by the purpose rule")
 }

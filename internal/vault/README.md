@@ -75,10 +75,11 @@ order between the vault and signer is:
 | Kind/object | Fields in order |
 | --- | --- |
 | 02 policy | epoch_seq u64; roles count u16 and `{device_id, role u8}`; recipients count u16 and `{device_id, key_id, x25519_pub[32]}`; policy_retention_floor u64; retained_recovery_points u16; max_publications u32; max_epoch_age u32; recovery_anchor[32]; prev_policy_digest[32] |
-| 03 control | epoch_seq u64; policy_digest[32]; head_snapshot_cid (uint16 length + bytes); publication_count u64; revoked count u16 and `{device_id, cert_epoch u64}`; prev_control_cid (uint16 length + bytes) |
+| 03 control | epoch_seq u64; policy_digest[32]; head_snapshot_cid (uint16 length + bytes); revoked count u16 and `{device_id, cert_epoch u64}`; prev_control_cid (uint16 length + bytes) |
 | 04 certificate | device_id; key_id; ed25519_pub[32]; x25519_pub[32]; role u8; cert_epoch u64; issuer device_id; revocation_ref (uint16 length + bytes) |
-| 05 checkpoint | snapshot_cid (uint16 length + bytes); epoch_seq u64; policy_digest[32]; control_cid (uint16 length + bytes) |
+| 05 checkpoint | snapshot_cid (uint16 length + bytes); epoch_seq u64; policy_digest[32]; anchor[32]; control_cid (uint16 length + bytes) |
 | 06 attestation | device_id; policy_digest[32]; retention_floor u64; retained_recovery_points u16; control_cid (uint16 length + bytes) |
+| 07 head | epoch_seq u64; policy_digest[32]; snapshot_cid (uint16 length + bytes); blob_cid (uint16 length + bytes); publication_count u64; prev_head_cid (uint16 length + bytes) |
 
 All variable byte fields use uint16 length prefixes; strings are UTF-8 bytes without a
 terminator. Arrays use uint16 counts. Vault identifiers, digests and public keys are raw
