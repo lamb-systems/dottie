@@ -39,4 +39,4 @@ Skip reasons emitted by this capture path are `external-link`, `excluded`, and `
 | `excluded` | Entry matched a local exclude pattern | First matching pattern |
 | `special-file` | FIFO, socket, block device or character device | Empty |
 
-Budgets, deterministic parent-before-child ordering, opaque file contents and the unknown-on-failure rule remain unchanged. DOT-B04 owns external-link approval UX and persistence; approvals here are caller-supplied only. Link apply/restore is deferred to DOT-L10.
+Budgets, deterministic parent-before-child ordering, opaque file contents and the unknown-on-failure rule remain unchanged. One-time apply modes owns external-link approval UX and persistence; approvals here are caller-supplied only. Link apply/restore is deferred to the journaled apply path.

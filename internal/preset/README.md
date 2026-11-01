@@ -8,7 +8,7 @@ they cannot contain commands, hooks, downloads, package requests, or consent ove
 `BuildPreview` validates caller-supplied presets, resolves file roots against the
 provided HOME and XDG paths, reports the destination's effective default mode, and
 performs no filesystem mutation or config write. GNOME presets retain their catalog
-information but return a structured `ErrSourceNotCapturable` reason until DOT-G01; a
+information but return a structured `ErrSourceNotCapturable` reason until the GNOME capture work; a
 preset cannot report whether anything is captured locally.
 
 `Materialize` returns a configuration proposal and never writes it. Each new target has

@@ -114,7 +114,7 @@ a plan is a plaintext data leak. Do not log a `Plan`. `Plan.Diagnostic` and `Enc
 produce the redacted diagnostic form; it contains only entry keys, actions, reasons, and digests.
 That diagnostic form is the only representation suitable for logs.
 
-`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. DOT-L10
+`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The journaled apply path
 must refuse a plan containing either action unless the user has explicitly resolved it. This package
 does not implement that consumer-side enforcement.
 

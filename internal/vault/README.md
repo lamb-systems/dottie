@@ -13,7 +13,7 @@ does not observe a filesystem or invent tombstones. Explicit deleted entries rem
 tombstones. `Estimate` reports plaintext bytes by target in target-id order and identifies
 relative symlink targets that lexically escape the selected root. `Unpack` returns only an
 in-memory snapshot; this package has no extraction API and performs no symlink containment
-check. DOT-L10 owns re-containment and fresh external-link consent at apply time.
+check. The journaled apply path owns re-containment and fresh external-link consent at apply time.
 
 Default bounds are aligned with filesystem capture where applicable:
 
@@ -34,10 +34,10 @@ and counts bytes actually read.
 
 Per-entry SHA-256 values and the whole-container digest detect accidental corruption and
 truncation. These digests are integrity-only, not authenticity. `Pack` returns plaintext;
-DOT-V02 `Seal` encrypts and signs those bytes when a caller supplies the authorization
+the envelope implementation `Seal` encrypts and signs those bytes when a caller supplies the authorization
 context and keys. This package does not publish remotely, reconcile, merge or apply data.
 
-## DOT-V02 envelope and signed objects
+## Envelope and signed objects
 
 Every integer is big-endian. `DTE` is the three-byte ASCII prefix `44 54 45`; version is
 `01`. The kind byte is `01` envelope, `02` policy, `03` control, `04` certificate,
@@ -175,7 +175,7 @@ Recipient keys must be the policy-authorized certificate keys; the signer must b
 for the selected purpose. `SealPrepared` has the same invariants and is intended for fixed-key
 test vectors, not production entropy handling.
 
-## DOT-V03 bootstrap and device transitions
+## Bootstrap and device transitions
 
 Bootstrap is deterministic over its inputs. Device Ed25519 and X25519 keys are generated separately
 with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. A 32-byte recovery kit
@@ -193,7 +193,7 @@ attacker's root. A checkpoint older than unseen history cannot reveal that missi
 anything below the pinned anchor is still rejected. Later starts use a checkpoint already held
 by the device. `dottie account bootstrap` prints the grouped kit plus vault, anchor, checkpoint
 and kit-public-key fingerprints for independent recording. Durable checkpoint storage is
-DOT-L06's responsibility; V03 stops at verification.
+the state store's responsibility; V03 stops at verification.
 
 `PrepareTransition` currently implements enrollment. It binds the authenticated predecessor's
 control CID, policy digest, epoch and head CID to a successor root-signed policy, control,
@@ -219,7 +219,7 @@ V04 and is not implemented here.
 Check 7 proves recipient identity binding only: each envelope key ID maps to the certified key
 named by policy, with no extras or omissions. It cannot prove that encryption used that recipient's
 key correctly without the recipient's private key. Snapshot record schemas and record-to-blob
-binding remain DOT-P01 work; this package prepares encoded signed objects and raw CIDs without
+binding remain the record schemas work; this package prepares encoded signed objects and raw CIDs without
 introducing a competing snapshot-record codec.
 
 ### Current-format test vectors

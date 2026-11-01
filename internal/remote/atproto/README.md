@@ -132,7 +132,7 @@ records and MST depth 32. The bounded pre-pass rejects malformed roots, duplicat
 oversized blocks. After loading, a partial MST is rejected; every membership key is unique, its
 record bytes must exist in the CAR, and the bytes are re-hashed to the membership CID. Any bound or
 integrity failure returns a typed error and no partial revision. These defaults are proof-task
-limits sized for a small preferences repository; a real account CAR may be larger. DOT-P03 must
+limits sized for a small preferences repository; a real account CAR may be larger. The read path must
 revisit the defaults before production reads.
 
 A verified revision carries a read-only `(NSID, rkey) -> record CID` membership view and record
@@ -148,7 +148,7 @@ The live fence harness uses provisional test-only records: `systems.lamb.dottie.
 `probe-<base32>` with `{$type, probe, blob, createdAt}`; `systems.lamb.dottie.vaultHead` at
 `self` with `{$type, snapshotRkey, snapshotCid, updatedAt}`; and `systems.lamb.dottie.vaultControl`
 at `self` with `{$type, devices:[{did,role}], policyEpoch, updatedAt}`. These fixtures are not
-DOT-P01 schemas and must not be used as production vault records. They are confined to integration
+the record schemas schemas and must not be used as production vault records. They are confined to integration
 tests and are deleted and verified by deferred cleanup.
 
 The error categories are `ErrFenceLost` for structured `InvalidSwap`, `ErrRevisionMoving` after
@@ -159,12 +159,12 @@ record preparation or definitive non-fence rejection, and `ErrAmbiguousTransport
 transport outcomes and server failures.
 
 The only current revision claim is membership at a PDS-asserted commit, not global freshness.
-Rollback and equivocation defence require independent checkpoints in DOT-V05. A fence prevents
+Rollback and equivocation defence require independent checkpoints in checkpoints and recovery. A fence prevents
 exposure through our writes under an honest-but-racing provider; a malicious PDS colluding with a
 revoked keyholder can still reference temporary blobs outside our writes. Device authorship and
-role enforcement remain DOT-V03/V04.
+role enforcement remain device enrollment/V04.
 
-## DOT-F05 contention and ambiguous-failure measurement
+## Contention and ambiguous-failure measurement
 
 `tests/integration/contention_harness_test.go` is a test-only measurement harness.
 `TestLiveContention` skips unless `DOTTIE_LIVE_CONTENTION=1`, and uses only the F03/F04
@@ -311,7 +311,7 @@ control transition), stale-cache rejection, bounded mixed-view retries and blob-
 rollback. Stale rows include captured `swapCommit` and the competing commit; the fence rejection
 must be `InvalidSwap`, and post-failure rows verify both unreferenced membership and anonymous CID
 unreachability. Failures write the existing redacted mode-0600 failure artifact with provider,
-criterion, evidence, DOT-F07 decision and cloud-release hold. Deferred cleanup deletes and verifies
+criterion, evidence, the feasibility gate decision and cloud-release hold. Deferred cleanup deletes and verifies
 every record created or unexpectedly created by a publication.
 
 The controlled D2 experiment runs in this order on the selected PDS: fetch the unreferenced
@@ -343,7 +343,7 @@ D6 uses a known-valid `app.bsky.feed.post` write fixture outside the granted col
 valid `listRecords` read request for that collection; results are classified as authorization,
 validation, transport or success, and validation failures do not count as evidence of least
 privilege. Any successful out-of-scope repository access is recorded as a provider limitation for
-DOT-F07, and a successfully created out-of-scope record is deleted and verified by deferred cleanup.
+the feasibility gate, and a successfully created out-of-scope record is deleted and verified by deferred cleanup.
 The read-only `com.atproto.server.getSession` request is a data-minimisation observation, not a
 scope-widening test: the harness does not request `account:email`, and records only whether
 unrequested fields such as `email`, `emailConfirmed`, `phone` or similar are present. Their field
@@ -399,7 +399,7 @@ timing. The checked-in matrix is intentionally unmeasured until its owner runs t
 
 A failed criterion writes a mode-0600 `failure.json` into a printed temporary directory. Its fields
 are `provider`, `intended_pds`, `criterion`, `redacted_evidence`, `decision_required_at_DOT_F07` and
-`cloud_release_hold: true`. The DOT-F07 decision is provider-specific; cloud release is held for
+`cloud_release_hold: true`. The the feasibility gate decision is provider-specific; cloud release is held for
 the failing provider. This task does not implement local-only fallback and never silently switches
 providers.
 
@@ -445,3 +445,78 @@ Consequences encoded in this package:
   revoked device can still decrypt would turn this provider behaviour into a real leak; that
   constraint belongs to the vault epoch work and is recorded here because this task is where the
   window was measured.
+
+## Fenced vault transition commit
+
+`CommitTransition` accepts a V03 `vault.Transition`, the root signing key, a `TransitionIO` and a
+`TransitionAttemptStore`. `ATProtoTransitionIO` uses `RevisionReader` for verified repository reads,
+uploads the already-sealed successor-epoch snapshot with `application/octet-stream`, and commits
+with one `PublishFenced` `applyWrites` call. Enrollment writes the snapshot blob reference, head,
+control, policy and certificate together. The prepared transition is validated against an initial
+fresh read before staging, then validated again against a second freshly verified predecessor after
+staging and immediately before the fenced write. It never trusts the predecessor captured when the
+bundle was prepared.
+
+The local attempt row is committed before the blob upload request. It stores the unique snapshot
+marker, expected DAG-CBOR record CID, candidate blob CID, successor epoch, policy digest, outcome and
+resolution evidence, but no snapshot bytes or key material. `TransitionAttempts` enumerates rows
+for restart recovery; `ResolveTransitionAttempt` verifies current repository membership and does not
+send another batch. The only commit outcomes are `committed`, `committed-but-superseded`,
+`not-landed` and `unavailable`; only `not-landed` permits a fresh prepared attempt. A `fence-lost`
+result is separate: `TransitionFenceLostError` wraps `ErrFenceLost` and `ErrTransitionDiscarded`,
+contains the latest verified revision and predecessor when available, and never reports candidate
+disclosure. The caller must throw the old bundle away and prepare again from that observation; V04
+has no internal retry loop.
+Every other failure after candidate transmission joins `ErrCandidateMayBeDisclosed`, including an
+unknown result resolved as not landed or unavailable. A verified marker plus matching head and
+control CIDs is the evidence for commit; a present marker no longer bound by current head/control
+is recorded as committed-but-superseded.
+
+`TestLiveLedgerSharedRootRace` is gated by `DOTTIE_LIVE_LEDGER=1` and the existing disposable
+identity allowlist. It tracks cleanup targets before sending bootstrap or transition writes, uses
+two separately constructed clients, sessions, transports and HTTP clients, and prints record/blob
+identifiers only. Both clients intentionally share one root identity because V03 can issue only
+publisher or restore-only enrollment certificates and pins transition authorization to the
+predecessor control signer. The experiment is named `experiment-ledger-shared-root-race`: it tests
+process concurrency under the same device authority, not a race between distinct roots and not a
+revocation. It checks exactly one commit, a clean lost fence for the other attempt, no record
+referencing the losing blob, and exactly one added policy device. The distinct-root race remains
+untested until a future transition can enroll root-capable devices. No live ledger experiment was
+run for this implementation.
+
+
+## Coherent reads and authenticated retrieval
+
+`VaultReader.Read` returns only a complete result from one `RevisionReader` proof. The repository
+commit signature and DID verification key are checked before any vault record is considered. The
+reader then checks record-to-object bindings, fetches the envelope named by the head's snapshot CID
+(the envelope CID, not the snapshot-record CID), verifies the envelope and snapshot-record
+signatures and binding, checks cross-record context, and authenticates the vault state. Every
+repository record used by the result comes from the same verified CAR revision. The final latest-
+commit check covers the blob fetch and all validation; a moved revision discards the candidate and
+restarts within a bounded retry count. There is no older-revision fallback or partial result.
+
+The repository proof uses `DefaultBudgets`: 8 MiB CAR bytes, 4096 membership records, plus the
+existing block, MST-depth and per-block limits. Blob reads are capped before allocation by the
+smaller of the configured maximum and the V02 envelope limit; the signed snapshot record's declared
+size must also match exactly. The response is streamed through that cap, then its raw CID is
+verified. The current reader does not consume a held checkpoint, so every successful result carries
+`freshness-unverified`. This is a statement that membership was proven at a PDS-asserted revision,
+not that the revision is globally current or rollback-resistant.
+
+A non-genesis policy overwrites the `literal:self` policy record, so its predecessor cannot be read
+from the same current revision. `ReadRequest.PreviousPolicy` accepts the caller-held DAG-CBOR policy
+record only for this case; its signed-object digest must equal the current policy's
+`prevPolicyDigest`, and its root must authorize the current policy signer. The field is required for
+a nonzero predecessor digest and rejected at genesis when supplied. Missing or mismatched context
+fails closed. In particular, without a predecessor policy the reader cannot authenticate a rotated
+root and does not guess.
+
+The reader is read-only. Supplying no device key returns authenticated ciphertext metadata and no
+plaintext. Supplying a device key invokes the existing vault opener only after record binding,
+record signature, envelope signature, policy, certificate-chain, role, epoch and revocation checks
+succeed. Read failures expose a `ReadError.Stage` and support `errors.Is` for distinct causes:
+record binding/context/signature, envelope signature, blob missing/transport/size/truncation/CID,
+vault authorization and decryption. `ErrRevisionMoving`, `ErrUntrustedCar` and
+`ErrUnprovenMembership` remain the repository-proof failures. Tests use synthetic signed fixtures
+and a fake transport only; they make no live or network requests.
