@@ -4,6 +4,34 @@ The package implements the OAuth identity boundary, bounded repository proofs an
 `applyWrites` publication operation. It does not provide generic record or blob CRUD, encrypt
 snapshot content, or wire synchronization into the CLI.
 
+## Vault record binding
+
+The seven `systems.lamb.dottie` Lexicon records are represented by typed Go values in `records.go`.
+`DecodeRecord` and `EncodeRecord` use AT Protocol DAG-CBOR and reject unknown or missing fields;
+`VerifyRecordBinding(record, envelopeOrObject)` is pure comparison code with no transport or I/O.
+It checks every field duplicated between a record and its V02 signed envelope/object, including
+object-signature equality and the snapshot blob reference, length and envelope-signature digest.
+It does not prove signature authenticity.
+
+`VerifyRecordContext` performs the separate cross-record checks. Its policy, control, certificate,
+snapshot and previous-policy context values are DAG-CBOR record bytes; a non-nil empty snapshot
+slice denotes the bootstrap empty head. Missing required context fails with a typed error.
+`SnapshotRecordSigningPreimage`, `SignSnapshotRecord`
+and `VerifySnapshotRecordSignature` define the independent Ed25519ctx record signature as
+`dottie/v1/recordsig` followed by canonical DAG-CBOR of all snapshot record fields except
+`signature`; `$type`, `schemaVersion` and the typed blob reference are included. A future field
+addition changes every signature preimage, so it is a signature-compatibility break even if the DTE
+wire version stays the same. V02 uint64 record values use Lexicon integers capped at 9007199254740991;
+`EncodeRecord` refuses larger values rather than truncating them. Resolving the record and envelope
+signatures to the same trusted device key requires the caller's certificate chain, which these
+binding functions deliberately do not accept.
+
+The policy stores recipient X25519 public keys by value and roles by device ID. A policy
+recipient's `keyId` identifies the X25519 wrapping key; a certificate's `keyId` identifies the
+Ed25519 signing key, so the two identifiers must never be compared. The policy does not duplicate
+signing public keys: policy role authorizes the device, the certificate chain binds that device to
+its Ed25519 key, and the certificate record binds both public keys to the signed certificate object.
+
 ## Discovery and identity binding
 
 Discovery is four ordered hops: handle to DID using HTTPS `/.well-known/atproto-did` with

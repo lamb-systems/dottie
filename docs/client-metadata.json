@@ -8,5 +8,5 @@
   "token_endpoint_auth_method": "none",
   "dpop_bound_access_tokens": true,
   "redirect_uris": ["http://127.0.0.1/callback"],
-  "scope": "atproto repo:systems.lamb.dottie.vaultHead repo:systems.lamb.dottie.vaultSnapshot repo:systems.lamb.dottie.vaultControl blob:application/octet-stream"
+  "scope": "atproto repo:systems.lamb.dottie.vaultHead repo:systems.lamb.dottie.vaultSnapshot repo:systems.lamb.dottie.vaultControl repo:systems.lamb.dottie.vaultPolicy repo:systems.lamb.dottie.vaultCertificate repo:systems.lamb.dottie.vaultCheckpoint repo:systems.lamb.dottie.vaultAttestation blob:application/octet-stream"
 }

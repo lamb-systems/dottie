@@ -1,0 +1,82 @@
+{
+  "lexicon": 1,
+  "id": "systems.lamb.dottie.vaultSnapshot",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A signed binding between one encrypted snapshot envelope blob and its V02 metadata. The independent record signature uses Ed25519ctx context dottie/v1/recordsig and the same signer key identity as the envelope. Binding comparison checks the envelope signature digest; certificate-chain verification authenticates both signatures. V02 uint64 values are represented as Lexicon integers bounded by 9007199254740991 (2^53-1); the encoder rejects larger values. CIDs and parent values are raw CID bytes and are limited to 128 bytes inclusive. The envelope blob is application/octet-stream and is bounded by the V02 envelope limit of 402653184 bytes.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "vault",
+          "publicationId",
+          "epochSeq",
+          "policyDigest",
+          "parent",
+          "blob",
+          "signerDeviceId",
+          "signerKeyId",
+          "envelopeSignatureDigest",
+          "signature"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "vault": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "publicationId": {
+            "type": "bytes",
+            "minLength": 16,
+            "maxLength": 16
+          },
+          "epochSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "policyDigest": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "parent": {
+            "type": "bytes",
+            "maxLength": 128
+          },
+          "blob": {
+            "type": "blob",
+            "accept": [
+              "application/octet-stream"
+            ],
+            "maxSize": 402653184
+          },
+          "signerDeviceId": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "signerKeyId": {
+            "type": "bytes",
+            "maxLength": 255
+          },
+          "envelopeSignatureDigest": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "signature": {
+            "type": "bytes",
+            "minLength": 64,
+            "maxLength": 64
+          }
+        }
+      }
+    }
+  }
+}
