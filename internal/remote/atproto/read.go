@@ -20,27 +20,29 @@ import (
 const readAttempts = 3
 
 var (
-	ErrReadRecordMissing          = errors.New("required vault record is missing")
-	ErrReadRecordType             = errors.New("vault record has an unexpected type")
-	ErrReadRecordInvalid          = errors.New("vault record is invalid")
-	ErrReadSnapshotAmbiguous      = errors.New("multiple snapshot records match the head")
-	ErrReadRecordBinding          = errors.New("vault record binding failed")
-	ErrReadRecordContext          = errors.New("vault record context failed")
-	ErrReadRecordSignature        = errors.New("vault snapshot record signature failed")
-	ErrReadEnvelopeInvalid        = errors.New("snapshot envelope is invalid")
-	ErrReadEnvelopeSignature      = errors.New("snapshot envelope signature failed")
-	ErrReadBlobMissing            = errors.New("snapshot blob is missing")
-	ErrReadBlobTransport          = errors.New("snapshot blob transport failed")
-	ErrReadBlobTooLarge           = errors.New("snapshot blob exceeds the read limit")
-	ErrReadBlobTruncated          = errors.New("snapshot blob is truncated")
-	ErrReadBlobSizeMismatch       = errors.New("snapshot blob size differs from its record")
-	ErrReadBlobCIDMismatch        = errors.New("snapshot blob CID mismatch")
-	ErrReadPreviousPolicyRequired = errors.New("predecessor policy is required")
-	ErrReadUnexpectedPrevious     = errors.New("predecessor policy is unexpected at genesis")
-	ErrReadVaultAuthentication    = errors.New("vault authentication failed")
-	ErrReadDecryption             = errors.New("snapshot decryption failed")
-	ErrPublicationCountBackwards  = state.ErrVaultPublicationBackwards
-	ErrPublicationCountConflict   = state.ErrVaultPublicationConflict
+	ErrReadRecordMissing              = errors.New("required vault record is missing")
+	ErrReadRecordType                 = errors.New("vault record has an unexpected type")
+	ErrReadRecordInvalid              = errors.New("vault record is invalid")
+	ErrReadSnapshotAmbiguous          = errors.New("multiple snapshot records match the head")
+	ErrReadRecordBinding              = errors.New("vault record binding failed")
+	ErrReadRecordContext              = errors.New("vault record context failed")
+	ErrReadRecordSignature            = errors.New("vault snapshot record signature failed")
+	ErrReadEnvelopeInvalid            = errors.New("snapshot envelope is invalid")
+	ErrReadEnvelopeSignature          = errors.New("snapshot envelope signature failed")
+	ErrReadBlobMissing                = errors.New("snapshot blob is missing")
+	ErrReadBlobTransport              = errors.New("snapshot blob transport failed")
+	ErrReadBlobTooLarge               = errors.New("snapshot blob exceeds the read limit")
+	ErrReadBlobTruncated              = errors.New("snapshot blob is truncated")
+	ErrReadBlobSizeMismatch           = errors.New("snapshot blob size differs from its record")
+	ErrReadBlobCIDMismatch            = errors.New("snapshot blob CID mismatch")
+	ErrReadPreviousPolicyRequired     = errors.New("predecessor policy is required")
+	ErrReadUnexpectedPrevious         = errors.New("predecessor policy is unexpected at genesis")
+	ErrReadVaultAuthentication        = errors.New("vault authentication failed")
+	ErrReadDecryption                 = errors.New("snapshot decryption failed")
+	ErrPublicationObservationRequired = errors.New("durable publication observation store is required")
+	ErrPublicationCountBackwards      = state.ErrVaultPublicationBackwards
+	ErrPublicationCountGap            = state.ErrVaultPublicationGap
+	ErrPublicationCountConflict       = state.ErrVaultPublicationConflict
 )
 
 type ReadStage string
@@ -102,9 +104,10 @@ type ReadResult struct {
 }
 
 type VaultReader struct {
-	Transport    Transport
-	Budgets      Budgets
-	MaxBlobBytes int64
+	Transport        Transport
+	ObservationStore PublicationObservationStore
+	Budgets          Budgets
+	MaxBlobBytes     int64
 }
 
 type PublicationObservationStore interface {
@@ -112,7 +115,10 @@ type PublicationObservationStore interface {
 }
 
 func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult) error {
-	if store == nil || result.EpochSeq > uint64(^uint64(0)>>1) || result.PublicationCount > uint64(^uint64(0)>>1) || result.PublicationCount < result.PublicationCountBaseline {
+	if store == nil {
+		return ErrPublicationObservationRequired
+	}
+	if result.EpochSeq > uint64(^uint64(0)>>1) || result.PublicationCount > uint64(^uint64(0)>>1) || result.PublicationCount < result.PublicationCountBaseline {
 		return ErrPublicationCountBackwards
 	}
 	if result.Head.PublicationCount != result.PublicationCount || result.Head.EpochSeq != result.EpochSeq || !bytes.Equal(result.Head.SnapshotCID, result.HeadCID) {
@@ -161,6 +167,9 @@ func (r VaultReader) Read(ctx context.Context, request ReadRequest) (ReadResult,
 		}
 		result.Revision = revision
 		result.Freshness = FreshnessUnverified
+		if err := CheckPublicationCount(ctx, r.ObservationStore, request.Vault, result); err != nil {
+			return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: err}
+		}
 		return result, nil
 	}
 	return ReadResult{}, &ReadError{Stage: ReadStageRevision, Err: ErrRevisionMoving}

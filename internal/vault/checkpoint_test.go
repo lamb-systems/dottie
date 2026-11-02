@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,11 +11,12 @@ import (
 )
 
 type checkpointFixture struct {
-	vaultID [32]byte
-	anchor  [32]byte
-	root    DeviceMaterial
-	cert    []byte
-	kit     []byte
+	vaultID    [32]byte
+	anchor     [32]byte
+	root       DeviceMaterial
+	cert       []byte
+	kit        []byte
+	checkpoint []byte
 }
 
 func newCheckpointFixture(t *testing.T) checkpointFixture {
@@ -23,7 +25,7 @@ func newCheckpointFixture(t *testing.T) checkpointFixture {
 	kit := fixtureBytes(1, 32)
 	boot, err := Bootstrap(kit, "checkpoint fixture", root)
 	require.NoError(t, err)
-	return checkpointFixture{vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate, kit: kit}
+	return checkpointFixture{vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate, kit: kit, checkpoint: boot.Checkpoint}
 }
 
 func (f checkpointFixture) evidence(t *testing.T, epoch uint64, previous []byte) ControlEvidence {
@@ -48,26 +50,22 @@ func (f checkpointFixture) evidence(t *testing.T, epoch uint64, previous []byte)
 	return ControlEvidence{Control: controlBytes, Policy: policyBytes, Certificates: [][]byte{f.cert}}
 }
 
-func checkpointHeld(t *testing.T, fixture checkpointFixture, evidence ControlEvidence) *HeldCheckpoint {
+func checkpointHeld(t *testing.T, evidence ControlEvidence) *ControlEvidence {
 	t.Helper()
-	control, err := DecodeControl(evidence.Control)
-	require.NoError(t, err)
-	controlCID, err := rawCID(evidence.Control)
-	require.NoError(t, err)
-	return &HeldCheckpoint{
-		Position: CheckpointPosition{
-			Vault: fixture.vaultID, Anchor: fixture.anchor, ControlCID: controlCID,
-			ControlBytes: bytes.Clone(evidence.Control), SnapshotCID: bytes.Clone(control.HeadSnapshotCID),
-			EpochSeq: control.EpochSeq, PolicyDigest: control.PolicyDigest,
-		},
-		Evidence: ControlEvidence{Policy: evidence.Policy, Certificates: evidence.Certificates},
+	return &ControlEvidence{
+		Control: bytes.Clone(evidence.Control), Policy: bytes.Clone(evidence.Policy),
+		Certificates: cloneByteSlices(evidence.Certificates),
 	}
 }
 
-func verifyFixture(t *testing.T, fixture checkpointFixture, held *HeldCheckpoint, supplied ControlEvidence, intermediates ...ControlEvidence) VerificationResult {
+func verifyFixture(t *testing.T, fixture checkpointFixture, held *ControlEvidence, supplied ControlEvidence, intermediates ...ControlEvidence) VerificationResult {
 	t.Helper()
-	result, err := VerifyControlState(VerificationRequest{
-		Vault: fixture.vaultID, TrustAnchor: fixture.anchor, Held: held, Supplied: supplied, Intermediates: intermediates,
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	if held != nil {
+		require.NoError(t, trustedContext.SetHeldCheckpoint(*held))
+	}
+	result, err := VerifyControlState(trustedContext, VerificationRequest{
+		Supplied: supplied, Intermediates: intermediates,
 	})
 	require.NoError(t, err)
 	return result
@@ -76,9 +74,32 @@ func verifyFixture(t *testing.T, fixture checkpointFixture, held *HeldCheckpoint
 func TestVerifyControlStateCurrent(t *testing.T) {
 	fixture := newCheckpointFixture(t)
 	current := fixture.evidence(t, 0, nil)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, current), current)
+	result := verifyFixture(t, fixture, checkpointHeld(t, current), current)
 	assert.Equal(t, CheckpointCurrent, result.Outcome)
 	assert.Equal(t, "same-control", result.ReasonCode)
+}
+
+func TestVerifyControlStateRefusesSelfSuppliedAnchorAndCheckpoint(t *testing.T) {
+	requestType := reflect.TypeOf(VerificationRequest{})
+	_, hasTrustAnchor := requestType.FieldByName("TrustAnchor")
+	_, hasHeldCheckpoint := requestType.FieldByName("Held")
+	assert.False(t, hasTrustAnchor)
+	assert.False(t, hasHeldCheckpoint)
+
+	fixture := newCheckpointFixture(t)
+	supplied := fixture.evidence(t, 0, nil)
+	artifact := struct {
+		Anchor     [32]byte
+		Checkpoint []byte
+		Supplied   ControlEvidence
+	}{Anchor: fixture.anchor, Checkpoint: fixture.checkpoint, Supplied: supplied}
+
+	_, err := VerifyControlState(nil, VerificationRequest{Supplied: artifact.Supplied})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidVerification)
+	var refusal *VerificationRefusal
+	require.True(t, errors.As(err, &refusal))
+	assert.Equal(t, "missing-trusted-context", refusal.Code)
 }
 
 func TestVerifyControlStateDescendant(t *testing.T) {
@@ -87,7 +108,7 @@ func TestVerifyControlStateDescendant(t *testing.T) {
 	heldCID, err := rawCID(held.Control)
 	require.NoError(t, err)
 	supplied := fixture.evidence(t, 1, heldCID)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, held), supplied)
+	result := verifyFixture(t, fixture, checkpointHeld(t, held), supplied)
 	assert.Equal(t, CheckpointDescendant, result.Outcome)
 	assert.Equal(t, 1, result.LinkCount)
 }
@@ -98,7 +119,7 @@ func TestVerifyControlStateStale(t *testing.T) {
 	oldCID, err := rawCID(old.Control)
 	require.NoError(t, err)
 	held := fixture.evidence(t, 1, oldCID)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, held), old)
+	result := verifyFixture(t, fixture, checkpointHeld(t, held), old)
 	assert.Equal(t, CheckpointStale, result.Outcome)
 	assert.Equal(t, 1, result.LinkCount)
 }
@@ -110,7 +131,7 @@ func TestVerifyControlStateConflicting(t *testing.T) {
 	require.NoError(t, err)
 	held := fixture.evidence(t, 1, genesisCID)
 	supplied := fixture.evidence(t, 2, genesisCID)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, held), supplied, genesis)
+	result := verifyFixture(t, fixture, checkpointHeld(t, held), supplied, genesis)
 	assert.Equal(t, CheckpointConflicting, result.Outcome)
 	assert.Equal(t, "independent-histories", result.ReasonCode)
 }
@@ -147,7 +168,7 @@ func TestVerifyControlStateLargerEpochWithoutLinkIsNotCurrent(t *testing.T) {
 	fixture := newCheckpointFixture(t)
 	held := fixture.evidence(t, 0, nil)
 	supplied := fixture.evidence(t, 100, nil)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, held), supplied)
+	result := verifyFixture(t, fixture, checkpointHeld(t, held), supplied)
 	assert.Equal(t, CheckpointConflicting, result.Outcome)
 	assert.NotEqual(t, CheckpointCurrent, result.Outcome)
 }
@@ -162,12 +183,12 @@ func TestVerifyControlStateWalksSuppliedAndHeldHistory(t *testing.T) {
 	require.NoError(t, err)
 	two := fixture.evidence(t, 2, oneCID)
 
-	descendant := verifyFixture(t, fixture, checkpointHeld(t, fixture, genesis), two, one)
+	descendant := verifyFixture(t, fixture, checkpointHeld(t, genesis), two, one)
 	assert.Equal(t, CheckpointDescendant, descendant.Outcome)
 	assert.Equal(t, "verified-descendant", descendant.ReasonCode)
 	assert.Equal(t, 2, descendant.LinkCount)
 
-	stale := verifyFixture(t, fixture, checkpointHeld(t, fixture, two), genesis, one)
+	stale := verifyFixture(t, fixture, checkpointHeld(t, two), genesis, one)
 	assert.Equal(t, CheckpointStale, stale.Outcome)
 	assert.Equal(t, "verified-stale", stale.ReasonCode)
 	assert.Equal(t, 2, stale.LinkCount)
@@ -182,7 +203,7 @@ func TestVerifyControlStateMissingIntermediateIsUnverifiable(t *testing.T) {
 	oneCID, err := rawCID(one.Control)
 	require.NoError(t, err)
 	two := fixture.evidence(t, 2, oneCID)
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, genesis), two)
+	result := verifyFixture(t, fixture, checkpointHeld(t, genesis), two)
 	assert.Equal(t, CheckpointUnverifiable, result.Outcome)
 	assert.Equal(t, "missing-intermediate", result.ReasonCode)
 	assert.True(t, result.ConsentAvailable)
@@ -200,7 +221,7 @@ func TestVerifyControlStateDepthBoundAndMissingEvidenceAreUnverifiable(t *testin
 		require.NoError(t, err)
 	}
 	intermediates := chain[1:9]
-	result := verifyFixture(t, fixture, checkpointHeld(t, fixture, chain[0]), chain[9], intermediates...)
+	result := verifyFixture(t, fixture, checkpointHeld(t, chain[0]), chain[9], intermediates...)
 	assert.Equal(t, CheckpointUnverifiable, result.Outcome)
 	assert.Equal(t, "depth-exceeded", result.ReasonCode)
 }
@@ -210,7 +231,7 @@ func TestVerifyControlStateInvalidSignatureCannotReachConsent(t *testing.T) {
 	supplied := fixture.evidence(t, 0, nil)
 	supplied.Control = bytes.Clone(supplied.Control)
 	supplied.Control[len(supplied.Control)-1] ^= 0x80
-	_, err := VerifyControlState(VerificationRequest{Vault: fixture.vaultID, TrustAnchor: fixture.anchor, Supplied: supplied})
+	_, err := VerifyControlState(NewTrustedContext(fixture.vaultID, fixture.anchor), VerificationRequest{Supplied: supplied})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidVerification)
 	var refusal *VerificationRefusal
@@ -242,8 +263,9 @@ func TestVerifyControlStateRefusesInvalidIntermediate(t *testing.T) {
 	one.Control = bytes.Clone(one.Control)
 	one.Control[len(one.Control)-1] ^= 1
 	two := fixture.evidence(t, 2, []byte("missing-link"))
-	_, err = VerifyControlState(VerificationRequest{
-		Vault: fixture.vaultID, TrustAnchor: fixture.anchor, Held: checkpointHeld(t, fixture, genesis),
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+	_, err = VerifyControlState(trustedContext, VerificationRequest{
 		Supplied: two, Intermediates: []ControlEvidence{one},
 	})
 	require.Error(t, err)

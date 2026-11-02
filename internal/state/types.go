@@ -19,6 +19,7 @@ var ErrTargetBindingChanged = errors.New("target binding changed")
 var ErrCheckpointBackwards = errors.New("vault checkpoint update would move backwards")
 var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
 var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
+var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 

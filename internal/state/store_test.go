@@ -138,6 +138,7 @@ func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.
 	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), first))
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 2, HeadCID: []byte("head-2")}), ErrVaultPublicationBackwards)
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 3, HeadCID: []byte("different-head")}), ErrVaultPublicationConflict)
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("head-5")}), ErrVaultPublicationGap)
 	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4")}))
 	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 3, PublicationCount: 0, HeadCID: []byte("epoch-3-head")}))
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("old-epoch-head")}), ErrVaultPublicationBackwards)

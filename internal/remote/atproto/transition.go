@@ -82,10 +82,12 @@ type TransitionAttemptStore interface {
 }
 
 type ATProtoTransitionIO struct {
-	Reader      RevisionReader
-	Transport   Transport
-	DID         string
-	TrustAnchor [32]byte
+	Reader           RevisionReader
+	Transport        Transport
+	DID              string
+	TrustAnchor      [32]byte
+	PreviousPolicies [][]byte
+	ObservationStore PublicationObservationStore
 }
 
 func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault.Predecessor, error) {
@@ -96,7 +98,7 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 	if err != nil {
 		return nil, vault.Predecessor{}, err
 	}
-	predecessor, err := predecessorFromRevision(revision, io.TrustAnchor)
+	predecessor, err := predecessorFromRevision(revision, io.TrustAnchor, io.PreviousPolicies)
 	if err != nil {
 		return nil, vault.Predecessor{}, err
 	}
@@ -115,6 +117,17 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 		}
 		predecessor.Head, err = vault.EncodeHead(headFromRecord(headRecord))
 		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
+		head := headFromRecord(headRecord)
+		control, decodeErr := vault.DecodeControl(predecessor.Control)
+		if decodeErr != nil {
+			return nil, vault.Predecessor{}, decodeErr
+		}
+		if err := CheckPublicationCount(ctx, io.ObservationStore, head.Vault, ReadResult{
+			Control: toControlRecord(control), Head: headRecord, PublicationCount: head.PublicationCount,
+			PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), EpochSeq: head.EpochSeq,
+		}); err != nil {
 			return nil, vault.Predecessor{}, err
 		}
 	}
@@ -480,11 +493,38 @@ func marshalRecord(record Record) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode vault record", ErrBatchRejected)
 	}
-	encoded, err := json.Marshal(normalizeRecordMap(object))
+	encoded, err := json.Marshal(normalizeRecordJSONMap(object))
 	if err != nil || !json.Valid(encoded) {
 		return nil, fmt.Errorf("%w: encode vault record", ErrBatchRejected)
 	}
 	return encoded, nil
+}
+
+func normalizeRecordJSONMap(object map[string]any) map[string]any {
+	normalized := make(map[string]any, len(object))
+	for key, value := range object {
+		normalized[key] = normalizeRecordJSONValue(value)
+	}
+	return normalized
+}
+
+func normalizeRecordJSONValue(value any) any {
+	switch item := value.(type) {
+	case []byte:
+		return atdata.Bytes(item)
+	case atdata.Bytes:
+		return item
+	case []any:
+		normalized := make([]any, len(item))
+		for index := range item {
+			normalized[index] = normalizeRecordJSONValue(item[index])
+		}
+		return normalized
+	case map[string]any:
+		return normalizeRecordJSONMap(item)
+	default:
+		return value
+	}
 }
 
 func recordCIDText(encodedJSON []byte) (string, error) {
@@ -588,7 +628,43 @@ func revisionCommit(revision *Revision) string {
 	return revision.CommitCID()
 }
 
-func predecessorFromRevision(revision *Revision, trustAnchor [32]byte) (vault.Predecessor, error) {
+func predecessorPolicyEvidence(current vault.Policy, candidates [][]byte) ([]byte, error) {
+	if allZero(current.PrevPolicyDigest[:]) {
+		return nil, nil
+	}
+	var selected []byte
+	for _, candidate := range candidates {
+		decoded, err := DecodeRecord(candidate)
+		if err != nil {
+			continue
+		}
+		record, ok := decoded.(PolicyRecord)
+		if !ok {
+			continue
+		}
+		object, err := vault.EncodePolicy(policyFromRecord(record))
+		if err != nil {
+			continue
+		}
+		digest, err := vault.ComputePolicyDigest(object)
+		if err != nil || digest != current.PrevPolicyDigest {
+			continue
+		}
+		if err := VerifyRecordBinding(candidate, object); err != nil {
+			return nil, err
+		}
+		if selected != nil && !bytes.Equal(selected, candidate) {
+			return nil, fmt.Errorf("%w: predecessor policy evidence is ambiguous", ErrReadVaultAuthentication)
+		}
+		selected = bytes.Clone(candidate)
+	}
+	if selected == nil {
+		return nil, ErrReadPreviousPolicyRequired
+	}
+	return selected, nil
+}
+
+func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousPolicies [][]byte) (vault.Predecessor, error) {
 	if revision == nil {
 		return vault.Predecessor{}, fmt.Errorf("%w: verified revision is required", ErrUntrustedCar)
 	}
@@ -766,7 +842,31 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte) (vault.Pr
 	if !exists {
 		return vault.Predecessor{}, fmt.Errorf("%w: policy signer certificate is absent", vault.ErrAuthorization)
 	}
-	if err := VerifyRecordContext(policyProven.Data, RecordContext{Certificate: certificateData[rootRecord.DeviceID]}); err != nil {
+	previousPolicy, err := predecessorPolicyEvidence(policyObject, previousPolicies)
+	if err != nil {
+		return vault.Predecessor{}, err
+	}
+	storedCertificates := make(map[string]storedCertificate, len(certificates))
+	for _, encoded := range certificates {
+		certificate, decodeErr := vault.DecodeCertificate(encoded)
+		if decodeErr != nil {
+			return vault.Predecessor{}, decodeErr
+		}
+		storedCertificates[certificateIdentity(certificate.DeviceID, certificate.KeyID)] = storedCertificate{
+			recordBytes: bytes.Clone(certificateData[certificate.DeviceID]), objectBytes: bytes.Clone(encoded), object: certificate,
+		}
+	}
+	policySigner, exists := storedCertificates[certificateIdentity(policyObject.Signer.DeviceID, policyObject.Signer.KeyID)]
+	if !exists {
+		return vault.Predecessor{}, fmt.Errorf("%w: policy signer certificate is absent", vault.ErrAuthorization)
+	}
+	request := ReadRequest{Vault: policyObject.Vault, TrustAnchor: trustAnchor, PreviousPolicy: previousPolicy}
+	if err := authorizePolicyPredecessor(request, policyObject, policyBytes, policySigner, storedCertificates); err != nil {
+		return vault.Predecessor{}, fmt.Errorf("%w: predecessor policy authentication: %w", ErrReadVaultAuthentication, err)
+	}
+	if err := VerifyRecordContext(policyProven.Data, RecordContext{
+		Certificate: certificateData[rootRecord.DeviceID], PreviousPolicy: previousPolicy, TrustAnchor: trustAnchor,
+	}); err != nil {
 		return vault.Predecessor{}, err
 	}
 	return vault.Predecessor{

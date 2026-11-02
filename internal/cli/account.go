@@ -171,7 +171,7 @@ func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFacto
 
 	verify := configure(&urfave.Command{
 		Name:  "verify",
-		Flags: []urfave.Flag{&urfave.StringFlag{Name: "bundle", Usage: "local verification bundle path", OnlyOnce: true}, &urfave.BoolFlag{Name: "record", Usage: "advance the local checkpoint after current or descendant verification", OnlyOnce: true}, &urfave.BoolFlag{Name: "consent", Usage: "confirm inspection/export-only continuation for unverifiable state", OnlyOnce: true}},
+		Flags: []urfave.Flag{&urfave.StringFlag{Name: "bundle", Usage: "local verification bundle path", OnlyOnce: true}, &urfave.StringFlag{Name: "trust-anchor", Usage: "operator-supplied 32-byte hexadecimal root fingerprint when no local checkpoint exists", OnlyOnce: true}, &urfave.BoolFlag{Name: "record", Usage: "advance the local checkpoint after current or descendant verification", OnlyOnce: true}, &urfave.BoolFlag{Name: "consent", Usage: "confirm inspection/export-only continuation for unverifiable state", OnlyOnce: true}},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runAccountVerify(ctx, command)
 		},

@@ -29,28 +29,32 @@ type ControlEvidence struct {
 	Certificates [][]byte
 }
 
-type CheckpointPosition struct {
-	Vault        [32]byte
-	Anchor       [32]byte
-	ControlCID   []byte
-	ControlBytes []byte
-	SnapshotCID  []byte
-	EpochSeq     uint64
-	PolicyDigest [32]byte
-	RecordedAt   int64
-}
-
-type HeldCheckpoint struct {
-	Position CheckpointPosition
-	Evidence ControlEvidence
+type TrustedContext struct {
+	vault       [32]byte
+	anchor      [32]byte
+	held        *ControlEvidence
+	initialized bool
 }
 
 type VerificationRequest struct {
-	Vault         [32]byte
-	TrustAnchor   [32]byte
-	Held          *HeldCheckpoint
 	Supplied      ControlEvidence
 	Intermediates []ControlEvidence
+}
+
+func NewTrustedContext(vaultID, trustAnchor [32]byte) *TrustedContext {
+	return &TrustedContext{vault: vaultID, anchor: trustAnchor, initialized: true}
+}
+
+func (context *TrustedContext) SetHeldCheckpoint(evidence ControlEvidence) error {
+	if context == nil || !context.initialized {
+		return &VerificationRefusal{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
+	}
+	context.held = &ControlEvidence{
+		Control:      bytes.Clone(evidence.Control),
+		Policy:       bytes.Clone(evidence.Policy),
+		Certificates: cloneByteSlices(evidence.Certificates),
+	}
+	return nil
 }
 
 type VerificationResult struct {
@@ -143,33 +147,27 @@ func verifyControlEvidence(vaultID, trustAnchor [32]byte, evidence ControlEviden
 	return control, controlCID, nil
 }
 
-func authenticateVerificationRequest(request VerificationRequest) (Control, []byte, *Control, []byte, map[string]Control, error) {
-	supplied, suppliedCID, err := verifyControlEvidence(request.Vault, request.TrustAnchor, request.Supplied)
+func authenticateVerificationRequest(context *TrustedContext, request VerificationRequest) (Control, []byte, *Control, []byte, map[string]Control, error) {
+	if context == nil || !context.initialized {
+		return Control{}, nil, nil, nil, nil, &VerificationRefusal{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
+	}
+	supplied, suppliedCID, err := verifyControlEvidence(context.vault, context.anchor, request.Supplied)
 	if err != nil {
 		return Control{}, nil, nil, nil, nil, refusalForSide(err, "supplied")
 	}
 	var heldControl *Control
 	var heldCID []byte
-	if request.Held != nil {
-		position := request.Held.Position
-		if position.Vault != request.Vault || position.Anchor != request.TrustAnchor {
-			return Control{}, nil, nil, nil, nil, &VerificationRefusal{Side: "held", Code: "checkpoint-vault-or-anchor", Err: ErrAuthorization}
-		}
-		heldEvidence := request.Held.Evidence
-		heldEvidence.Control = position.ControlBytes
-		decoded, computedCID, verifyErr := verifyControlEvidence(request.Vault, request.TrustAnchor, heldEvidence)
+	if context.held != nil {
+		decoded, computedCID, verifyErr := verifyControlEvidence(context.vault, context.anchor, *context.held)
 		if verifyErr != nil {
 			return Control{}, nil, nil, nil, nil, refusalForSide(verifyErr, "held")
-		}
-		if !bytes.Equal(position.ControlCID, computedCID) || decoded.EpochSeq != position.EpochSeq || decoded.PolicyDigest != position.PolicyDigest || !bytes.Equal(decoded.HeadSnapshotCID, position.SnapshotCID) {
-			return Control{}, nil, nil, nil, nil, &VerificationRefusal{Side: "held", Code: "checkpoint-fields", Err: ErrAuthorization}
 		}
 		heldControl = &decoded
 		heldCID = computedCID
 	}
 	intermediates := make(map[string]Control, len(request.Intermediates))
 	for _, evidence := range request.Intermediates {
-		control, controlCID, verifyErr := verifyControlEvidence(request.Vault, request.TrustAnchor, evidence)
+		control, controlCID, verifyErr := verifyControlEvidence(context.vault, context.anchor, evidence)
 		if verifyErr != nil {
 			return Control{}, nil, nil, nil, nil, refusalForSide(verifyErr, "intermediate", evidence.Control)
 		}
@@ -280,8 +278,8 @@ func unverifiableResult(code, reason string, neededCID []byte, links int) Verifi
 	return VerificationResult{Outcome: CheckpointUnverifiable, ReasonCode: code, Reason: reason, NeededControlCID: bytes.Clone(neededCID), LinkCount: links, ConsentAvailable: true, validityPassed: true}
 }
 
-func compareControlCheckpoints(request VerificationRequest) (VerificationResult, error) {
-	supplied, suppliedCID, held, heldCID, intermediates, err := authenticateVerificationRequest(request)
+func compareControlCheckpoints(context *TrustedContext, request VerificationRequest) (VerificationResult, error) {
+	supplied, suppliedCID, held, heldCID, intermediates, err := authenticateVerificationRequest(context, request)
 	if err != nil {
 		return VerificationResult{}, err
 	}

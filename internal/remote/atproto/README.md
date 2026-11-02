@@ -460,7 +460,11 @@ before staging and against a fresh verified read after staging. A superseded pol
 `CommitTransition` accepts a `vault.Transition`, the root signing key, a `TransitionIO` and a
 `TransitionAttemptStore`. `ATProtoTransitionIO` uses `RevisionReader` for verified repository reads,
 uploads the already-sealed successor-epoch snapshot with `application/octet-stream`, and commits
-with one `PublishFenced` `applyWrites` call. Enrollment writes the snapshot blob reference, head,
+with one `PublishFenced` `applyWrites` call. The adapter requires caller-held predecessor policy
+record evidence in `PreviousPolicies`; it selects the exact record named by the current policy digest,
+then verifies that evidence's record binding, signature, chain and one-epoch relationship just as the
+read path does. The policy evidence is not taken from the repository under verification. Its durable
+`ObservationStore` is also required whenever a head is accepted. Enrollment writes the snapshot blob reference, head,
 control, policy and certificate together. Revocation writes the snapshot reference, head, control
 and policy only. The revoked certificate remains a historical record; its device is added to the
 control revoked set and removed from successor roles and recipients. Both prepared transitions are
@@ -497,12 +501,14 @@ reader then checks record-to-object bindings, fetches the envelope named by the 
 (the envelope CID, not the snapshot-record CID), verifies the envelope and snapshot-record
 signatures and binding, checks cross-record context, and authenticates the vault state. Every
 repository record used by the result comes from the same verified CAR revision. The result exposes
-the authenticated publication count and head snapshot CID. `CheckPublicationCount` compares the
-count with the epoch baseline and the durable last observation in state, then records the new
-observation; it refuses a backwards count. Migration 0004 stores epoch, count and head CID per
-vault. The final latest-commit check covers the blob fetch and all validation; a moved revision
-discards the candidate and restarts within a bounded retry count. There is no older-revision
-fallback or partial result.
+the authenticated publication count and head snapshot CID. Before returning, `VaultReader.Read`
+requires a durable observation store and calls `CheckPublicationCount` only after the final
+latest-commit stability check. `ATProtoTransitionIO.ReadCurrent` applies the same observation gate
+before returning a publication or transition predecessor. The state store rejects decreases,
+conflicting equal counts and same-epoch increments that skip a count; a higher epoch starts a new
+count sequence. Migration 0004 stores epoch, count and head CID per vault. The final latest-commit
+check covers the blob fetch and all validation; a moved revision discards the candidate and restarts
+within a bounded retry count. There is no older-revision fallback or partial result.
 
 The repository proof uses `DefaultBudgets`: 8 MiB CAR bytes, 4096 membership records, plus the
 existing block, MST-depth and per-block limits. Blob reads are capped before allocation by the

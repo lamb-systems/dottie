@@ -27,11 +27,12 @@ import (
 )
 
 type readFixture struct {
-	request   ReadRequest
-	transport *readTransport
-	records   map[RecordKey][]byte
-	blocks    []proofBlock
-	root      cid.Cid
+	request          ReadRequest
+	transport        *readTransport
+	observationStore *state.Store
+	records          map[RecordKey][]byte
+	blocks           []proofBlock
+	root             cid.Cid
 }
 
 type readTransport struct {
@@ -158,6 +159,12 @@ func newReadFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	previousPolicyRecord, err := EncodeRecord(policyRecordFromObject(previousPolicy))
 	require.NoError(t, err)
+	storeRoot := t.TempDir()
+	observationStore, err := state.Open(platform.Paths{
+		Home: filepath.Join(storeRoot, "home"), StateHome: filepath.Join(storeRoot, "state"), CacheHome: filepath.Join(storeRoot, "cache"),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, observationStore.Close()) })
 	return readFixture{
 		request: ReadRequest{
 			DID: proofTestDID, DIDDocumentID: proofTestDID,
@@ -165,8 +172,12 @@ func newReadFixture(t *testing.T) readFixture {
 			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
 			DeviceKeyID: []byte("publisher-sign"), DeviceKey: publisherRecipient,
 		},
-		transport: transport, records: records, blocks: blocks, root: root,
+		transport: transport, observationStore: observationStore, records: records, blocks: blocks, root: root,
 	}
+}
+
+func (fixture readFixture) reader() VaultReader {
+	return VaultReader{Transport: fixture.transport, ObservationStore: fixture.observationStore}
 }
 
 func repeatedCIDs(value string, count int) []string {
@@ -241,6 +252,11 @@ func buildReadCAR(t *testing.T, records map[RecordKey][]byte) ([]byte, []proofBl
 	t.Helper()
 	privateKey, err := atcrypto.GeneratePrivateKeyP256()
 	require.NoError(t, err)
+	return buildReadCARWithPrivateKey(t, records, privateKey)
+}
+
+func buildReadCARWithPrivateKey(t *testing.T, records map[RecordKey][]byte, privateKey *atcrypto.PrivateKeyP256) ([]byte, []proofBlock, cid.Cid, string) {
+	t.Helper()
 	publicKey, err := privateKey.PublicKey()
 	require.NoError(t, err)
 	tree := mst.NewEmptyTree()
@@ -290,7 +306,7 @@ func replaceReadCAR(t *testing.T, fixture *readFixture, records map[RecordKey][]
 
 func TestVaultReaderAuthenticatesAndDecryptsPinnedSnapshot(t *testing.T) {
 	fixture := newReadFixture(t)
-	result, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	result, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	require.Equal(t, FreshnessUnverified, result.Freshness)
 	require.Equal(t, []byte("synthetic snapshot payload"), result.Plaintext)
@@ -300,6 +316,37 @@ func TestVaultReaderAuthenticatesAndDecryptsPinnedSnapshot(t *testing.T) {
 	require.Equal(t, result.Head.EpochSeq, result.EpochSeq)
 	require.Equal(t, fixture.root.String(), result.Revision.CommitCID())
 	require.Equal(t, 1, fixture.transport.blobCalls)
+}
+
+func TestVaultReaderRequiresDurablePublicationObservationStore(t *testing.T) {
+	fixture := newReadFixture(t)
+	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	require.ErrorIs(t, err, ErrPublicationObservationRequired)
+}
+
+func TestVaultReaderRejectsLowerCountOnAuthenticatedReread(t *testing.T) {
+	fixture := newReadFixture(t)
+	reader := fixture.reader()
+	first, err := reader.Read(context.Background(), fixture.request)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.PublicationCount)
+
+	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
+	decoded, err := DecodeRecord(fixture.records[headKey])
+	require.NoError(t, err)
+	head := headFromRecord(decoded.(HeadRecord))
+	head.PublicationCount = 0
+	lowerCount := signReadHead(t, head, fixtureSigningKey(12))
+	headObject, err := vault.DecodeHead(lowerCount)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, headKey, headRecordFromObject(headObject))
+	replaceReadCAR(t, &fixture, fixture.records)
+
+	_, err = reader.Read(context.Background(), fixture.request)
+	require.ErrorIs(t, err, ErrPublicationCountBackwards)
+	var readErr *ReadError
+	require.ErrorAs(t, err, &readErr)
+	assert.Equal(t, ReadStageVaultAuth, readErr.Stage)
 }
 
 func TestVaultReaderRejectsZeroCountHeadOutsideEpochBaseline(t *testing.T) {
@@ -328,14 +375,14 @@ func TestVaultReaderRejectsZeroCountHeadOutsideEpochBaseline(t *testing.T) {
 	require.NoError(t, err)
 	putReadRecord(t, fixture.records, controlKey, controlRecordFromObject(controlObject))
 	replaceReadCAR(t, &fixture, fixture.records)
-	_, err = (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err = fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadVaultAuthentication)
 }
 
 func TestVaultReaderRequiresDigestBoundPredecessorPolicy(t *testing.T) {
 	fixture := newReadFixture(t)
 	fixture.request.PreviousPolicy = nil
-	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadPreviousPolicyRequired)
 }
 
@@ -343,7 +390,7 @@ func TestVaultReaderDoesNotDecryptWithoutDeviceKey(t *testing.T) {
 	fixture := newReadFixture(t)
 	fixture.request.DeviceKey = nil
 	fixture.request.DeviceKeyID = nil
-	result, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	result, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	require.Nil(t, result.Plaintext)
 	require.Equal(t, FreshnessUnverified, result.Freshness)
@@ -374,7 +421,7 @@ func TestVaultReaderRejectsCertificateContextMismatch(t *testing.T) {
 	}
 	require.True(t, mutated)
 	replaceReadCAR(t, &fixture, fixture.records)
-	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecordContext)
 }
 
@@ -402,7 +449,7 @@ func TestVaultReaderRejectsTamperedSnapshotRecord(t *testing.T) {
 	fixture.records[key], err = EncodeRecord(snapshot)
 	require.NoError(t, err)
 	replaceReadCAR(t, &fixture, fixture.records)
-	_, err = (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err = fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecordSignature)
 }
 
@@ -416,7 +463,7 @@ func TestVaultReaderRejectsTamperedCARBlock(t *testing.T) {
 		}
 	}
 	fixture.transport.carBytes = encodeProofCAR(t, fixture.root, fixture.blocks)
-	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrUntrustedCar)
 	assert.Zero(t, fixture.transport.blobCalls)
 }
@@ -437,7 +484,7 @@ func TestVaultReaderDistinguishesBlobFailures(t *testing.T) {
 		t.Run(check.name, func(t *testing.T) {
 			fixture := newReadFixture(t)
 			check.mutate(&fixture)
-			_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+			_, err := fixture.reader().Read(context.Background(), fixture.request)
 			require.ErrorIs(t, err, check.want)
 		})
 	}
@@ -473,7 +520,7 @@ func TestVaultReaderRejectsWrongEpochPolicyDigestAndCrossVaultAtBinding(t *testi
 			fixture.records[key], err = EncodeRecord(mutated)
 			require.NoError(t, err)
 			replaceReadCAR(t, &fixture, fixture.records)
-			_, err = (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+			_, err = fixture.reader().Read(context.Background(), fixture.request)
 			require.ErrorIs(t, err, ErrReadRecordBinding)
 			var readErr *ReadError
 			require.ErrorAs(t, err, &readErr)
@@ -494,7 +541,7 @@ func TestVaultReaderRetriesMovingRevisionAndDoesNotReturnOldSnapshot(t *testing.
 	fixture := newReadFixture(t)
 	otherCID := proofCID(t, []byte("later revision"))
 	fixture.transport.latestCIDs = []string{fixture.root.String(), fixture.root.String(), otherCID.String()}
-	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrRevisionMoving)
 }
 
@@ -502,14 +549,14 @@ func TestVaultReaderRespectsCARBudget(t *testing.T) {
 	fixture := newReadFixture(t)
 	budgets := DefaultBudgets()
 	budgets.MaxCarBytes = int64(len(fixture.transport.carBytes) - 1)
-	_, err := (VaultReader{Transport: fixture.transport, Budgets: budgets}).Read(context.Background(), fixture.request)
+	_, err := (VaultReader{Transport: fixture.transport, ObservationStore: fixture.observationStore, Budgets: budgets}).Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrUntrustedCar)
 	assert.Zero(t, fixture.transport.blobCalls)
 }
 
 func TestVaultReaderRejectsOversizedDeclaredBlobBeforeFetching(t *testing.T) {
 	fixture := newReadFixture(t)
-	reader := VaultReader{Transport: fixture.transport, MaxBlobBytes: 1}
+	reader := VaultReader{Transport: fixture.transport, ObservationStore: fixture.observationStore, MaxBlobBytes: 1}
 	_, err := reader.Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadBlobTooLarge)
 	assert.Zero(t, fixture.transport.blobCalls)

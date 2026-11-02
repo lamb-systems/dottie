@@ -246,6 +246,18 @@ func EncodeRecord(record Record) ([]byte, error) {
 	return encoded, nil
 }
 
+func decodeRecordJSON(encoded []byte) (Record, error) {
+	object, err := atdata.UnmarshalJSON(encoded)
+	if err != nil {
+		return nil, err
+	}
+	data, err := atdata.MarshalCBOR(normalizeRecordMap(object))
+	if err != nil {
+		return nil, err
+	}
+	return DecodeRecord(data)
+}
+
 func validateRecordIntegers(record Record) error {
 	check := func(field string, value uint64) error {
 		if value > MaxRecordInteger {

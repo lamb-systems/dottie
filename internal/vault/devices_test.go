@@ -175,6 +175,44 @@ func TestPrepareRevocationAdvancesEpochAndWithdrawsDevice(t *testing.T) {
 	assert.NoError(t, ValidateTransition(transition, predecessor))
 }
 
+func TestEnrollmentPreservesPredecessorRevocations(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	firstPredecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
+	revocation, err := PrepareTransition(firstPredecessor, TransitionIntent{
+		Kind: TransitionRevoke, Vault: fixture.bootstrap.Vault, Signer: fixture.root, RevokeDeviceID: fixture.newDevice.DeviceID,
+		ContentKey: fixtureBytes(31, 32), Recipients: [][]byte{firstPredecessor.Certificates[0]},
+		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(91, 32)), WrapNonce: [24]byte(fixtureBytes(123, 24))}},
+		Plaintext: []byte("state after revocation"), PublicationID: [16]byte(fixtureBytes(157, 16)), Nonce: [24]byte(fixtureBytes(169, 24)),
+	})
+	require.NoError(t, err)
+	revokedPredecessor := predecessorAfterTransition(t, firstPredecessor, revocation)
+	revokedControl, err := DecodeControl(revocation.Control)
+	require.NoError(t, err)
+	require.Len(t, revokedControl.Revoked, 1)
+
+	next := DeviceMaterial{DeviceID: "device-next", KeyID: []byte("next-key"), Signing: fixedSigningKey(13), Recipient: fixedX25519Key(23)}
+	enrollment, err := PrepareTransition(revokedPredecessor, TransitionIntent{
+		Kind: TransitionEnroll, Vault: fixture.bootstrap.Vault, Signer: fixture.root, NewDevice: &next, RequestedRole: RolePublisher,
+		ContentKey: fixtureBytes(41, 32), Recipients: cloneByteSlices(revokedPredecessor.Certificates),
+		Wraps: []RecipientWrapInput{
+			{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(51, 32)), WrapNonce: [24]byte(fixtureBytes(83, 24))},
+			{KeyID: bytes.Clone(next.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(115, 32)), WrapNonce: [24]byte(fixtureBytes(147, 24))},
+		},
+		Plaintext: []byte("state after the next enrollment"), PublicationID: [16]byte(fixtureBytes(179, 16)), Nonce: [24]byte(fixtureBytes(195, 24)),
+	})
+	require.NoError(t, err)
+	control, err := DecodeControl(enrollment.Control)
+	require.NoError(t, err)
+	assert.Equal(t, revokedControl.Revoked, control.Revoked)
+	require.NoError(t, ValidateTransition(enrollment, revokedPredecessor))
+
+	stripped := enrollment
+	control.Revoked = nil
+	stripped.Control = signControlValue(t, control, fixture.root.Signing)
+	stripped.Digest = ComputeTransitionDigest(stripped)
+	assert.ErrorIs(t, ValidateTransition(stripped, revokedPredecessor), ErrRevokedDevice)
+}
+
 func TestRevokedCertificateCannotPrepareLaterPublication(t *testing.T) {
 	fixture, predecessor, _, _ := newPublicationTestFixture(t)
 	intent := TransitionIntent{

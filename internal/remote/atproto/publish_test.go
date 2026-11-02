@@ -277,10 +277,16 @@ func TestPublishSnapshotFencedKeepsAllPackReferencesInsideOneBatch(t *testing.T)
 	var head HeadRecord
 	for _, write := range input.Writes {
 		if write.Collection == VaultSnapshotNSID {
-			require.NoError(t, json.Unmarshal(write.Value, &snapshot))
+			record, err := decodeRecordJSON(write.Value)
+			require.NoError(t, err)
+			require.IsType(t, SnapshotRecord{}, record)
+			snapshot = record.(SnapshotRecord)
 		}
 		if write.Collection == VaultHeadNSID {
-			require.NoError(t, json.Unmarshal(write.Value, &head))
+			record, err := decodeRecordJSON(write.Value)
+			require.NoError(t, err)
+			require.IsType(t, HeadRecord{}, record)
+			head = record.(HeadRecord)
 		}
 	}
 	assert.Equal(t, cid.Cid(snapshot.Blob.Ref).Bytes(), head.SnapshotCID)
@@ -293,10 +299,12 @@ func TestPublishSnapshotFencedRejectsHeadReferenceOutsideSnapshot(t *testing.T) 
 	revision := publicationTestRevision()
 	fenced, err := snapshotPublication(publication, publisher.Signing, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), revision, predecessor)
 	require.NoError(t, err)
-	var head HeadRecord
-	require.NoError(t, json.Unmarshal(fenced.VaultHead.Record, &head))
+	headValue, err := decodeRecordJSON(fenced.VaultHead.Record)
+	require.NoError(t, err)
+	require.IsType(t, HeadRecord{}, headValue)
+	head := headValue.(HeadRecord)
 	head.SnapshotCID = []byte("different snapshot")
-	fenced.VaultHead.Record, err = json.Marshal(head)
+	fenced.VaultHead.Record, err = marshalRecord(head)
 	require.NoError(t, err)
 	transport := &transitionApplyTransport{}
 	_, err = PublishSnapshotFenced(context.Background(), transport, revision, fenced)

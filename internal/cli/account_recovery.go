@@ -30,7 +30,6 @@ type accountControlEvidenceJSON struct {
 
 type accountVerifyBundleJSON struct {
 	Vault         string                       `json:"vault"`
-	TrustAnchor   string                       `json:"trust_anchor"`
 	Held          *accountControlEvidenceJSON  `json:"held,omitempty"`
 	Supplied      accountControlEvidenceJSON   `json:"supplied"`
 	Intermediates []accountControlEvidenceJSON `json:"intermediates,omitempty"`
@@ -99,10 +98,6 @@ func runAccountVerify(ctx context.Context, command *urfave.Command) error {
 	if err != nil {
 		return usageExit("bundle vault must be a 32-byte hexadecimal identifier")
 	}
-	trustAnchor, err := parseVaultFingerprint(bundle.TrustAnchor)
-	if err != nil {
-		return usageExit("bundle trust_anchor must be a 32-byte hexadecimal fingerprint")
-	}
 	supplied, err := decodeAccountControlEvidence(bundle.Supplied)
 	if err != nil {
 		return urfave.Exit("invalid supplied control evidence", 1)
@@ -124,9 +119,20 @@ func runAccountVerify(ctx context.Context, command *urfave.Command) error {
 		return urfave.Exit("cannot open local checkpoint state", 1)
 	}
 	defer store.Close()
-	var held *vault.HeldCheckpoint
+	var held *vault.ControlEvidence
+	var trustAnchor [32]byte
 	stored, err := store.VaultCheckpoint(ctx, vaultID)
 	if err == nil {
+		if stored.Vault != vaultID {
+			return urfave.Exit("local checkpoint belongs to a different vault", 1)
+		}
+		trustAnchor = stored.Anchor
+		if command.String("trust-anchor") != "" {
+			explicitAnchor, parseErr := parseVaultFingerprint(command.String("trust-anchor"))
+			if parseErr != nil || explicitAnchor != stored.Anchor {
+				return urfave.Exit("operator trust anchor does not match the locally held checkpoint", 1)
+			}
+		}
 		if bundle.Held == nil {
 			return urfave.Exit("bundle held policy and certificates are required for the local checkpoint", 1)
 		}
@@ -135,25 +141,35 @@ func runAccountVerify(ctx context.Context, command *urfave.Command) error {
 			return urfave.Exit("invalid held checkpoint evidence", 1)
 		}
 		heldBytes, decodeErr := hex.DecodeString(bundle.Held.Control)
-		if decodeErr != nil || !bytes.Equal(heldBytes, stored.ControlBytes) || stored.Anchor != trustAnchor {
-			return urfave.Exit("bundle held control or anchor does not match local checkpoint state", 1)
+		if decodeErr != nil || !bytes.Equal(heldBytes, stored.ControlBytes) {
+			return urfave.Exit("bundle held control does not match local checkpoint state", 1)
 		}
-		held = &vault.HeldCheckpoint{
-			Position: vault.CheckpointPosition{
-				Vault: stored.Vault, Anchor: stored.Anchor, ControlCID: stored.ControlCID,
-				ControlBytes: stored.ControlBytes, SnapshotCID: stored.SnapshotCID, EpochSeq: stored.Epoch,
-				PolicyDigest: stored.PolicyDigest, RecordedAt: stored.RecordedAt,
-			},
-			Evidence: heldEvidence,
+		held = &vault.ControlEvidence{
+			Control: stored.ControlBytes, Policy: heldEvidence.Policy, Certificates: heldEvidence.Certificates,
 		}
 	} else if !errors.Is(err, state.ErrVaultCheckpointNotFound) {
 		return urfave.Exit("cannot load local checkpoint state", 1)
-	} else if bundle.Held != nil {
-		return urfave.Exit("bundle includes held evidence but no local checkpoint is held", 1)
+	} else {
+		if bundle.Held != nil {
+			return urfave.Exit("bundle includes held evidence but no local checkpoint is held", 1)
+		}
+		if command.String("trust-anchor") == "" {
+			return usageExit("account verify requires --trust-anchor when no local checkpoint exists")
+		}
+		trustAnchor, err = parseVaultFingerprint(command.String("trust-anchor"))
+		if err != nil {
+			return usageExit("--trust-anchor must be a 32-byte hexadecimal fingerprint")
+		}
 	}
 
-	result, err := vault.VerifyControlState(vault.VerificationRequest{
-		Vault: vaultID, TrustAnchor: trustAnchor, Held: held, Supplied: supplied, Intermediates: intermediates,
+	trustedContext := vault.NewTrustedContext(vaultID, trustAnchor)
+	if held != nil {
+		if err := trustedContext.SetHeldCheckpoint(*held); err != nil {
+			return urfave.Exit("cannot prepare locally held checkpoint", 1)
+		}
+	}
+	result, err := vault.VerifyControlState(trustedContext, vault.VerificationRequest{
+		Supplied: supplied, Intermediates: intermediates,
 	})
 	if err != nil {
 		return urfave.Exit(formatAccountVerificationRefusal(err), 1)
@@ -217,7 +233,7 @@ func decodeAccountVerifyBundle(encoded []byte) (accountVerifyBundleJSON, error) 
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return accountVerifyBundleJSON{}, errors.New("verification bundle has trailing data")
 	}
-	if bundle.Vault == "" || bundle.TrustAnchor == "" || bundle.Supplied.Control == "" || bundle.Supplied.Policy == "" {
+	if bundle.Vault == "" || bundle.Supplied.Control == "" || bundle.Supplied.Policy == "" {
 		return accountVerifyBundleJSON{}, errors.New("verification bundle is missing required fields")
 	}
 	if len(bundle.Intermediates) > vault.MaxCheckpointWalkDepth*2 {

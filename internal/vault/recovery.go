@@ -65,8 +65,8 @@ func RecoveryKitVaultID(kit []byte, vaultName string) ([32]byte, error) {
 	return deriveVaultID(kit, vaultName)
 }
 
-func VerifyControlState(request VerificationRequest) (VerificationResult, error) {
-	result, err := compareControlCheckpoints(request)
+func VerifyControlState(context *TrustedContext, request VerificationRequest) (VerificationResult, error) {
+	result, err := compareControlCheckpoints(context, request)
 	if err != nil {
 		return VerificationResult{}, err
 	}

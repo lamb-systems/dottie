@@ -182,7 +182,7 @@ func TestAccountRecoveryRejectsShortKit(t *testing.T) {
 }
 
 func TestAccountVerifyConsentDoesNotAdvanceCheckpoint(t *testing.T) {
-	bundle, _ := accountVerifyTestBundle(t)
+	bundle, boot := accountVerifyTestBundle(t)
 	bundle.Held = nil
 	encoded, err := json.Marshal(bundle)
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestAccountVerifyConsentDoesNotAdvanceCheckpoint(t *testing.T) {
 	require.NoError(t, os.WriteFile(bundlePath, encoded, 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--consent"}, strings.NewReader(""), &stdout, &stderr)
+	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--trust-anchor", hex.EncodeToString(boot.Anchor[:]), "--consent"}, strings.NewReader(""), &stdout, &stderr)
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "outcome: unverifiable")
 	assert.Contains(t, stdout.String(), "consequence: freshness is not established")
@@ -213,7 +213,7 @@ func TestAccountVerifyConsentDoesNotAdvanceCheckpoint(t *testing.T) {
 }
 
 func TestAccountVerifyRequiresExplicitConsentForUnverifiableState(t *testing.T) {
-	bundle, _ := accountVerifyTestBundle(t)
+	bundle, boot := accountVerifyTestBundle(t)
 	bundle.Held = nil
 	encoded, err := json.Marshal(bundle)
 	require.NoError(t, err)
@@ -223,7 +223,7 @@ func TestAccountVerifyRequiresExplicitConsentForUnverifiableState(t *testing.T) 
 	require.NoError(t, os.WriteFile(bundlePath, encoded, 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath}, strings.NewReader(""), &stdout, &stderr)
+	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--trust-anchor", hex.EncodeToString(boot.Anchor[:])}, strings.NewReader(""), &stdout, &stderr)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stdout.String(), "outcome: unverifiable")
 	assert.Contains(t, stdout.String(), "inspection/export-only")
@@ -231,7 +231,7 @@ func TestAccountVerifyRequiresExplicitConsentForUnverifiableState(t *testing.T) 
 }
 
 func TestAccountVerifyRefusesInvalidSignatureBeforeConsent(t *testing.T) {
-	bundle, _ := accountVerifyTestBundle(t)
+	bundle, boot := accountVerifyTestBundle(t)
 	bundle.Held = nil
 	control, err := hex.DecodeString(bundle.Supplied.Control)
 	require.NoError(t, err)
@@ -245,11 +245,34 @@ func TestAccountVerifyRefusesInvalidSignatureBeforeConsent(t *testing.T) {
 	require.NoError(t, os.WriteFile(bundlePath, encoded, 0o600))
 
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--consent"}, strings.NewReader(""), &stdout, &stderr)
+	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--trust-anchor", hex.EncodeToString(boot.Anchor[:]), "--consent"}, strings.NewReader(""), &stdout, &stderr)
 	require.Equal(t, 1, code)
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "verification refused: supplied control-signature")
 	assert.NotContains(t, stderr.String(), "consent")
+}
+
+func TestAccountVerifyRejectsBundleSuppliedTrustAnchor(t *testing.T) {
+	bundle, boot := accountVerifyTestBundle(t)
+	bundle.Held = nil
+	encoded, err := json.Marshal(bundle)
+	require.NoError(t, err)
+	var artifact map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &artifact))
+	artifact["trust_anchor"] = hex.EncodeToString(boot.Anchor[:])
+	encoded, err = json.Marshal(artifact)
+	require.NoError(t, err)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bundlePath := filepath.Join(t.TempDir(), "bundle.json")
+	require.NoError(t, os.WriteFile(bundlePath, encoded, 0o600))
+
+	var stdout, stderr bytes.Buffer
+	code := runAccountWithReader([]string{"verify", "--bundle", bundlePath, "--consent"}, strings.NewReader(""), &stdout, &stderr)
+	require.Equal(t, 1, code)
+	assert.Empty(t, stdout.String())
+	assert.Contains(t, stderr.String(), "verification bundle is not valid JSON")
+	assert.NotContains(t, stderr.String(), "consent recorded")
 }
 
 func TestAccountVerifyRecordsOnlyAuthenticatedCurrentCheckpoint(t *testing.T) {
@@ -302,7 +325,7 @@ func accountVerifyTestBundle(t *testing.T) (accountVerifyBundleJSON, vault.Boots
 	boot, err := vault.Bootstrap(kit, "verify-command", root)
 	require.NoError(t, err)
 	bundle := accountVerifyBundleJSON{
-		Vault: hex.EncodeToString(boot.Vault[:]), TrustAnchor: hex.EncodeToString(boot.Anchor[:]),
+		Vault: hex.EncodeToString(boot.Vault[:]),
 		Supplied: accountControlEvidenceJSON{
 			Control: hex.EncodeToString(boot.Control), Policy: hex.EncodeToString(boot.Policy),
 			Certificates: []string{hex.EncodeToString(boot.Certificate)},

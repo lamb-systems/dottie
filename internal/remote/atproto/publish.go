@@ -166,14 +166,19 @@ type PublicationIO interface {
 }
 
 type ATProtoPublicationIO struct {
-	Reader      RevisionReader
-	Transport   Transport
-	DID         string
-	TrustAnchor [32]byte
+	Reader           RevisionReader
+	Transport        Transport
+	DID              string
+	TrustAnchor      [32]byte
+	PreviousPolicies [][]byte
+	ObservationStore PublicationObservationStore
 }
 
 func (io ATProtoPublicationIO) ReadCurrent(ctx context.Context) (*Revision, vault.Predecessor, error) {
-	return (ATProtoTransitionIO{Reader: io.Reader, Transport: io.Transport, DID: io.DID, TrustAnchor: io.TrustAnchor}).ReadCurrent(ctx)
+	return (ATProtoTransitionIO{
+		Reader: io.Reader, Transport: io.Transport, DID: io.DID, TrustAnchor: io.TrustAnchor,
+		PreviousPolicies: io.PreviousPolicies, ObservationStore: io.ObservationStore,
+	}).ReadCurrent(ctx)
 }
 
 func (io ATProtoPublicationIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
@@ -256,12 +261,14 @@ func validateSnapshotPublication(publication FencedSnapshotPublication, revision
 	if headWrite.Action != expectedHeadAction || headWrite.Collection != VaultHeadNSID || headWrite.RKey != "self" {
 		return fmt.Errorf("%w: publication must write the head at its current action", ErrBatchRejected)
 	}
-	var snapshot SnapshotRecord
-	if err := json.Unmarshal(snapshotWrite.Record, &snapshot); err != nil || len(snapshot.Vault) != 32 || len(snapshot.PolicyDigest) != 32 || len(snapshot.PublicationID) != 16 || !snapshot.Blob.Ref.IsDefined() {
+	snapshotValue, err := decodeRecordJSON(snapshotWrite.Record)
+	snapshot, snapshotOK := snapshotValue.(SnapshotRecord)
+	if err != nil || !snapshotOK || len(snapshot.Vault) != 32 || len(snapshot.PolicyDigest) != 32 || len(snapshot.PublicationID) != 16 || !snapshot.Blob.Ref.IsDefined() {
 		return fmt.Errorf("%w: snapshot record is malformed", ErrBatchRejected)
 	}
-	var head HeadRecord
-	if err := json.Unmarshal(headWrite.Record, &head); err != nil || len(head.Vault) != 32 || len(head.PolicyDigest) != 32 || head.PublicationCount == 0 {
+	headValue, err := decodeRecordJSON(headWrite.Record)
+	head, headOK := headValue.(HeadRecord)
+	if err != nil || !headOK || len(head.Vault) != 32 || len(head.PolicyDigest) != 32 || head.PublicationCount == 0 {
 		return fmt.Errorf("%w: head record is malformed", ErrBatchRejected)
 	}
 	snapshotCID := cid.Cid(snapshot.Blob.Ref).Bytes()

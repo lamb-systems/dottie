@@ -334,6 +334,10 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 		return Transition{}, fmt.Errorf("%w: proposer key", ErrAuthorization)
 	}
 
+	oldControl, err := DecodeControl(predecessor.Control)
+	if err != nil {
+		return Transition{}, fmt.Errorf("%w: predecessor control", ErrPredecessor)
+	}
 	newEpoch := oldPolicy.EpochSeq + 1
 	newCertificateBytes, err := certificateForEnrollment(oldPolicy.Vault, *intent.NewDevice, intent.RequestedRole, newEpoch, intent.Signer, predecessor.ControlCID)
 	if err != nil {
@@ -422,8 +426,9 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	blobCID := bytes.Clone(snapshotCID)
 	control := Control{
 		Vault: newPolicy.Vault, EpochSeq: newEpoch, PolicyDigest: policyDigest,
-		HeadSnapshotCID: bytes.Clone(snapshotCID), PrevControlCID: bytes.Clone(predecessor.ControlCID),
-		Signer: Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)},
+		HeadSnapshotCID: bytes.Clone(snapshotCID), Revoked: append([]RevokedDevice(nil), oldControl.Revoked...),
+		PrevControlCID: bytes.Clone(predecessor.ControlCID),
+		Signer:         Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)},
 	}
 	controlBytes, err := signControl(control, intent.Signer.Signing)
 	if err != nil {
@@ -1076,7 +1081,7 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 	if !exists || role != certificate.Role {
 		return ErrCertificateAuthority
 	}
-	if err := validateEnrollmentDelta(oldPolicy, policy, oldControl, certificate); err != nil {
+	if err := validateEnrollmentDelta(oldPolicy, policy, oldControl, control, certificate); err != nil {
 		return err
 	}
 	if err := validateTransitionRecipients(transition, policy, predecessor, proposer, envelope); err != nil {
@@ -1241,9 +1246,17 @@ func verifyTransitionSignatures(transition Transition, proposer Certificate) err
 	return nil
 }
 
-func validateEnrollmentDelta(oldPolicy, policy Policy, oldControl Control, certificate Certificate) error {
+func validateEnrollmentDelta(oldPolicy, policy Policy, oldControl, control Control, certificate Certificate) error {
 	if len(policy.Roles) != len(oldPolicy.Roles)+1 || len(policy.Recipients) != len(oldPolicy.Recipients)+1 {
 		return ErrTransitionDelta
+	}
+	if len(control.Revoked) != len(oldControl.Revoked) {
+		return ErrRevokedDevice
+	}
+	for index, revoked := range oldControl.Revoked {
+		if control.Revoked[index] != revoked {
+			return ErrRevokedDevice
+		}
 	}
 	added := 0
 	for _, binding := range policy.Roles {

@@ -520,8 +520,16 @@ func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observati
 				if observation.PublicationCount < uint64(existingCount) {
 					return ErrVaultPublicationBackwards
 				}
-				if (observation.PublicationCount == uint64(existingCount) && !bytes.Equal(observation.HeadCID, existingHeadCID)) || (observation.PublicationCount > uint64(existingCount) && bytes.Equal(observation.HeadCID, existingHeadCID)) {
+				if observation.PublicationCount == uint64(existingCount) && !bytes.Equal(observation.HeadCID, existingHeadCID) {
 					return ErrVaultPublicationConflict
+				}
+				if observation.PublicationCount > uint64(existingCount) {
+					if observation.PublicationCount > uint64(existingCount)+1 {
+						return ErrVaultPublicationGap
+					}
+					if bytes.Equal(observation.HeadCID, existingHeadCID) {
+						return ErrVaultPublicationConflict
+					}
 				}
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
