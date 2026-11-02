@@ -391,6 +391,10 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	if err != nil {
 		return Transition{}, err
 	}
+	newPolicy, err = DecodePolicy(policyBytes)
+	if err != nil {
+		return Transition{}, err
+	}
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	if err != nil {
 		return Transition{}, err
@@ -409,7 +413,7 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 		Purpose: PurposeSnapshot, Vault: newPolicy.Vault, PublicationID: intent.PublicationID, EpochSeq: newEpoch,
 		PolicyDigest: policyDigest, Parent: parent, DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID),
 		Plaintext: bytes.Clone(intent.Plaintext), SigningKey: intent.Signer.Signing, ContentKey: bytes.Clone(intent.ContentKey),
-		Nonce: intent.Nonce, Recipients: preparedRecipients,
+		Nonce: intent.Nonce, Recipients: preparedRecipients, Policy: newPolicy,
 	}
 	sealed, err := SealPrepared(prepared)
 	if err != nil {
@@ -511,7 +515,7 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: intent.PublicationID, EpochSeq: policy.EpochSeq,
 		PolicyDigest: predecessor.PolicyDigest, Parent: bytes.Clone(currentHead.SnapshotCID), DeviceID: intent.Signer.DeviceID,
 		KeyID: bytes.Clone(intent.Signer.KeyID), Plaintext: bytes.Clone(intent.Plaintext), SigningKey: intent.Signer.Signing,
-		ContentKey: bytes.Clone(intent.ContentKey), Nonce: intent.Nonce, Recipients: preparedRecipients,
+		ContentKey: bytes.Clone(intent.ContentKey), Nonce: intent.Nonce, Recipients: preparedRecipients, Policy: policy,
 	}
 	sealed, err := SealPrepared(prepared)
 	if err != nil {
@@ -796,6 +800,10 @@ func prepareRevocation(predecessor Predecessor, intent TransitionIntent) (Transi
 	if err != nil {
 		return Transition{}, err
 	}
+	newPolicy, err = DecodePolicy(policyBytes)
+	if err != nil {
+		return Transition{}, err
+	}
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	if err != nil {
 		return Transition{}, err
@@ -812,7 +820,7 @@ func prepareRevocation(predecessor Predecessor, intent TransitionIntent) (Transi
 		Purpose: PurposeSnapshot, Vault: newPolicy.Vault, PublicationID: intent.PublicationID, EpochSeq: newEpoch,
 		PolicyDigest: policyDigest, Parent: bytes.Clone(oldHead.SnapshotCID), DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID),
 		Plaintext: bytes.Clone(intent.Plaintext), SigningKey: intent.Signer.Signing, ContentKey: bytes.Clone(intent.ContentKey),
-		Nonce: intent.Nonce, Recipients: preparedRecipients,
+		Nonce: intent.Nonce, Recipients: preparedRecipients, Policy: newPolicy,
 	}
 	sealed, err := SealPrepared(prepared)
 	if err != nil {

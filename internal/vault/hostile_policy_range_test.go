@@ -47,6 +47,7 @@ func rebuildEnrollmentRaw(t *testing.T, fixture devicesFixture, mutate func(*Pol
 	require.NoError(t, err)
 	mutate(&policy)
 	policyBytes := outOfRangePolicyWire(t, policy, fixture.root.Signing)
+	copy(policy.Signature[:], policyBytes[len(policyBytes)-ed25519.SignatureSize:])
 	digest := outOfRangePolicyDigest(policyBytes)
 	wraps, err := prepareRecipientWraps(policy, fixture.intent.Wraps)
 	require.NoError(t, err)
@@ -55,7 +56,7 @@ func rebuildEnrollmentRaw(t *testing.T, fixture devicesFixture, mutate func(*Pol
 	envelope, err := SealPrepared(PreparedSeal{
 		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: fixture.intent.PublicationID, EpochSeq: policy.EpochSeq,
 		PolicyDigest: digest, Parent: bytes.Clone(fixture.predecessor.HeadCID), DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
-		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey, Nonce: fixture.intent.Nonce, Recipients: recipients,
+		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey, Nonce: fixture.intent.Nonce, Recipients: recipients, Policy: policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)

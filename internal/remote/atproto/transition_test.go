@@ -27,6 +27,14 @@ type transitionApplyTransport struct {
 	body  []byte
 }
 
+type candidateStageTransport struct {
+	calls   int
+	status  int
+	body    []byte
+	err     error
+	request []byte
+}
+
 type signedCARFlowTransport struct {
 	*readTransport
 	t           *testing.T
@@ -112,6 +120,173 @@ func (*transitionApplyTransport) OpenStream(context.Context, string, url.Values)
 	return 0, nil, errors.New("unexpected stream request")
 }
 
+func (transport *candidateStageTransport) Do(_ context.Context, method, endpoint string, _ url.Values, body []byte, _ string) (int, []byte, error) {
+	transport.calls++
+	if method != "POST" || endpoint != "com.atproto.repo.uploadBlob" {
+		return 0, nil, fmt.Errorf("unexpected request %s %s", method, endpoint)
+	}
+	transport.request = bytes.Clone(body)
+	return transport.status, bytes.Clone(transport.body), transport.err
+}
+
+func (*candidateStageTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
+	return 0, nil, errors.New("unexpected stream request")
+}
+
+func candidateUploadResponse(t *testing.T, data []byte) []byte {
+	t.Helper()
+	blob := blobJSONFromCID(rawTransitionCID(data), len(data))
+	response, err := json.Marshal(struct {
+		Blob json.RawMessage `json:"blob"`
+	}{Blob: blob})
+	require.NoError(t, err)
+	return response
+}
+
+func TestATProtoTransitionStageCandidateRequiresEnvelopeContextBeforeNetwork(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, publication.Snapshot)}
+	io := ATProtoTransitionIO{Transport: transport}
+	ctx := context.Background()
+
+	_, _, err = io.StageCandidate(ctx, []byte("synthetic plaintext"), policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateEnvelopeInvalid)
+	assert.Zero(t, transport.calls, "a non-envelope candidate must be refused before uploadBlob")
+
+	wrongVault := policy.Vault
+	wrongVault[0] ^= 1
+	wrongVaultPolicy := policy
+	wrongVaultPolicy.Vault = wrongVault
+	_, _, err = io.StageCandidate(ctx, publication.Snapshot, wrongVaultPolicy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateContextMismatch)
+	assert.Zero(t, transport.calls, "a candidate for another vault must be refused before uploadBlob")
+
+	wrongEpochPolicy := policy
+	wrongEpochPolicy.EpochSeq++
+	_, _, err = io.StageCandidate(ctx, publication.Snapshot, wrongEpochPolicy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateContextMismatch)
+	assert.Zero(t, transport.calls, "a candidate for another epoch must be refused before uploadBlob")
+
+	wrongDigestPolicy := policy
+	wrongDigestPolicy.MaxPublications++
+	_, _, err = io.StageCandidate(ctx, publication.Snapshot, wrongDigestPolicy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateContextMismatch)
+	assert.Zero(t, transport.calls, "a candidate for another policy must be refused before uploadBlob")
+
+	blobReference, blobCID, err := io.StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	require.NoError(t, err)
+	assert.NotEmpty(t, blobReference)
+	assert.Equal(t, cid.NewCidV1(cid.Raw, mustTransitionMultihash(publication.Snapshot)).String(), blobCID)
+	assert.Equal(t, 1, transport.calls, "the authenticated envelope positive control reaches uploadBlob")
+	assert.Equal(t, publication.Snapshot, transport.request)
+}
+
+func TestATProtoTransitionStageCandidateRejectsPlaintextEnvelope(t *testing.T) {
+	currentPolicy, certificates, oldEnvelope, currentDigest := newStageCandidateAuthenticationFixture(t)
+	plaintextCandidate := oldEnvelope
+	plaintextCandidate.Vault = currentPolicy.Vault
+	plaintextCandidate.EpochSeq = currentPolicy.EpochSeq
+	plaintextCandidate.PolicyDigest = currentDigest
+	plaintextCandidate.Ciphertext = []byte("synthetic plaintext")
+	plaintextCandidate.Commit = [32]byte{}
+	plaintextCandidate.Nonce = [24]byte{}
+	plaintextCandidate.Tag = [16]byte{}
+	plaintextCandidate.Signature = [64]byte{}
+	plaintextBytes, err := vault.EncodeEnvelope(plaintextCandidate)
+	require.NoError(t, err)
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, plaintextBytes)}
+	_, _, err = (ATProtoTransitionIO{Transport: transport}).StageCandidate(context.Background(), plaintextBytes, currentPolicy, certificates)
+	require.ErrorIs(t, err, ErrCandidateUnauthenticated)
+	assert.Zero(t, transport.calls, "a structurally valid plaintext envelope with zero authentication fields must be refused before uploadBlob")
+}
+
+func TestATProtoTransitionStageCandidateRejectsRelabelledOldEpochEnvelope(t *testing.T) {
+	currentPolicy, certificates, oldEnvelope, currentDigest := newStageCandidateAuthenticationFixture(t)
+	relabelledOldEnvelope := oldEnvelope
+	relabelledOldEnvelope.EpochSeq = currentPolicy.EpochSeq
+	relabelledOldEnvelope.PolicyDigest = currentDigest
+	relabelledBytes, err := vault.EncodeEnvelope(relabelledOldEnvelope)
+	require.NoError(t, err)
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, relabelledBytes)}
+	_, _, err = (ATProtoTransitionIO{Transport: transport}).StageCandidate(context.Background(), relabelledBytes, currentPolicy, certificates)
+	require.ErrorIs(t, err, ErrCandidateUnauthenticated)
+	assert.Zero(t, transport.calls, "rewriting an old-epoch envelope header must not make its old signature valid")
+}
+
+func newStageCandidateAuthenticationFixture(t *testing.T) (vault.Policy, [][]byte, vault.Envelope, [32]byte) {
+	t.Helper()
+	fixture := newTransitionTestFixture(t)
+	newSigning, newRecipient, err := vault.GenerateDeviceKeys()
+	require.NoError(t, err)
+	newDevice := vault.DeviceMaterial{DeviceID: "candidate-device", KeyID: []byte("candidate-key"), Signing: newSigning, Recipient: newRecipient}
+	enrollment, err := vault.PrepareTransition(fixture.predecessor, vault.TransitionIntent{
+		Kind: vault.TransitionEnroll, Vault: mustTestVault(t, fixture.predecessor), Signer: fixture.root,
+		NewDevice: &newDevice, RequestedRole: vault.RolePublisher, ContentKey: publicationTestBytes(t, 32),
+		Recipients: fixture.predecessor.Certificates,
+		Wraps:      publicationTestWrapsForKeyIDs(t, [][]byte{fixture.root.KeyID, newDevice.KeyID}),
+		Plaintext:  []byte("synthetic enrollment snapshot"), PublicationID: [16]byte(publicationTestBytes(t, 16)),
+		Nonce: [24]byte(publicationTestBytes(t, 24)),
+	})
+	require.NoError(t, err)
+	currentPolicy, err := vault.DecodePolicy(enrollment.Policy)
+	require.NoError(t, err)
+	currentDigest, err := vault.ComputePolicyDigest(enrollment.Policy)
+	require.NoError(t, err)
+
+	oldPolicy, err := vault.DecodePolicy(fixture.predecessor.Policy)
+	require.NoError(t, err)
+	oldDigest, err := vault.ComputePolicyDigest(fixture.predecessor.Policy)
+	require.NoError(t, err)
+	rootCertificate, err := vault.DecodeCertificate(fixture.predecessor.Certificates[0])
+	require.NoError(t, err)
+	oldRecipients := make([]vault.RecipientPublicKey, 0, len(oldPolicy.Recipients))
+	for _, recipient := range oldPolicy.Recipients {
+		oldRecipients = append(oldRecipients, vault.RecipientPublicKey{KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:])})
+	}
+	oldEnvelope, err := vault.SealAuthorized(vault.SealRequest{
+		Purpose: vault.PurposeSnapshot, Vault: oldPolicy.Vault, PublicationID: [16]byte(publicationTestBytes(t, 16)),
+		EpochSeq: oldPolicy.EpochSeq, PolicyDigest: oldDigest, DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
+		Plaintext: []byte("old-epoch snapshot"), SigningKey: fixture.root.Signing, Recipients: oldRecipients, Policy: oldPolicy,
+	}, rootCertificate, oldPolicy)
+	require.NoError(t, err)
+	return currentPolicy, enrollment.Recipients, oldEnvelope, currentDigest
+}
+
+func TestATProtoTransitionStageCandidateSignalsPostTransmissionDisclosure(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	transportFailure := &candidateStageTransport{err: errors.New("response lost after dispatch")}
+	_, _, err = (ATProtoTransitionIO{Transport: transportFailure}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+	assert.Equal(t, 1, transportFailure.calls)
+
+	acceptedBody := candidateUploadResponse(t, publication.Snapshot)
+	acceptedResponse := &candidateStageTransport{status: 400, body: acceptedBody}
+	_, _, err = (ATProtoTransitionIO{Transport: acceptedResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrBatchRejected)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
+		"a non-2xx response carrying a valid blob reference suggests upload acceptance")
+	assert.Equal(t, 1, acceptedResponse.calls)
+
+	rejectedResponse := &candidateStageTransport{status: 400, body: []byte(`{"error":"InvalidRequest"}`)}
+	_, _, err = (ATProtoTransitionIO{Transport: rejectedResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrBatchRejected)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
+		"every post-transmission failure must signal possible candidate disclosure")
+
+	redirectResponse := &candidateStageTransport{status: 302, body: []byte(`{"error":"Redirect"}`)}
+	_, _, err = (ATProtoTransitionIO{Transport: redirectResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrBatchRejected)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
+		"a post-transmission redirect response must signal possible candidate disclosure")
+}
+
 type transitionTestFixture struct {
 	root        vault.DeviceMaterial
 	predecessor vault.Predecessor
@@ -191,7 +366,7 @@ func (io *transitionTestIO) ReadCurrent(_ context.Context) (*Revision, vault.Pre
 	return revision, io.predecessors[index], nil
 }
 
-func (io *transitionTestIO) StageCandidate(_ context.Context, data []byte) (json.RawMessage, string, error) {
+func (io *transitionTestIO) StageCandidate(_ context.Context, data []byte, _ vault.Policy, _ [][]byte) (json.RawMessage, string, error) {
 	io.stageCount++
 	blobCID := cid.NewCidV1(cid.Raw, mustTransitionMultihash(data))
 	reference, err := json.Marshal(map[string]any{

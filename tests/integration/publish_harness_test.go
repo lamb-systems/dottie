@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,28 +28,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type publicationRaceIO struct {
-	base    atproto.PublicationIO
+type publicationRaceTransport struct {
+	base    atproto.Transport
 	ready   chan<- string
 	release <-chan struct{}
 }
 
-func (io publicationRaceIO) ReadCurrent(ctx context.Context) (*atproto.Revision, vault.Predecessor, error) {
-	return io.base.ReadCurrent(ctx)
-}
-
-func (io publicationRaceIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
-	return io.base.StageCandidate(ctx, data)
-}
-
-func (io publicationRaceIO) ApplyPublication(ctx context.Context, revision *atproto.Revision, publication atproto.FencedSnapshotPublication) error {
-	io.ready <- "publish"
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-io.release:
+func (transport publicationRaceTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+	if endpoint == "com.atproto.repo.applyWrites" {
+		transport.ready <- "publish"
+		select {
+		case <-ctx.Done():
+			return 0, nil, ctx.Err()
+		case <-transport.release:
+		}
 	}
-	return io.base.ApplyPublication(ctx, revision, publication)
+	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
+}
+
+func (transport publicationRaceTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+	return transport.base.OpenStream(ctx, endpoint, query)
 }
 
 type revocationRaceIO struct {
@@ -60,8 +60,8 @@ func (io revocationRaceIO) ReadCurrent(ctx context.Context) (*atproto.Revision, 
 	return io.base.ReadCurrent(ctx)
 }
 
-func (io revocationRaceIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
-	return io.base.StageCandidate(ctx, data)
+func (io revocationRaceIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
+	return io.base.StageCandidate(ctx, data, expectedPolicy, certificates)
 }
 
 func (io revocationRaceIO) ApplyTransition(ctx context.Context, revision *atproto.Revision, publication atproto.FencedPublication) error {
@@ -231,7 +231,8 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	ready := make(chan string, 2)
 	release := make(chan struct{})
 	results := make(chan publicationRaceResult, 2)
-	publicationIO := publicationRaceIO{base: publicationIOA, ready: ready, release: release}
+	publicationIO := publicationIOA
+	publicationIO.Transport = publicationRaceTransport{base: transportA, ready: ready, release: release}
 	transitionIOB := atproto.ATProtoTransitionIO{Reader: readerB, Transport: transportB, DID: identityB.DID, TrustAnchor: bootstrap.Anchor}
 	revocationIO := revocationRaceIO{base: transitionIOB, ready: ready, release: release}
 	go func() {

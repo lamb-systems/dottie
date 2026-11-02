@@ -51,8 +51,8 @@ func (io ledgerRaceIO) ReadCurrent(ctx context.Context) (*atproto.Revision, vaul
 	return io.base.ReadCurrent(ctx)
 }
 
-func (io ledgerRaceIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
-	return io.base.StageCandidate(ctx, data)
+func (io ledgerRaceIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
+	return io.base.StageCandidate(ctx, data, expectedPolicy, certificates)
 }
 
 func (io ledgerRaceIO) ApplyTransition(ctx context.Context, revision *atproto.Revision, publication atproto.FencedPublication) error {

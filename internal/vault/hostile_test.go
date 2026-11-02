@@ -3,6 +3,7 @@ package vault
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"os"
@@ -157,7 +158,7 @@ func rebuildEnrollment(t *testing.T, fixture devicesFixture, parentOverride []by
 		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: fixture.intent.PublicationID, EpochSeq: policy.EpochSeq,
 		PolicyDigest: digest, Parent: parent, DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
 		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey,
-		Nonce: fixture.intent.Nonce, Recipients: recipients,
+		Nonce: fixture.intent.Nonce, Recipients: recipients, Policy: policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)
@@ -257,7 +258,7 @@ func rebuildRevocation(t *testing.T, base Transition, predecessor Predecessor, s
 	envelope, err := SealPrepared(PreparedSeal{
 		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: intent.PublicationID, EpochSeq: policy.EpochSeq,
 		PolicyDigest: digest, Parent: bytes.Clone(predecessor.HeadCID), DeviceID: signer.DeviceID, KeyID: bytes.Clone(signer.KeyID),
-		Plaintext: intent.Plaintext, SigningKey: signer.Signing, ContentKey: intent.ContentKey, Nonce: intent.Nonce, Recipients: recipients,
+		Plaintext: intent.Plaintext, SigningKey: signer.Signing, ContentKey: intent.ContentKey, Nonce: intent.Nonce, Recipients: recipients, Policy: policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)
@@ -407,26 +408,35 @@ func TestOpenRefusesRecipientAbsentFromPolicy(t *testing.T) {
 	digest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
 	absent := fixedX25519Key(90)
-	var absentPublic [32]byte
-	copy(absentPublic[:], absent.PublicKey().Bytes())
-	envelope, err := SealPrepared(PreparedSeal{
+	absentID := []byte("absent-recipient")
+	var ephemeral [32]byte
+	copy(ephemeral[:], fixedX25519Key(43).PublicKey().Bytes())
+	envelope := Envelope{
 		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: [16]byte(fixtureBytes(201, 16)), EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, DeviceID: fixture.newDevice.DeviceID, KeyID: bytes.Clone(fixture.newDevice.KeyID),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixture.newDevice.Signing, ContentKey: fixtureBytes(221, 32),
-		Nonce: [24]byte(fixtureBytes(5, 24)),
-		Recipients: []PreparedRecipient{
-			{KeyID: bytes.Clone(fixture.root.KeyID), PublicKey: fixedX25519Key(21).PublicKey().Bytes(), EphemeralPrivate: fixedX25519Key(41).Bytes(), WrapNonce: [24]byte(fixtureBytes(33, 24))},
-			{KeyID: bytes.Clone(fixture.newDevice.KeyID), PublicKey: fixedX25519Key(22).PublicKey().Bytes(), EphemeralPrivate: fixedX25519Key(42).Bytes(), WrapNonce: [24]byte(fixtureBytes(57, 24))},
-			{KeyID: []byte("absent-recipient"), PublicKey: absent.PublicKey().Bytes(), EphemeralPrivate: fixedX25519Key(43).Bytes(), WrapNonce: [24]byte(fixtureBytes(81, 24))},
-		},
-	})
+		PolicyDigest: digest, DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
+		Commit: [32]byte(fixtureBytes(221, 32)), Nonce: [24]byte(fixtureBytes(5, 24)),
+		Ciphertext: []byte("hostile synthetic payload"),
+		Recipients: []EnvelopeRecipient{{
+			KeyID: bytes.Clone(absentID), Ephemeral: ephemeral, WrapNonce: [24]byte(fixtureBytes(81, 24)), WrappedKey: fixtureBytes(113, 48),
+		}},
+	}
+	unsignedBytes, err := EncodeEnvelope(envelope)
 	require.NoError(t, err)
-	_, err = Open(envelope, OpenRequest{
-		Vault: policy.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: digest, Policy: policyBytes, TrustAnchor: fixture.bootstrap.Anchor,
-		Certificates: [][]byte{fixture.bootstrap.Certificate, fixture.transition.Certificate},
-		DeviceKeyID:  []byte("absent-recipient"), DeviceKey: absent,
-	})
-	require.ErrorIs(t, err, ErrRecipient)
+	preimage := append([]byte(preimageSig), unsignedBytes[:len(unsignedBytes)-ed25519.SignatureSize]...)
+	signature, err := Sign(contextForPurpose(envelope.Purpose), preimage, fixture.root.Signing)
+	require.NoError(t, err)
+	copy(envelope.Signature[:], signature)
+	hostileBytes, err := EncodeEnvelope(envelope)
+	require.NoError(t, err)
+	hostileEnvelope, err := DecodeEnvelope(hostileBytes)
+	require.NoError(t, err)
+	request := OpenRequest{
+		Vault: fixture.bootstrap.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: digest,
+		Policy: policyBytes, Control: fixture.transition.Control, TrustAnchor: fixture.bootstrap.Anchor,
+		Certificates: fixture.transition.Recipients, DeviceKeyID: absentID, DeviceKey: absent,
+	}
+	_, err = Open(hostileEnvelope, request)
+	require.ErrorIs(t, err, ErrRecipient, "Open must refuse a signed envelope recipient absent from policy authorization")
 }
 
 func splitExportArchive(t *testing.T, encoded []byte) (ExportManifest, []exportTestMember) {

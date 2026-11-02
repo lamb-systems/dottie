@@ -173,7 +173,7 @@ func installGenesisReadState(t *testing.T, fixture *readFixture, previousControl
 		EpochSeq: 0, PolicyDigest: policyDigest, DeviceID: "root", KeyID: []byte("root-sign"),
 		Plaintext: []byte("synthetic genesis payload"), SigningKey: fixtureSigningKey(11),
 		ContentKey: bytes.Repeat([]byte{0x5a}, 32), Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: preparedRecipientsForPolicy(t, policy, 81),
+		Recipients: preparedRecipientsForPolicy(t, policy, 81), Policy: policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)

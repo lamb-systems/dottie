@@ -121,6 +121,7 @@ type SealRequest struct {
 	Plaintext     []byte
 	SigningKey    ed25519.PrivateKey
 	Recipients    []RecipientPublicKey
+	Policy        Policy
 }
 
 type PreparedSeal struct {
@@ -137,6 +138,7 @@ type PreparedSeal struct {
 	ContentKey    []byte
 	Nonce         [24]byte
 	Recipients    []PreparedRecipient
+	Policy        Policy
 }
 
 type OpenRequest struct {
@@ -201,6 +203,10 @@ func knownSignatureContext(label string) bool {
 }
 
 func Seal(request SealRequest) (Envelope, error) {
+	return sealWithPolicy(request, request.Policy)
+}
+
+func sealWithPolicy(request SealRequest, policy Policy) (Envelope, error) {
 	contentKey := make([]byte, chacha20poly1305.KeySize)
 	if _, err := rand.Read(contentKey); err != nil {
 		return Envelope{}, fmt.Errorf("%w: content key", ErrAuthentication)
@@ -217,7 +223,7 @@ func Seal(request SealRequest) (Envelope, error) {
 		EpochSeq: request.EpochSeq, PolicyDigest: request.PolicyDigest, Parent: request.Parent,
 		DeviceID: request.DeviceID, KeyID: request.KeyID, Plaintext: request.Plaintext,
 		SigningKey: request.SigningKey, ContentKey: contentKey, Nonce: nonce,
-		Recipients: make([]PreparedRecipient, 0, len(request.Recipients)),
+		Recipients: make([]PreparedRecipient, 0, len(request.Recipients)), Policy: policy,
 	}
 	for _, recipient := range request.Recipients {
 		privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
@@ -253,35 +259,7 @@ func SealAuthorized(request SealRequest, certificate Certificate, policy Policy)
 	if !roleMaySeal(certificate.Role, request.Purpose) {
 		return Envelope{}, fmt.Errorf("%w: seal purpose", ErrAuthorization)
 	}
-	if len(request.Recipients) != len(policy.Recipients) {
-		return Envelope{}, fmt.Errorf("%w: recipient set", ErrRecipient)
-	}
-	matched := make([]bool, len(policy.Recipients))
-	seenKeyIDs := make(map[string]struct{}, len(request.Recipients))
-	for _, supplied := range request.Recipients {
-		keyID := string(supplied.KeyID)
-		if _, exists := seenKeyIDs[keyID]; exists {
-			return Envelope{}, fmt.Errorf("%w: duplicate recipient key_id", ErrRecipient)
-		}
-		seenKeyIDs[keyID] = struct{}{}
-		found := false
-		for index, authorized := range policy.Recipients {
-			if !matched[index] && bytes.Equal(supplied.KeyID, authorized.KeyID) && bytes.Equal(supplied.PublicKey, authorized.PublicKey[:]) {
-				matched[index] = true
-				found = true
-				break
-			}
-		}
-		if !found {
-			return Envelope{}, fmt.Errorf("%w: recipient pair", ErrRecipient)
-		}
-	}
-	for _, isMatched := range matched {
-		if !isMatched {
-			return Envelope{}, fmt.Errorf("%w: missing recipient", ErrRecipient)
-		}
-	}
-	return Seal(request)
+	return sealWithPolicy(request, policy)
 }
 
 func roleMaySeal(role Role, purpose Purpose) bool {
@@ -294,6 +272,23 @@ func roleMaySeal(role Role, purpose Purpose) bool {
 }
 
 func SealPrepared(prepared PreparedSeal) (Envelope, error) {
+	if prepared.Vault != prepared.Policy.Vault {
+		return Envelope{}, fmt.Errorf("%w: seal vault", ErrAuthorization)
+	}
+	if prepared.EpochSeq != prepared.Policy.EpochSeq {
+		return Envelope{}, ErrSnapshotEpoch
+	}
+	policyBytes, err := EncodePolicy(prepared.Policy)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("%w: seal policy", ErrAuthorization)
+	}
+	policyDigest := sha256.Sum256(append([]byte(preimagePolicy), policyBytes...))
+	if policyDigest != prepared.PolicyDigest {
+		return Envelope{}, fmt.Errorf("%w: seal policy_digest", ErrAuthorization)
+	}
+	if !preparedRecipientsMatchPolicy(prepared.Recipients, prepared.Policy) {
+		return Envelope{}, fmt.Errorf("%w: recipient set", ErrRecipient)
+	}
 	if !validPurpose(prepared.Purpose) {
 		return Envelope{}, fmt.Errorf("%w: purpose", ErrFormat)
 	}
@@ -378,6 +373,33 @@ func SealPrepared(prepared PreparedSeal) (Envelope, error) {
 	}
 	copy(envelope.Signature[:], signature)
 	return envelope, nil
+}
+
+func preparedRecipientsMatchPolicy(recipients []PreparedRecipient, policy Policy) bool {
+	if len(recipients) != len(policy.Recipients) || len(recipients) == 0 {
+		return false
+	}
+	authorized := make(map[string][32]byte, len(policy.Recipients))
+	for _, recipient := range policy.Recipients {
+		keyID := string(recipient.KeyID)
+		if _, exists := authorized[keyID]; exists {
+			return false
+		}
+		authorized[keyID] = recipient.PublicKey
+	}
+	seen := make(map[string]struct{}, len(recipients))
+	for _, recipient := range recipients {
+		keyID := string(recipient.KeyID)
+		if _, exists := seen[keyID]; exists {
+			return false
+		}
+		seen[keyID] = struct{}{}
+		publicKey, exists := authorized[keyID]
+		if !exists || !bytes.Equal(recipient.PublicKey, publicKey[:]) {
+			return false
+		}
+	}
+	return len(seen) == len(authorized)
 }
 
 func Open(envelope Envelope, request OpenRequest) ([]byte, error) {

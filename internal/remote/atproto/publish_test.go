@@ -42,19 +42,23 @@ func (io *publicationTestIO) ReadCurrent(context.Context) (*Revision, vault.Pred
 	}
 	revision := cloneTransitionTestRevision(io.latest)
 	if revision == nil {
-		revision = publicationTestRevision()
+		var err error
+		revision, err = publicationRevisionForPredecessor(io.predecessors[index])
+		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
 	}
 	return revision, io.predecessors[index], nil
 }
 
-func (io *publicationTestIO) StageCandidate(_ context.Context, data []byte) (json.RawMessage, string, error) {
+func (io *publicationTestIO) StageCandidate(_ context.Context, data []byte, _ vault.Policy, _ [][]byte) (json.RawMessage, string, error) {
 	io.stageCount++
 	cidText := cid.NewCidV1(cid.Raw, mustTransitionMultihash(data)).String()
 	blob, err := json.Marshal(atdata.Blob{Ref: atdata.CIDLink(cid.NewCidV1(cid.Raw, mustTransitionMultihash(data))), MimeType: "application/octet-stream", Size: int64(len(data))})
 	return blob, cidText, err
 }
 
-func (io *publicationTestIO) ApplyPublication(_ context.Context, _ *Revision, publication FencedSnapshotPublication) error {
+func (io *publicationTestIO) applyPublication(_ context.Context, _ *Revision, publication FencedSnapshotPublication) error {
 	io.applyCount++
 	io.publication = append(io.publication, publication)
 	if io.applyError != nil {
@@ -77,6 +81,51 @@ func publicationTestRevision() *Revision {
 	revision := transitionTestRevision()
 	revision.membership[RecordKey{Collection: VaultHeadNSID, RKey: "self"}] = "prior-head-record"
 	return revision
+}
+
+func publicationRevisionForPredecessor(predecessor vault.Predecessor) (*Revision, error) {
+	revision := publicationTestRevision()
+	control, err := vault.DecodeControl(predecessor.Control)
+	if err != nil {
+		return nil, err
+	}
+	if err := addPublicationTestRecord(revision, RecordKey{Collection: VaultControlNSID, RKey: "self"}, toControlRecord(control)); err != nil {
+		return nil, err
+	}
+	if len(predecessor.HeadCID) != 0 {
+		head, err := vault.DecodeHead(predecessor.Head)
+		if err != nil {
+			return nil, err
+		}
+		if err := addPublicationTestRecord(revision, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, toHeadRecord(head)); err != nil {
+			return nil, err
+		}
+	} else {
+		delete(revision.membership, RecordKey{Collection: VaultHeadNSID, RKey: "self"})
+	}
+	return revision, nil
+}
+
+func addPublicationTestRecord(revision *Revision, key RecordKey, record Record) error {
+	encodedJSON, err := marshalRecord(record)
+	if err != nil {
+		return err
+	}
+	object, err := atdata.UnmarshalJSON(encodedJSON)
+	if err != nil {
+		return err
+	}
+	encoded, err := atdata.MarshalCBOR(normalizeRecordMap(object))
+	if err != nil {
+		return err
+	}
+	cidText, err := recordCIDText(encodedJSON)
+	if err != nil {
+		return err
+	}
+	revision.membership[key] = cidText
+	revision.records[key] = ProvenRecord{CID: cidText, Data: encoded}
+	return nil
 }
 
 func newAtprotoPublicationFixture(t *testing.T) (vault.DeviceMaterial, vault.DeviceMaterial, vault.Predecessor, vault.Publication) {
@@ -186,7 +235,7 @@ func TestCommitPublicationUsesPublisherAndWritesSnapshotAndHeadOnly(t *testing.T
 	_, publisher, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := &publicationTestIO{predecessors: []vault.Predecessor{predecessor}}
 	store := newTransitionTestStore()
-	result, err := CommitPublication(context.Background(), io, store, publication, publisher.Signing, time.Unix(200, 0))
+	result, err := commitPublication(context.Background(), io, store, publication, publisher.Signing, time.Unix(200, 0))
 	require.NoError(t, err)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
 	assert.Equal(t, 1, io.stageCount)
@@ -200,10 +249,21 @@ func TestCommitPublicationUsesPublisherAndWritesSnapshotAndHeadOnly(t *testing.T
 	assert.NotEqual(t, VaultControlNSID, io.publication[0].VaultHead.Collection)
 }
 
+func TestCommitPublicationRejectsPredecessorNotBoundToFencedRevision(t *testing.T) {
+	_, _, revisionPredecessor, _ := newAtprotoPublicationFixture(t)
+	_, publisher, predecessor, publication := newAtprotoPublicationFixture(t)
+	revision, err := publicationRevisionForPredecessor(revisionPredecessor)
+	require.NoError(t, err)
+	io := &publicationTestIO{predecessors: []vault.Predecessor{predecessor}, latest: revision}
+	_, err = commitPublication(context.Background(), io, newTransitionTestStore(), publication, publisher.Signing, time.Unix(203, 0))
+	require.ErrorIs(t, err, ErrBatchRejected)
+	assert.Zero(t, io.stageCount, "a predecessor not represented by the fenced revision must be refused before staging")
+}
+
 func TestCommitPublicationRejectsSigningKeyOutsideCandidateCertificate(t *testing.T) {
 	root, _, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := &publicationTestIO{predecessors: []vault.Predecessor{predecessor}}
-	_, err := CommitPublication(context.Background(), io, newTransitionTestStore(), publication, root.Signing, time.Unix(202, 0))
+	_, err := commitPublication(context.Background(), io, newTransitionTestStore(), publication, root.Signing, time.Unix(202, 0))
 	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.Zero(t, io.stageCount)
 }
@@ -214,7 +274,7 @@ func TestCommitPublicationRejectsCandidateAfterPolicyChange(t *testing.T) {
 	changed := transitionPredecessorAfter(t, predecessor, competingTransition)
 	io := &publicationTestIO{predecessors: []vault.Predecessor{predecessor, changed}}
 	store := newTransitionTestStore()
-	result, err := CommitPublication(context.Background(), io, store, publication, publisher.Signing, time.Unix(201, 0))
+	result, err := commitPublication(context.Background(), io, store, publication, publisher.Signing, time.Unix(201, 0))
 	require.ErrorIs(t, err, ErrPreparedPolicyMismatch)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeNotLanded), result.Outcome)
@@ -244,7 +304,7 @@ func TestResolvePublicationAttemptUsesMarkerAndHeadWithoutControl(t *testing.T) 
 	require.NoError(t, store.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionOutcomeStaged, string(evidence)))
 	require.NoError(t, store.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionOutcomeSubmitted, string(evidence)))
 	io := &publicationTestIO{predecessors: []vault.Predecessor{predecessor}, latest: publicationResolutionRevision(fenced)}
-	result, err := ResolvePublicationAttempt(context.Background(), io, store, attempt.ID)
+	result, err := resolvePublicationAttempt(context.Background(), io, store, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
 	assert.Zero(t, io.applyCount)
@@ -256,7 +316,7 @@ func TestPublishSnapshotFencedKeepsAllPackReferencesInsideOneBatch(t *testing.T)
 	fenced, err := snapshotPublication(publication, publisher.Signing, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), revision, predecessor)
 	require.NoError(t, err)
 	transport := &transitionApplyTransport{}
-	_, err = PublishSnapshotFenced(context.Background(), transport, revision, fenced)
+	_, err = publishSnapshotFenced(context.Background(), transport, revision, fenced)
 	require.NoError(t, err)
 	var input struct {
 		SwapCommit string `json:"swapCommit"`
@@ -307,7 +367,7 @@ func TestPublishSnapshotFencedRejectsHeadReferenceOutsideSnapshot(t *testing.T) 
 	fenced.VaultHead.Record, err = marshalRecord(head)
 	require.NoError(t, err)
 	transport := &transitionApplyTransport{}
-	_, err = PublishSnapshotFenced(context.Background(), transport, revision, fenced)
+	_, err = publishSnapshotFenced(context.Background(), transport, revision, fenced)
 	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.Zero(t, transport.calls)
 }

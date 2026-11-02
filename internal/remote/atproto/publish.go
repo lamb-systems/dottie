@@ -159,10 +159,10 @@ func PublishFenced(ctx context.Context, transport Transport, revision *Revision,
 	return PublishResult{CommitCID: output.Commit.CID}, nil
 }
 
-type PublicationIO interface {
+type publicationIO interface {
 	ReadCurrent(context.Context) (*Revision, vault.Predecessor, error)
-	StageCandidate(context.Context, []byte) (json.RawMessage, string, error)
-	ApplyPublication(context.Context, *Revision, FencedSnapshotPublication) error
+	StageCandidate(context.Context, []byte, vault.Policy, [][]byte) (json.RawMessage, string, error)
+	applyPublication(context.Context, *Revision, FencedSnapshotPublication) error
 }
 
 type ATProtoPublicationIO struct {
@@ -181,16 +181,16 @@ func (io ATProtoPublicationIO) ReadCurrent(ctx context.Context) (*Revision, vaul
 	}).ReadCurrent(ctx)
 }
 
-func (io ATProtoPublicationIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
-	return (ATProtoTransitionIO{Transport: io.Transport}).StageCandidate(ctx, data)
+func (io ATProtoPublicationIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
+	return (ATProtoTransitionIO{Transport: io.Transport}).StageCandidate(ctx, data, expectedPolicy, certificates)
 }
 
-func (io ATProtoPublicationIO) ApplyPublication(ctx context.Context, revision *Revision, publication FencedSnapshotPublication) error {
-	_, err := PublishSnapshotFenced(ctx, io.Transport, revision, publication)
+func (io ATProtoPublicationIO) applyPublication(ctx context.Context, revision *Revision, publication FencedSnapshotPublication) error {
+	_, err := publishSnapshotFenced(ctx, io.Transport, revision, publication)
 	return err
 }
 
-func PublishSnapshotFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedSnapshotPublication) (PublishResult, error) {
+func publishSnapshotFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedSnapshotPublication) (PublishResult, error) {
 	if transport == nil || revision == nil || !validDID(revision.did) || revision.commitCID == "" {
 		return PublishResult{}, fmt.Errorf("%w: verified revision and transport are required", ErrBatchRejected)
 	}
@@ -278,13 +278,75 @@ func validateSnapshotPublication(publication FencedSnapshotPublication, revision
 	return nil
 }
 
-func CommitPublication(ctx context.Context, io PublicationIO, store TransitionAttemptStore, publication vault.Publication, signer ed25519.PrivateKey, now time.Time) (PublicationCommitResult, error) {
+func publicationPredecessorMatchesRevision(revision *Revision, predecessor vault.Predecessor) error {
+	if revision == nil {
+		return ErrUntrustedCar
+	}
+	controlKey := RecordKey{Collection: VaultControlNSID, RKey: "self"}
+	controlRecord, exists := revision.records[controlKey]
+	if !exists || revision.membership[controlKey] == "" || revision.membership[controlKey] != controlRecord.CID {
+		return ErrUnprovenMembership
+	}
+	decodedControl, err := DecodeRecord(controlRecord.Data)
+	if err != nil {
+		return err
+	}
+	control, ok := decodedControl.(ControlRecord)
+	if !ok {
+		return ErrRecord
+	}
+	controlBytes, err := vault.EncodeControl(controlFromRecord(control))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(controlBytes, predecessor.Control) {
+		return ErrBatchRejected
+	}
+
+	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
+	headRecord, hasHeadRecord := revision.records[headKey]
+	headCID, hasHeadMembership := revision.membership[headKey]
+	if len(predecessor.HeadCID) == 0 {
+		if len(predecessor.Head) != 0 || hasHeadRecord || hasHeadMembership {
+			return ErrBatchRejected
+		}
+		return nil
+	}
+	if !hasHeadRecord || !hasHeadMembership || headCID == "" || headCID != headRecord.CID {
+		return ErrUnprovenMembership
+	}
+	decodedHead, err := DecodeRecord(headRecord.Data)
+	if err != nil {
+		return err
+	}
+	head, ok := decodedHead.(HeadRecord)
+	if !ok {
+		return ErrRecord
+	}
+	headBytes, err := vault.EncodeHead(headFromRecord(head))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(headBytes, predecessor.Head) || !bytes.Equal(head.SnapshotCID, predecessor.HeadCID) {
+		return ErrBatchRejected
+	}
+	return nil
+}
+
+func CommitPublication(ctx context.Context, io ATProtoPublicationIO, store TransitionAttemptStore, publication vault.Publication, signer ed25519.PrivateKey, now time.Time) (PublicationCommitResult, error) {
+	return commitPublication(ctx, io, store, publication, signer, now)
+}
+
+func commitPublication(ctx context.Context, io publicationIO, store TransitionAttemptStore, publication vault.Publication, signer ed25519.PrivateKey, now time.Time) (PublicationCommitResult, error) {
 	if io == nil || store == nil || len(signer) != ed25519.PrivateKeySize || now.IsZero() {
 		return PublicationCommitResult{}, fmt.Errorf("%w: publication I/O, store, signer and timestamp are required", ErrBatchRejected)
 	}
 	initialRevision, initialPredecessor, err := io.ReadCurrent(ctx)
 	if err != nil {
 		return PublicationCommitResult{}, fmt.Errorf("read current publication predecessor: %w", err)
+	}
+	if err := publicationPredecessorMatchesRevision(initialRevision, initialPredecessor); err != nil {
+		return PublicationCommitResult{Predecessor: &initialPredecessor}, fmt.Errorf("%w: predecessor does not match verified revision: %w", ErrBatchRejected, err)
 	}
 	if publication.PolicyDigest != initialPredecessor.PolicyDigest {
 		return PublicationCommitResult{Predecessor: &initialPredecessor}, &PreparedPolicyMismatchError{Prepared: publication.PolicyDigest, Current: initialPredecessor.PolicyDigest}
@@ -325,7 +387,11 @@ func CommitPublication(ctx context.Context, io PublicationIO, store TransitionAt
 	if err := store.BeginTransitionAttempt(ctx, attempt); err != nil {
 		return PublicationCommitResult{}, err
 	}
-	blobReference, uploadedCID, err := io.StageCandidate(ctx, publication.Snapshot)
+	currentPolicy, err := vault.DecodePolicy(initialPredecessor.Policy)
+	if err != nil {
+		return PublicationCommitResult{}, fmt.Errorf("%w: current publication policy", ErrBatchRejected)
+	}
+	blobReference, uploadedCID, err := io.StageCandidate(ctx, publication.Snapshot, currentPolicy, initialPredecessor.Certificates)
 	if err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "stageError", err.Error())
 		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
@@ -345,6 +411,11 @@ func CommitPublication(ctx context.Context, io PublicationIO, store TransitionAt
 		updatedEvidence := evidenceWith(string(evidence), "revalidationReadError", err.Error())
 		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
 		return publicationResult(attempt, TransitionOutcomeNotLanded, nil, updatedEvidence), errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+	}
+	if err := publicationPredecessorMatchesRevision(currentRevision, currentPredecessor); err != nil {
+		updatedEvidence := evidenceWith(string(evidence), "revalidationError", err.Error())
+		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
+		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(fmt.Errorf("%w: predecessor does not match verified revision: %w", ErrBatchRejected, err), updateErr, ErrCandidateMayBeDisclosed)
 	}
 	if publication.PolicyDigest != currentPredecessor.PolicyDigest {
 		mismatch := &PreparedPolicyMismatchError{Prepared: publication.PolicyDigest, Current: currentPredecessor.PolicyDigest}
@@ -370,7 +441,7 @@ func CommitPublication(ctx context.Context, io PublicationIO, store TransitionAt
 	if err := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeSubmitted, string(evidence)); err != nil {
 		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, string(evidence)), errors.Join(err, ErrCandidateMayBeDisclosed)
 	}
-	applyErr := io.ApplyPublication(ctx, currentRevision, fencedPublication)
+	applyErr := io.applyPublication(ctx, currentRevision, fencedPublication)
 	if errors.Is(applyErr, ErrFenceLost) {
 		latest, latestPredecessor, readErr := io.ReadCurrent(ctx)
 		updatedEvidence := evidenceWith(string(evidence), "fenceLostRevision", revisionCommit(latest))
@@ -394,7 +465,11 @@ func CommitPublication(ctx context.Context, io PublicationIO, store TransitionAt
 	return resolved, errors.Join(applyErr, outcomeError(resolved.Outcome), ErrCandidateMayBeDisclosed)
 }
 
-func ResolvePublicationAttempt(ctx context.Context, io PublicationIO, store TransitionAttemptStore, attemptID string) (PublicationCommitResult, error) {
+func ResolvePublicationAttempt(ctx context.Context, io ATProtoPublicationIO, store TransitionAttemptStore, attemptID string) (PublicationCommitResult, error) {
+	return resolvePublicationAttempt(ctx, io, store, attemptID)
+}
+
+func resolvePublicationAttempt(ctx context.Context, io publicationIO, store TransitionAttemptStore, attemptID string) (PublicationCommitResult, error) {
 	if io == nil || store == nil {
 		return PublicationCommitResult{}, fmt.Errorf("%w: publication I/O and store are required", ErrBatchRejected)
 	}
@@ -511,7 +586,7 @@ func publicationResult(attempt state.TransitionAttempt, outcome TransitionOutcom
 	}
 }
 
-func resolveSubmittedPublication(ctx context.Context, io PublicationIO, store TransitionAttemptStore, attempt state.TransitionAttempt, evidence string) (PublicationCommitResult, error) {
+func resolveSubmittedPublication(ctx context.Context, io publicationIO, store TransitionAttemptStore, attempt state.TransitionAttempt, evidence string) (PublicationCommitResult, error) {
 	latest, latestPredecessor, err := io.ReadCurrent(ctx)
 	if err != nil {
 		updatedEvidence := evidenceWith(evidence, "resolutionError", err.Error())

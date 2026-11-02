@@ -22,10 +22,13 @@ import (
 )
 
 var (
-	ErrTransitionDiscarded   = errors.New("prepared transition was discarded after a lost fence")
-	ErrTransitionNotLanded   = errors.New("transition marker is absent from the verified revision")
-	ErrTransitionSuperseded  = errors.New("transition committed but has been superseded")
-	ErrTransitionUnavailable = errors.New("transition outcome could not be verified")
+	ErrTransitionDiscarded      = errors.New("prepared transition was discarded after a lost fence")
+	ErrTransitionNotLanded      = errors.New("transition marker is absent from the verified revision")
+	ErrTransitionSuperseded     = errors.New("transition committed but has been superseded")
+	ErrTransitionUnavailable    = errors.New("transition outcome could not be verified")
+	ErrCandidateEnvelopeInvalid = errors.New("candidate is not a valid snapshot envelope")
+	ErrCandidateContextMismatch = errors.New("candidate envelope does not match expected vault, epoch and policy")
+	ErrCandidateUnauthenticated = errors.New("candidate envelope is not authenticated by an authorized signer")
 )
 
 const (
@@ -70,7 +73,7 @@ func (e *TransitionFenceLostError) Is(target error) bool {
 
 type TransitionIO interface {
 	ReadCurrent(context.Context) (*Revision, vault.Predecessor, error)
-	StageCandidate(context.Context, []byte) (json.RawMessage, string, error)
+	StageCandidate(context.Context, []byte, vault.Policy, [][]byte) (json.RawMessage, string, error)
 	ApplyTransition(context.Context, *Revision, FencedPublication) error
 }
 
@@ -134,25 +137,94 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 	return revision, predecessor, nil
 }
 
-func (io ATProtoTransitionIO) StageCandidate(ctx context.Context, data []byte) (json.RawMessage, string, error) {
+func (io ATProtoTransitionIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
+	if io.Transport == nil {
+		return nil, "", fmt.Errorf("%w: candidate transport is required", ErrBatchRejected)
+	}
+	envelope, err := vault.DecodeEnvelope(data)
+	if err != nil || envelope.Purpose != vault.PurposeSnapshot {
+		return nil, "", ErrCandidateEnvelopeInvalid
+	}
+	policyBytes, err := vault.EncodePolicy(expectedPolicy)
+	if err != nil {
+		return nil, "", ErrCandidateContextMismatch
+	}
+	expectedPolicyDigest, err := vault.ComputePolicyDigest(policyBytes)
+	if err != nil {
+		return nil, "", ErrCandidateContextMismatch
+	}
+	if envelope.Vault != expectedPolicy.Vault || envelope.EpochSeq != expectedPolicy.EpochSeq || envelope.PolicyDigest != expectedPolicyDigest {
+		return nil, "", ErrCandidateContextMismatch
+	}
+	if err := verifyCandidateEnvelopeSignature(data, envelope, expectedPolicy, certificates); err != nil {
+		return nil, "", errors.Join(ErrCandidateUnauthenticated, err)
+	}
 	status, body, err := io.Transport.Do(ctx, "POST", "com.atproto.repo.uploadBlob", nil, data, "application/octet-stream")
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: candidate blob upload outcome is unknown", ErrAmbiguousTransport)
+		return nil, "", errors.Join(fmt.Errorf("%w: candidate blob upload outcome is unknown", ErrAmbiguousTransport), ErrCandidateMayBeDisclosed)
 	}
 	if status < 200 || status >= 300 {
-		return nil, "", fmt.Errorf("candidate blob upload returned HTTP %d", status)
+		failure := fmt.Errorf("%w: candidate blob upload returned HTTP %d", ErrBatchRejected, status)
+		if status < 200 || status >= 500 {
+			return nil, "", errors.Join(fmt.Errorf("%w: candidate blob upload outcome is ambiguous", ErrAmbiguousTransport), ErrCandidateMayBeDisclosed)
+		}
+		return nil, "", errors.Join(failure, ErrCandidateMayBeDisclosed)
 	}
+	blob, encodedBlob, err := candidateBlobResponse(body)
+	if err != nil {
+		return nil, "", errors.Join(fmt.Errorf("%w: candidate blob upload response is malformed", ErrAmbiguousTransport), ErrCandidateMayBeDisclosed)
+	}
+	return bytes.Clone(encodedBlob), blob.Ref.CID().String(), nil
+}
+
+func candidateBlobResponse(body []byte) (atdata.Blob, json.RawMessage, error) {
 	var response struct {
 		Blob json.RawMessage `json:"blob"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil || len(response.Blob) == 0 {
-		return nil, "", fmt.Errorf("%w: candidate blob upload response is malformed", ErrAmbiguousTransport)
+		return atdata.Blob{}, nil, ErrBatchRejected
 	}
 	var blob atdata.Blob
 	if err := json.Unmarshal(response.Blob, &blob); err != nil || !blob.Ref.IsDefined() {
-		return nil, "", fmt.Errorf("%w: candidate blob reference is malformed", ErrAmbiguousTransport)
+		return atdata.Blob{}, nil, ErrBatchRejected
 	}
-	return bytes.Clone(response.Blob), blob.Ref.CID().String(), nil
+	return blob, response.Blob, nil
+}
+
+func verifyCandidateEnvelopeSignature(data []byte, envelope vault.Envelope, policy vault.Policy, certificates [][]byte) error {
+	var signer *vault.Certificate
+	for _, encoded := range certificates {
+		certificate, err := vault.DecodeCertificate(encoded)
+		if err != nil {
+			return err
+		}
+		if certificate.DeviceID != envelope.DeviceID || !bytes.Equal(certificate.KeyID, envelope.KeyID) {
+			continue
+		}
+		if signer != nil {
+			return vault.ErrAuthorization
+		}
+		copyOf := certificate
+		signer = &copyOf
+	}
+	if signer == nil || signer.Vault != policy.Vault || signer.CertEpoch > policy.EpochSeq {
+		return vault.ErrAuthorization
+	}
+	roleAuthorized := false
+	for _, binding := range policy.Roles {
+		if binding.DeviceID == signer.DeviceID && binding.Role == signer.Role && (binding.Role == vault.RoleRoot || binding.Role == vault.RolePublisher) {
+			roleAuthorized = true
+			break
+		}
+	}
+	if !roleAuthorized {
+		return vault.ErrAuthorization
+	}
+	if len(data) < ed25519.SignatureSize {
+		return vault.ErrSignature
+	}
+	preimage := append([]byte("dottie/v1/sig"), data[:len(data)-ed25519.SignatureSize]...)
+	return vault.Verify("dottie/v1/sig-snapshot", preimage, envelope.Signature[:], ed25519.PublicKey(signer.SigningPublicKey[:]))
 }
 
 func (io ATProtoTransitionIO) ApplyTransition(ctx context.Context, revision *Revision, publication FencedPublication) error {
@@ -215,7 +287,11 @@ func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAtte
 	if err := store.BeginTransitionAttempt(ctx, attempt); err != nil {
 		return TransitionCommitResult{}, err
 	}
-	blobReference, uploadedCID, err := io.StageCandidate(ctx, transition.Snapshot)
+	transitionPolicy, err := vault.DecodePolicy(transition.Policy)
+	if err != nil {
+		return TransitionCommitResult{}, fmt.Errorf("%w: transition candidate policy", ErrBatchRejected)
+	}
+	blobReference, uploadedCID, err := io.StageCandidate(ctx, transition.Snapshot, transitionPolicy, transition.Recipients)
 	if err != nil {
 		return transitionResult(attempt, TransitionOutcomeNotLanded, initialRevision, evidenceWith(string(evidence), "stageError", err.Error())), errors.Join(err, store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, evidenceWith(string(evidence), "stageError", err.Error())), ErrCandidateMayBeDisclosed)
 	}

@@ -190,27 +190,21 @@ target, and every edge examined before `conflicting` can be returned. Each contr
 with its matching policy evidence; missing predecessor policy evidence remains unverifiable rather than being
 treated as a proven edge.
 
-### Recipient-wrap guarantees and residual limit
+### Recipient-wrap guarantees
 
-`SealAuthorized` enforces exact `(KeyID, PublicKey)` recipient pairs against the policy; substitution,
-omission and extra pairs are refused with `ErrRecipient`. `VaultReader` enforces equality of recipient
-key-ID sets only, returning `ErrReadRecipientSet`, whether or not a device key was supplied. Extra,
-missing and otherwise mismatched IDs are refused: `TestExpectedRefusalReaderExtraRecipientInMetadata`,
-`TestReaderRefusesMissingPolicyRecipientKeyID` and `TestReaderRefusesSameCountRecipientSet` cover those
-cases. `TestReaderRefusesUnnamedRecipientSet` also refuses an envelope that adds an unlisted ID. The
-wire format carries no recipient public key (`envelope.go:93-98`), so the reader cannot prove which
-public key built another recipient's wrap.
+`SealPrepared` requires the policy evidence and enforces exact `(KeyID, PublicKey)` pairs against its
+recipients; substitution, omission, extra and duplicate pairs are refused with `ErrRecipient`. It
+also requires the prepared vault, epoch and policy digest to match that policy. Production transition
+and publication preparation pass their current or successor policy directly to this primitive.
+`SealAuthorized` performs the signer-role checks and delegates sealing with that policy.
 
-The residual is a substituted public key *under a policy key ID*. A publisher bypassing
-`SealAuthorized` and calling `SealPrepared` can keep the exact policy key-ID set but wrap one ID to a
-rogue public key. `TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey` proves that the reader accepts
-that envelope and the rogue private key independently recovers that snapshot's content key. By
-contrast, `TestRogueWrapDisclosesContentKeyOutsideReader` only demonstrates an independent unwrap of an
-extra-ID wrapper; the reader refuses that fixture and it does not prove reader acceptance. The
-preventive layer is `SealAuthorized`'s exact key-ID/public-key pair check; the reader cannot prevent
-substitution once a caller bypasses it. `Seal` generates a fresh content key per call
-(envelope.go:203-206), so the disclosure is one envelope's key, not the epoch's. A wrap being
-*malformed* is separate, detectable only by attempting the unwrap, and no refusal is claimed for it.
+`VaultReader` separately enforces equality of the envelope's recipient key-ID set with policy,
+returning `ErrReadRecipientSet` whether or not a device key was supplied. This is defence in depth;
+the wire format carries no recipient public key (`envelope.go:93-98`), so reader set validation alone
+cannot prove which public key built another recipient's wrap. `TestRogueWrapDisclosesContentKeyOutsideReader`
+and `TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey` now prove the hostile wraps are refused by
+the production sealing primitive. The earlier framing of recipient substitution as an accepted residual
+risk was wrong.
 
 ### Undetectable limits
 

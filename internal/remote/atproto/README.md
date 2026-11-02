@@ -138,9 +138,10 @@ revisit the defaults before production reads.
 A verified revision carries a read-only `(NSID, rkey) -> record CID` membership view and record
 bytes sourced only from that CAR. `PublishFenced` emits one `com.atproto.repo.applyWrites` batch
 for administrative transitions: the first blob-reference record, head, control and explicitly
-supplied policy/certificate writes are atomic. Ordinary publication uses the separate
-`PublishSnapshotFenced` path, which writes only the snapshot reference and head; it cannot encode a
-control write. Both paths use the verified revision CID as `swapCommit`, with no unfenced fallback.
+supplied policy/certificate writes are atomic. Ordinary publication uses an unexported fenced sink
+reachable only through `CommitPublication`; it writes only the snapshot reference and head and cannot
+encode a control write. Both paths use the verified revision CID as `swapCommit`, with no unfenced
+fallback.
 A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
@@ -450,9 +451,12 @@ Consequences encoded in this package:
 ## Fenced vault publication and transitions
 
 `CommitPublication` accepts a publisher- or root-authorized `vault.Publication`, a signing key, a
-`PublicationIO` and a durable attempt store. It uploads the already-sealed current-epoch snapshot
-with `application/octet-stream`, then calls `PublishSnapshotFenced` with exactly two writes: the
-snapshot reference and a head whose `publication_count` is the predecessor count plus one. It
+concrete `ATProtoPublicationIO` value and a durable attempt store. Requiring this concrete adapter
+is intentional: callers cannot supply an outside I/O implementation or override its concrete verified
+reader and fenced-write path. It uploads the already-sealed current-epoch snapshot with
+`application/octet-stream`, after the sink independently decodes its envelope and checks the expected
+vault, epoch and policy digest. It then invokes the unexported fenced sink with exactly two writes:
+the snapshot reference and a head whose `publication_count` is the predecessor count plus one. It
 writes no control and changes no epoch. The prepared policy digest and predecessor head are checked
 before staging and against a fresh verified read after staging. A superseded policy is a typed
 `ErrPreparedPolicyMismatch`; the candidate must be discarded and prepared again.

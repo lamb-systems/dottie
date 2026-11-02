@@ -125,55 +125,35 @@ func TestReaderRefusesSameCountRecipientSet(t *testing.T) {
 
 func sealFixtureSnapshotWithPreparedRecipients(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte, recipients []vault.PreparedRecipient) ([]byte, SnapshotRecord) {
 	t.Helper()
-	policy, _, digest := fixturePolicyParts(t, fixture)
-	envelope, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: digest, Parent: parent, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: plaintext, SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, 32),
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: recipients,
-	})
-	require.NoError(t, err)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	return envelopeBytes, snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	baseEnvelope, _ := sealFixtureSnapshot(t, fixture, parent, publicationSeed, plaintext)
+	keyIDs := make([][]byte, len(recipients))
+	for index, recipient := range recipients {
+		keyIDs[index] = bytes.Clone(recipient.KeyID)
+	}
+	return forgeEnvelopeRecipientKeyIDs(t, baseEnvelope, keyIDs, fixtureSigningKey(12))
 }
 
 func TestExpectedRefusalReaderUnauthorizedWrap(t *testing.T) {
 	fixture := newReadFixture(t)
-	policy, _, digest := fixturePolicyParts(t, fixture)
-	prepared := vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: digest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, 32),
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: []vault.PreparedRecipient{
-			{KeyID: []byte("publisher-sign"), PublicKey: readX25519Key(t, 22).PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 31).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x33}, 24))},
-			{KeyID: []byte("root-sign"), PublicKey: readX25519Key(t, 21).PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 32).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x34}, 24))},
-			{KeyID: bytes.Clone(readRogueKeyID), PublicKey: readX25519Key(t, 98).PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 97).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x35}, 24))},
-		},
+	policy, _, _ := fixturePolicyParts(t, fixture)
+	baseEnvelope, _ := sealFixtureSnapshot(t, fixture, nil, 0x99, []byte("synthetic snapshot payload"))
+	keyIDs := make([][]byte, 0, len(policy.Recipients)+1)
+	for _, recipient := range policy.Recipients {
+		keyIDs = append(keyIDs, bytes.Clone(recipient.KeyID))
 	}
-	envelope, err := vault.SealPrepared(prepared)
-	require.NoError(t, err)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	keyIDs = append(keyIDs, bytes.Clone(readRogueKeyID))
+	envelopeBytes, snapshot := forgeEnvelopeRecipientKeyIDs(t, baseEnvelope, keyIDs, fixtureSigningKey(12))
 	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 
 	controlFixture := newReadFixture(t)
-	controlPrepared := prepared
-	controlPrepared.Recipients = append([]vault.PreparedRecipient(nil), prepared.Recipients[:len(prepared.Recipients)-1]...)
-	controlEnvelope, err := vault.SealPrepared(controlPrepared)
-	require.NoError(t, err)
-	controlEnvelopeBytes, err := vault.EncodeEnvelope(controlEnvelope)
-	require.NoError(t, err)
-	controlSnapshot := snapshotRecordForEnvelope(t, controlEnvelope, controlEnvelopeBytes, fixtureSigningKey(12))
-	controlHead := signFixtureHead(t, controlFixture, controlEnvelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
-	installSnapshot(t, &controlFixture, controlEnvelopeBytes, controlSnapshot, controlHead)
+	controlEnvelope, controlSnapshot := sealFixtureSnapshot(t, controlFixture, nil, 0x99, []byte("synthetic snapshot payload"))
+	controlHead := signFixtureHead(t, controlFixture, controlEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
+	installSnapshot(t, &controlFixture, controlEnvelope, controlSnapshot, controlHead)
 	controlResult, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
-	require.NoError(t, err, "the same prepared envelope without the unauthorized wrap reads")
+	require.NoError(t, err, "the otherwise identical envelope without the unauthorized wrap reads")
 	assert.Equal(t, []byte("synthetic snapshot payload"), controlResult.Plaintext)
-	assert.Equal(t, len(prepared.Recipients)-1, len(controlResult.Envelope.Recipients))
+	assert.Equal(t, len(policy.Recipients), len(controlResult.Envelope.Recipients))
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecipientSet, "the reader must reject an envelope carrying a wrap for a device the policy never named")

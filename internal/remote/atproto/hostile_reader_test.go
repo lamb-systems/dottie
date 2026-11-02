@@ -5,13 +5,10 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/hkdf"
-	"crypto/sha256"
-	"encoding/binary"
-	"hash"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -21,7 +18,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -506,26 +502,46 @@ func currentSnapshotRecord(t *testing.T, fixture readFixture) SnapshotRecord {
 
 func sealFixtureSnapshotExtraRecipient(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte, extra vault.RecipientPublicKey) ([]byte, SnapshotRecord) {
 	t.Helper()
-	policy, _, digest := fixturePolicyParts(t, fixture)
-	recipients := append(fixtureRecipientPublicKeys(policy), extra)
-	preparedRecipients := make([]vault.PreparedRecipient, len(recipients))
-	for index, recipient := range recipients {
-		seed := byte(31 + index)
-		preparedRecipients[index] = vault.PreparedRecipient{
-			KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey),
-			EphemeralPrivate: readX25519Key(t, seed).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{byte(0x33 + index)}, 24)),
-		}
+	policy, _, _ := fixturePolicyParts(t, fixture)
+	envelopeBytes, _ := sealFixtureSnapshot(t, fixture, parent, publicationSeed, plaintext)
+	keyIDs := make([][]byte, 0, len(policy.Recipients)+1)
+	for _, recipient := range policy.Recipients {
+		keyIDs = append(keyIDs, bytes.Clone(recipient.KeyID))
 	}
-	envelope, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: digest, Parent: parent, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: plaintext, SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, chacha20poly1305.KeySize),
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: preparedRecipients,
+	keyIDs = append(keyIDs, bytes.Clone(extra.KeyID))
+	return forgeEnvelopeRecipientKeyIDs(t, envelopeBytes, keyIDs, fixtureSigningKey(12))
+}
+
+func forgeEnvelopeRecipientKeyIDs(t *testing.T, encoded []byte, keyIDs [][]byte, signer ed25519.PrivateKey) ([]byte, SnapshotRecord) {
+	t.Helper()
+	envelope, err := vault.DecodeEnvelope(encoded)
+	require.NoError(t, err)
+	original := append([]vault.EnvelopeRecipient(nil), envelope.Recipients...)
+	envelope.Recipients = make([]vault.EnvelopeRecipient, len(keyIDs))
+	for index, keyID := range keyIDs {
+		if index < len(original) {
+			envelope.Recipients[index] = original[index]
+		} else {
+			envelope.Recipients[index] = vault.EnvelopeRecipient{
+				Ephemeral:  [32]byte(bytes.Repeat([]byte{byte(index + 1)}, 32)),
+				WrapNonce:  [24]byte(bytes.Repeat([]byte{byte(index + 17)}, 24)),
+				WrappedKey: bytes.Repeat([]byte{byte(index + 33)}, 48),
+			}
+		}
+		envelope.Recipients[index].KeyID = bytes.Clone(keyID)
+	}
+	sort.Slice(envelope.Recipients, func(i, j int) bool {
+		return bytes.Compare(envelope.Recipients[i].KeyID, envelope.Recipients[j].KeyID) < 0
 	})
+	unsigned, err := vault.EncodeEnvelope(envelope)
 	require.NoError(t, err)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
+	preimage := append([]byte("dottie/v1/sig"), unsigned[:len(unsigned)-ed25519.SignatureSize]...)
+	signature, err := vault.Sign("dottie/v1/sig-snapshot", preimage, signer)
 	require.NoError(t, err)
-	return envelopeBytes, snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	copy(envelope.Signature[:], signature)
+	encoded, err = vault.EncodeEnvelope(envelope)
+	require.NoError(t, err)
+	return encoded, snapshotRecordForEnvelope(t, envelope, encoded, signer)
 }
 
 func TestReaderRefusesExtraRecipientInMetadata(t *testing.T) {
@@ -804,97 +820,30 @@ func TestSeamBoundaryAttestationSignerUnauthenticated(t *testing.T) {
 		"record-context validation is not an authentication verdict: a validly signed attestation naming a device with no role still passes")
 }
 
-func wrapAppendBytes16(buffer, value []byte) []byte {
-	var length [2]byte
-	binary.BigEndian.PutUint16(length[:], uint16(len(value)))
-	buffer = append(buffer, length[:]...)
-	return append(buffer, value...)
-}
-
-func wrapAppendUint64(buffer []byte, value uint64) []byte {
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], value)
-	return append(buffer, encoded[:]...)
-}
-
-func recoverWrappedContentKey(t *testing.T, vaultID [32]byte, epoch uint64, purpose byte, keyID []byte, devicePrivate *ecdh.PrivateKey, entry vault.EnvelopeRecipient) []byte {
-	t.Helper()
-	ephemeral, err := ecdh.X25519().NewPublicKey(entry.Ephemeral[:])
-	require.NoError(t, err)
-	shared, err := devicePrivate.ECDH(ephemeral)
-	require.NoError(t, err)
-	info := append([]byte("dottie/v1/wrap"), vaultID[:]...)
-	info = wrapAppendBytes16(info, keyID)
-	info = wrapAppendUint64(info, epoch)
-	info = append(info, purpose)
-	wrapKey, err := hkdf.Key[hash.Hash](sha256.New, shared, nil, string(info), chacha20poly1305.KeySize)
-	require.NoError(t, err)
-	associated := append([]byte("dottie/v1/wrapad"), vaultID[:]...)
-	associated = wrapAppendBytes16(associated, keyID)
-	associated = wrapAppendUint64(associated, epoch)
-	associated = append(associated, purpose)
-	associated = append(associated, devicePrivate.PublicKey().Bytes()...)
-	associated = append(associated, entry.Ephemeral[:]...)
-	aead, err := chacha20poly1305.NewX(wrapKey)
-	require.NoError(t, err)
-	contentKey, err := aead.Open(nil, entry.WrapNonce[:], entry.WrappedKey, associated)
-	require.NoError(t, err)
-	return contentKey
-}
-
-func sealRogueRecipientEnvelope(t *testing.T, fixture readFixture) (vault.Policy, []byte, *ecdh.PrivateKey, vault.Envelope) {
-	t.Helper()
-	policy, _, digest := fixturePolicyParts(t, fixture)
-	contentKey := bytes.Repeat([]byte{0x5a}, chacha20poly1305.KeySize)
-	publisherRecipientKey := readX25519Key(t, 22)
-	rootRecipientKey := readX25519Key(t, 21)
-	rogueRecipientKey := readX25519Key(t, 98)
-	prepared := vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: digest, Parent: nil, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12), ContentKey: contentKey,
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: []vault.PreparedRecipient{
-			{KeyID: []byte("publisher-sign"), PublicKey: publisherRecipientKey.PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 31).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x33}, 24))},
-			{KeyID: []byte("root-sign"), PublicKey: rootRecipientKey.PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 32).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x34}, 24))},
-			{KeyID: bytes.Clone(readRogueKeyID), PublicKey: rogueRecipientKey.PublicKey().Bytes(), EphemeralPrivate: readX25519Key(t, 97).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x35}, 24))},
-		},
-	}
-	envelope, err := vault.SealPrepared(prepared)
-	require.NoError(t, err)
-	return policy, contentKey, rogueRecipientKey, envelope
-}
-
 func TestReaderRefusesMissingPolicyRecipientKeyID(t *testing.T) {
 	fixture := newReadFixture(t)
-	policy, _, policyDigest := fixturePolicyParts(t, fixture)
-	recipients := preparedRecipientsForPolicy(t, policy, 71)
-	require.Len(t, recipients, 2)
-	envelope, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x97}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12),
-		ContentKey: bytes.Repeat([]byte{0x5a}, 32), Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: recipients[:1],
-	})
-	require.NoError(t, err)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	policy, _, _ := fixturePolicyParts(t, fixture)
+	envelopeBytes, _ := sealFixtureSnapshot(t, fixture, nil, 0x97, []byte("synthetic snapshot payload"))
+	keyIDs := [][]byte{bytes.Clone(policy.Recipients[0].KeyID)}
+	envelopeBytes, snapshot := forgeEnvelopeRecipientKeyIDs(t, envelopeBytes, keyIDs, fixtureSigningKey(12))
 	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 
-	_, err = fixture.reader().Read(context.Background(), fixture.request)
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecipientSet,
 		"the reader refuses a correctly signed envelope that omits a policy recipient key ID")
 }
 
 func TestReaderRefusesUnnamedRecipientSet(t *testing.T) {
 	fixture := newReadFixture(t)
-	_, _, _, envelope := sealRogueRecipientEnvelope(t, fixture)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	policy, _, _ := fixturePolicyParts(t, fixture)
+	envelopeBytes, _ := sealFixtureSnapshot(t, fixture, nil, 0x99, []byte("synthetic snapshot payload"))
+	keyIDs := make([][]byte, 0, len(policy.Recipients)+1)
+	for _, recipient := range policy.Recipients {
+		keyIDs = append(keyIDs, bytes.Clone(recipient.KeyID))
+	}
+	keyIDs = append(keyIDs, bytes.Clone(readRogueKeyID))
+	envelopeBytes, snapshot := forgeEnvelopeRecipientKeyIDs(t, envelopeBytes, keyIDs, fixtureSigningKey(12))
 	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 
@@ -913,68 +862,45 @@ func TestReaderRefusesUnnamedRecipientSet(t *testing.T) {
 
 func TestRogueWrapDisclosesContentKeyOutsideReader(t *testing.T) {
 	fixture := newReadFixture(t)
-	policy, contentKey, rogueRecipientKey, envelope := sealRogueRecipientEnvelope(t, fixture)
-	var rogueEntry vault.EnvelopeRecipient
-	found := false
-	for _, entry := range envelope.Recipients {
-		if bytes.Equal(entry.KeyID, readRogueKeyID) {
-			rogueEntry = entry
-			found = true
-		}
-	}
-	require.True(t, found, "the hostile prepared envelope contains the rogue recipient wrap")
-	recovered := recoverWrappedContentKey(t, fixture.request.Vault, policy.EpochSeq, byte(vault.PurposeSnapshot), readRogueKeyID, rogueRecipientKey, rogueEntry)
-	require.Equal(t, contentKey, recovered,
-		"the rogue private key recovers the content key through X25519, HKDF and AEAD without a reader call")
+	policy, _, policyDigest := fixturePolicyParts(t, fixture)
+	recipients := preparedRecipientsForPolicy(t, policy, 71)
+	recipients = append(recipients, vault.PreparedRecipient{
+		KeyID: bytes.Clone(readRogueKeyID), PublicKey: readX25519Key(t, 98).PublicKey().Bytes(),
+		EphemeralPrivate: readX25519Key(t, 97).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x35}, 24)),
+	})
+	_, err := vault.SealPrepared(vault.PreparedSeal{
+		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
+		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
+		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12),
+		ContentKey: bytes.Repeat([]byte{0x5a}, 32), Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
+		Recipients: recipients, Policy: policy,
+	})
+	require.ErrorIs(t, err, vault.ErrRecipient,
+		"the extra-recipient attack is unconstructible through the production sealing primitive, rather than merely undetected at read time")
 }
 
 func TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey(t *testing.T) {
 	fixture := newReadFixture(t)
 	policy, _, policyDigest := fixturePolicyParts(t, fixture)
-	contentKey := bytes.Repeat([]byte{0x5a}, chacha20poly1305.KeySize)
-	rogueRecipientKey := readX25519Key(t, 98)
 	recipients := preparedRecipientsForPolicy(t, policy, 71)
 	require.Len(t, recipients, len(policy.Recipients))
 	var substitutedKeyID []byte
 	for index := range recipients {
 		if bytes.Equal(recipients[index].KeyID, []byte("root-sign")) {
 			substitutedKeyID = bytes.Clone(recipients[index].KeyID)
-			recipients[index].PublicKey = rogueRecipientKey.PublicKey().Bytes()
+			recipients[index].PublicKey = readX25519Key(t, 98).PublicKey().Bytes()
 		}
 	}
 	require.Equal(t, []byte("root-sign"), substitutedKeyID,
 		"the substituted public key keeps a key ID named by policy")
-
-	envelope, err := vault.SealPrepared(vault.PreparedSeal{
+	_, err := vault.SealPrepared(vault.PreparedSeal{
 		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
 		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12), ContentKey: contentKey,
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: recipients,
+		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, 32),
+		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: recipients, Policy: policy,
 	})
-	require.NoError(t, err)
-	envelopeBytes, err := vault.EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
-	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
-	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
-
-	result, err := fixture.reader().Read(context.Background(), fixture.request)
-	require.NoError(t, err,
-		"the reader accepts the substituted public key because envelope and policy key-ID sets match")
-	assert.Equal(t, []byte("synthetic snapshot payload"), result.Plaintext)
-
-	var rogueEntry vault.EnvelopeRecipient
-	found := false
-	for _, entry := range result.Envelope.Recipients {
-		if bytes.Equal(entry.KeyID, substitutedKeyID) {
-			rogueEntry = entry
-			found = true
-		}
-	}
-	require.True(t, found, "the accepted envelope retains the policy key ID on the rogue wrapper")
-	recovered := recoverWrappedContentKey(t, fixture.request.Vault, policy.EpochSeq, byte(vault.PurposeSnapshot), substitutedKeyID, rogueRecipientKey, rogueEntry)
-	require.Equal(t, contentKey, recovered,
-		"the rogue private key independently unwraps this snapshot's content key")
+	require.ErrorIs(t, err, vault.ErrRecipient,
+		"the policy-key-ID substitution attack is unconstructible through the production sealing primitive, rather than merely undetected at read time")
 }
 
 func fixturePublisherCertKey(t *testing.T, fixture readFixture) RecordKey {
@@ -1084,7 +1010,7 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 		Purpose: vault.PurposeSnapshot, Vault: bootstrap.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
 		EpochSeq: policyObject.EpochSeq, PolicyDigest: policyDigest, Parent: nil, DeviceID: "restore", KeyID: []byte("restore-sign"),
 		Plaintext: []byte("synthetic snapshot payload"), SigningKey: restoreSigning, ContentKey: bytes.Repeat([]byte{45}, 32),
-		Nonce: [24]byte(bytes.Repeat([]byte{63}, 24)), Recipients: preparedRecipientsForPolicy(t, policyObject, 80),
+		Nonce: [24]byte(bytes.Repeat([]byte{63}, 24)), Recipients: preparedRecipientsForPolicy(t, policyObject, 80), Policy: policyObject,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)

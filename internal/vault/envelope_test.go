@@ -154,6 +154,8 @@ func newEnvelopeFixture(t *testing.T) envelopeFixture {
 		Signer: Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
 	}
 	policyBytes := signPolicyValue(t, policy, signingKey)
+	policy, err := DecodePolicy(policyBytes)
+	require.NoError(t, err)
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
 	prepared := PreparedSeal{
@@ -164,7 +166,7 @@ func newEnvelopeFixture(t *testing.T) envelopeFixture {
 		Recipients: []PreparedRecipient{{
 			KeyID: []byte("recipient-a"), PublicKey: recipientKey.PublicKey().Bytes(),
 			EphemeralPrivate: fixedX25519Key(41).Bytes(), WrapNonce: [24]byte(fixtureBytes(181, 24)),
-		}},
+		}}, Policy: policy,
 	}
 	envelope, err := SealPrepared(prepared)
 	require.NoError(t, err)
@@ -194,9 +196,12 @@ func signedVectors(t *testing.T) map[string][]byte {
 		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondKey.PublicKey().Bytes()),
 	})
 	manyPolicyBytes := signPolicyValue(t, manyPolicy, fixture.signingKey)
+	manyPolicy, err = DecodePolicy(manyPolicyBytes)
+	require.NoError(t, err)
 	manyPolicyDigest, err := ComputePolicyDigest(manyPolicyBytes)
 	require.NoError(t, err)
 	many := fixture.prepared
+	many.Policy = manyPolicy
 	many.PolicyDigest = manyPolicyDigest
 	many.Recipients = []PreparedRecipient{{
 		KeyID: []byte("recipient-b"), PublicKey: secondKey.PublicKey().Bytes(),
@@ -314,6 +319,7 @@ func TestSealGeneratesMaterialAndOpens(t *testing.T) {
 		Parent: fixture.envelope.Parent, DeviceID: fixture.envelope.DeviceID, KeyID: fixture.envelope.KeyID,
 		Plaintext: fixture.prepared.Plaintext, SigningKey: fixture.publisherKey,
 		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+		Policy:     fixture.policy,
 	}
 	envelope, err := Seal(request)
 	require.NoError(t, err)
@@ -695,15 +701,102 @@ func TestOpenRejectsSwappedRecipientKey(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRecipient)
 }
 
+func TestSealPreparedRequiresExactPolicyPairsAndMetadata(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+	originalRecipientPublicKey := bytes.Clone(fixture.prepared.Recipients[0].PublicKey)
+	for _, test := range []struct {
+		name   string
+		mutate func(*PreparedSeal)
+		want   error
+	}{
+		{
+			name: "substituted public key",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.Recipients[0].PublicKey = fixedX25519Key(90).PublicKey().Bytes()
+			},
+			want: ErrRecipient,
+		},
+		{
+			name: "omitted recipient",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.Recipients = nil
+			},
+			want: ErrRecipient,
+		},
+		{
+			name: "extra recipient",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.Recipients = append(prepared.Recipients, PreparedRecipient{
+					KeyID: []byte("recipient-extra"), PublicKey: fixedX25519Key(91).PublicKey().Bytes(),
+					EphemeralPrivate: fixedX25519Key(92).Bytes(), WrapNonce: [24]byte(fixtureBytes(220, 24)),
+				})
+			},
+			want: ErrRecipient,
+		},
+		{
+			name: "duplicate recipient",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.Recipients = append(prepared.Recipients, prepared.Recipients[0])
+			},
+			want: ErrRecipient,
+		},
+		{
+			name: "vault mismatch",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.Vault[0] ^= 1
+			},
+			want: ErrAuthorization,
+		},
+		{
+			name: "epoch mismatch",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.EpochSeq++
+			},
+			want: ErrSnapshotEpoch,
+		},
+		{
+			name: "policy digest mismatch",
+			mutate: func(prepared *PreparedSeal) {
+				prepared.PolicyDigest[0] ^= 1
+			},
+			want: ErrAuthorization,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared := fixture.prepared
+			prepared.Recipients = append([]PreparedRecipient(nil), fixture.prepared.Recipients...)
+			for index := range prepared.Recipients {
+				prepared.Recipients[index].KeyID = bytes.Clone(prepared.Recipients[index].KeyID)
+				prepared.Recipients[index].PublicKey = bytes.Clone(prepared.Recipients[index].PublicKey)
+				prepared.Recipients[index].EphemeralPrivate = bytes.Clone(prepared.Recipients[index].EphemeralPrivate)
+			}
+			test.mutate(&prepared)
+			_, err := SealPrepared(prepared)
+			assert.ErrorIs(t, err, test.want)
+			assert.Equal(t, originalRecipientPublicKey, fixture.prepared.Recipients[0].PublicKey, "subtest mutation must not affect the fixture")
+		})
+	}
+}
+
 func TestSealPreparedRejectsLowOrderRecipientKey(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	prepared := fixture.prepared
+	policy := fixture.policy
+	policy.Recipients = append([]PolicyRecipient(nil), fixture.policy.Recipients...)
+	policy.Recipients[0].PublicKey = [32]byte{}
+	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+	policy, err := DecodePolicy(policyBytes)
+	require.NoError(t, err)
+	prepared.Policy = policy
+	prepared.PolicyDigest, err = ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
 	prepared.Recipients = []PreparedRecipient{{
 		KeyID: []byte("recipient-a"), PublicKey: make([]byte, 32),
 		EphemeralPrivate: fixedX25519Key(52).Bytes(), WrapNonce: [24]byte(fixtureBytes(220, 24)),
 	}}
-	_, err := SealPrepared(prepared)
+	_, err = SealPrepared(prepared)
 	assert.ErrorIs(t, err, ErrRecipient)
+	assert.ErrorContains(t, err, "X25519")
 }
 
 func TestCommitmentRejectsCiphertextValidUnderTwoContentKeys(t *testing.T) {
@@ -1036,20 +1129,27 @@ func vectorSeed(name string) []byte {
 
 func TestOpenRejectsPolicyEpochMismatch(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
-	shifted := fixture.policy
-	shifted.EpochSeq = fixture.policy.EpochSeq + 1
-	shiftedBytes := signPolicyValue(t, shifted, fixture.signingKey)
-	shiftedDigest, err := ComputePolicyDigest(shiftedBytes)
+	hostile := Envelope{
+		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault,
+		PublicationID: [16]byte(fixtureBytes(231, 16)), EpochSeq: fixture.policy.EpochSeq + 1,
+		PolicyDigest: fixture.prepared.PolicyDigest, Parent: fixtureCIDBytes(t),
+		DeviceID: fixture.certificate.DeviceID, KeyID: bytes.Clone(fixture.certificate.KeyID),
+		Commit: [32]byte(fixtureBytes(232, 32)),
+		Recipients: []EnvelopeRecipient{{
+			KeyID: []byte("recipient-a"), Ephemeral: [32]byte(fixedX25519Key(53).PublicKey().Bytes()),
+			WrapNonce: [24]byte(fixtureBytes(233, 24)), WrappedKey: fixtureBytes(234, 48),
+		}},
+		Nonce: [24]byte(fixtureBytes(235, 24)), Ciphertext: []byte("hostile envelope"),
+		Tag: [16]byte(fixtureBytes(236, 16)),
+	}
+	encoded, err := EncodeEnvelope(hostile)
 	require.NoError(t, err)
-	prepared := fixture.prepared
-	prepared.PolicyDigest = shiftedDigest
-	envelope, err := SealPrepared(prepared)
+	hostile, err = DecodeEnvelope(encoded)
 	require.NoError(t, err)
-	request := fixture.openRequest
-	request.Policy = shiftedBytes
-	request.PolicyDigest = shiftedDigest
-	_, err = Open(envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization, "a policy whose epoch differs from the envelope must not authorize it")
+	plaintext, err := Open(hostile, fixture.openRequest)
+	assert.ErrorIs(t, err, ErrAuthorization, "Open refuses an envelope whose epoch differs from its signed policy")
+	assert.ErrorContains(t, err, "policy epoch_seq")
+	assert.Nil(t, plaintext)
 }
 
 func TestSealAuthorizedEnforcesRole(t *testing.T) {
@@ -1094,6 +1194,8 @@ func TestSealAuthorizedRefusesSubstitutedRecipientPair(t *testing.T) {
 		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
 	})
 	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+	policy, err := DecodePolicy(policyBytes)
+	require.NoError(t, err)
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
 	exactPairs := []RecipientPublicKey{
@@ -1142,6 +1244,16 @@ func TestEnvelopeCodecRefusesDuplicateRecipientKeyIDs(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	secondRecipientKey := fixedX25519Key(23)
 	prepared := fixture.prepared
+	policy := fixture.policy
+	policy.Recipients = append(policy.Recipients, PolicyRecipient{
+		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
+	})
+	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+	policy, err := DecodePolicy(policyBytes)
+	require.NoError(t, err)
+	prepared.Policy = policy
+	prepared.PolicyDigest, err = ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
 	prepared.Recipients = append(append([]PreparedRecipient(nil), fixture.prepared.Recipients...), PreparedRecipient{
 		KeyID: []byte("recipient-b"), PublicKey: secondRecipientKey.PublicKey().Bytes(),
 		EphemeralPrivate: fixedX25519Key(42).Bytes(), WrapNonce: [24]byte(fixtureBytes(201, 24)),

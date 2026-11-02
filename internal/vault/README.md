@@ -172,8 +172,10 @@ key ids, and aborts the whole operation on any key or entropy failure rather tha
 envelope that some recipients cannot open. It uses a fresh content key and content nonce from
 `crypto/rand`, commits to that key and context, and returns only a fully signed envelope.
 Recipient keys must be the policy-authorized certificate keys; the signer must be authorized
-for the selected purpose. `SealPrepared` has the same invariants and is intended for fixed-key
-test vectors, not production entropy handling.
+for the selected purpose. `SealPrepared` requires policy evidence, enforces exact recipient pairs
+and matching vault/epoch/policy digest, and is the primitive used by `PrepareTransition` and
+`PreparePublication`. Its fixed key inputs are supplied by its caller, which owns their entropy
+handling.
 
 ## Bootstrap and device transitions
 
