@@ -530,6 +530,12 @@ func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observati
 					if bytes.Equal(observation.HeadCID, existingHeadCID) {
 						return ErrVaultPublicationConflict
 					}
+					if !bytes.Equal(observation.PrevHeadCID, existingHeadCID) {
+						return ErrPublicationAncestry
+					}
+					if observation.EnforceParent && !bytes.Equal(observation.ParentCID, existingHeadCID) {
+						return ErrPublicationAncestry
+					}
 				}
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {

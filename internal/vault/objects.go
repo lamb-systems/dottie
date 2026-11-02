@@ -15,6 +15,13 @@ const (
 	RoleRestoreOnly
 )
 
+const (
+	minPolicyMaxPublications uint32 = 1
+	maxPolicyMaxPublications uint32 = 100000
+	minPolicyMaxEpochAge     uint32 = 3600
+	maxPolicyMaxEpochAge     uint32 = 31536000
+)
+
 type Signer struct {
 	DeviceID string
 	KeyID    []byte
@@ -562,7 +569,24 @@ func scanPolicy(data []byte) error {
 			return cursor.err
 		}
 	}
-	if !cursor.skip(8 + 2 + 4 + 4 + 32 + 32) {
+	if !cursor.skip(8 + 2) {
+		return cursor.err
+	}
+	maxPublications := cursor.u32()
+	if cursor.err != nil {
+		return cursor.err
+	}
+	if maxPublications < minPolicyMaxPublications || maxPublications > maxPolicyMaxPublications {
+		return fmt.Errorf("%w: max_publications", ErrLimit)
+	}
+	maxEpochAge := cursor.u32()
+	if cursor.err != nil {
+		return cursor.err
+	}
+	if maxEpochAge < minPolicyMaxEpochAge || maxEpochAge > maxPolicyMaxEpochAge {
+		return fmt.Errorf("%w: max_epoch_age", ErrLimit)
+	}
+	if !cursor.skip(32 + 32) {
 		return cursor.err
 	}
 	if err := scanSigner(&cursor); err != nil {

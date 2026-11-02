@@ -934,6 +934,9 @@ func validateRevocationTransition(transition Transition, predecessor Predecessor
 }
 
 func validateRevocationDelta(oldPolicy, policy Policy, oldControl, control Control, predecessorCertificates [][]byte) error {
+	if !nonRosterPolicyFieldsEqual(oldPolicy, policy) {
+		return ErrTransitionDelta
+	}
 	if len(policy.Roles) != len(oldPolicy.Roles)-1 || len(policy.Recipients) != len(oldPolicy.Recipients)-1 || len(control.Revoked) != len(oldControl.Revoked)+1 {
 		return ErrTransitionDelta
 	}
@@ -1088,7 +1091,7 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 		return err
 	}
 	policyDigest := mustPolicyDigest(transition.Policy)
-	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq || envelope.PolicyDigest != policyDigest || envelope.Vault != policy.Vault {
+	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq || envelope.PolicyDigest != policyDigest || envelope.Vault != policy.Vault || !bytes.Equal(envelope.Parent, predecessor.HeadCID) {
 		return ErrSnapshotEpoch
 	}
 	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != policyDigest || head.PublicationCount != 0 || !bytes.Equal(head.SnapshotCID, transition.SnapshotCID) || !bytes.Equal(head.BlobCID, transition.BlobCID) || !bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) || !bytes.Equal(control.HeadSnapshotCID, transition.SnapshotCID) {
@@ -1205,25 +1208,25 @@ func verifyTransitionSignatures(transition Transition, proposer Certificate) err
 		case objectKindPolicy:
 			value, err := DecodePolicy(object.encoded)
 			if err != nil {
-				return fmt.Errorf("%w: policy", ErrTransitionSignature)
+				return fmt.Errorf("%w: policy: %w", ErrTransitionSignature, err)
 			}
 			signer, signature = value.Signer, value.Signature[:]
 		case objectKindControl:
 			value, err := DecodeControl(object.encoded)
 			if err != nil {
-				return fmt.Errorf("%w: control", ErrTransitionSignature)
+				return fmt.Errorf("%w: control: %w", ErrTransitionSignature, err)
 			}
 			signer, signature = value.Signer, value.Signature[:]
 		case objectKindCertificate:
 			value, err := DecodeCertificate(object.encoded)
 			if err != nil {
-				return fmt.Errorf("%w: certificate", ErrTransitionSignature)
+				return fmt.Errorf("%w: certificate: %w", ErrTransitionSignature, err)
 			}
 			signer, signature = value.Signer, value.Signature[:]
 		case objectKindHead:
 			value, err := DecodeHead(object.encoded)
 			if err != nil {
-				return fmt.Errorf("%w: head", ErrTransitionSignature)
+				return fmt.Errorf("%w: head: %w", ErrTransitionSignature, err)
 			}
 			signer, signature = value.Signer, value.Signature[:]
 		}
@@ -1247,6 +1250,9 @@ func verifyTransitionSignatures(transition Transition, proposer Certificate) err
 }
 
 func validateEnrollmentDelta(oldPolicy, policy Policy, oldControl, control Control, certificate Certificate) error {
+	if !nonRosterPolicyFieldsEqual(oldPolicy, policy) {
+		return ErrTransitionDelta
+	}
 	if len(policy.Roles) != len(oldPolicy.Roles)+1 || len(policy.Recipients) != len(oldPolicy.Recipients)+1 {
 		return ErrTransitionDelta
 	}
@@ -1309,6 +1315,14 @@ func validateEnrollmentDelta(oldPolicy, policy Policy, oldControl, control Contr
 		}
 	}
 	return nil
+}
+
+func nonRosterPolicyFieldsEqual(oldPolicy, policy Policy) bool {
+	return oldPolicy.PolicyRetentionFloor == policy.PolicyRetentionFloor &&
+		oldPolicy.RetainedRecoveryPoints == policy.RetainedRecoveryPoints &&
+		oldPolicy.MaxPublications == policy.MaxPublications &&
+		oldPolicy.MaxEpochAge == policy.MaxEpochAge &&
+		oldPolicy.RecoveryAnchor == policy.RecoveryAnchor
 }
 
 func validateTransitionRecipients(transition Transition, policy Policy, predecessor Predecessor, proposer Certificate, envelope Envelope) error {

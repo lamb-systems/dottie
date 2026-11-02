@@ -37,12 +37,24 @@ var (
 	ErrReadBlobCIDMismatch            = errors.New("snapshot blob CID mismatch")
 	ErrReadPreviousPolicyRequired     = errors.New("predecessor policy is required")
 	ErrReadUnexpectedPrevious         = errors.New("predecessor policy is unexpected at genesis")
+	ErrReadControlRequired            = errors.New("predecessor control is required")
+	ErrReadControlType                = errors.New("predecessor control record is invalid")
+	ErrReadControlSignature           = errors.New("predecessor control signature failed")
+	ErrReadControlSigner              = errors.New("predecessor control signer is invalid")
+	ErrReadControlEpoch               = errors.New("predecessor control epoch is invalid")
+	ErrReadControlPolicyDigest        = errors.New("predecessor control policy digest is invalid")
+	ErrReadControlLinkage             = errors.New("control predecessor linkage is invalid")
+	ErrPolicyAncestry                 = vault.ErrPolicyAncestry
 	ErrReadVaultAuthentication        = errors.New("vault authentication failed")
+	ErrReadHeadEnvelopeLinkage        = errors.New("head and envelope predecessor linkage disagree")
+	ErrReadSignerMismatch             = errors.New("head and envelope signers disagree")
+	ErrReadRecipientSet               = errors.New("envelope recipient set differs from policy")
 	ErrReadDecryption                 = errors.New("snapshot decryption failed")
 	ErrPublicationObservationRequired = errors.New("durable publication observation store is required")
 	ErrPublicationCountBackwards      = state.ErrVaultPublicationBackwards
 	ErrPublicationCountGap            = state.ErrVaultPublicationGap
 	ErrPublicationCountConflict       = state.ErrVaultPublicationConflict
+	ErrVaultPublicationAncestry       = state.ErrPublicationAncestry
 )
 
 type ReadStage string
@@ -83,6 +95,7 @@ type ReadRequest struct {
 	Vault               [32]byte
 	TrustAnchor         [32]byte
 	PreviousPolicy      []byte
+	PreviousControl     []byte
 	DeviceKeyID         []byte
 	DeviceKey           *ecdh.PrivateKey
 }
@@ -114,7 +127,18 @@ type PublicationObservationStore interface {
 	RecordVaultPublicationObservation(context.Context, state.VaultPublicationObservation) error
 }
 
-func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult) error {
+type PublicationCountOptions struct {
+	MaxPublications uint64
+	EnforceMaximum  bool
+	PrevHeadCID     []byte
+	ParentCID       []byte
+	EnforceParent   bool
+}
+
+func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult, options PublicationCountOptions) error {
+	if options.EnforceMaximum && result.PublicationCount > options.MaxPublications {
+		return vault.ErrPublicationCount
+	}
 	if store == nil {
 		return ErrPublicationObservationRequired
 	}
@@ -132,6 +156,7 @@ func CheckPublicationCount(ctx context.Context, store PublicationObservationStor
 	}
 	return store.RecordVaultPublicationObservation(ctx, state.VaultPublicationObservation{
 		Vault: vaultID, Epoch: result.EpochSeq, PublicationCount: result.PublicationCount, HeadCID: bytes.Clone(result.HeadCID),
+		PrevHeadCID: bytes.Clone(options.PrevHeadCID), ParentCID: bytes.Clone(options.ParentCID), EnforceParent: options.EnforceParent,
 	})
 }
 
@@ -167,7 +192,10 @@ func (r VaultReader) Read(ctx context.Context, request ReadRequest) (ReadResult,
 		}
 		result.Revision = revision
 		result.Freshness = FreshnessUnverified
-		if err := CheckPublicationCount(ctx, r.ObservationStore, request.Vault, result); err != nil {
+		if err := CheckPublicationCount(ctx, r.ObservationStore, request.Vault, result, PublicationCountOptions{
+			MaxPublications: uint64(result.Policy.MaxPublications), EnforceMaximum: true,
+			PrevHeadCID: result.Head.PrevHeadCID, ParentCID: result.Envelope.Parent, EnforceParent: true,
+		}); err != nil {
 			return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: err}
 		}
 		return result, nil
@@ -539,7 +567,7 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	if policy.Signer.DeviceID != policyRecord.SignerDeviceID || !bytes.Equal(policy.Signer.KeyID, policyRecord.SignerKeyID) {
 		return errors.New("policy signer mismatch")
 	}
-	if err := authorizePolicyPredecessor(request, policy, policyBytes, policySigner, certificates); err != nil {
+	if err := authorizePolicyPredecessor(request, policy, policyBytes, policySigner, certificates, control); err != nil {
 		return err
 	}
 	controlSigner, err := authorizedReadSigner(control.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RoleRoot)
@@ -547,6 +575,15 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 		return err
 	}
 	if err := verifySignedObject(controlBytes, "dottie/v1/sig-control", control.Signature[:], controlSigner.object.SigningPublicKey[:]); err != nil {
+		return err
+	}
+	if isReadGenesis(policy, control) {
+		if len(request.PreviousControl) != 0 {
+			return ErrReadUnexpectedPrevious
+		}
+	} else if policy.EpochSeq == 0 && allZero(policy.PrevPolicyDigest[:]) && len(control.PrevControlCID) != 0 {
+		return ErrReadControlLinkage
+	} else if err := authorizeControlPredecessor(request, policy, control, certificates); err != nil {
 		return err
 	}
 	headSigner, err := authorizedReadSigner(head.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RolePublisher)
@@ -563,19 +600,56 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	if err := verifyEnvelopeSignature(envelopeBytes, envelope, snapshotSigner.object.SigningPublicKey[:]); err != nil {
 		return err
 	}
+	if !bytes.Equal(head.PrevHeadCID, envelope.Parent) {
+		return ErrReadHeadEnvelopeLinkage
+	}
+	if head.Signer.DeviceID != envelope.DeviceID || !bytes.Equal(head.Signer.KeyID, envelope.KeyID) {
+		return ErrReadSignerMismatch
+	}
+	if len(policy.Recipients) != len(envelope.Recipients) {
+		return ErrReadRecipientSet
+	}
+	recipientKeyIDs := make(map[string]struct{}, len(policy.Recipients))
+	for _, recipient := range policy.Recipients {
+		keyID := string(recipient.KeyID)
+		if _, exists := recipientKeyIDs[keyID]; exists {
+			return ErrReadRecipientSet
+		}
+		recipientKeyIDs[keyID] = struct{}{}
+	}
+	for _, recipient := range envelope.Recipients {
+		keyID := string(recipient.KeyID)
+		if _, exists := recipientKeyIDs[keyID]; !exists {
+			return ErrReadRecipientSet
+		}
+		delete(recipientKeyIDs, keyID)
+	}
+	if len(recipientKeyIDs) != 0 {
+		return ErrReadRecipientSet
+	}
 	if policy.EpochSeq != policyRecord.EpochSeq || control.EpochSeq != controlRecord.EpochSeq || head.EpochSeq != headRecord.EpochSeq {
 		return errors.New("signed object epoch differs from its records")
 	}
 	return nil
 }
 
-func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, currentBytes []byte, signer storedCertificate, certificates map[string]storedCertificate) error {
-	if allZero(current.PrevPolicyDigest[:]) {
-		if len(request.PreviousPolicy) != 0 {
-			return ErrReadUnexpectedPrevious
-		}
+func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, currentBytes []byte, signer storedCertificate, certificates map[string]storedCertificate, controls ...vault.Control) error {
+	zeroPredecessor := allZero(current.PrevPolicyDigest[:])
+	if current.EpochSeq > 0 && zeroPredecessor || current.EpochSeq == 0 && !zeroPredecessor {
+		return ErrPolicyAncestry
+	}
+	if zeroPredecessor {
 		if current.Signer.DeviceID != signer.object.DeviceID || signer.object.Role != vault.RoleRoot {
 			return errors.New("genesis policy signer is not an anchored root")
+		}
+		if len(controls) != 0 && len(controls[0].PrevControlCID) != 0 {
+			return nil
+		}
+		if len(controls) != 0 && !sameReadSigner(controls[0].Signer, current.Signer) {
+			return ErrPolicyAncestry
+		}
+		if len(request.PreviousPolicy) != 0 {
+			return ErrReadUnexpectedPrevious
 		}
 		return nil
 	}
@@ -621,6 +695,77 @@ func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, curre
 	currentDigest, err := vault.ComputePolicyDigest(currentBytes)
 	if err != nil || currentDigest == previousDigest {
 		return errors.New("current and predecessor policies are not distinct")
+	}
+	return nil
+}
+
+func isReadGenesis(policy vault.Policy, control vault.Control) bool {
+	return policy.EpochSeq == 0 && allZero(policy.PrevPolicyDigest[:]) && len(control.PrevControlCID) == 0 && sameReadSigner(control.Signer, policy.Signer)
+}
+
+func sameReadSigner(left, right vault.Signer) bool {
+	return left.DeviceID == right.DeviceID && bytes.Equal(left.KeyID, right.KeyID)
+}
+
+func authorizeControlPredecessor(request ReadRequest, policy vault.Policy, control vault.Control, certificates map[string]storedCertificate) error {
+	if len(request.PreviousControl) == 0 {
+		return ErrReadControlRequired
+	}
+	previousRecord, err := DecodeRecord(request.PreviousControl)
+	if err != nil {
+		return ErrReadControlType
+	}
+	previousRecordValue, ok := previousRecord.(ControlRecord)
+	if !ok {
+		return ErrReadControlType
+	}
+	previousObjectBytes, err := vault.EncodeControl(controlFromRecord(previousRecordValue))
+	if err != nil {
+		return ErrReadControlType
+	}
+	if err := VerifyRecordBinding(request.PreviousControl, previousObjectBytes); err != nil {
+		return ErrReadControlType
+	}
+	previousCID, err := rawBlobCID(previousObjectBytes)
+	if err != nil {
+		return ErrReadControlType
+	}
+	previousControl, err := vault.DecodeControl(previousObjectBytes)
+	if err != nil {
+		return ErrReadControlSignature
+	}
+	previousPolicyRecord, err := DecodeRecord(request.PreviousPolicy)
+	if err != nil {
+		return ErrPolicyAncestry
+	}
+	previousPolicyRecordValue, ok := previousPolicyRecord.(PolicyRecord)
+	if !ok {
+		return ErrPolicyAncestry
+	}
+	previousPolicyBytes, err := vault.EncodePolicy(policyFromRecord(previousPolicyRecordValue))
+	if err != nil || VerifyRecordBinding(request.PreviousPolicy, previousPolicyBytes) != nil {
+		return ErrPolicyAncestry
+	}
+	previousPolicy, err := vault.DecodePolicy(previousPolicyBytes)
+	if err != nil {
+		return ErrPolicyAncestry
+	}
+	previousSigner, err := authorizedReadSigner(previousControl.Signer, previousPolicy.Roles, certificates, previousPolicy.Vault, previousPolicy.EpochSeq, request.TrustAnchor, nil, vault.RoleRoot)
+	if err != nil || verifySignedObject(previousObjectBytes, "dottie/v1/sig-control", previousControl.Signature[:], previousSigner.object.SigningPublicKey[:]) != nil {
+		return ErrReadControlSignature
+	}
+	if !sameReadSigner(previousControl.Signer, previousPolicy.Signer) {
+		return ErrReadControlSigner
+	}
+	if previousControl.Vault != policy.Vault || policy.EpochSeq == 0 || previousControl.EpochSeq == ^uint64(0) || previousControl.EpochSeq != policy.EpochSeq-1 {
+		return ErrReadControlEpoch
+	}
+	previousPolicyDigest, err := vault.ComputePolicyDigest(previousPolicyBytes)
+	if err != nil || previousControl.PolicyDigest != previousPolicyDigest {
+		return ErrReadControlPolicyDigest
+	}
+	if !bytes.Equal(control.PrevControlCID, previousCID) {
+		return ErrReadControlLinkage
 	}
 	return nil
 }

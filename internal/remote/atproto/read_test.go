@@ -159,6 +159,7 @@ func newReadFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	previousPolicyRecord, err := EncodeRecord(policyRecordFromObject(previousPolicy))
 	require.NoError(t, err)
+	previousControlRecord := encodeReadControlRecord(t, bootstrap.Control)
 	storeRoot := t.TempDir()
 	observationStore, err := state.Open(platform.Paths{
 		Home: filepath.Join(storeRoot, "home"), StateHome: filepath.Join(storeRoot, "state"), CacheHome: filepath.Join(storeRoot, "cache"),
@@ -170,7 +171,7 @@ func newReadFixture(t *testing.T) readFixture {
 			DID: proofTestDID, DIDDocumentID: proofTestDID,
 			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
 			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
-			DeviceKeyID: []byte("publisher-sign"), DeviceKey: publisherRecipient,
+			PreviousControl: previousControlRecord, DeviceKeyID: []byte("publisher-sign"), DeviceKey: publisherRecipient,
 		},
 		transport: transport, observationStore: observationStore, records: records, blocks: blocks, root: root,
 	}
@@ -235,6 +236,15 @@ func readPolicyDigest(t *testing.T, data []byte) [32]byte {
 	value, err := vault.ComputePolicyDigest(data)
 	require.NoError(t, err)
 	return value
+}
+
+func encodeReadControlRecord(t *testing.T, data []byte) []byte {
+	t.Helper()
+	control, err := vault.DecodeControl(data)
+	require.NoError(t, err)
+	record, err := EncodeRecord(controlRecordFromObject(control))
+	require.NoError(t, err)
+	return record
 }
 
 func sha256Digest(value []byte) [32]byte {
@@ -384,6 +394,15 @@ func TestVaultReaderRequiresDigestBoundPredecessorPolicy(t *testing.T) {
 	fixture.request.PreviousPolicy = nil
 	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadPreviousPolicyRequired)
+}
+
+func TestVaultReaderRequiresControlForNonGenesisPolicy(t *testing.T) {
+	fixture := newReadFixture(t)
+	policy, _, _ := fixturePolicyParts(t, fixture)
+	require.Equal(t, uint64(1), policy.EpochSeq)
+	fixture.request.PreviousControl = nil
+	_, err := fixture.reader().Read(context.Background(), fixture.request)
+	require.ErrorIs(t, err, ErrReadControlRequired)
 }
 
 func TestVaultReaderDoesNotDecryptWithoutDeviceKey(t *testing.T) {
@@ -575,15 +594,15 @@ func TestCheckPublicationCountRefusesBackwardRead(t *testing.T) {
 		PublicationCount: 4, PublicationCountBaseline: 0, EpochSeq: 2, HeadCID: headCID,
 		Head: HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
 	}
-	require.NoError(t, CheckPublicationCount(context.Background(), store, vaultID, result))
+	require.NoError(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}))
 	backwardsCID := readRawCID(t, []byte("head-3"))
 	result.PublicationCount = 3
 	result.Head.PublicationCount = 3
 	result.HeadCID = backwardsCID
 	result.Head.SnapshotCID = bytes.Clone(backwardsCID)
-	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result), ErrPublicationCountBackwards)
+	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}), ErrPublicationCountBackwards)
 	result.PublicationCount = 4
 	result.Head.PublicationCount = 4
 	result.PublicationCountBaseline = 5
-	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result), ErrPublicationCountBackwards)
+	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}), ErrPublicationCountBackwards)
 }

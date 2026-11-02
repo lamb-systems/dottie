@@ -503,10 +503,12 @@ signatures and binding, checks cross-record context, and authenticates the vault
 repository record used by the result comes from the same verified CAR revision. The result exposes
 the authenticated publication count and head snapshot CID. Before returning, `VaultReader.Read`
 requires a durable observation store and calls `CheckPublicationCount` only after the final
-latest-commit stability check. `ATProtoTransitionIO.ReadCurrent` applies the same observation gate
-before returning a publication or transition predecessor. The state store rejects decreases,
-conflicting equal counts and same-epoch increments that skip a count; a higher epoch starts a new
-count sequence. Migration 0004 stores epoch, count and head CID per vault. The final latest-commit
+latest-commit stability check. `ATProtoTransitionIO.ReadCurrent` currently enforces the persisted
+publication-count and signed head-ancestry checks (`PrevHeadCID`) before returning a publication or
+transition predecessor. It does not check envelope-parent linkage or enforce policy `max_publications`;
+both are deferred P04 gaps. The state store rejects decreases, conflicting equal counts and same-epoch
+increments that skip a count; a higher epoch starts a new count sequence. Migration 0004 stores epoch,
+count and head CID per vault. The final latest-commit
 check covers the blob fetch and all validation; a moved revision discards the candidate and restarts
 within a bounded retry count. There is no older-revision fallback or partial result.
 

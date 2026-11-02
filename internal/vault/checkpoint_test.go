@@ -3,7 +3,9 @@ package vault
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,12 +13,13 @@ import (
 )
 
 type checkpointFixture struct {
-	vaultID    [32]byte
-	anchor     [32]byte
-	root       DeviceMaterial
-	cert       []byte
-	kit        []byte
-	checkpoint []byte
+	vaultID       [32]byte
+	anchor        [32]byte
+	root          DeviceMaterial
+	cert          []byte
+	kit           []byte
+	checkpoint    []byte
+	genesisPolicy []byte
 }
 
 func newCheckpointFixture(t *testing.T) checkpointFixture {
@@ -25,21 +28,36 @@ func newCheckpointFixture(t *testing.T) checkpointFixture {
 	kit := fixtureBytes(1, 32)
 	boot, err := Bootstrap(kit, "checkpoint fixture", root)
 	require.NoError(t, err)
-	return checkpointFixture{vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate, kit: kit, checkpoint: boot.Checkpoint}
+	return checkpointFixture{
+		vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate, kit: kit,
+		checkpoint: boot.Checkpoint, genesisPolicy: bytes.Clone(boot.Policy),
+	}
 }
 
-func (f checkpointFixture) evidence(t *testing.T, epoch uint64, previous []byte) ControlEvidence {
+func (f checkpointFixture) policyWithPredecessor(t *testing.T, epoch uint64, predecessor []byte) []byte {
 	t.Helper()
-	boot, err := Bootstrap(f.kit, "checkpoint fixture", f.root)
-	require.NoError(t, err)
-	policy, err := DecodePolicy(boot.Policy)
+	policy, err := DecodePolicy(f.genesisPolicy)
 	require.NoError(t, err)
 	policy.EpochSeq = epoch
 	if epoch > 0 {
-		policy.PrevPolicyDigest = mustPolicyDigest(boot.Policy)
+		policy.PrevPolicyDigest = mustPolicyDigest(predecessor)
 	}
 	policyBytes, err := signPolicy(policy, f.root.Signing)
 	require.NoError(t, err)
+	return policyBytes
+}
+
+func (f checkpointFixture) policyAtEpoch(t *testing.T, epoch uint64) []byte {
+	t.Helper()
+	policyBytes := bytes.Clone(f.genesisPolicy)
+	for current := uint64(1); current <= epoch; current++ {
+		policyBytes = f.policyWithPredecessor(t, current, policyBytes)
+	}
+	return policyBytes
+}
+
+func (f checkpointFixture) evidenceWithPolicy(t *testing.T, epoch uint64, previous, policyBytes []byte) ControlEvidence {
+	t.Helper()
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
 	controlBytes, err := signControl(Control{
@@ -47,7 +65,53 @@ func (f checkpointFixture) evidence(t *testing.T, epoch uint64, previous []byte)
 		Signer: Signer{DeviceID: f.root.DeviceID, KeyID: bytes.Clone(f.root.KeyID)},
 	}, f.root.Signing)
 	require.NoError(t, err)
-	return ControlEvidence{Control: controlBytes, Policy: policyBytes, Certificates: [][]byte{f.cert}}
+	return ControlEvidence{Control: controlBytes, Policy: bytes.Clone(policyBytes), Certificates: [][]byte{f.cert}}
+}
+
+func (f checkpointFixture) evidenceWithPolicyPredecessor(t *testing.T, epoch uint64, previous, predecessorPolicy []byte) ControlEvidence {
+	policyBytes := f.policyWithPredecessor(t, epoch, predecessorPolicy)
+	return f.evidenceWithPolicy(t, epoch, previous, policyBytes)
+}
+
+func (f checkpointFixture) evidence(t *testing.T, epoch uint64, previous []byte) ControlEvidence {
+	t.Helper()
+	return f.evidenceWithPolicy(t, epoch, previous, f.policyAtEpoch(t, epoch))
+}
+
+func (f checkpointFixture) enrollmentEvidence(t *testing.T, genesis ControlEvidence, branch byte) ControlEvidence {
+	t.Helper()
+	genesisCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	device := DeviceMaterial{
+		DeviceID: fmt.Sprintf("checkpoint-publisher-%d", branch), KeyID: []byte(fmt.Sprintf("checkpoint-publisher-key-%d", branch)),
+		Signing: fixedSigningKey(31 + branch), Recipient: fixedX25519Key(41 + branch),
+	}
+	certificate, err := certificateForEnrollment(f.vaultID, device, RolePublisher, 1, f.root, genesisCID)
+	require.NoError(t, err)
+	policy, err := DecodePolicy(genesis.Policy)
+	require.NoError(t, err)
+	policy.EpochSeq = 1
+	policy.PrevPolicyDigest = mustPolicyDigest(genesis.Policy)
+	policy.Roles = append(policy.Roles, RoleBinding{DeviceID: device.DeviceID, Role: RolePublisher})
+	var publicKey [32]byte
+	copy(publicKey[:], device.Recipient.PublicKey().Bytes())
+	policy.Recipients = append(policy.Recipients, PolicyRecipient{DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID), PublicKey: publicKey})
+	sort.Slice(policy.Roles, func(i, j int) bool { return policy.Roles[i].DeviceID < policy.Roles[j].DeviceID })
+	sort.Slice(policy.Recipients, func(i, j int) bool {
+		return bytes.Compare(policy.Recipients[i].KeyID, policy.Recipients[j].KeyID) < 0
+	})
+	policyBytes, err := signPolicy(policy, f.root.Signing)
+	require.NoError(t, err)
+	policyDigest, err := ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	headCID, err := rawCID([]byte(device.DeviceID))
+	require.NoError(t, err)
+	controlBytes, err := signControl(Control{
+		Vault: f.vaultID, EpochSeq: 1, PolicyDigest: policyDigest, HeadSnapshotCID: headCID,
+		PrevControlCID: bytes.Clone(genesisCID), Signer: Signer{DeviceID: f.root.DeviceID, KeyID: bytes.Clone(f.root.KeyID)},
+	}, f.root.Signing)
+	require.NoError(t, err)
+	return ControlEvidence{Control: controlBytes, Policy: policyBytes, Certificates: [][]byte{f.cert, certificate}}
 }
 
 func checkpointHeld(t *testing.T, evidence ControlEvidence) *ControlEvidence {
@@ -129,8 +193,23 @@ func TestVerifyControlStateConflicting(t *testing.T) {
 	genesis := fixture.evidence(t, 0, nil)
 	genesisCID, err := rawCID(genesis.Control)
 	require.NoError(t, err)
-	held := fixture.evidence(t, 1, genesisCID)
-	supplied := fixture.evidence(t, 2, genesisCID)
+	held := fixture.enrollmentEvidence(t, genesis, 1)
+	supplied := fixture.enrollmentEvidence(t, genesis, 2)
+	heldControl, err := DecodeControl(held.Control)
+	require.NoError(t, err)
+	suppliedControl, err := DecodeControl(supplied.Control)
+	require.NoError(t, err)
+	assert.Equal(t, genesisCID, heldControl.PrevControlCID)
+	assert.Equal(t, genesisCID, suppliedControl.PrevControlCID)
+	assert.NotEqual(t, held.Control, supplied.Control)
+	assert.NotEqual(t, mustPolicyDigest(held.Policy), mustPolicyDigest(supplied.Policy))
+	heldPolicy, err := DecodePolicy(held.Policy)
+	require.NoError(t, err)
+	suppliedPolicy, err := DecodePolicy(supplied.Policy)
+	require.NoError(t, err)
+	genesisDigest := mustPolicyDigest(genesis.Policy)
+	assert.Equal(t, genesisDigest, heldPolicy.PrevPolicyDigest)
+	assert.Equal(t, genesisDigest, suppliedPolicy.PrevPolicyDigest)
 	result := verifyFixture(t, fixture, checkpointHeld(t, held), supplied, genesis)
 	assert.Equal(t, CheckpointConflicting, result.Outcome)
 	assert.Equal(t, "independent-histories", result.ReasonCode)
@@ -148,18 +227,14 @@ func TestVerifyControlStateUnverifiableWithoutCheckpoint(t *testing.T) {
 func TestVerifyControlStatePrecedenceCurrentBeforeLink(t *testing.T) {
 	fixture := newCheckpointFixture(t)
 	heldEvidence := fixture.evidence(t, 0, nil)
-	heldControl, err := DecodeControl(heldEvidence.Control)
-	require.NoError(t, err)
-	_, _, err = verifyControlEvidence(fixture.vaultID, fixture.anchor, heldEvidence)
+	heldPosition, _, err := verifyControlPositionEvidence(fixture.vaultID, fixture.anchor, heldEvidence)
 	require.NoError(t, err)
 	heldCID, err := rawCID(heldEvidence.Control)
 	require.NoError(t, err)
 	supplied := fixture.evidence(t, 1, heldCID)
-	suppliedControl, err := DecodeControl(supplied.Control)
+	suppliedPosition, _, err := verifyControlPositionEvidence(fixture.vaultID, fixture.anchor, supplied)
 	require.NoError(t, err)
-	_, _, err = verifyControlEvidence(fixture.vaultID, fixture.anchor, supplied)
-	require.NoError(t, err)
-	result, compareErr := compareAuthenticatedControls(suppliedControl, heldCID, &heldControl, heldCID, nil)
+	result, compareErr := compareAuthenticatedControls(suppliedPosition, heldCID, &heldPosition, heldCID, nil)
 	require.NoError(t, compareErr)
 	assert.Equal(t, CheckpointCurrent, result.Outcome)
 }
@@ -182,6 +257,17 @@ func TestVerifyControlStateWalksSuppliedAndHeldHistory(t *testing.T) {
 	oneCID, err := rawCID(one.Control)
 	require.NoError(t, err)
 	two := fixture.evidence(t, 2, oneCID)
+	genesisDigest := mustPolicyDigest(genesis.Policy)
+	oneDigest := mustPolicyDigest(one.Policy)
+	twoDigest := mustPolicyDigest(two.Policy)
+	assert.NotEqual(t, genesisDigest, oneDigest)
+	assert.NotEqual(t, oneDigest, twoDigest)
+	onePolicy, err := DecodePolicy(one.Policy)
+	require.NoError(t, err)
+	twoPolicy, err := DecodePolicy(two.Policy)
+	require.NoError(t, err)
+	assert.Equal(t, genesisDigest, onePolicy.PrevPolicyDigest)
+	assert.Equal(t, oneDigest, twoPolicy.PrevPolicyDigest)
 
 	descendant := verifyFixture(t, fixture, checkpointHeld(t, genesis), two, one)
 	assert.Equal(t, CheckpointDescendant, descendant.Outcome)
@@ -192,6 +278,83 @@ func TestVerifyControlStateWalksSuppliedAndHeldHistory(t *testing.T) {
 	assert.Equal(t, CheckpointStale, stale.Outcome)
 	assert.Equal(t, "verified-stale", stale.ReasonCode)
 	assert.Equal(t, 2, stale.LinkCount)
+}
+
+func TestVerifyControlStateRefusesDirectPolicyControlMismatch(t *testing.T) {
+	fixture := newCheckpointFixture(t)
+	genesis := fixture.evidence(t, 0, nil)
+	genesisCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	wrongParent := fixture.policyAtEpoch(t, 1)
+	directDescendant := fixture.evidenceWithPolicyPredecessor(t, 1, genesisCID, wrongParent)
+	descendantContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+	_, err = VerifyControlState(descendantContext, VerificationRequest{Supplied: directDescendant})
+	var descendantRefusal *VerificationRefusal
+	require.ErrorAs(t, err, &descendantRefusal)
+	assert.Equal(t, "supplied", descendantRefusal.Side)
+	assert.Equal(t, "policy-ancestry", descendantRefusal.Code)
+
+	suppliedCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	directStale := fixture.evidenceWithPolicyPredecessor(t, 1, suppliedCID, wrongParent)
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, directStale)))
+	_, err = VerifyControlState(trustedContext, VerificationRequest{Supplied: genesis})
+	var staleRefusal *VerificationRefusal
+	require.ErrorAs(t, err, &staleRefusal)
+	assert.Equal(t, "held", staleRefusal.Side)
+	assert.Equal(t, "policy-ancestry", staleRefusal.Code)
+
+	epochGap := fixture.evidenceWithPolicyPredecessor(t, 2, genesisCID, genesis.Policy)
+	descendantContext = NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+	_, err = VerifyControlState(descendantContext, VerificationRequest{Supplied: epochGap})
+	var epochRefusal *VerificationRefusal
+	require.ErrorAs(t, err, &epochRefusal)
+	assert.Equal(t, "supplied", epochRefusal.Side)
+	assert.Equal(t, "policy-ancestry", epochRefusal.Code)
+
+	maximumEpoch := ^uint64(0)
+	maximumPolicy := fixture.policyWithPredecessor(t, maximumEpoch, genesis.Policy)
+	maximum := fixture.evidenceWithPolicy(t, maximumEpoch, nil, maximumPolicy)
+	maximumCID, err := rawCID(maximum.Control)
+	require.NoError(t, err)
+	successorPolicy, err := DecodePolicy(fixture.genesisPolicy)
+	require.NoError(t, err)
+	successorPolicy.PrevPolicyDigest = mustPolicyDigest(maximum.Policy)
+	successorPolicyBytes, err := signPolicy(successorPolicy, fixture.root.Signing)
+	require.NoError(t, err)
+	successor := fixture.evidenceWithPolicy(t, 0, maximumCID, successorPolicyBytes)
+	overflowContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, overflowContext.SetHeldCheckpoint(*checkpointHeld(t, maximum)))
+	_, err = VerifyControlState(overflowContext, VerificationRequest{Supplied: successor})
+	var overflowRefusal *VerificationRefusal
+	require.ErrorAs(t, err, &overflowRefusal)
+	assert.Equal(t, "supplied", overflowRefusal.Side)
+	assert.Equal(t, "policy-ancestry", overflowRefusal.Code)
+}
+
+func TestVerifyControlStateRefusesTerminalPolicyControlMismatch(t *testing.T) {
+	fixture := newCheckpointFixture(t)
+	genesis := fixture.evidence(t, 0, nil)
+	genesisCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	wrongParent := fixture.policyAtEpoch(t, 1)
+	one := fixture.evidenceWithPolicyPredecessor(t, 1, genesisCID, wrongParent)
+	oneCID, err := rawCID(one.Control)
+	require.NoError(t, err)
+	two := fixture.evidenceWithPolicyPredecessor(t, 2, oneCID, one.Policy)
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+	_, err = VerifyControlState(trustedContext, VerificationRequest{
+		Supplied: two, Intermediates: []ControlEvidence{one},
+	})
+	var refusal *VerificationRefusal
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, "intermediate", refusal.Side)
+	assert.Equal(t, "invalid-intermediate", refusal.Code)
+	assert.Equal(t, "policy-ancestry", refusal.Check)
 }
 
 func TestVerifyControlStateMissingIntermediateIsUnverifiable(t *testing.T) {

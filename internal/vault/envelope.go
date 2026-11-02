@@ -253,6 +253,34 @@ func SealAuthorized(request SealRequest, certificate Certificate, policy Policy)
 	if !roleMaySeal(certificate.Role, request.Purpose) {
 		return Envelope{}, fmt.Errorf("%w: seal purpose", ErrAuthorization)
 	}
+	if len(request.Recipients) != len(policy.Recipients) {
+		return Envelope{}, fmt.Errorf("%w: recipient set", ErrRecipient)
+	}
+	matched := make([]bool, len(policy.Recipients))
+	seenKeyIDs := make(map[string]struct{}, len(request.Recipients))
+	for _, supplied := range request.Recipients {
+		keyID := string(supplied.KeyID)
+		if _, exists := seenKeyIDs[keyID]; exists {
+			return Envelope{}, fmt.Errorf("%w: duplicate recipient key_id", ErrRecipient)
+		}
+		seenKeyIDs[keyID] = struct{}{}
+		found := false
+		for index, authorized := range policy.Recipients {
+			if !matched[index] && bytes.Equal(supplied.KeyID, authorized.KeyID) && bytes.Equal(supplied.PublicKey, authorized.PublicKey[:]) {
+				matched[index] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Envelope{}, fmt.Errorf("%w: recipient pair", ErrRecipient)
+		}
+	}
+	for _, isMatched := range matched {
+		if !isMatched {
+			return Envelope{}, fmt.Errorf("%w: missing recipient", ErrRecipient)
+		}
+	}
 	return Seal(request)
 }
 

@@ -139,7 +139,7 @@ func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 2, HeadCID: []byte("head-2")}), ErrVaultPublicationBackwards)
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 3, HeadCID: []byte("different-head")}), ErrVaultPublicationConflict)
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("head-5")}), ErrVaultPublicationGap)
-	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4")}))
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4"), PrevHeadCID: first.HeadCID}))
 	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 3, PublicationCount: 0, HeadCID: []byte("epoch-3-head")}))
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("old-epoch-head")}), ErrVaultPublicationBackwards)
 	require.NoError(t, store.Close())
@@ -152,6 +152,50 @@ func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.
 	assert.Equal(t, int64(3), epoch)
 	assert.Equal(t, int64(0), count)
 	assert.Equal(t, []byte("epoch-3-head"), headCID)
+}
+
+func TestVaultPublicationObservationAcceptsFirstIdempotentAndMidEpochRead(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	defer store.Close()
+	ctx := context.Background()
+	vaultID := [32]byte{9}
+	first := VaultPublicationObservation{Vault: vaultID, Epoch: 1, PublicationCount: 1, HeadCID: []byte("head-1")}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
+
+	next := VaultPublicationObservation{
+		Vault: vaultID, Epoch: 1, PublicationCount: 2, HeadCID: []byte("head-2"),
+		PrevHeadCID: first.HeadCID, ParentCID: first.HeadCID, EnforceParent: true,
+	}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, next))
+
+	midEpoch := VaultPublicationObservation{Vault: vaultID, Epoch: 2, PublicationCount: 7, HeadCID: []byte("epoch-2-head-7")}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, midEpoch))
+}
+
+func TestVaultPublicationObservationRejectsAncestryMismatch(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	defer store.Close()
+	ctx := context.Background()
+	first := VaultPublicationObservation{Vault: [32]byte{10}, Epoch: 3, PublicationCount: 4, HeadCID: []byte("head-4")}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
+
+	wrongPrevHead := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"),
+		PrevHeadCID: []byte("other-head"), ParentCID: first.HeadCID, EnforceParent: true,
+	}
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, wrongPrevHead), ErrPublicationAncestry)
+
+	wrongParent := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"),
+		PrevHeadCID: first.HeadCID, ParentCID: []byte("other-head"), EnforceParent: true,
+	}
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, wrongParent), ErrPublicationAncestry)
+
+	sameHead := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: first.HeadCID, PrevHeadCID: first.HeadCID,
+	}
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, sameHead), ErrVaultPublicationConflict)
 }
 
 func testVaultControlBytes(vault [32]byte, epoch uint64, digest [32]byte, snapshotCID []byte) []byte {

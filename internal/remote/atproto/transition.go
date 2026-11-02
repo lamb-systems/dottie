@@ -127,7 +127,7 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 		if err := CheckPublicationCount(ctx, io.ObservationStore, head.Vault, ReadResult{
 			Control: toControlRecord(control), Head: headRecord, PublicationCount: head.PublicationCount,
 			PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), EpochSeq: head.EpochSeq,
-		}); err != nil {
+		}, PublicationCountOptions{PrevHeadCID: head.PrevHeadCID, EnforceParent: false}); err != nil {
 			return nil, vault.Predecessor{}, err
 		}
 	}

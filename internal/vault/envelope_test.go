@@ -1084,3 +1084,84 @@ func TestSealAuthorizedEnforcesRole(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAuthorization,
 		"a restore-only device the policy does name must still be refused by the purpose rule")
 }
+
+func TestSealAuthorizedRefusesSubstitutedRecipientPair(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+	secondRecipientKey := fixedX25519Key(23)
+	policy := fixture.policy
+	policy.Roles = append(policy.Roles, RoleBinding{DeviceID: "device-second", Role: RoleRestoreOnly})
+	policy.Recipients = append(policy.Recipients, PolicyRecipient{
+		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
+	})
+	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+	policyDigest, err := ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	exactPairs := []RecipientPublicKey{
+		{KeyID: bytes.Clone(policy.Recipients[0].KeyID), PublicKey: bytes.Clone(policy.Recipients[0].PublicKey[:])},
+		{KeyID: bytes.Clone(policy.Recipients[1].KeyID), PublicKey: bytes.Clone(policy.Recipients[1].PublicKey[:])},
+	}
+	request := SealRequest{
+		Purpose: PurposeSnapshot, Vault: policy.Vault,
+		PublicationID: [16]byte(fixtureBytes(101, 16)), EpochSeq: policy.EpochSeq,
+		PolicyDigest: policyDigest, Parent: fixtureCIDBytes(t),
+		DeviceID: fixture.certificate.DeviceID, KeyID: fixture.certificate.KeyID,
+		Plaintext: []byte("authorized sealing"), SigningKey: fixture.publisherKey,
+		Recipients: exactPairs,
+	}
+
+	wrongDevicePair := request
+	wrongDevicePair.Recipients = append([]RecipientPublicKey(nil), exactPairs...)
+	wrongDevicePair.Recipients[0].PublicKey = bytes.Clone(exactPairs[1].PublicKey)
+	wrongDevicePair.Recipients[1].PublicKey = bytes.Clone(exactPairs[0].PublicKey)
+	duplicatedPair := request
+	duplicatedPair.Recipients = append([]RecipientPublicKey(nil), exactPairs...)
+	duplicatedPair.Recipients[1] = RecipientPublicKey{KeyID: bytes.Clone(exactPairs[0].KeyID), PublicKey: bytes.Clone(exactPairs[0].PublicKey)}
+	omittedPair := request
+	omittedPair.Recipients = append([]RecipientPublicKey(nil), exactPairs[:1]...)
+
+	t.Run("exact pair set accepted", func(t *testing.T) {
+		_, err := SealAuthorized(request, fixture.certificate, policy)
+		require.NoError(t, err, "SealAuthorized accepts the exact two-recipient policy pair set")
+	})
+	for _, test := range []struct {
+		name    string
+		request SealRequest
+	}{
+		{name: "pair assigned to the wrong device", request: wrongDevicePair},
+		{name: "duplicated pair with another omitted", request: duplicatedPair},
+		{name: "omitted pair", request: omittedPair},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := SealAuthorized(test.request, fixture.certificate, policy)
+			require.ErrorIs(t, err, ErrRecipient, "SealAuthorized must require exact policy recipient pairs")
+		})
+	}
+}
+
+func TestEnvelopeCodecRefusesDuplicateRecipientKeyIDs(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+	secondRecipientKey := fixedX25519Key(23)
+	prepared := fixture.prepared
+	prepared.Recipients = append(append([]PreparedRecipient(nil), fixture.prepared.Recipients...), PreparedRecipient{
+		KeyID: []byte("recipient-b"), PublicKey: secondRecipientKey.PublicKey().Bytes(),
+		EphemeralPrivate: fixedX25519Key(42).Bytes(), WrapNonce: [24]byte(fixtureBytes(201, 24)),
+	})
+	envelope, err := SealPrepared(prepared)
+	require.NoError(t, err)
+	encoded, err := EncodeEnvelope(envelope)
+	require.NoError(t, err)
+
+	duplicateObject := envelope
+	duplicateObject.Recipients = append([]EnvelopeRecipient(nil), envelope.Recipients...)
+	duplicateObject.Recipients[1].KeyID = bytes.Clone(duplicateObject.Recipients[0].KeyID)
+	_, err = EncodeEnvelope(duplicateObject)
+	require.ErrorIs(t, err, ErrRecipient, "the encoder refuses duplicate recipient key IDs")
+
+	duplicateWire := bytes.Clone(encoded)
+	secondKeyIDOffset := bytes.Index(duplicateWire, []byte("recipient-b"))
+	require.NotEqual(t, -1, secondKeyIDOffset, "the valid encoded envelope contains the second recipient key ID")
+	copy(duplicateWire[secondKeyIDOffset:], []byte("recipient-a"))
+	_, err = DecodeEnvelope(duplicateWire)
+	require.ErrorIs(t, err, ErrRecipient,
+		"the decoder refuses duplicate recipient key IDs before the reader can observe such an envelope")
+}

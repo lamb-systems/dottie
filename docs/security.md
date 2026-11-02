@@ -43,6 +43,10 @@ device. Not implemented.
 A verified revision proves membership of records at a commit the provider asserted. It does not prove who
 wrote them, what policy applied, or that the commit is current.
 
+`VaultReader` enforces one authenticated edge over caller-supplied control history. It refuses forged or
+skipped ancestry; it does not prove the control this device observed. ADR 014:52-54 requires the observed
+control, and only a held checkpoint supplies it.
+
 The publication fence is measured on two providers: a stale writer loses on a structured error rather than
 silently overwriting. Whether a provider can accept two identical batches and produce two effects is
 **unproven**, because the measurement could not distinguish one commit from two by final membership.
@@ -145,13 +149,12 @@ take away its ability to unwrap ciphertext that was already wrapped to it.
 ADR 014 and ADR 015 define the target contract. The DOT-V07 corpus attacks the vault authorization and
 decoder paths with runtime constructors in `internal/vault/hostile_test.go`,
 `internal/vault/hostile_export_test.go` and `internal/remote/atproto/hostile_reader_test.go`; the case matrix
-and each case's first mandatory check live in those files as the `caseMatrix` table. It is evidence, not a
-clean bill of health: the security gate it defines is expected to fail today, because fourteen ADR-violating
-behaviours are recorded as known defects.
+and each case's first mandatory check live in those files as the `caseMatrix` table. The fourteen DOT-V07a
+findings are closed: their tagged refusal tests remain in the frozen inventories and the security gate passes.
 
-Case 1a proves that the unequal ancestry fields are accepted on both an observed and an empty observation
-store, but cannot prove that a future fix implements the Parent-to-PrevHeadCID join rather than an unrelated
-refusal; that is verified in the fix's own implementation review.
+Case 1a now refuses the head/envelope parent mismatch with `ErrReadHeadEnvelopeLinkage` on both observed and
+empty observation stores. Its refusal tests assert hostile fields on decoded inputs, not plaintext or a result
+returned alongside an error.
 
 ### Proven refusals
 
@@ -168,50 +171,46 @@ The reader and the vault library refuse these, with the sentinel and stage named
   and an export whose member inventory is over its cap or whose first member header disagrees with its entry,
   each refused before any member payload is read (the case 12 guard asserts no payload is read past the manifest).
 
-### Known defects and the gate
+### Closed defect gate
 
-Each known defect carries an owner and the ADR contract it violates; the registry is `knownSecurityDefects`
-in each package. `accepted-risk` is non-waivable for any authentication, authorization, signature,
-policy-digest or consent failure. The gate is closed only when `make known-defects` passes **and**
-`TestCaseSecurityGateIsClosed` passes, which requires both an empty registry and no `known-defect` matrix
-row. Today the gate is open:
+`make known-defects` passes with the fourteen tagged refusal tests intact, all fourteen matrix rows at
+`new-refusal`, both package registries empty, and `TestCaseSecurityGateIsClosed` passing. The matrix and
+frozen inventories remain the record of each case and its refusal test.
 
-| Case | Finding | Owner | Contract | Observation |
-| --- | --- | --- | --- | --- |
-| 1a | P03 | vault-read | refuse | accept |
-| 1b | V03 | vault-devices | refuse | accept |
-| 3b | P03 | vault-read | refuse | accept |
-| 3c | P03 | vault-read | refuse | accept |
-| 5b | P05 | vault-read | refuse | accept |
-| 5c | P03 | vault-read | refuse | accept |
-| 10 | P03 | vault-read | refuse | accept |
-| 11 | V04 | vault-read | refuse | accept |
-| 13 | V04 | vault-checkpoint | refuse | accept |
-| 14 | V03 | vault-devices | refuse | accept |
-| 15 | V04 | vault-devices | refuse | accept |
-| 18 | P04 | vault-read | refuse | accept |
-| 19 | V05 | vault-checkpoint | refuse | accept |
-| 20 | V02 | vault-objects | refuse | accept |
+| Package | Closed case IDs |
+| --- | --- |
+| `internal/remote/atproto` | 1a, 3b, 3c, 5b, 5c, 10, 11, 18 |
+| `internal/vault` | 1b, 13, 14, 15, 19, 20 |
 
-The shared shape is a check that is individually correct but either not on the path that runs or not joined
-to the field it must agree with: the reader never joins `head.PrevHeadCID` to `envelope.Parent` (1a) and never
-compares either ancestry field with its observed head (5c); it never compares `envelope.Recipients` with the
-policy (3b, 3c), authorizes the head and envelope signers independently (10), accepts a head above
-`max_publications` (18) and never walks control ancestry (11). Enrollment omits the `envelope.Parent` to
-predecessor `HeadCID` join (1b); the enrollment and revocation deltas leave non-roster policy fields unchecked
-(14, 15), and the vault decoder accepts out-of-range bounds (20). The checkpoint verifier follows control links
-without mirroring the policy chain or consulting `policy.Roles` (13, 19). An older but coherent revision
-replayed at the next count is likewise accepted (5b).
+Checkpoint verification joins signer certificates to the policy role for the policy/control authorization
+checks. It also checks every derivable control predecessor edge: the predecessor epoch must advance by exactly
+one without uint64 overflow, and the successor policy's `PrevPolicyDigest` must equal the predecessor policy
+digest. This covers direct descendant and stale shortcuts, each supplied walk link including its terminal
+target, and every edge examined before `conflicting` can be returned. Each control position is authenticated
+with its matching policy evidence; missing predecessor policy evidence remains unverifiable rather than being
+treated as a proven edge.
 
-### Retracted claim and the extra-wrap mechanism
+### Recipient-wrap guarantees and residual limit
 
-An earlier note implied extra envelope wraps were rejected. That is retracted. `SealAuthorized` does not
-filter recipients, the read path never compares the envelope recipient set with the policy, and an
-unauthorized recipient's wrap recovers the prepared envelope's content key with X25519, HKDF-SHA256 and
-XChaCha20-Poly1305, which decrypts that snapshot. Case 3c unwraps that route independently and recovers the
-exact content key. `Seal` generates a fresh content key per call (envelope.go:203-206), so this proves
-disclosure of the one prepared envelope's key, not of every snapshot in the epoch. A wrap being *malformed*
-is separate, detectable only by attempting the unwrap, and no refusal is claimed for it.
+`SealAuthorized` enforces exact `(KeyID, PublicKey)` recipient pairs against the policy; substitution,
+omission and extra pairs are refused with `ErrRecipient`. `VaultReader` enforces equality of recipient
+key-ID sets only, returning `ErrReadRecipientSet`, whether or not a device key was supplied. Extra,
+missing and otherwise mismatched IDs are refused: `TestExpectedRefusalReaderExtraRecipientInMetadata`,
+`TestReaderRefusesMissingPolicyRecipientKeyID` and `TestReaderRefusesSameCountRecipientSet` cover those
+cases. `TestReaderRefusesUnnamedRecipientSet` also refuses an envelope that adds an unlisted ID. The
+wire format carries no recipient public key (`envelope.go:93-98`), so the reader cannot prove which
+public key built another recipient's wrap.
+
+The residual is a substituted public key *under a policy key ID*. A publisher bypassing
+`SealAuthorized` and calling `SealPrepared` can keep the exact policy key-ID set but wrap one ID to a
+rogue public key. `TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey` proves that the reader accepts
+that envelope and the rogue private key independently recovers that snapshot's content key. By
+contrast, `TestRogueWrapDisclosesContentKeyOutsideReader` only demonstrates an independent unwrap of an
+extra-ID wrapper; the reader refuses that fixture and it does not prove reader acceptance. The
+preventive layer is `SealAuthorized`'s exact key-ID/public-key pair check; the reader cannot prevent
+substitution once a caller bypasses it. `Seal` generates a fresh content key per call
+(envelope.go:203-206), so the disclosure is one envelope's key, not the epoch's. A wrap being
+*malformed* is separate, detectable only by attempting the unwrap, and no refusal is claimed for it.
 
 ### Undetectable limits
 
@@ -220,6 +219,8 @@ is separate, detectable only by attempting the unwrap, and no refusal is claimed
 - `max_epoch_age` is a **local rotation trigger, not a validity rule** (ADR 014:148-164). It is a local-clock
   trigger persisted in state, and a device treats the trigger as met when its state is lost. A reader that
   accepts an old epoch is therefore correct, and no refusal case is claimed for epoch age. This is separate
-  from `max_publications` and `max_epoch_age` *numeric range* (ADR 014:158-159), which case 20 characterizes
-  as an unfixed defect: the vault wire decoder accepts out-of-range bounds rather than refusing them.
+  from `max_publications` and `max_epoch_age` *numeric range* (ADR 014:158-159), which the vault wire decoder
+  now refuses with `ErrLimit` when the bounds are out of range (case 20).
+- `ATProtoTransitionIO.ReadCurrent` enforces publication count and head ancestry only; it does not check
+  envelope-parent linkage or the policy `max_publications` bound (P04).
 - Availability: withheld blobs and refused reads are `unavailable`, not a rollback signal.

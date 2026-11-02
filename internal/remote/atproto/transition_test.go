@@ -516,6 +516,32 @@ func TestATProtoTransitionIORejectsPublicationCountGapOnPredecessorRead(t *testi
 	require.ErrorIs(t, err, ErrPublicationCountGap)
 }
 
+func TestReadCurrentObservesConsecutivePublicationCounts(t *testing.T) {
+	fixture := newReadFixture(t)
+	adapter := ATProtoTransitionIO{
+		Reader: RevisionReader{
+			Transport: fixture.transport, DIDDocumentID: fixture.request.DIDDocumentID,
+			VerificationMethods: fixture.request.VerificationMethods,
+		},
+		Transport: fixture.transport, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
+		PreviousPolicies: [][]byte{fixture.request.PreviousPolicy}, ObservationStore: fixture.observationStore,
+	}
+
+	_, first, err := adapter.ReadCurrent(context.Background())
+	require.NoError(t, err)
+	firstHeadCID := bytes.Clone(first.HeadCID)
+
+	envelope, snapshot := sealFixtureSnapshot(t, fixture, firstHeadCID, 0xD2, []byte("second consecutive publication"))
+	secondHeadCID := readRawCID(t, envelope)
+	head := signFixtureHead(t, fixture, envelope, 2, firstHeadCID, publisherSigner(), fixtureSigningKey(12))
+	installSnapshot(t, &fixture, envelope, snapshot, head)
+	adapter.Reader.VerificationMethods = fixture.request.VerificationMethods
+
+	_, second, err := adapter.ReadCurrent(context.Background())
+	require.NoError(t, err, "ReadCurrent accepts a legitimate count n+1 whose signed PrevHeadCID is the observed count n head")
+	assert.Equal(t, secondHeadCID, second.HeadCID)
+}
+
 func TestCommitTransitionRejectsBundleStaleAtFinalRevalidation(t *testing.T) {
 	fixture := newTransitionTestFixture(t)
 	bundle := prepareTransitionTestBundle(t, fixture, 1)

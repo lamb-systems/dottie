@@ -21,6 +21,7 @@ var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
 var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
 var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
+var ErrPublicationAncestry = errors.New("vault publication ancestry does not match the observed head")
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 
 type TargetDescriptor struct {
@@ -189,6 +190,9 @@ type VaultPublicationObservation struct {
 	Epoch            uint64
 	PublicationCount uint64
 	HeadCID          []byte
+	PrevHeadCID      []byte
+	ParentCID        []byte
+	EnforceParent    bool
 }
 
 type JournalEntry struct {

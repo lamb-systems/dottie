@@ -20,26 +20,23 @@ func TestExpectedRefusalReaderHeadEnvelopeParentLink(t *testing.T) {
 	s3Envelope, s3Snapshot := sealFixtureSnapshot(t, fixture, s2CID, 0xA3, []byte("hostile S3 payload"))
 	s3Head := signFixtureHead(t, fixture, s3Envelope, 3, s1CID, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, s3Envelope, s3Snapshot, s3Head)
+	hostileEnvelope, err := vault.DecodeEnvelope(s3Envelope)
+	require.NoError(t, err)
+	assert.Equal(t, s2CID, hostileEnvelope.Parent, "hostile envelope Parent is S2")
+	assert.Equal(t, s1CID, s3Head.PrevHeadCID, "hostile signed head PrevHeadCID is S1")
+	assert.NotEqual(t, s0CID, s3Head.PrevHeadCID, "the hostile predecessor differs from control.HeadSnapshotCID S0")
+	assert.NotEqual(t, s2CID, s3Head.PrevHeadCID, "the hostile predecessor differs from observed head S2")
+	assert.NotEqual(t, hostileEnvelope.Parent, s3Head.PrevHeadCID,
+		"the hostile input has Parent=S2 and PrevHeadCID=S1")
 
-	observedResult, observedErr := fixture.reader().Read(context.Background(), fixture.request)
-	assert.Error(t, observedErr, "the observed-store hostile read must refuse the Parent/PrevHeadCID mismatch")
-	assert.Equal(t, []byte("hostile S3 payload"), observedResult.Plaintext)
-	assert.Equal(t, s2CID, observedResult.Envelope.Parent, "observed-store hostile envelope Parent is S2")
-	assert.Equal(t, s1CID, observedResult.Head.PrevHeadCID, "observed-store hostile head PrevHeadCID is S1")
-	assert.NotEqual(t, s0CID, observedResult.Head.PrevHeadCID, "the hostile predecessor differs from control.HeadSnapshotCID S0")
-	assert.NotEqual(t, s2CID, observedResult.Head.PrevHeadCID, "the hostile predecessor differs from observed head S2")
-	assert.NotEqual(t, observedResult.Envelope.Parent, observedResult.Head.PrevHeadCID,
-		"the observed-store hostile input has Parent=S2 and PrevHeadCID=S1")
+	_, observedErr := fixture.reader().Read(context.Background(), fixture.request)
+	require.ErrorIs(t, observedErr, ErrReadHeadEnvelopeLinkage,
+		"the observed-store hostile read refuses the Parent/PrevHeadCID mismatch")
 
 	fixture.observationStore = newObservationStore(t)
-	freshResult, freshErr := fixture.reader().Read(context.Background(), fixture.request)
-	assert.Error(t, freshErr, "the empty-store hostile read must refuse the Parent/PrevHeadCID mismatch")
-	assert.Equal(t, []byte("hostile S3 payload"), freshResult.Plaintext)
-	assert.Equal(t, s2CID, freshResult.Envelope.Parent, "fresh-store hostile envelope Parent is S2")
-	assert.Equal(t, s1CID, freshResult.Head.PrevHeadCID, "fresh-store hostile head PrevHeadCID is S1")
-	assert.NotEqual(t, s0CID, freshResult.Head.PrevHeadCID, "fresh-store hostile predecessor differs from control.HeadSnapshotCID S0")
-	assert.NotEqual(t, freshResult.Envelope.Parent, freshResult.Head.PrevHeadCID,
-		"the empty-store hostile input has Parent=S2 and PrevHeadCID=S1")
+	_, freshErr := fixture.reader().Read(context.Background(), fixture.request)
+	require.ErrorIs(t, freshErr, ErrReadHeadEnvelopeLinkage,
+		"the empty-store hostile read refuses the Parent/PrevHeadCID mismatch")
 
 	controlFixture := newReadFixture(t)
 	_, controlS1 := buildGenuineChain(t, &controlFixture, 0xB0)
@@ -82,7 +79,63 @@ func TestExpectedRefusalReaderExtraRecipientInMetadata(t *testing.T) {
 	assert.Equal(t, len(policy.Recipients), len(controlResult.Envelope.Recipients))
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must compare the envelope recipient set with the policy")
+	require.ErrorIs(t, err, ErrReadRecipientSet, "the reader must compare the envelope recipient set with the policy")
+}
+
+func TestReaderRefusesSameCountRecipientSet(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		replaceAll bool
+	}{
+		{name: "one policy key ID replaced by a rogue key ID"},
+		{name: "every policy key ID replaced by distinct rogue key IDs", replaceAll: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newReadFixture(t)
+			policy, _, _ := fixturePolicyParts(t, fixture)
+			recipients := preparedRecipientsForPolicy(t, policy, 71)
+			require.Len(t, recipients, 2, "the fixture policy has two recipient key IDs")
+			if test.replaceAll {
+				recipients[0].KeyID = []byte("rogue-recipient-a")
+				recipients[0].PublicKey = readX25519Key(t, 98).PublicKey().Bytes()
+				recipients[1].KeyID = []byte("rogue-recipient-b")
+				recipients[1].PublicKey = readX25519Key(t, 99).PublicKey().Bytes()
+			} else {
+				recipients[1].KeyID = bytes.Clone(readRogueKeyID)
+				recipients[1].PublicKey = readX25519Key(t, 99).PublicKey().Bytes()
+			}
+			envelopeBytes, snapshot := sealFixtureSnapshotWithPreparedRecipients(
+				t, fixture, nil, 0x96, []byte("synthetic snapshot payload"), recipients,
+			)
+			envelope, err := vault.DecodeEnvelope(envelopeBytes)
+			require.NoError(t, err)
+			assert.Equal(t, len(policy.Recipients), len(envelope.Recipients),
+				"the hostile envelope keeps the policy recipient count")
+			head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
+			installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
+			fixture.request.DeviceKey = nil
+			fixture.request.DeviceKeyID = nil
+
+			_, err = fixture.reader().Read(context.Background(), fixture.request)
+			require.ErrorIs(t, err, ErrReadRecipientSet,
+				"the reader must reject same-count envelope key-ID sets that differ from policy")
+		})
+	}
+}
+
+func sealFixtureSnapshotWithPreparedRecipients(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte, recipients []vault.PreparedRecipient) ([]byte, SnapshotRecord) {
+	t.Helper()
+	policy, _, digest := fixturePolicyParts(t, fixture)
+	envelope, err := vault.SealPrepared(vault.PreparedSeal{
+		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
+		EpochSeq: policy.EpochSeq, PolicyDigest: digest, Parent: parent, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
+		Plaintext: plaintext, SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, 32),
+		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: recipients,
+	})
+	require.NoError(t, err)
+	envelopeBytes, err := vault.EncodeEnvelope(envelope)
+	require.NoError(t, err)
+	return envelopeBytes, snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
 }
 
 func TestExpectedRefusalReaderUnauthorizedWrap(t *testing.T) {
@@ -123,7 +176,7 @@ func TestExpectedRefusalReaderUnauthorizedWrap(t *testing.T) {
 	assert.Equal(t, len(prepared.Recipients)-1, len(controlResult.Envelope.Recipients))
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must reject an envelope carrying a wrap for a device the policy never named")
+	require.ErrorIs(t, err, ErrReadRecipientSet, "the reader must reject an envelope carrying a wrap for a device the policy never named")
 }
 
 func TestExpectedRefusalReaderOlderSnapshotAtNextCount(t *testing.T) {
@@ -161,7 +214,8 @@ func TestExpectedRefusalReaderOlderSnapshotAtNextCount(t *testing.T) {
 	require.NoError(t, err)
 	installSnapshot(t, &fixture, s1Blob, s1Record, signFixtureHead(t, fixture, s1Blob, 3, s1Record.Parent, publisherSigner(), fixtureSigningKey(12)))
 	_, err = reader.Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must reject an older snapshot republished at the next count")
+	require.ErrorIs(t, err, ErrVaultPublicationAncestry,
+		"the reader must reject an older snapshot republished at the next count")
 }
 
 func TestExpectedRefusalReaderCoherentForkBehindHead(t *testing.T) {
@@ -184,7 +238,8 @@ func TestExpectedRefusalReaderCoherentForkBehindHead(t *testing.T) {
 	assert.Equal(t, controlS1, positive.Head.PrevHeadCID)
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must reject a coherent fork that descends from S0, behind the observed head S1")
+	require.ErrorIs(t, err, ErrVaultPublicationAncestry,
+		"the reader must reject a coherent fork that descends from S0, behind the observed head S1")
 }
 
 func TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners(t *testing.T) {
@@ -207,14 +262,17 @@ func TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners(t *testing.T) {
 	assert.Equal(t, []byte("publisher-sign"), positive.Envelope.KeyID)
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must require the head and envelope signers to be equal")
+	require.ErrorIs(t, err, ErrReadSignerMismatch,
+		"the reader refuses a head and envelope with different authorized signers")
 }
 
 func TestExpectedRefusalReaderControlAncestry(t *testing.T) {
 	fixture := newReadFixture(t)
 	policyKey := RecordKey{Collection: VaultPolicyNSID, RKey: "self"}
 	controlKey := RecordKey{Collection: VaultControlNSID, RKey: "self"}
-	c1Decoded, err := DecodeRecord(fixture.records[controlKey])
+	c1Record := bytes.Clone(fixture.records[controlKey])
+	fixture.request.PreviousControl = c1Record
+	c1Decoded, err := DecodeRecord(c1Record)
 	require.NoError(t, err)
 	c1Object := controlFromRecord(c1Decoded.(ControlRecord))
 	c0CID := bytes.Clone(c1Object.PrevControlCID)
@@ -232,7 +290,9 @@ func TestExpectedRefusalReaderControlAncestry(t *testing.T) {
 	controlFixture := newReadFixture(t)
 	controlPolicyKey := RecordKey{Collection: VaultPolicyNSID, RKey: "self"}
 	controlRecordKey := RecordKey{Collection: VaultControlNSID, RKey: "self"}
-	controlRecord, err := DecodeRecord(controlFixture.records[controlRecordKey])
+	controlC1Record := bytes.Clone(controlFixture.records[controlRecordKey])
+	controlFixture.request.PreviousControl = controlC1Record
+	controlRecord, err := DecodeRecord(controlC1Record)
 	require.NoError(t, err)
 	controlObject := controlFromRecord(controlRecord.(ControlRecord))
 	controlBytes, err := vault.EncodeControl(controlObject)
@@ -256,7 +316,13 @@ func TestExpectedRefusalReaderControlAncestry(t *testing.T) {
 	assert.Equal(t, controlP1Digest[:], positive.Policy.PrevPolicyDigest)
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must validate control ancestry (C2 names C0, skipping C1) against policy ancestry")
+	require.ErrorIs(t, err, ErrReadControlLinkage,
+		"the reader refuses C2 naming C0 while the supplied authenticated predecessor is C1")
+	assert.NotErrorIs(t, err, ErrReadControlType)
+	assert.NotErrorIs(t, err, ErrReadControlSignature)
+	assert.NotErrorIs(t, err, ErrReadControlSigner)
+	assert.NotErrorIs(t, err, ErrReadControlEpoch)
+	assert.NotErrorIs(t, err, ErrReadControlPolicyDigest)
 }
 
 func TestExpectedRefusalReaderHeadAboveMaxPublications(t *testing.T) {
@@ -284,8 +350,15 @@ func TestExpectedRefusalReaderHeadAboveMaxPublications(t *testing.T) {
 	over, overSnapshot := sealFixtureSnapshot(t, fixture, atMaxCID, 0x42, []byte("n+1 payload"))
 	installSnapshot(t, &fixture, over, overSnapshot, signFixtureHead(t, fixture, over, maximum+1, atMaxCID, publisherSigner(), fixtureSigningKey(12)))
 	_, err = reader.Read(context.Background(), fixture.request)
-	require.Error(t, err, "the reader must reject a head above the policy publication maximum")
+	require.ErrorIs(t, err, vault.ErrPublicationCount,
+		"the reader must reject a head above the policy publication maximum")
+	installSnapshot(t, &fixture, atMax, atMaxSnapshot, signFixtureHead(t, fixture, atMax, maximum, belowCID, publisherSigner(), fixtureSigningKey(12)))
+	positive, err := reader.Read(context.Background(), fixture.request)
+	require.NoError(t, err, "the refused over-limit read must not advance the observation")
+	assert.Equal(t, maximum, positive.PublicationCount)
 }
+
+var pinnedFrozenDefectIDs = []string{"1a", "3b", "3c", "5b", "5c", "10", "11", "18"}
 
 var frozenSecurityDefectCases = []struct {
 	id      string
@@ -303,6 +376,12 @@ var frozenSecurityDefectCases = []struct {
 
 func TestCaseMatrixMatchesRefusalTests(t *testing.T) {
 	functions := testSourceFunctions(t)
+	frozenIDs := make([]string, 0, len(frozenSecurityDefectCases))
+	for _, frozen := range frozenSecurityDefectCases {
+		frozenIDs = append(frozenIDs, frozen.id)
+	}
+	assert.ElementsMatch(t, pinnedFrozenDefectIDs, frozenIDs,
+		"the frozen defect inventory is pinned: closing a defect moves its matrix status, it never removes the entry")
 	matrixByID := make(map[string]matrixCase, len(caseMatrix))
 	for _, entry := range caseMatrix {
 		matrixByID[entry.id] = entry

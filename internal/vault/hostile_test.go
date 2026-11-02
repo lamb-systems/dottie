@@ -40,26 +40,19 @@ type securityDefect struct {
 }
 
 var caseMatrix = []matrixCase{
-	{id: "1b", status: statusKnownDefect, test: "TestKnownDefectEnrollmentIgnoresParentJoin", refusal: "TestExpectedRefusalEnrollmentParentJoin"},
+	{id: "1b", status: statusNewRefusal, test: "TestEnrollmentRefusesParentMismatch", refusal: "TestExpectedRefusalEnrollmentParentJoin"},
 	{id: "2", status: statusNewRefusal, test: "TestExportRefusesCheckpointNamingAbsentRoot"},
 	{id: "3a-i", status: statusExisting, test: "TestOpenVerificationOrderAndAuthorizationErrors"},
 	{id: "3a-ii", status: statusNewRefusal, test: "TestOpenRefusesRecipientAbsentFromPolicy"},
 	{id: "12", status: statusNewRefusal, test: "TestExportRefusesOverCapAndMismatchedMembers"},
-	{id: "13", status: statusKnownDefect, test: "TestKnownDefectCheckpointAcceptsSkippedPolicyChain", refusal: "TestExpectedRefusalCheckpointSkippedPolicyChain"},
-	{id: "14", status: statusKnownDefect, test: "TestKnownDefectEnrollmentDeltaPermitsPolicyFieldChanges", refusal: "TestExpectedRefusalEnrollmentDeltaPolicyFields"},
-	{id: "15", status: statusKnownDefect, test: "TestKnownDefectRevocationDeltaPermitsPolicyFieldChanges", refusal: "TestExpectedRefusalRevocationDeltaPolicyFields"},
-	{id: "19", status: statusKnownDefect, test: "TestKnownDefectCheckpointIgnoresCertPolicyRoleDisagreement", refusal: "TestExpectedRefusalCheckpointCertPolicyRole"},
-	{id: "20", status: statusKnownDefect, test: "TestKnownDefectPolicyDecoderAcceptsOutOfRangeBounds", refusal: "TestExpectedRefusalPolicyDecoderOutOfRangeBounds"},
+	{id: "13", status: statusNewRefusal, test: "TestVerifyControlStateRefusesSkippedPolicyChain", refusal: "TestExpectedRefusalCheckpointSkippedPolicyChain"},
+	{id: "14", status: statusNewRefusal, test: "TestEnrollmentRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalEnrollmentDeltaPolicyFields"},
+	{id: "15", status: statusNewRefusal, test: "TestRevocationRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalRevocationDeltaPolicyFields"},
+	{id: "19", status: statusNewRefusal, test: "TestVerifyControlStateRefusesCertificatePolicyRoleMismatch", refusal: "TestExpectedRefusalCheckpointCertPolicyRole"},
+	{id: "20", status: statusNewRefusal, test: "TestPolicyDecoderRefusesOutOfRangeBounds", refusal: "TestExpectedRefusalPolicyDecoderOutOfRangeBounds"},
 }
 
-var knownSecurityDefects = []securityDefect{
-	{caseID: "1b", finding: "V03", owner: "vault-devices", contract: "refuse", observation: "accept"},
-	{caseID: "13", finding: "V04", owner: "vault-checkpoint", contract: "refuse", observation: "accept"},
-	{caseID: "14", finding: "V03", owner: "vault-devices", contract: "refuse", observation: "accept"},
-	{caseID: "15", finding: "V04", owner: "vault-devices", contract: "refuse", observation: "accept"},
-	{caseID: "19", finding: "V05", owner: "vault-checkpoint", contract: "refuse", observation: "accept"},
-	{caseID: "20", finding: "V02", owner: "vault-objects", contract: "refuse", observation: "accept"},
-}
+var knownSecurityDefects []securityDefect
 
 const hostilePackageName = "vault"
 
@@ -212,7 +205,7 @@ func enrollmentPolicyFieldMutators() []struct {
 	}
 }
 
-func TestKnownDefectEnrollmentIgnoresParentJoin(t *testing.T) {
+func TestEnrollmentRefusesParentMismatch(t *testing.T) {
 	fixture := newDevicesFixture(t)
 	foreignParent, err := rawCID([]byte("unrelated predecessor head Q"))
 	require.NoError(t, err)
@@ -220,45 +213,28 @@ func TestKnownDefectEnrollmentIgnoresParentJoin(t *testing.T) {
 	envelope, err := DecodeEnvelope(transition.Snapshot)
 	require.NoError(t, err)
 	assert.False(t, bytes.Equal(envelope.Parent, fixture.predecessor.HeadCID),
-		"the enrolled snapshot names a parent the predecessor never held")
-	assert.NoError(t, ValidateTransition(transition, fixture.predecessor),
-		"enrollment validation never joins the envelope parent to the predecessor head")
+		"the hostile enrollment snapshot names a parent the predecessor never held")
+	require.ErrorIs(t, ValidateTransition(transition, fixture.predecessor), ErrSnapshotEpoch,
+		"enrollment refuses an envelope parent that differs from the predecessor head")
+
+	controlFixture := newDevicesFixture(t)
+	require.NoError(t, ValidateTransition(controlFixture.transition, controlFixture.predecessor),
+		"enrollment accepts a snapshot whose envelope parent matches the predecessor head")
 }
 
-func TestKnownDefectEnrollmentDeltaPermitsPolicyFieldChanges(t *testing.T) {
+func TestEnrollmentRefusesNonRosterPolicyFieldChanges(t *testing.T) {
 	for _, mutator := range enrollmentPolicyFieldMutators() {
 		t.Run(mutator.name, func(t *testing.T) {
 			fixture := newDevicesFixture(t)
 			transition := rebuildEnrollment(t, fixture, nil, mutator.mutate)
-			assert.NoError(t, ValidateTransition(transition, fixture.predecessor),
-				"enrollment delta validation ignores %s", mutator.name)
+			require.ErrorIs(t, ValidateTransition(transition, fixture.predecessor), ErrTransitionDelta,
+				"enrollment must reject a non-roster change to %s", mutator.name)
 		})
 	}
-}
 
-func TestKnownDefectPolicyDecoderAcceptsOutOfRangeBounds(t *testing.T) {
-	checks := []struct {
-		name   string
-		mutate func(*Policy)
-	}{
-		{"max_publications", func(p *Policy) { p.MaxPublications = 0 }},
-		{"max_epoch_age", func(p *Policy) { p.MaxEpochAge = 0 }},
-	}
-	for _, check := range checks {
-		t.Run(check.name, func(t *testing.T) {
-			fixture := newDevicesFixture(t)
-			transition := rebuildEnrollment(t, fixture, nil, check.mutate)
-			decoded, err := DecodePolicy(transition.Policy)
-			require.NoError(t, err, "DecodePolicy reads %s as a raw integer with no range check", check.name)
-			if check.name == "max_publications" {
-				assert.Equal(t, uint32(0), decoded.MaxPublications)
-			} else {
-				assert.Equal(t, uint32(0), decoded.MaxEpochAge)
-			}
-			assert.NoError(t, ValidateTransition(transition, fixture.predecessor),
-				"vault transition validation accepts a policy with an out-of-range %s", check.name)
-		})
-	}
+	fixture := newDevicesFixture(t)
+	require.NoError(t, ValidateTransition(fixture.transition, fixture.predecessor),
+		"enrollment accepts a transition with all non-roster policy fields unchanged")
 }
 
 func rebuildRevocation(t *testing.T, base Transition, predecessor Predecessor, signer DeviceMaterial, intent TransitionIntent, mutate func(*Policy)) Transition {
@@ -327,15 +303,19 @@ func revocationFixture(t *testing.T) (devicesFixture, Predecessor, Transition, T
 	return fixture, predecessor, base, intent
 }
 
-func TestKnownDefectRevocationDeltaPermitsPolicyFieldChanges(t *testing.T) {
+func TestRevocationRefusesNonRosterPolicyFieldChanges(t *testing.T) {
 	for _, mutator := range enrollmentPolicyFieldMutators() {
 		t.Run(mutator.name, func(t *testing.T) {
 			fixture, predecessor, base, intent := revocationFixture(t)
 			transition := rebuildRevocation(t, base, predecessor, fixture.root, intent, mutator.mutate)
-			assert.NoError(t, ValidateTransition(transition, predecessor),
-				"revocation delta validation ignores %s", mutator.name)
+			require.ErrorIs(t, ValidateTransition(transition, predecessor), ErrTransitionDelta,
+				"revocation must reject a non-roster change to %s", mutator.name)
 		})
 	}
+
+	_, predecessor, base, _ := revocationFixture(t)
+	require.NoError(t, ValidateTransition(base, predecessor),
+		"revocation accepts a transition with all non-roster policy fields unchanged")
 }
 
 func demotedRootEvidence(t *testing.T, fixture checkpointFixture, heldCID []byte) ControlEvidence {
@@ -359,7 +339,7 @@ func demotedRootEvidence(t *testing.T, fixture checkpointFixture, heldCID []byte
 	return ControlEvidence{Control: controlBytes, Policy: policyBytes, Certificates: [][]byte{fixture.cert}}
 }
 
-func TestKnownDefectCheckpointIgnoresCertPolicyRoleDisagreement(t *testing.T) {
+func TestVerifyControlStateRefusesCertificatePolicyRoleMismatch(t *testing.T) {
 	fixture := newCheckpointFixture(t)
 	held := fixture.evidence(t, 0, nil)
 	heldCID, err := rawCID(held.Control)
@@ -378,13 +358,14 @@ func TestKnownDefectCheckpointIgnoresCertPolicyRoleDisagreement(t *testing.T) {
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
 	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: supplied})
-	require.NoError(t, err)
-	assert.Equal(t, CheckpointDescendant, result.Outcome)
-	assert.Equal(t, "direct-descendant", result.ReasonCode,
-		"the checkpoint verifier never consults policy.Roles, so a policy that demotes the anchored root is accepted")
+	var refusal *VerificationRefusal
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, "supplied", refusal.Side)
+	assert.Equal(t, "policy-signer-role", refusal.Code)
+	assert.Equal(t, VerificationResult{}, result)
 }
 
-func TestKnownDefectCheckpointAcceptsSkippedPolicyChain(t *testing.T) {
+func TestVerifyControlStateRefusesSkippedPolicyChain(t *testing.T) {
 	fixture := newCheckpointFixture(t)
 	held := fixture.evidence(t, 0, nil)
 	heldCID, err := rawCID(held.Control)
@@ -392,7 +373,13 @@ func TestKnownDefectCheckpointAcceptsSkippedPolicyChain(t *testing.T) {
 	one := fixture.evidence(t, 1, heldCID)
 	oneCID, err := rawCID(one.Control)
 	require.NoError(t, err)
-	two := fixture.evidence(t, 2, oneCID)
+	two := fixture.evidenceWithPolicyPredecessor(t, 2, oneCID, held.Policy)
+	oneControl, err := DecodeControl(one.Control)
+	require.NoError(t, err)
+	twoControl, err := DecodeControl(two.Control)
+	require.NoError(t, err)
+	assert.Equal(t, heldCID, oneControl.PrevControlCID)
+	assert.Equal(t, oneCID, twoControl.PrevControlCID)
 
 	genesisDigest := mustPolicyDigest(held.Policy)
 	intermediateDigest := mustPolicyDigest(one.Policy)
@@ -405,11 +392,11 @@ func TestKnownDefectCheckpointAcceptsSkippedPolicyChain(t *testing.T) {
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
 	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}})
-	require.NoError(t, err)
-	assert.Equal(t, CheckpointDescendant, result.Outcome)
-	assert.Equal(t, "verified-descendant", result.ReasonCode,
-		"the control walk accepts a descendant whose policy chain skips an epoch")
-	assert.Equal(t, 2, result.LinkCount)
+	var refusal *VerificationRefusal
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, "supplied", refusal.Side)
+	assert.Equal(t, "policy-ancestry", refusal.Code)
+	assert.Equal(t, VerificationResult{}, result)
 }
 
 func TestOpenRefusesRecipientAbsentFromPolicy(t *testing.T) {

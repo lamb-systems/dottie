@@ -3,14 +3,13 @@
 package vault
 
 import (
-	"bytes"
-	"crypto/ed25519"
-	"crypto/sha256"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var pinnedFrozenDefectIDs = []string{"1b", "13", "14", "15", "19", "20"}
 
 var frozenSecurityDefectCases = []struct {
 	id      string
@@ -24,108 +23,43 @@ var frozenSecurityDefectCases = []struct {
 	{id: "20", refusal: "TestExpectedRefusalPolicyDecoderOutOfRangeBounds"},
 }
 
-func outOfRangePolicyDigest(encoded []byte) [32]byte {
-	return sha256.Sum256(append([]byte(preimagePolicy), encoded...))
-}
-
-func outOfRangePolicyWire(t *testing.T, value Policy, key ed25519.PrivateKey) []byte {
-	t.Helper()
-	prefix, err := encodePolicyPrefix(value)
-	require.NoError(t, err)
-	signature, err := signObject("dottie/v1/sig-policy", prefix, key)
-	require.NoError(t, err)
-	value.Signature = signature
-	encoded, err := EncodePolicy(value)
-	require.NoError(t, err)
-	return encoded
-}
-
-func rebuildEnrollmentRaw(t *testing.T, fixture devicesFixture, mutate func(*Policy)) Transition {
-	t.Helper()
-	policy, err := DecodePolicy(fixture.transition.Policy)
-	require.NoError(t, err)
-	mutate(&policy)
-	policyBytes := outOfRangePolicyWire(t, policy, fixture.root.Signing)
-	digest := outOfRangePolicyDigest(policyBytes)
-	wraps, err := prepareRecipientWraps(policy, fixture.intent.Wraps)
-	require.NoError(t, err)
-	recipients, err := prepareSealRecipients(policy, wraps)
-	require.NoError(t, err)
-	envelope, err := SealPrepared(PreparedSeal{
-		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: fixture.intent.PublicationID, EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, Parent: bytes.Clone(fixture.predecessor.HeadCID), DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
-		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey, Nonce: fixture.intent.Nonce, Recipients: recipients,
-	})
-	require.NoError(t, err)
-	envelopeBytes, err := EncodeEnvelope(envelope)
-	require.NoError(t, err)
-	snapshotCID, err := rawCID(envelopeBytes)
-	require.NoError(t, err)
-	oldControl, err := DecodeControl(fixture.transition.Control)
-	require.NoError(t, err)
-	control := Control{
-		Vault: policy.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: digest, HeadSnapshotCID: bytes.Clone(snapshotCID),
-		Revoked: oldControl.Revoked, PrevControlCID: bytes.Clone(fixture.predecessor.ControlCID),
-		Signer: Signer{DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID)},
-	}
-	controlBytes, err := signControl(control, fixture.root.Signing)
-	require.NoError(t, err)
-	head := Head{
-		Vault: policy.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: digest, SnapshotCID: bytes.Clone(snapshotCID),
-		BlobCID: bytes.Clone(snapshotCID), PublicationCount: 0, PrevHeadCID: bytes.Clone(fixture.predecessor.HeadCID),
-		Signer: Signer{DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID)},
-	}
-	headBytes, err := signHead(head, fixture.root.Signing)
-	require.NoError(t, err)
-	transition := Transition{
-		Kind: TransitionEnroll, Predecessor: fixture.transition.Predecessor, Policy: policyBytes, Control: controlBytes,
-		Certificate: fixture.transition.Certificate, Head: headBytes, Snapshot: envelopeBytes, SnapshotCID: snapshotCID,
-		BlobCID: bytes.Clone(snapshotCID), Recipients: fixture.transition.Recipients,
-	}
-	transition.Digest = ComputeTransitionDigest(transition)
-	return transition
-}
-
 func TestExpectedRefusalEnrollmentParentJoin(t *testing.T) {
 	fixture := newDevicesFixture(t)
 	foreignParent, err := rawCID([]byte("unrelated predecessor head Q"))
 	require.NoError(t, err)
 	transition := rebuildEnrollment(t, fixture, foreignParent, nil)
-	require.Error(t, ValidateTransition(transition, fixture.predecessor),
-		"enrollment must join the envelope parent to the predecessor head")
+	require.ErrorIs(t, ValidateTransition(transition, fixture.predecessor), ErrSnapshotEpoch,
+		"enrollment refuses an envelope parent that differs from the predecessor head")
+
+	controlFixture := newDevicesFixture(t)
+	require.NoError(t, ValidateTransition(controlFixture.transition, controlFixture.predecessor),
+		"enrollment accepts a snapshot whose envelope parent matches the predecessor head")
 }
 
-func TestExpectedRefusalEnrollmentDeltaPolicyFields(t *testing.T) {
+func TestEnrollmentPolicyFieldRefusalSentinel(t *testing.T) {
 	for _, mutator := range enrollmentPolicyFieldMutators() {
 		t.Run(mutator.name, func(t *testing.T) {
 			fixture := newDevicesFixture(t)
 			transition := rebuildEnrollment(t, fixture, nil, mutator.mutate)
-			require.Error(t, ValidateTransition(transition, fixture.predecessor),
+			require.ErrorIs(t, ValidateTransition(transition, fixture.predecessor), ErrTransitionDelta,
 				"enrollment must reject a non-roster change to %s", mutator.name)
 		})
 	}
 }
 
-func TestExpectedRefusalRevocationDeltaPolicyFields(t *testing.T) {
+func TestRevocationPolicyFieldRefusalSentinel(t *testing.T) {
 	for _, mutator := range enrollmentPolicyFieldMutators() {
 		t.Run(mutator.name, func(t *testing.T) {
 			fixture, predecessor, base, intent := revocationFixture(t)
 			transition := rebuildRevocation(t, base, predecessor, fixture.root, intent, mutator.mutate)
-			require.Error(t, ValidateTransition(transition, predecessor),
+			require.ErrorIs(t, ValidateTransition(transition, predecessor), ErrTransitionDelta,
 				"revocation must reject a non-roster change to %s", mutator.name)
 		})
 	}
 }
 
 func TestExpectedRefusalPolicyDecoderOutOfRangeBounds(t *testing.T) {
-	checks := []struct {
-		name   string
-		mutate func(*Policy)
-	}{
-		{"max_publications", func(p *Policy) { p.MaxPublications = 0 }},
-		{"max_epoch_age", func(p *Policy) { p.MaxEpochAge = 0 }},
-	}
-	for _, check := range checks {
+	for _, check := range outOfRangePolicyCases() {
 		t.Run(check.name, func(t *testing.T) {
 			fixture := newDevicesFixture(t)
 			outOfRange, err := DecodePolicy(fixture.transition.Policy)
@@ -133,11 +67,15 @@ func TestExpectedRefusalPolicyDecoderOutOfRangeBounds(t *testing.T) {
 			check.mutate(&outOfRange)
 			encoded := outOfRangePolicyWire(t, outOfRange, fixture.root.Signing)
 			_, decodeErr := DecodePolicy(encoded)
-			require.Error(t, decodeErr, "DecodePolicy must reject an out-of-range %s", check.name)
+			require.ErrorIs(t, decodeErr, ErrLimit, "DecodePolicy rejects out-of-range %s", check.name)
+			assert.ErrorContains(t, decodeErr, check.field, "DecodePolicy identifies out-of-range %s", check.field)
 
 			transition := rebuildEnrollmentRaw(t, fixture, check.mutate)
-			require.Error(t, ValidateTransition(transition, fixture.predecessor),
-				"vault transition validation must reject an out-of-range %s", check.name)
+			transitionErr := ValidateTransition(transition, fixture.predecessor)
+			require.ErrorIs(t, transitionErr, ErrTransitionSignature,
+				"vault transition validation rejects out-of-range %s", check.name)
+			assert.ErrorIs(t, transitionErr, ErrLimit, "vault transition preserves the policy range error")
+			assert.ErrorContains(t, transitionErr, check.field, "vault transition identifies out-of-range %s", check.field)
 		})
 	}
 }
@@ -168,7 +106,13 @@ func TestExpectedRefusalCheckpointSkippedPolicyChain(t *testing.T) {
 	one := fixture.evidence(t, 1, heldCID)
 	oneCID, err := rawCID(one.Control)
 	require.NoError(t, err)
-	two := fixture.evidence(t, 2, oneCID)
+	two := fixture.evidenceWithPolicyPredecessor(t, 2, oneCID, held.Policy)
+	oneControl, err := DecodeControl(one.Control)
+	require.NoError(t, err)
+	twoControl, err := DecodeControl(two.Control)
+	require.NoError(t, err)
+	assert.Equal(t, heldCID, oneControl.PrevControlCID)
+	assert.Equal(t, oneCID, twoControl.PrevControlCID)
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
 	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}})
@@ -183,6 +127,12 @@ func TestExpectedRefusalCheckpointSkippedPolicyChain(t *testing.T) {
 
 func TestCaseMatrixMatchesRefusalTests(t *testing.T) {
 	functions := testSourceFunctions(t)
+	frozenIDs := make([]string, 0, len(frozenSecurityDefectCases))
+	for _, frozen := range frozenSecurityDefectCases {
+		frozenIDs = append(frozenIDs, frozen.id)
+	}
+	assert.ElementsMatch(t, pinnedFrozenDefectIDs, frozenIDs,
+		"the frozen defect inventory is pinned: closing a defect moves its matrix status, it never removes the entry")
 	matrixByID := make(map[string]matrixCase, len(caseMatrix))
 	for _, entry := range caseMatrix {
 		matrixByID[entry.id] = entry
@@ -224,4 +174,32 @@ func TestCaseSecurityGateIsClosed(t *testing.T) {
 	}
 	assert.Empty(t, open, "the security gate is open while frozen defect rows remain known-defect")
 	assert.Empty(t, knownSecurityDefects, "the security gate is open while the known-defect registry is non-empty")
+}
+
+func TestExpectedRefusalEnrollmentDeltaPolicyFields(t *testing.T) {
+	for _, mutator := range enrollmentPolicyFieldMutators() {
+		t.Run(mutator.name, func(t *testing.T) {
+			fixture := newDevicesFixture(t)
+			transition := rebuildEnrollment(t, fixture, nil, mutator.mutate)
+			require.ErrorIs(t, ValidateTransition(transition, fixture.predecessor), ErrTransitionDelta,
+				"enrollment must refuse a non-roster change to %s", mutator.name)
+		})
+	}
+	fixture := newDevicesFixture(t)
+	require.NoError(t, ValidateTransition(fixture.transition, fixture.predecessor),
+		"enrollment accepts a transition whose non-roster fields are unchanged")
+}
+
+func TestExpectedRefusalRevocationDeltaPolicyFields(t *testing.T) {
+	for _, mutator := range enrollmentPolicyFieldMutators() {
+		t.Run(mutator.name, func(t *testing.T) {
+			fixture, predecessor, base, intent := revocationFixture(t)
+			transition := rebuildRevocation(t, base, predecessor, fixture.root, intent, mutator.mutate)
+			require.ErrorIs(t, ValidateTransition(transition, predecessor), ErrTransitionDelta,
+				"revocation must refuse a non-roster change to %s", mutator.name)
+		})
+	}
+	_, predecessor, base, _ := revocationFixture(t)
+	require.NoError(t, ValidateTransition(base, predecessor),
+		"revocation accepts a transition whose non-roster fields are unchanged")
 }
