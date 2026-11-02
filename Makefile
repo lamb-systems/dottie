@@ -5,7 +5,7 @@ override GIO_MIN_VERSION := 2.40
 GOTOOLCHAIN ?= local
 export GOTOOLCHAIN CC PKG_CONFIG
 
-.PHONY: build test test-race vet fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race
+.PHONY: build test test-race vet fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race known-defects acceptance
 
 FUZZ_TIME ?= 30s
 FUZZ_SMOKE_TIME ?= 5s
@@ -30,6 +30,34 @@ fmt-check:
 	if [ -n "$$files" ]; then printf 'Run make fmt for:\n%s\n' "$$files"; exit 1; fi
 
 check: fmt-check vet test
+
+override KNOWN_DEFECTS_VAULT_TESTS := TestExpectedRefusalEnrollmentParentJoin TestExpectedRefusalCheckpointSkippedPolicyChain TestExpectedRefusalEnrollmentDeltaPolicyFields TestExpectedRefusalRevocationDeltaPolicyFields TestExpectedRefusalCheckpointCertPolicyRole TestExpectedRefusalPolicyDecoderOutOfRangeBounds TestCaseMatrixMatchesRefusalTests TestCaseSecurityGateIsClosed
+override KNOWN_DEFECTS_ATPROTO_TESTS := TestExpectedRefusalReaderHeadEnvelopeParentLink TestExpectedRefusalReaderExtraRecipientInMetadata TestExpectedRefusalReaderUnauthorizedWrap TestExpectedRefusalReaderOlderSnapshotAtNextCount TestExpectedRefusalReaderCoherentForkBehindHead TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners TestExpectedRefusalReaderControlAncestry TestExpectedRefusalReaderHeadAboveMaxPublications TestCaseMatrixMatchesRefusalTests TestCaseSecurityGateIsClosed
+
+known-defects:
+	@set +e; \
+	tmpdir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	$(GO) test -count=1 -v -tags known_defects ./internal/vault >"$$tmpdir/vault.log" 2>&1; vault_status=$$?; \
+	cat "$$tmpdir/vault.log"; \
+	$(GO) test -count=1 -v -tags known_defects ./internal/remote/atproto >"$$tmpdir/atproto.log" 2>&1; atproto_status=$$?; \
+	cat "$$tmpdir/atproto.log"; \
+	check_names() { \
+		log="$$1"; shift; missing=0; \
+		for name in "$$@"; do \
+			if ! grep -Eq "^--- (PASS|FAIL): $$name([[:space:]]|$$)" "$$log"; then \
+				printf 'known-defects: missing PASS/FAIL result for %s\n' "$$name" >&2; missing=1; \
+			fi; \
+		done; \
+		return "$$missing"; \
+	}; \
+	guard_status=0; \
+	check_names "$$tmpdir/vault.log" $(KNOWN_DEFECTS_VAULT_TESTS) || guard_status=1; \
+	check_names "$$tmpdir/atproto.log" $(KNOWN_DEFECTS_ATPROTO_TESTS) || guard_status=1; \
+	if [ "$$guard_status" -ne 0 ]; then exit 1; fi; \
+	if [ "$$vault_status" -ne 0 ] || [ "$$atproto_status" -ne 0 ]; then exit 1; fi
+
+acceptance: check test-race build known-defects
 
 verify:
 	$(GO) mod verify

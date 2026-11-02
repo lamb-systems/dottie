@@ -12,13 +12,17 @@ for someone deciding whether to trust the tool with their configuration.
 | Bounded snapshots | yes | encrypted envelopes |
 | OAuth against a real provider | yes, internal boundary | user-facing account linking |
 | Blob lifecycle and fenced publication | yes, harness and library | wired into a product command |
-| Encryption and signatures | **no** | ADR 015 |
-| Device roles, revocation, epochs | **no** | ADR 014 |
-| Recovery kit, checkpoints, export | **no** | checkpoints and recovery, V06 |
+| Encryption and signatures | yes, vault library (ADR 015) | wired into a sync command |
+| Device roles, revocation, epochs | yes, vault library (ADR 014); `account bootstrap`, `enroll`, `recovery`, `verify` | transitions driven end to end against a provider |
+| Recovery kit and checkpoints | yes, vault library; `account recovery` and `account verify` | restore driven end to end |
+| Vault export and import | yes, library only (`EncodeExportArchive`/`ReadExportArchive`); no command | a product export/import command |
+| Remote vault sync | no; `dottie plan` previews a local view bundle only | a sync command that publishes and reads a vault |
 | GNOME settings capture and apply | boundary only, opt-in cgo | the GNOME capture work to G04 |
 
-The CLI currently exposes target selection only. Account linking exists as an internal OAuth boundary with
-an unsupported login path, not as a command you can run. No real data should be stored with this build.
+The CLI exposes target selection, `dottie plan`, and the `account` command group (`bootstrap`, `enroll`,
+`recovery`, `verify`). Account OAuth linking remains an internal boundary with an unsupported login path. No
+command publishes or reads a vault against a provider, and vault export and import are library functions only.
+No real data should be stored with this build.
 
 ## Authorities
 
@@ -136,7 +140,86 @@ backup.
 The recipient key row is the one people get wrong: revoking a device stops it publishing, and it does not
 take away its ability to unwrap ciphertext that was already wrapped to it.
 
-## Coverage
+## Adversarial corpus (DOT-V07)
 
-ADR 014 and ADR 015 define the target contract. The adversarial testing work owns the adversarial tests; every residual risk
-above names the limit it accepts rather than a test that would clear it.
+ADR 014 and ADR 015 define the target contract. The DOT-V07 corpus attacks the vault authorization and
+decoder paths with runtime constructors in `internal/vault/hostile_test.go`,
+`internal/vault/hostile_export_test.go` and `internal/remote/atproto/hostile_reader_test.go`; the case matrix
+and each case's first mandatory check live in those files as the `caseMatrix` table. It is evidence, not a
+clean bill of health: the security gate it defines is expected to fail today, because fourteen ADR-violating
+behaviours are recorded as known defects.
+
+Case 1a proves that the unequal ancestry fields are accepted on both an observed and an empty observation
+store, but cannot prove that a future fix implements the Parent-to-PrevHeadCID join rather than an unrelated
+refusal; that is verified in the fix's own implementation review.
+
+### Proven refusals
+
+The reader and the vault library refuse these, with the sentinel and stage named in each test:
+
+- a snapshot with no membership in a valid revision, before any blob fetch (`ErrReadRecordMissing`);
+- a restore-only device that signs a snapshot (`ErrReadRecordContext`, field `role`);
+- a revoked device's envelope at its successor epoch (`ErrReadVaultAuthentication`);
+- a successor policy signed by a root the predecessor never authorized (`ErrReadVaultAuthentication`);
+- an epoch-mixed object, an epoch-1 envelope under an epoch-2 record (`ErrReadRecordBinding`, field `epochSeq`);
+- a current policy naming an unrelated predecessor (`ErrReadRecordContext`, field `prevPolicyDigest`);
+- opening a recipient the policy does not name (`ErrRecipient`);
+- an export whose kit-signed checkpoint names a root the archive chain does not contain (`ErrAuthorization`),
+  and an export whose member inventory is over its cap or whose first member header disagrees with its entry,
+  each refused before any member payload is read (the case 12 guard asserts no payload is read past the manifest).
+
+### Known defects and the gate
+
+Each known defect carries an owner and the ADR contract it violates; the registry is `knownSecurityDefects`
+in each package. `accepted-risk` is non-waivable for any authentication, authorization, signature,
+policy-digest or consent failure. The gate is closed only when `make known-defects` passes **and**
+`TestCaseSecurityGateIsClosed` passes, which requires both an empty registry and no `known-defect` matrix
+row. Today the gate is open:
+
+| Case | Finding | Owner | Contract | Observation |
+| --- | --- | --- | --- | --- |
+| 1a | P03 | vault-read | refuse | accept |
+| 1b | V03 | vault-devices | refuse | accept |
+| 3b | P03 | vault-read | refuse | accept |
+| 3c | P03 | vault-read | refuse | accept |
+| 5b | P05 | vault-read | refuse | accept |
+| 5c | P03 | vault-read | refuse | accept |
+| 10 | P03 | vault-read | refuse | accept |
+| 11 | V04 | vault-read | refuse | accept |
+| 13 | V04 | vault-checkpoint | refuse | accept |
+| 14 | V03 | vault-devices | refuse | accept |
+| 15 | V04 | vault-devices | refuse | accept |
+| 18 | P04 | vault-read | refuse | accept |
+| 19 | V05 | vault-checkpoint | refuse | accept |
+| 20 | V02 | vault-objects | refuse | accept |
+
+The shared shape is a check that is individually correct but either not on the path that runs or not joined
+to the field it must agree with: the reader never joins `head.PrevHeadCID` to `envelope.Parent` (1a) and never
+compares either ancestry field with its observed head (5c); it never compares `envelope.Recipients` with the
+policy (3b, 3c), authorizes the head and envelope signers independently (10), accepts a head above
+`max_publications` (18) and never walks control ancestry (11). Enrollment omits the `envelope.Parent` to
+predecessor `HeadCID` join (1b); the enrollment and revocation deltas leave non-roster policy fields unchecked
+(14, 15), and the vault decoder accepts out-of-range bounds (20). The checkpoint verifier follows control links
+without mirroring the policy chain or consulting `policy.Roles` (13, 19). An older but coherent revision
+replayed at the next count is likewise accepted (5b).
+
+### Retracted claim and the extra-wrap mechanism
+
+An earlier note implied extra envelope wraps were rejected. That is retracted. `SealAuthorized` does not
+filter recipients, the read path never compares the envelope recipient set with the policy, and an
+unauthorized recipient's wrap recovers the prepared envelope's content key with X25519, HKDF-SHA256 and
+XChaCha20-Poly1305, which decrypts that snapshot. Case 3c unwraps that route independently and recovers the
+exact content key. `Seal` generates a fresh content key per call (envelope.go:203-206), so this proves
+disclosure of the one prepared envelope's key, not of every snapshot in the epoch. A wrap being *malformed*
+is separate, detectable only by attempting the unwrap, and no refusal is claimed for it.
+
+### Undetectable limits
+
+- A coherent, correctly signed, older revision is undetectable without an independent freshness floor. Global
+  freshness is not provided; the only remote claim is membership at a provider-asserted commit.
+- `max_epoch_age` is a **local rotation trigger, not a validity rule** (ADR 014:148-164). It is a local-clock
+  trigger persisted in state, and a device treats the trigger as met when its state is lost. A reader that
+  accepts an old epoch is therefore correct, and no refusal case is claimed for epoch age. This is separate
+  from `max_publications` and `max_epoch_age` *numeric range* (ADR 014:158-159), which case 20 characterizes
+  as an unfixed defect: the vault wire decoder accepts out-of-range bounds rather than refusing them.
+- Availability: withheld blobs and refused reads are `unavailable`, not a rollback signal.
