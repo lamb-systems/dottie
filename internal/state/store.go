@@ -504,17 +504,65 @@ FROM vault_checkpoints WHERE vault = ?`, vault[:]).Scan(&storedVault, &anchor, &
 	return checkpoint, err
 }
 
+func (s *Store) RecordVaultEpochFirstSeen(ctx context.Context, vault [32]byte, epoch uint64, firstSeenAt int64) error {
+	if epoch > uint64(^uint64(0)>>1) || firstSeenAt < 0 {
+		return errors.New("invalid vault epoch first-seen time")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO vault_epoch_first_seen(vault, epoch, first_seen_at)
+VALUES (?, ?, ?) ON CONFLICT(vault, epoch) DO NOTHING`, vault[:], epoch, firstSeenAt)
+		return err
+	})
+}
+
+func (s *Store) VaultPublicationEpoch(ctx context.Context, vault [32]byte) (uint64, bool, error) {
+	var epoch int64
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, "SELECT epoch FROM vault_publication_observations WHERE vault = ?", vault[:]).Scan(&epoch)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if epoch < 0 {
+		return 0, false, errors.New("stored vault publication epoch is malformed")
+	}
+	return uint64(epoch), true, nil
+}
+
+func (s *Store) VaultEpochFirstSeen(ctx context.Context, vault [32]byte, epoch uint64) (int64, bool, error) {
+	if epoch > uint64(^uint64(0)>>1) {
+		return 0, false, errors.New("invalid vault epoch")
+	}
+	var firstSeenAt int64
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, "SELECT first_seen_at FROM vault_epoch_first_seen WHERE vault = ? AND epoch = ?", vault[:], epoch).Scan(&firstSeenAt)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return firstSeenAt, true, nil
+}
+
 func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observation VaultPublicationObservation) error {
-	if len(observation.HeadCID) == 0 || len(observation.HeadCID) > 128 || observation.Epoch > uint64(^uint64(0)>>1) || observation.PublicationCount > uint64(^uint64(0)>>1) {
+	if len(observation.HeadCID) == 0 || len(observation.HeadCID) > 128 || len(observation.ControlCID) == 0 || len(observation.ControlCID) > 128 || len(observation.PrevControlCID) > 128 || observation.Epoch > uint64(^uint64(0)>>1) || observation.PublicationCount > uint64(^uint64(0)>>1) {
 		return errors.New("invalid vault publication observation")
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var existingEpoch, existingCount int64
-		var existingHeadCID []byte
-		err := tx.QueryRowContext(ctx, "SELECT epoch, publication_count, head_cid FROM vault_publication_observations WHERE vault = ?", observation.Vault[:]).Scan(&existingEpoch, &existingCount, &existingHeadCID)
+		var existingHeadCID, existingControlCID []byte
+		err := tx.QueryRowContext(ctx, "SELECT epoch, publication_count, head_cid, control_cid FROM vault_publication_observations WHERE vault = ?", observation.Vault[:]).Scan(&existingEpoch, &existingCount, &existingHeadCID, &existingControlCID)
 		if err == nil {
 			if observation.Epoch < uint64(existingEpoch) {
 				return ErrVaultPublicationBackwards
+			}
+			if observation.Epoch > uint64(existingEpoch) && (len(existingControlCID) == 0 || !bytes.Equal(observation.PrevControlCID, existingControlCID)) {
+				return ErrVaultPublicationControlAncestry
 			}
 			if observation.Epoch == uint64(existingEpoch) {
 				if observation.PublicationCount < uint64(existingCount) {
@@ -541,10 +589,10 @@ func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observati
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO vault_publication_observations(vault, epoch, publication_count, head_cid)
-VALUES (?, ?, ?, ?)
-ON CONFLICT(vault) DO UPDATE SET epoch=excluded.epoch, publication_count=excluded.publication_count, head_cid=excluded.head_cid`,
-			observation.Vault[:], observation.Epoch, observation.PublicationCount, observation.HeadCID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO vault_publication_observations(vault, epoch, publication_count, head_cid, control_cid)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(vault) DO UPDATE SET epoch=excluded.epoch, publication_count=excluded.publication_count, head_cid=excluded.head_cid, control_cid=excluded.control_cid`,
+			observation.Vault[:], observation.Epoch, observation.PublicationCount, observation.HeadCID, observation.ControlCID)
 		return err
 	})
 }

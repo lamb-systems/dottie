@@ -126,6 +126,10 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	require.NoError(t, err)
 	apiB, err := newPDSAPIClient(identityB.PDS, authB, nil)
 	require.NoError(t, err)
+	anonymousAPI, err := newPDSAPIClient(identityA.PDS, nil, nil)
+	require.NoError(t, err)
+	blobUploadLimit, limitKnown, describeOK := describePDS(t, ctx, provider, identityA.PDS, anonymousAPI)
+	require.True(t, describeOK && limitKnown, "live publication requires a discovered PDS blobUploadLimit")
 	transportA := atproto.NewATClientTransport(apiA)
 	transportB := atproto.NewATClientTransport(apiB)
 	readerA := atproto.RevisionReader{Transport: transportA, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identityA.DIDDocumentID, VerificationMethods: identityA.VerificationMethods}
@@ -170,7 +174,10 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	store, err := state.Open(platform.Paths{Home: filepath.Join(stateRoot, "home"), StateHome: filepath.Join(stateRoot, "state"), CacheHome: filepath.Join(stateRoot, "cache")})
 	require.NoError(t, err)
 	defer store.Close()
-	transitionIO := atproto.ATProtoTransitionIO{Reader: readerA, Transport: transportA, DID: identityA.DID, TrustAnchor: bootstrap.Anchor}
+	transitionIO := atproto.ATProtoTransitionIO{
+		Reader: readerA, Transport: transportA, BlobUploadLimit: blobUploadLimit,
+		DID: identityA.DID, TrustAnchor: bootstrap.Anchor, ObservationStore: store,
+	}
 	publisher, enrollment, err := ledgerPrepareEnrollment(bootstrap, root, 1)
 	require.NoError(t, err)
 	for _, key := range ledgerTransitionTargets(enrollment, publisher) {
@@ -180,9 +187,16 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, atproto.TransitionOutcome(atproto.TransitionOutcomeCommitted), enrollmentResult.Outcome)
 
-	publicationIOA := atproto.ATProtoPublicationIO{Reader: readerA, Transport: transportA, DID: identityA.DID, TrustAnchor: bootstrap.Anchor}
+	publicationIOA := atproto.ATProtoPublicationIO{
+		Reader: readerA, Transport: transportA, BlobUploadLimit: blobUploadLimit,
+		DID: identityA.DID, TrustAnchor: bootstrap.Anchor,
+		PreviousPolicies: [][]byte{publicationHarnessPolicyRecord(t, bootstrap.Policy)},
+		PreviousControls: [][]byte{publicationHarnessControlRecord(t, bootstrap.Control)}, ObservationStore: store,
+	}
 	_, predecessor, err := publicationIOA.ReadCurrent(ctx)
 	require.NoError(t, err)
+	publicationIOA.PreviousPolicies = append(publicationIOA.PreviousPolicies, publicationHarnessPolicyRecord(t, predecessor.Policy))
+	publicationIOA.PreviousControls = append(publicationIOA.PreviousControls, publicationHarnessControlRecord(t, predecessor.Control))
 	publisherCertificate := findPublicationHarnessCertificate(t, predecessor.Certificates, publisher.DeviceID)
 	publicationID := [16]byte(publicationHarnessRandom(t, 16))
 	publicationIntent := vault.PublicationIntent{
@@ -233,7 +247,12 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	results := make(chan publicationRaceResult, 2)
 	publicationIO := publicationIOA
 	publicationIO.Transport = publicationRaceTransport{base: transportA, ready: ready, release: release}
-	transitionIOB := atproto.ATProtoTransitionIO{Reader: readerB, Transport: transportB, DID: identityB.DID, TrustAnchor: bootstrap.Anchor}
+	transitionIOB := atproto.ATProtoTransitionIO{
+		Reader: readerB, Transport: transportB, BlobUploadLimit: blobUploadLimit,
+		DID: identityB.DID, TrustAnchor: bootstrap.Anchor,
+		PreviousPolicies: publicationIOA.PreviousPolicies, PreviousControls: publicationIOA.PreviousControls,
+		ObservationStore: store,
+	}
 	revocationIO := revocationRaceIO{base: transitionIOB, ready: ready, release: release}
 	go func() {
 		result, commitErr := atproto.CommitPublication(ctx, publicationIO, store, publication, root.Signing, time.Now())
@@ -353,6 +372,49 @@ func publicationHarnessWraps(t *testing.T, certificates [][]byte) []vault.Recipi
 		wraps = append(wraps, vault.RecipientWrapInput{KeyID: bytes.Clone(certificate.KeyID), EphemeralPrivate: privateBytes, WrapNonce: nonce})
 	}
 	return wraps
+}
+
+func publicationHarnessPolicyRecord(t *testing.T, encoded []byte) []byte {
+	t.Helper()
+	policy, err := vault.DecodePolicy(encoded)
+	require.NoError(t, err)
+	record := atproto.PolicyRecord{
+		SchemaVersion: 1, Vault: bytes.Clone(policy.Vault[:]), EpochSeq: policy.EpochSeq,
+		PolicyRetentionFloor: policy.PolicyRetentionFloor, RetainedRecoveryPoints: policy.RetainedRecoveryPoints,
+		MaxPublications: policy.MaxPublications, MaxEpochAge: policy.MaxEpochAge,
+		RecoveryAnchor: bytes.Clone(policy.RecoveryAnchor[:]), PrevPolicyDigest: bytes.Clone(policy.PrevPolicyDigest[:]),
+		SignerDeviceID: policy.Signer.DeviceID, SignerKeyID: bytes.Clone(policy.Signer.KeyID), Signature: bytes.Clone(policy.Signature[:]),
+	}
+	for _, role := range policy.Roles {
+		record.Roles = append(record.Roles, atproto.PolicyRoleRecord{DeviceID: role.DeviceID, Role: uint8(role.Role)})
+	}
+	for _, recipient := range policy.Recipients {
+		record.Recipients = append(record.Recipients, atproto.PolicyRecipientRecord{
+			DeviceID: recipient.DeviceID, KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:]),
+		})
+	}
+	result, err := atproto.EncodeRecord(record)
+	require.NoError(t, err)
+	return result
+}
+
+func publicationHarnessControlRecord(t *testing.T, encoded []byte) []byte {
+	t.Helper()
+	control, err := vault.DecodeControl(encoded)
+	require.NoError(t, err)
+	revoked := make([]atproto.RevokedDeviceRecord, len(control.Revoked))
+	for index, device := range control.Revoked {
+		revoked[index] = atproto.RevokedDeviceRecord{DeviceID: device.DeviceID, CertEpoch: device.CertEpoch}
+	}
+	record := atproto.ControlRecord{
+		SchemaVersion: 1, Vault: bytes.Clone(control.Vault[:]), EpochSeq: control.EpochSeq,
+		PolicyDigest: bytes.Clone(control.PolicyDigest[:]), HeadSnapshotCID: bytes.Clone(control.HeadSnapshotCID),
+		Revoked: revoked, PrevControlCID: bytes.Clone(control.PrevControlCID),
+		SignerDeviceID: control.Signer.DeviceID, SignerKeyID: bytes.Clone(control.Signer.KeyID), Signature: bytes.Clone(control.Signature[:]),
+	}
+	result, err := atproto.EncodeRecord(record)
+	require.NoError(t, err)
+	return result
 }
 
 func findPublicationHarnessCertificate(t *testing.T, certificates [][]byte, deviceID string) vault.Certificate {

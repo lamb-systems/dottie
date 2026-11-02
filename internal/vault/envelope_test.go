@@ -647,6 +647,92 @@ func TestEnvelopeOpenRejectsTamperingAndContextMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSignature)
 }
 
+func TestOpenJoinsAdministrativeSignerRolesToPolicy(t *testing.T) {
+	fixture := newEnvelopeFixture(t)
+
+	t.Run("consistent administrative signers open", func(t *testing.T) {
+		request := fixture.openRequest
+		request.Control = signControlValue(t, Control{
+			Vault: fixture.policy.Vault, EpochSeq: fixture.policy.EpochSeq, PolicyDigest: request.PolicyDigest,
+			Signer: Signer{DeviceID: fixture.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.rootCertificate.KeyID)},
+		}, fixture.signingKey)
+
+		plaintext, err := Open(fixture.envelope, request)
+		require.NoError(t, err)
+		assert.Equal(t, fixture.prepared.Plaintext, plaintext)
+	})
+
+	t.Run("control signer certificate role differs from policy", func(t *testing.T) {
+		controlKey := fixedSigningKey(77)
+		controlRecipient := fixedX25519Key(78)
+		policy := fixture.policy
+		policy.Roles = append(policy.Roles, RoleBinding{DeviceID: "device-control", Role: RolePublisher})
+		policy.Recipients = append(policy.Recipients, PolicyRecipient{
+			DeviceID: "device-control", KeyID: []byte("recipient-control"), PublicKey: [32]byte(controlRecipient.PublicKey().Bytes()),
+		})
+		policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+		policy, err := DecodePolicy(policyBytes)
+		require.NoError(t, err)
+		policyDigest, err := ComputePolicyDigest(policyBytes)
+		require.NoError(t, err)
+		controlCertificate := Certificate{
+			Vault: policy.Vault, DeviceID: "device-control", KeyID: []byte("signer-control"),
+			SigningPublicKey:    [ed25519.PublicKeySize]byte(controlKey.Public().(ed25519.PublicKey)),
+			EncryptionPublicKey: [32]byte(controlRecipient.PublicKey().Bytes()), Role: RoleRoot, CertEpoch: policy.EpochSeq,
+			Issuer: fixture.rootCertificate.DeviceID,
+			Signer: Signer{DeviceID: fixture.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.rootCertificate.KeyID)},
+		}
+		controlCertificateBytes := signCertificateValue(t, controlCertificate, fixture.signingKey)
+
+		prepared := fixture.prepared
+		prepared.Policy = policy
+		prepared.PolicyDigest = policyDigest
+		prepared.Recipients = append(prepared.Recipients, PreparedRecipient{
+			KeyID: []byte("recipient-control"), PublicKey: controlRecipient.PublicKey().Bytes(),
+			EphemeralPrivate: fixedX25519Key(79).Bytes(), WrapNonce: [24]byte(fixtureBytes(201, 24)),
+		})
+		envelope, err := SealPrepared(prepared)
+		require.NoError(t, err)
+
+		request := fixture.openRequest
+		request.Policy = policyBytes
+		request.PolicyDigest = policyDigest
+		request.Certificates = append(request.Certificates, controlCertificateBytes)
+		request.Control = signControlValue(t, Control{
+			Vault: policy.Vault, EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest,
+			Signer: Signer{DeviceID: controlCertificate.DeviceID, KeyID: bytes.Clone(controlCertificate.KeyID)},
+		}, controlKey)
+
+		_, err = Open(envelope, request)
+		assert.ErrorIs(t, err, ErrAuthorization)
+	})
+
+	t.Run("policy signer certificate role differs from policy", func(t *testing.T) {
+		policy := fixture.policy
+		for index := range policy.Roles {
+			if policy.Roles[index].DeviceID == fixture.rootCertificate.DeviceID {
+				policy.Roles[index].Role = RolePublisher
+			}
+		}
+		policyBytes := signPolicyValue(t, policy, fixture.signingKey)
+		policy, err := DecodePolicy(policyBytes)
+		require.NoError(t, err)
+		policyDigest, err := ComputePolicyDigest(policyBytes)
+		require.NoError(t, err)
+		prepared := fixture.prepared
+		prepared.Policy = policy
+		prepared.PolicyDigest = policyDigest
+		envelope, err := SealPrepared(prepared)
+		require.NoError(t, err)
+
+		request := fixture.openRequest
+		request.Policy = policyBytes
+		request.PolicyDigest = policyDigest
+		_, err = Open(envelope, request)
+		assert.ErrorIs(t, err, ErrAuthorization)
+	})
+}
+
 func TestOpenVerificationOrderAndAuthorizationErrors(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	_, err := Open(fixture.envelope, OpenRequest{})

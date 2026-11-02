@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,15 @@ type signedCARFlowTransport struct {
 	commitKey   *atcrypto.PrivateKeyP256
 	staged      map[string][]byte
 	applyWrites int
+}
+
+func (transport *signedCARFlowTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+	if endpoint == "com.atproto.sync.getBlob" {
+		if staged, exists := transport.staged[query.Get("cid")]; exists {
+			return 200, io.NopCloser(bytes.NewReader(staged)), nil
+		}
+	}
+	return transport.readTransport.OpenStream(ctx, endpoint, query)
 }
 
 func (transport *signedCARFlowTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
@@ -148,7 +158,7 @@ func TestATProtoTransitionStageCandidateRequiresEnvelopeContextBeforeNetwork(t *
 	policy, err := vault.DecodePolicy(predecessor.Policy)
 	require.NoError(t, err)
 	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, publication.Snapshot)}
-	io := ATProtoTransitionIO{Transport: transport}
+	io := ATProtoTransitionIO{Transport: transport, BlobUploadLimit: int64(len(publication.Snapshot))}
 	ctx := context.Background()
 
 	_, _, err = io.StageCandidate(ctx, []byte("synthetic plaintext"), policy, predecessor.Certificates)
@@ -181,6 +191,60 @@ func TestATProtoTransitionStageCandidateRequiresEnvelopeContextBeforeNetwork(t *
 	assert.Equal(t, cid.NewCidV1(cid.Raw, mustTransitionMultihash(publication.Snapshot)).String(), blobCID)
 	assert.Equal(t, 1, transport.calls, "the authenticated envelope positive control reaches uploadBlob")
 	assert.Equal(t, publication.Snapshot, transport.request)
+}
+
+func TestATProtoTransitionStageCandidateEnforcesAdvertisedBlobUploadLimitBeforeNetwork(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	candidateLength := int64(len(publication.Snapshot))
+
+	for _, test := range []struct {
+		name           string
+		limit          int64
+		wantErr        error
+		otherAdmission error
+	}{
+		{name: "unadvertised", limit: 0, wantErr: ErrBlobUploadLimitUnadvertised, otherAdmission: ErrCandidateExceedsBlobUploadLimit},
+		{name: "over ceiling", limit: candidateLength - 1, wantErr: ErrCandidateExceedsBlobUploadLimit, otherAdmission: ErrBlobUploadLimitUnadvertised},
+		{name: "under ceiling", limit: candidateLength + 1},
+		{name: "exact ceiling", limit: candidateLength},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, publication.Snapshot)}
+			writer := ATProtoTransitionIO{Transport: transport, BlobUploadLimit: test.limit}
+			_, _, err := writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				assert.NotErrorIs(t, err, test.otherAdmission)
+				assert.NotErrorIs(t, err, ErrCandidateEnvelopeInvalid)
+				assert.Zero(t, transport.calls, "a refused candidate must not reach uploadBlob")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 1, transport.calls, "an admitted candidate reaches uploadBlob")
+			assert.Equal(t, publication.Snapshot, transport.request)
+		})
+	}
+
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, []byte("synthetic plaintext"))}
+	_, _, err = (ATProtoTransitionIO{Transport: transport}).StageCandidate(context.Background(), []byte("synthetic plaintext"), policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateEnvelopeInvalid)
+	assert.NotErrorIs(t, err, ErrBlobUploadLimitUnadvertised)
+	assert.NotErrorIs(t, err, ErrCandidateExceedsBlobUploadLimit)
+	assert.Zero(t, transport.calls, "envelope preflight errors remain distinct and happen before uploadBlob")
+}
+
+func TestATProtoPublicationIOThreadsBlobUploadLimitToCandidateSink(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, publication.Snapshot)}
+	writer := ATProtoPublicationIO{Transport: transport, BlobUploadLimit: int64(len(publication.Snapshot) - 1)}
+
+	_, _, err = writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateExceedsBlobUploadLimit)
+	assert.Zero(t, transport.calls, "the publication adapter must pass its discovered ceiling to the sink")
 }
 
 func TestATProtoTransitionStageCandidateRejectsPlaintextEnvelope(t *testing.T) {
@@ -261,27 +325,27 @@ func TestATProtoTransitionStageCandidateSignalsPostTransmissionDisclosure(t *tes
 	ctx := context.Background()
 
 	transportFailure := &candidateStageTransport{err: errors.New("response lost after dispatch")}
-	_, _, err = (ATProtoTransitionIO{Transport: transportFailure}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	_, _, err = (ATProtoTransitionIO{Transport: transportFailure, BlobUploadLimit: int64(len(publication.Snapshot))}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
 	require.ErrorIs(t, err, ErrAmbiguousTransport)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, 1, transportFailure.calls)
 
 	acceptedBody := candidateUploadResponse(t, publication.Snapshot)
 	acceptedResponse := &candidateStageTransport{status: 400, body: acceptedBody}
-	_, _, err = (ATProtoTransitionIO{Transport: acceptedResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	_, _, err = (ATProtoTransitionIO{Transport: acceptedResponse, BlobUploadLimit: int64(len(publication.Snapshot))}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
 	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
 		"a non-2xx response carrying a valid blob reference suggests upload acceptance")
 	assert.Equal(t, 1, acceptedResponse.calls)
 
 	rejectedResponse := &candidateStageTransport{status: 400, body: []byte(`{"error":"InvalidRequest"}`)}
-	_, _, err = (ATProtoTransitionIO{Transport: rejectedResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	_, _, err = (ATProtoTransitionIO{Transport: rejectedResponse, BlobUploadLimit: int64(len(publication.Snapshot))}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
 	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
 		"every post-transmission failure must signal possible candidate disclosure")
 
 	redirectResponse := &candidateStageTransport{status: 302, body: []byte(`{"error":"Redirect"}`)}
-	_, _, err = (ATProtoTransitionIO{Transport: redirectResponse}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
+	_, _, err = (ATProtoTransitionIO{Transport: redirectResponse, BlobUploadLimit: int64(len(publication.Snapshot))}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
 	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
 		"a post-transmission redirect response must signal possible candidate disclosure")
@@ -572,6 +636,7 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 		readTransport: fixture.transport, t: t, records: records, commitKey: commitKey,
 		staged: make(map[string][]byte),
 	}
+	observedAt := time.Unix(200, 0)
 	adapter := ATProtoTransitionIO{
 		Reader: RevisionReader{
 			Transport: flow, DIDDocumentID: fixture.request.DIDDocumentID,
@@ -579,13 +644,16 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 				ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method,
 			}},
 		},
-		Transport: flow, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
-		PreviousPolicies: [][]byte{bytes.Clone(fixture.request.PreviousPolicy)}, ObservationStore: fixture.observationStore,
+		Transport: flow, BlobUploadLimit: 1 << 30, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
+		PreviousPolicies: [][]byte{bytes.Clone(fixture.request.PreviousPolicy)}, PreviousControls: [][]byte{bytes.Clone(fixture.request.PreviousControl)}, ObservationStore: fixture.observationStore,
+		Clock: func() time.Time { return observedAt },
 	}
 	ctx := context.Background()
 	_, predecessor, err := adapter.ReadCurrent(ctx)
 	require.NoError(t, err)
+	firstEpoch := predecessor.EpochSeq
 	adapter.PreviousPolicies = append(adapter.PreviousPolicies, policyRecordBytesForObject(t, predecessor.Policy))
+	adapter.PreviousControls = append(adapter.PreviousControls, encodeReadControlRecord(t, predecessor.Control))
 
 	root := vault.DeviceMaterial{
 		DeviceID: "root", KeyID: []byte("root-sign"), Signing: fixtureSigningKey(11), Recipient: readX25519Key(t, 21),
@@ -609,12 +677,23 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 	})
 	require.NoError(t, err)
 	adapter.PreviousPolicies = append(adapter.PreviousPolicies, policyRecordBytesForObject(t, enrollment.Policy))
+	adapter.PreviousControls = append(adapter.PreviousControls, encodeReadControlRecord(t, enrollment.Control))
+	observedAt = time.Unix(201, 0)
 	enrollmentResult, err := CommitTransition(ctx, adapter, fixture.observationStore, enrollment, root.Signing, time.Unix(200, 0))
 	require.NoError(t, err, enrollmentResult.Evidence)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), enrollmentResult.Outcome)
 
 	_, predecessor, err = adapter.ReadCurrent(ctx)
 	require.NoError(t, err)
+	assert.NotEqual(t, firstEpoch, predecessor.EpochSeq)
+	firstEpochAt, firstEpochFound, err := fixture.observationStore.VaultEpochFirstSeen(ctx, mustTestVault(t, predecessor), firstEpoch)
+	require.NoError(t, err)
+	newEpochAt, newEpochFound, err := fixture.observationStore.VaultEpochFirstSeen(ctx, mustTestVault(t, predecessor), predecessor.EpochSeq)
+	require.NoError(t, err)
+	require.True(t, firstEpochFound)
+	require.True(t, newEpochFound)
+	assert.Equal(t, int64(200), firstEpochAt)
+	assert.Equal(t, int64(201), newEpochAt)
 	publisher := vault.DeviceMaterial{
 		DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: fixtureSigningKey(12), Recipient: readX25519Key(t, 22),
 	}
@@ -622,11 +701,13 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 		Vault: mustTestVault(t, predecessor), Signer: publisher, ContentKey: publicationTestBytes(t, 32),
 		Wraps: publicationTestWraps(t, predecessor.Certificates), Plaintext: []byte("adapter publication snapshot"),
 		PublicationID: [16]byte(publicationTestBytes(t, 16)), Nonce: [24]byte(publicationTestBytes(t, 24)),
+		EpochFirstSeen: fixture.observationStore, Clock: func() time.Time { return time.Unix(201, 0) },
 	})
 	require.NoError(t, err)
 	publicationAdapter := ATProtoPublicationIO{
 		Reader: adapter.Reader, Transport: flow, DID: adapter.DID, TrustAnchor: adapter.TrustAnchor,
-		PreviousPolicies: adapter.PreviousPolicies, ObservationStore: fixture.observationStore,
+		BlobUploadLimit:  adapter.BlobUploadLimit,
+		PreviousPolicies: adapter.PreviousPolicies, PreviousControls: adapter.PreviousControls, ObservationStore: fixture.observationStore,
 	}
 	publicationResult, err := CommitPublication(ctx, publicationAdapter, fixture.observationStore, publication, publisher.Signing, time.Unix(201, 0))
 	require.NoError(t, err)
@@ -685,10 +766,148 @@ func TestATProtoTransitionIORejectsPublicationCountGapOnPredecessorRead(t *testi
 			VerificationMethods: fixture.request.VerificationMethods,
 		},
 		Transport: fixture.transport, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
-		PreviousPolicies: [][]byte{fixture.request.PreviousPolicy}, ObservationStore: fixture.observationStore,
+		PreviousPolicies: [][]byte{fixture.request.PreviousPolicy}, PreviousControls: [][]byte{fixture.request.PreviousControl}, ObservationStore: fixture.observationStore,
 	}
 	_, _, err = adapter.ReadCurrent(context.Background())
 	require.ErrorIs(t, err, ErrPublicationCountGap)
+}
+
+type publicationEpochAgeStore struct {
+	firstSeenAt int64
+	found       bool
+}
+
+func (store publicationEpochAgeStore) VaultEpochFirstSeen(context.Context, [32]byte, uint64) (int64, bool, error) {
+	return store.firstSeenAt, store.found, nil
+}
+
+type transitionObservationTracker struct {
+	store          PublicationObservationStore
+	calls          int
+	firstSeenCalls int
+}
+
+func (tracker *transitionObservationTracker) RecordVaultPublicationObservation(ctx context.Context, observation state.VaultPublicationObservation) error {
+	tracker.calls++
+	return tracker.store.RecordVaultPublicationObservation(ctx, observation)
+}
+
+func (tracker *transitionObservationTracker) VaultPublicationEpoch(ctx context.Context, vaultID [32]byte) (uint64, bool, error) {
+	return tracker.store.VaultPublicationEpoch(ctx, vaultID)
+}
+
+func (tracker *transitionObservationTracker) RecordVaultEpochFirstSeen(ctx context.Context, vaultID [32]byte, epoch uint64, firstSeenAt int64) error {
+	tracker.firstSeenCalls++
+	return tracker.store.RecordVaultEpochFirstSeen(ctx, vaultID, epoch, firstSeenAt)
+}
+
+func TestReadCurrentRequiresPublicationAuthorityForHeadSigner(t *testing.T) {
+	fixture := newReadFixture(t)
+	policy, _, oldPolicyDigest := fixturePolicyParts(t, fixture)
+	previousPolicyRecord := bytes.Clone(fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}])
+	controlRecordDecoded, err := DecodeRecord(fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}])
+	require.NoError(t, err)
+	oldControlBytes, err := vault.EncodeControl(controlFromRecord(controlRecordDecoded.(ControlRecord)))
+	require.NoError(t, err)
+
+	policy.EpochSeq++
+	policy.PrevPolicyDigest = oldPolicyDigest
+	restoreSigning := fixtureSigningKey(77)
+	restoreRecipient := readX25519Key(t, 78)
+	restoreCertificate := vault.Certificate{
+		Vault: policy.Vault, DeviceID: "restore-only", KeyID: []byte("restore-only-sign"),
+		Role: vault.RoleRestoreOnly, CertEpoch: policy.EpochSeq, Issuer: "root",
+		Signer: vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")},
+	}
+	copy(restoreCertificate.SigningPublicKey[:], restoreSigning[32:])
+	copy(restoreCertificate.EncryptionPublicKey[:], restoreRecipient.PublicKey().Bytes())
+	restoreCertificateBytes := signReadCertificate(t, restoreCertificate, fixtureSigningKey(11))
+	restoreCertificate, err = vault.DecodeCertificate(restoreCertificateBytes)
+	require.NoError(t, err)
+	policy.Roles = append(policy.Roles, vault.RoleBinding{DeviceID: restoreCertificate.DeviceID, Role: vault.RoleRestoreOnly})
+	policy.Recipients = append(policy.Recipients, vault.PolicyRecipient{
+		DeviceID: restoreCertificate.DeviceID, KeyID: bytes.Clone(restoreCertificate.KeyID), PublicKey: restoreCertificate.EncryptionPublicKey,
+	})
+	policyBytes := signReadPolicy(t, policy, fixtureSigningKey(11))
+	policy, err = vault.DecodePolicy(policyBytes)
+	require.NoError(t, err)
+	policyDigest, err := vault.ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(policy))
+	putReadRecord(t, fixture.records, RecordKey{Collection: VaultCertificateNSID, RKey: "restore-only"}, certificateRecordFromObject(restoreCertificate))
+
+	control, err := vault.DecodeControl(oldControlBytes)
+	require.NoError(t, err)
+	control.EpochSeq = policy.EpochSeq
+	control.PolicyDigest = policyDigest
+	control.PrevControlCID = readRawCID(t, oldControlBytes)
+	tracker := &transitionObservationTracker{store: fixture.observationStore}
+	adapter := ATProtoTransitionIO{
+		Reader: RevisionReader{
+			Transport: fixture.transport, DIDDocumentID: fixture.request.DIDDocumentID,
+			VerificationMethods: fixture.request.VerificationMethods,
+		},
+		Transport: fixture.transport, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
+		PreviousPolicies: [][]byte{bytes.Clone(fixture.request.PreviousPolicy), previousPolicyRecord}, PreviousControls: [][]byte{encodeReadControlRecord(t, oldControlBytes)}, ObservationStore: tracker,
+	}
+
+	installReadPublicationForRoleJoin(t, &fixture, policy, control,
+		vault.Signer{DeviceID: restoreCertificate.DeviceID, KeyID: restoreCertificate.KeyID}, restoreSigning, 1, 0xD1)
+	adapter.Reader.VerificationMethods = fixture.request.VerificationMethods
+	_, _, err = adapter.ReadCurrent(context.Background())
+	require.ErrorIs(t, err, vault.ErrPublicationAuthority)
+	assert.Equal(t, 0, tracker.calls, "a refused restore-only head does not persist an observation")
+
+	installReadPublicationForRoleJoin(t, &fixture, policy, control, publisherSigner(), fixtureSigningKey(12), 1, 0xD2)
+	adapter.Reader.VerificationMethods = fixture.request.VerificationMethods
+	_, predecessor, err := adapter.ReadCurrent(context.Background())
+	require.NoError(t, err, "a publisher-signed head remains readable after the refused restore-only read")
+	assert.Equal(t, 1, tracker.calls)
+	assert.Equal(t, publisherSigner().DeviceID, vaultHeadSignerDeviceID(t, predecessor.Head))
+}
+
+func installReadPublicationForRoleJoin(t *testing.T, fixture *readFixture, policy vault.Policy, control vault.Control, signer vault.Signer, signingKey ed25519.PrivateKey, count uint64, publicationSeed byte) {
+	t.Helper()
+	policyBytes, err := vault.EncodePolicy(policy)
+	require.NoError(t, err)
+	policyDigest, err := vault.ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	certificate := fixturePublisherCertificate(t, *fixture)
+	envelope, err := vault.SealAuthorized(vault.SealRequest{
+		Purpose: vault.PurposeSnapshot, Vault: policy.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
+		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: certificate.DeviceID, KeyID: bytes.Clone(certificate.KeyID),
+		Plaintext: []byte("synthetic publisher snapshot"), SigningKey: fixtureSigningKey(12), Recipients: fixtureRecipientPublicKeys(policy),
+	}, certificate, policy)
+	require.NoError(t, err)
+	envelopeBytes, err := vault.EncodeEnvelope(envelope)
+	require.NoError(t, err)
+	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
+	envelopeCID := readRawCID(t, envelopeBytes)
+	control.EpochSeq = policy.EpochSeq
+	control.PolicyDigest = policyDigest
+	control.HeadSnapshotCID = bytes.Clone(envelopeCID)
+	controlBytes := signReadControl(t, control, fixtureSigningKey(11))
+	control, err = vault.DecodeControl(controlBytes)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(control))
+	head := fixtureHeadObject(t, *fixture)
+	head.EpochSeq = policy.EpochSeq
+	head.PolicyDigest = policyDigest
+	head.SnapshotCID = bytes.Clone(envelopeCID)
+	head.BlobCID = bytes.Clone(envelopeCID)
+	head.PublicationCount = count
+	head.Signer = vault.Signer{DeviceID: signer.DeviceID, KeyID: bytes.Clone(signer.KeyID)}
+	headBytes := signReadHead(t, head, signingKey)
+	head, err = vault.DecodeHead(headBytes)
+	require.NoError(t, err)
+	installSnapshot(t, fixture, envelopeBytes, snapshot, headRecordFromObject(head))
+}
+
+func vaultHeadSignerDeviceID(t *testing.T, encoded []byte) string {
+	t.Helper()
+	head, err := vault.DecodeHead(encoded)
+	require.NoError(t, err)
+	return head.Signer.DeviceID
 }
 
 func TestReadCurrentObservesConsecutivePublicationCounts(t *testing.T) {
@@ -699,7 +918,7 @@ func TestReadCurrentObservesConsecutivePublicationCounts(t *testing.T) {
 			VerificationMethods: fixture.request.VerificationMethods,
 		},
 		Transport: fixture.transport, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
-		PreviousPolicies: [][]byte{fixture.request.PreviousPolicy}, ObservationStore: fixture.observationStore,
+		PreviousPolicies: [][]byte{fixture.request.PreviousPolicy}, PreviousControls: [][]byte{fixture.request.PreviousControl}, ObservationStore: fixture.observationStore,
 	}
 
 	_, first, err := adapter.ReadCurrent(context.Background())

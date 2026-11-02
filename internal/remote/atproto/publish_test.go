@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
+	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -155,9 +157,34 @@ func newAtprotoPublicationFixture(t *testing.T) (vault.DeviceMaterial, vault.Dev
 		Vault: mustTestVault(t, predecessor), Signer: publisher, ContentKey: publicationTestBytes(t, 32),
 		Wraps: publicationTestWraps(t, predecessor.Certificates), Plaintext: []byte("published pack"),
 		PublicationID: [16]byte(publicationTestBytes(t, 16)), Nonce: [24]byte(publicationTestBytes(t, 24)),
+		EpochFirstSeen: publicationEpochAgeStore{firstSeenAt: 1_700_000_000, found: true},
+		Clock:          func() time.Time { return time.Unix(1_700_000_001, 0) },
 	})
 	require.NoError(t, err)
 	return fixture.root, publisher, predecessor, publication
+}
+
+func TestPreparePublicationUsesPersistedFirstSeenAfterStoreRestart(t *testing.T) {
+	_, publisher, predecessor, _ := newAtprotoPublicationFixture(t)
+	root := t.TempDir()
+	paths := platform.Paths{Home: filepath.Join(root, "home"), StateHome: filepath.Join(root, "state")}
+	store, err := state.Open(paths)
+	require.NoError(t, err)
+	firstSeenAt := int64(1_700_000_000)
+	require.NoError(t, store.RecordVaultEpochFirstSeen(context.Background(), mustTestVault(t, predecessor), predecessor.EpochSeq, firstSeenAt))
+	require.NoError(t, store.Close())
+
+	reopened, err := state.Open(paths)
+	require.NoError(t, err)
+	defer reopened.Close()
+	intent := vault.PublicationIntent{
+		Vault: mustTestVault(t, predecessor), Signer: publisher, ContentKey: publicationTestBytes(t, 32),
+		Wraps: publicationTestWraps(t, predecessor.Certificates), Plaintext: []byte("restart age check"),
+		PublicationID: [16]byte(publicationTestBytes(t, 16)), Nonce: [24]byte(publicationTestBytes(t, 24)),
+		EpochFirstSeen: reopened, Clock: func() time.Time { return time.Unix(firstSeenAt+86400, 0) },
+	}
+	_, err = vault.PreparePublication(predecessor, intent)
+	assert.ErrorIs(t, err, vault.ErrEpochRotationRequired)
 }
 
 func prepareAtprotoRevocation(t *testing.T, root, target vault.DeviceMaterial, predecessor vault.Predecessor) vault.Transition {

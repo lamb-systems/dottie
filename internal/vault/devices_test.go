@@ -2,11 +2,13 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,7 +86,22 @@ func predecessorAfterTransition(t *testing.T, predecessor Predecessor, transitio
 	}
 }
 
+type epochFirstSeenKey struct {
+	vault [32]byte
+	epoch uint64
+}
+
+type epochFirstSeenFixture map[epochFirstSeenKey]int64
+
+func (store epochFirstSeenFixture) VaultEpochFirstSeen(_ context.Context, vaultID [32]byte, epoch uint64) (int64, bool, error) {
+	firstSeenAt, found := store[epochFirstSeenKey{vault: vaultID, epoch: epoch}]
+	return firstSeenAt, found, nil
+}
+
 func publicationTestIntent(fixture devicesFixture, predecessor Predecessor) PublicationIntent {
+	firstSeen := epochFirstSeenFixture{
+		epochFirstSeenKey{vault: fixture.bootstrap.Vault, epoch: predecessor.EpochSeq}: 1_700_000_000,
+	}
 	return PublicationIntent{
 		Vault: fixture.bootstrap.Vault, Signer: fixture.newDevice, ContentKey: fixtureBytes(191, 32),
 		Wraps: []RecipientWrapInput{
@@ -92,7 +109,18 @@ func publicationTestIntent(fixture devicesFixture, predecessor Predecessor) Publ
 			{KeyID: bytes.Clone(fixture.newDevice.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(87, 32)), WrapNonce: [24]byte(fixtureBytes(111, 24))},
 		},
 		Plaintext: []byte("synthetic publication payload"), PublicationID: [16]byte(fixtureBytes(223, 16)), Nonce: [24]byte(fixtureBytes(239, 24)),
+		EpochFirstSeen: firstSeen, Clock: func() time.Time { return time.Unix(1_700_000_001, 0) },
 	}
+}
+
+func TestPreparePublicationRefusesWithoutTrustedClock(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
+	intent := publicationTestIntent(fixture, predecessor)
+	intent.Clock = nil
+	_, err := PreparePublication(predecessor, intent)
+	require.ErrorIs(t, err, ErrEpochClockMissing,
+		"an epoch age trigger cannot be evaluated without a trusted clock, so publication must refuse rather than skip it")
 }
 
 func newPublicationTestFixture(t *testing.T) (devicesFixture, Predecessor, Publication, PublicationIntent) {
@@ -103,6 +131,33 @@ func newPublicationTestFixture(t *testing.T) (devicesFixture, Predecessor, Publi
 	publication, err := PreparePublication(predecessor, intent)
 	require.NoError(t, err)
 	return fixture, predecessor, publication, intent
+}
+
+func TestPreparePublicationRefusesAtAndOverEpochAge(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
+	firstSeenAt := int64(1_700_000_000)
+	intent := publicationTestIntent(fixture, predecessor)
+	policy, err := DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	intent.Clock = func() time.Time { return time.Unix(firstSeenAt+int64(policy.MaxEpochAge)-1, 0) }
+	_, err = PreparePublication(predecessor, intent)
+	require.NoError(t, err, "an epoch one second under its age limit permits publication")
+
+	for _, age := range []int64{int64(policy.MaxEpochAge), int64(policy.MaxEpochAge) + 1} {
+		intent.Clock = func() time.Time { return time.Unix(firstSeenAt+age, 0) }
+		_, err = PreparePublication(predecessor, intent)
+		assert.ErrorIs(t, err, ErrEpochRotationRequired)
+	}
+}
+
+func TestPreparePublicationFailsClosedWhenEpochFirstSeenIsMissing(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
+	intent := publicationTestIntent(fixture, predecessor)
+	intent.EpochFirstSeen = epochFirstSeenFixture{}
+	_, err := PreparePublication(predecessor, intent)
+	assert.ErrorIs(t, err, ErrEpochFirstSeenMissing)
 }
 
 func TestPreparePublicationUsesPublisherWithoutRootPrivateKey(t *testing.T) {

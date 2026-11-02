@@ -131,27 +131,62 @@ func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testin
 	assert.Equal(t, checkpoint, stored, "checkpoint control bytes survive restart")
 }
 
+func TestVaultEpochFirstSeenIsInsertOnlyAndDurable(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	vaultID := [32]byte{17}
+	const epoch = 5
+	require.NoError(t, store.RecordVaultEpochFirstSeen(context.Background(), vaultID, epoch, 1_700_000_000))
+	require.NoError(t, store.RecordVaultEpochFirstSeen(context.Background(), vaultID, epoch, 1_700_100_000))
+	require.NoError(t, store.RecordVaultEpochFirstSeen(context.Background(), vaultID, epoch+1, 1_700_200_000))
+	firstSeenAt, found, err := store.VaultEpochFirstSeen(context.Background(), vaultID, epoch)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(1_700_000_000), firstSeenAt)
+	newEpochAt, found, err := store.VaultEpochFirstSeen(context.Background(), vaultID, epoch+1)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(1_700_200_000), newEpochAt)
+	missingAt, found, err := store.VaultEpochFirstSeen(context.Background(), vaultID, epoch+2)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Zero(t, missingAt)
+	require.NoError(t, store.Close())
+
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	defer reopened.Close()
+	firstSeenAt, found, err = reopened.VaultEpochFirstSeen(context.Background(), vaultID, epoch)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(1_700_000_000), firstSeenAt)
+}
+
 func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.T) {
 	paths := testPaths(t)
 	store := openTestStore(t, paths)
-	first := VaultPublicationObservation{Vault: [32]byte{8}, Epoch: 2, PublicationCount: 3, HeadCID: []byte("head-3")}
+	first := VaultPublicationObservation{Vault: [32]byte{8}, Epoch: 2, PublicationCount: 3, HeadCID: []byte("head-3"), ControlCID: []byte("control-2")}
 	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), first))
-	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 2, HeadCID: []byte("head-2")}), ErrVaultPublicationBackwards)
-	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 3, HeadCID: []byte("different-head")}), ErrVaultPublicationConflict)
-	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("head-5")}), ErrVaultPublicationGap)
-	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4"), PrevHeadCID: first.HeadCID}))
-	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 3, PublicationCount: 0, HeadCID: []byte("epoch-3-head")}))
-	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("old-epoch-head")}), ErrVaultPublicationBackwards)
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 2, HeadCID: []byte("head-2"), ControlCID: first.ControlCID}), ErrVaultPublicationBackwards)
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 3, HeadCID: []byte("different-head"), ControlCID: first.ControlCID}), ErrVaultPublicationConflict)
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("head-5"), ControlCID: first.ControlCID}), ErrVaultPublicationGap)
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 4, HeadCID: []byte("head-4"), ControlCID: first.ControlCID, PrevControlCID: first.ControlCID, PrevHeadCID: first.HeadCID}))
+	thirdEpoch := VaultPublicationObservation{Vault: first.Vault, Epoch: 3, PublicationCount: 0, HeadCID: []byte("epoch-3-head"), ControlCID: []byte("control-3"), PrevControlCID: []byte("wrong-control")}
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), thirdEpoch), ErrVaultPublicationControlAncestry)
+	thirdEpoch.PrevControlCID = []byte("control-2")
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), thirdEpoch))
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(context.Background(), VaultPublicationObservation{Vault: first.Vault, Epoch: 2, PublicationCount: 5, HeadCID: []byte("old-epoch-head"), ControlCID: first.ControlCID}), ErrVaultPublicationBackwards)
 	require.NoError(t, store.Close())
 	reopened, err := Open(paths)
 	require.NoError(t, err)
 	defer reopened.Close()
 	var epoch, count int64
-	var headCID []byte
-	require.NoError(t, reopened.conn.QueryRowContext(context.Background(), "SELECT epoch, publication_count, head_cid FROM vault_publication_observations WHERE vault = ?", first.Vault[:]).Scan(&epoch, &count, &headCID))
+	var headCID, controlCID []byte
+	require.NoError(t, reopened.conn.QueryRowContext(context.Background(), "SELECT epoch, publication_count, head_cid, control_cid FROM vault_publication_observations WHERE vault = ?", first.Vault[:]).Scan(&epoch, &count, &headCID, &controlCID))
 	assert.Equal(t, int64(3), epoch)
 	assert.Equal(t, int64(0), count)
 	assert.Equal(t, []byte("epoch-3-head"), headCID)
+	assert.Equal(t, []byte("control-3"), controlCID)
 }
 
 func TestVaultPublicationObservationAcceptsFirstIdempotentAndMidEpochRead(t *testing.T) {
@@ -159,41 +194,78 @@ func TestVaultPublicationObservationAcceptsFirstIdempotentAndMidEpochRead(t *tes
 	defer store.Close()
 	ctx := context.Background()
 	vaultID := [32]byte{9}
-	first := VaultPublicationObservation{Vault: vaultID, Epoch: 1, PublicationCount: 1, HeadCID: []byte("head-1")}
+	first := VaultPublicationObservation{Vault: vaultID, Epoch: 1, PublicationCount: 1, HeadCID: []byte("head-1"), ControlCID: []byte("control-1")}
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
 
 	next := VaultPublicationObservation{
-		Vault: vaultID, Epoch: 1, PublicationCount: 2, HeadCID: []byte("head-2"),
+		Vault: vaultID, Epoch: 1, PublicationCount: 2, HeadCID: []byte("head-2"), ControlCID: first.ControlCID,
 		PrevHeadCID: first.HeadCID, ParentCID: first.HeadCID, EnforceParent: true,
 	}
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, next))
 
-	midEpoch := VaultPublicationObservation{Vault: vaultID, Epoch: 2, PublicationCount: 7, HeadCID: []byte("epoch-2-head-7")}
+	midEpoch := VaultPublicationObservation{Vault: vaultID, Epoch: 2, PublicationCount: 7, HeadCID: []byte("epoch-2-head-7"), ControlCID: []byte("control-2"), PrevControlCID: next.ControlCID}
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, midEpoch))
+}
+
+func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	first := VaultPublicationObservation{Vault: [32]byte{12}, Epoch: 4, PublicationCount: 2, HeadCID: []byte("head-4"), ControlCID: []byte("control-4")}
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), first))
+	require.NoError(t, store.Close())
+
+	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
+	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
+	require.NoError(t, err)
+	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE vault_epoch_first_seen; UPDATE schema_version SET version = 6 WHERE singleton = 1")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	migrated, err := Open(paths)
+	require.NoError(t, err)
+	defer migrated.Close()
+	advanced := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: 5, PublicationCount: 0, HeadCID: []byte("head-5"),
+		ControlCID: []byte("control-5"), PrevControlCID: first.ControlCID,
+	}
+	assert.ErrorIs(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced), ErrVaultPublicationControlAncestry)
+	require.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), first), "a same-epoch observation refreshes the backfilled unknown control")
+	advanced.PrevControlCID = first.ControlCID
+	require.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced))
+}
+
+func TestVaultPublicationObservationAllowsFirstHigherEpochWithoutControlFloor(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	defer store.Close()
+	first := VaultPublicationObservation{
+		Vault: [32]byte{11}, Epoch: 9, PublicationCount: 6, HeadCID: []byte("head-9"),
+		ControlCID: []byte("control-9"), PrevControlCID: []byte("unobserved-control-8"),
+	}
+	require.NoError(t, store.RecordVaultPublicationObservation(context.Background(), first))
 }
 
 func TestVaultPublicationObservationRejectsAncestryMismatch(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	defer store.Close()
 	ctx := context.Background()
-	first := VaultPublicationObservation{Vault: [32]byte{10}, Epoch: 3, PublicationCount: 4, HeadCID: []byte("head-4")}
+	first := VaultPublicationObservation{Vault: [32]byte{10}, Epoch: 3, PublicationCount: 4, HeadCID: []byte("head-4"), ControlCID: []byte("control-3")}
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
 
 	wrongPrevHead := VaultPublicationObservation{
-		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"),
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"), ControlCID: first.ControlCID,
 		PrevHeadCID: []byte("other-head"), ParentCID: first.HeadCID, EnforceParent: true,
 	}
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, wrongPrevHead), ErrPublicationAncestry)
 
 	wrongParent := VaultPublicationObservation{
-		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"),
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: []byte("head-5"), ControlCID: first.ControlCID,
 		PrevHeadCID: first.HeadCID, ParentCID: []byte("other-head"), EnforceParent: true,
 	}
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, wrongParent), ErrPublicationAncestry)
 
 	sameHead := VaultPublicationObservation{
-		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: first.HeadCID, PrevHeadCID: first.HeadCID,
+		Vault: first.Vault, Epoch: 3, PublicationCount: 5, HeadCID: first.HeadCID, ControlCID: first.ControlCID, PrevHeadCID: first.HeadCID,
 	}
 	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, sameHead), ErrVaultPublicationConflict)
 }
@@ -391,7 +463,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 6")
+	assert.Contains(t, err.Error(), "supports version 8")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

@@ -168,21 +168,24 @@ type publicationIO interface {
 type ATProtoPublicationIO struct {
 	Reader           RevisionReader
 	Transport        Transport
+	BlobUploadLimit  int64
 	DID              string
 	TrustAnchor      [32]byte
 	PreviousPolicies [][]byte
+	PreviousControls [][]byte
 	ObservationStore PublicationObservationStore
+	Clock            func() time.Time
 }
 
 func (io ATProtoPublicationIO) ReadCurrent(ctx context.Context) (*Revision, vault.Predecessor, error) {
 	return (ATProtoTransitionIO{
 		Reader: io.Reader, Transport: io.Transport, DID: io.DID, TrustAnchor: io.TrustAnchor,
-		PreviousPolicies: io.PreviousPolicies, ObservationStore: io.ObservationStore,
+		PreviousPolicies: io.PreviousPolicies, PreviousControls: io.PreviousControls, ObservationStore: io.ObservationStore, Clock: io.Clock,
 	}).ReadCurrent(ctx)
 }
 
 func (io ATProtoPublicationIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
-	return (ATProtoTransitionIO{Transport: io.Transport}).StageCandidate(ctx, data, expectedPolicy, certificates)
+	return (ATProtoTransitionIO{Transport: io.Transport, BlobUploadLimit: io.BlobUploadLimit}).StageCandidate(ctx, data, expectedPolicy, certificates)
 }
 
 func (io ATProtoPublicationIO) applyPublication(ctx context.Context, revision *Revision, publication FencedSnapshotPublication) error {

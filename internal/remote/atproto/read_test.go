@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/bluesky-social/indigo/atproto/atcrypto"
 	"github.com/bluesky-social/indigo/atproto/atdata"
@@ -328,6 +329,26 @@ func TestVaultReaderAuthenticatesAndDecryptsPinnedSnapshot(t *testing.T) {
 	require.Equal(t, 1, fixture.transport.blobCalls)
 }
 
+func TestVaultReaderPersistsFirstSeenOncePerAuthenticatedEpoch(t *testing.T) {
+	fixture := newReadFixture(t)
+	reader := fixture.reader()
+	reader.Clock = func() time.Time { return time.Unix(1_700_000_123, 0) }
+	result, err := reader.Read(context.Background(), fixture.request)
+	require.NoError(t, err)
+	firstSeenAt, found, err := fixture.observationStore.VaultEpochFirstSeen(context.Background(), fixture.request.Vault, result.EpochSeq)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(1_700_000_123), firstSeenAt)
+
+	reader.Clock = func() time.Time { return time.Unix(1_701_000_123, 0) }
+	_, err = reader.Read(context.Background(), fixture.request)
+	require.NoError(t, err)
+	firstSeenAt, found, err = fixture.observationStore.VaultEpochFirstSeen(context.Background(), fixture.request.Vault, result.EpochSeq)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(1_700_000_123), firstSeenAt)
+}
+
 func TestVaultReaderRequiresDurablePublicationObservationStore(t *testing.T) {
 	fixture := newReadFixture(t)
 	_, err := (VaultReader{Transport: fixture.transport}).Read(context.Background(), fixture.request)
@@ -591,8 +612,9 @@ func TestCheckPublicationCountRefusesBackwardRead(t *testing.T) {
 	vaultID := [32]byte{9}
 	headCID := readRawCID(t, []byte("head-4"))
 	result := ReadResult{
-		PublicationCount: 4, PublicationCountBaseline: 0, EpochSeq: 2, HeadCID: headCID,
-		Head: HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
+		PublicationCount: 4, PublicationCountBaseline: 0, EpochSeq: 2, HeadCID: headCID, ControlCID: readRawCID(t, []byte("control-2")),
+		Head:    HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
+		Control: ControlRecord{HeadSnapshotCID: bytes.Clone(headCID)},
 	}
 	require.NoError(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}))
 	backwardsCID := readRawCID(t, []byte("head-3"))

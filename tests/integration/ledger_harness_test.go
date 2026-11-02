@@ -138,6 +138,12 @@ func TestLiveLedgerSharedRootRace(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err)
 	}
+	anonymousAPI, err := newPDSAPIClient(identityA.PDS, nil, nil)
+	if err != nil {
+		require.NoError(t, err)
+	}
+	blobUploadLimit, limitKnown, describeOK := describePDS(t, ctx, provider, identityA.PDS, anonymousAPI)
+	require.True(t, describeOK && limitKnown, "live ledger requires a discovered PDS blobUploadLimit")
 	transportA := atproto.NewATClientTransport(apiA)
 	transportB := atproto.NewATClientTransport(apiB)
 	readerA := atproto.RevisionReader{Transport: transportA, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identityA.DIDDocumentID, VerificationMethods: identityA.VerificationMethods}
@@ -203,8 +209,8 @@ func TestLiveLedgerSharedRootRace(t *testing.T) {
 			}
 		}
 	}
-	ioA := atproto.ATProtoTransitionIO{Reader: readerA, Transport: transportA, DID: identityA.DID, TrustAnchor: bootstrap.Anchor}
-	ioB := atproto.ATProtoTransitionIO{Reader: readerB, Transport: transportB, DID: identityB.DID, TrustAnchor: bootstrap.Anchor}
+	ioA := atproto.ATProtoTransitionIO{Reader: readerA, Transport: transportA, BlobUploadLimit: blobUploadLimit, DID: identityA.DID, TrustAnchor: bootstrap.Anchor}
+	ioB := atproto.ATProtoTransitionIO{Reader: readerB, Transport: transportB, BlobUploadLimit: blobUploadLimit, DID: identityB.DID, TrustAnchor: bootstrap.Anchor}
 	stateRoot := t.TempDir()
 	stateStore, err := state.Open(platform.Paths{Home: filepath.Join(stateRoot, "home"), StateHome: filepath.Join(stateRoot, "state"), CacheHome: filepath.Join(stateRoot, "cache")})
 	if err != nil {

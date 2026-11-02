@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/hkdf"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"hash"
 	"sort"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ipfs/go-cid"
@@ -31,6 +33,9 @@ var (
 	ErrPublicationAuthority  = errors.New("publication signer is not authorized by the current policy")
 	ErrPublicationCount      = errors.New("publication count is not the predecessor count plus one")
 	ErrPublicationHead       = errors.New("publication head does not match its predecessor")
+	ErrEpochRotationRequired = errors.New("publication requires epoch rotation because max_epoch_age is reached")
+	ErrEpochFirstSeenMissing = errors.New("publication requires epoch rotation because local first-seen state is missing")
+	ErrEpochClockMissing     = errors.New("publication requires a trusted clock to evaluate max_epoch_age")
 	ErrSnapshotEpoch         = errors.New("transition snapshot epoch is invalid")
 	ErrHeadLinkage           = errors.New("transition head linkage is invalid")
 	ErrCheckpointAnchor      = errors.New("transition checkpoint anchor is invalid")
@@ -131,14 +136,20 @@ type Transition struct {
 	Digest      [32]byte
 }
 
+type EpochFirstSeenStore interface {
+	VaultEpochFirstSeen(context.Context, [32]byte, uint64) (int64, bool, error)
+}
+
 type PublicationIntent struct {
-	Vault         [32]byte
-	Signer        DeviceMaterial
-	ContentKey    []byte
-	Wraps         []RecipientWrapInput
-	Plaintext     []byte
-	PublicationID [16]byte
-	Nonce         [24]byte
+	Vault          [32]byte
+	Signer         DeviceMaterial
+	ContentKey     []byte
+	Wraps          []RecipientWrapInput
+	Plaintext      []byte
+	PublicationID  [16]byte
+	Nonce          [24]byte
+	EpochFirstSeen EpochFirstSeenStore
+	Clock          func() time.Time
 }
 
 type Publication struct {
@@ -503,6 +514,9 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 	if currentHead.PublicationCount == ^uint64(0) || currentHead.PublicationCount >= uint64(policy.MaxPublications) {
 		return Publication{}, ErrPublicationCount
 	}
+	if err := validateEpochAge(intent, policy); err != nil {
+		return Publication{}, err
+	}
 	wraps, err := prepareRecipientWraps(policy, intent.Wraps)
 	if err != nil {
 		return Publication{}, err
@@ -547,6 +561,26 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 		return Publication{}, err
 	}
 	return publication, nil
+}
+
+func validateEpochAge(intent PublicationIntent, policy Policy) error {
+	if intent.EpochFirstSeen == nil {
+		return ErrEpochFirstSeenMissing
+	}
+	firstSeenAt, found, err := intent.EpochFirstSeen.VaultEpochFirstSeen(context.Background(), policy.Vault, policy.EpochSeq)
+	if err != nil {
+		return fmt.Errorf("read epoch first-seen time: %w", err)
+	}
+	if !found {
+		return ErrEpochFirstSeenMissing
+	}
+	if intent.Clock == nil {
+		return ErrEpochClockMissing
+	}
+	if intent.Clock().Sub(time.Unix(firstSeenAt, 0)) >= time.Duration(policy.MaxEpochAge)*time.Second {
+		return ErrEpochRotationRequired
+	}
+	return nil
 }
 
 func ValidatePublication(publication Publication, predecessor Predecessor) error {

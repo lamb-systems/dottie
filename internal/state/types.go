@@ -10,7 +10,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 6
+const LatestSchemaVersion = 8
 const PayloadRetention = "Referenced payloads are retained; journal backups are pruned only after verified rollback or expiry when no other record references them."
 
 var ErrStateLocked = errors.New("state is already locked")
@@ -22,6 +22,7 @@ var ErrVaultPublicationBackwards = errors.New("vault publication observation wou
 var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
 var ErrPublicationAncestry = errors.New("vault publication ancestry does not match the observed head")
+var ErrVaultPublicationControlAncestry = errors.New("vault publication control ancestry does not match the observed control")
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 
 type TargetDescriptor struct {
@@ -190,6 +191,8 @@ type VaultPublicationObservation struct {
 	Epoch            uint64
 	PublicationCount uint64
 	HeadCID          []byte
+	ControlCID       []byte
+	PrevControlCID   []byte
 	PrevHeadCID      []byte
 	ParentCID        []byte
 	EnforceParent    bool

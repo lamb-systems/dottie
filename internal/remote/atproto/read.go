@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/url"
 	"sort"
+	"time"
 
 	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/state"
@@ -20,41 +21,42 @@ import (
 const readAttempts = 3
 
 var (
-	ErrReadRecordMissing              = errors.New("required vault record is missing")
-	ErrReadRecordType                 = errors.New("vault record has an unexpected type")
-	ErrReadRecordInvalid              = errors.New("vault record is invalid")
-	ErrReadSnapshotAmbiguous          = errors.New("multiple snapshot records match the head")
-	ErrReadRecordBinding              = errors.New("vault record binding failed")
-	ErrReadRecordContext              = errors.New("vault record context failed")
-	ErrReadRecordSignature            = errors.New("vault snapshot record signature failed")
-	ErrReadEnvelopeInvalid            = errors.New("snapshot envelope is invalid")
-	ErrReadEnvelopeSignature          = errors.New("snapshot envelope signature failed")
-	ErrReadBlobMissing                = errors.New("snapshot blob is missing")
-	ErrReadBlobTransport              = errors.New("snapshot blob transport failed")
-	ErrReadBlobTooLarge               = errors.New("snapshot blob exceeds the read limit")
-	ErrReadBlobTruncated              = errors.New("snapshot blob is truncated")
-	ErrReadBlobSizeMismatch           = errors.New("snapshot blob size differs from its record")
-	ErrReadBlobCIDMismatch            = errors.New("snapshot blob CID mismatch")
-	ErrReadPreviousPolicyRequired     = errors.New("predecessor policy is required")
-	ErrReadUnexpectedPrevious         = errors.New("predecessor policy is unexpected at genesis")
-	ErrReadControlRequired            = errors.New("predecessor control is required")
-	ErrReadControlType                = errors.New("predecessor control record is invalid")
-	ErrReadControlSignature           = errors.New("predecessor control signature failed")
-	ErrReadControlSigner              = errors.New("predecessor control signer is invalid")
-	ErrReadControlEpoch               = errors.New("predecessor control epoch is invalid")
-	ErrReadControlPolicyDigest        = errors.New("predecessor control policy digest is invalid")
-	ErrReadControlLinkage             = errors.New("control predecessor linkage is invalid")
-	ErrPolicyAncestry                 = vault.ErrPolicyAncestry
-	ErrReadVaultAuthentication        = errors.New("vault authentication failed")
-	ErrReadHeadEnvelopeLinkage        = errors.New("head and envelope predecessor linkage disagree")
-	ErrReadSignerMismatch             = errors.New("head and envelope signers disagree")
-	ErrReadRecipientSet               = errors.New("envelope recipient set differs from policy")
-	ErrReadDecryption                 = errors.New("snapshot decryption failed")
-	ErrPublicationObservationRequired = errors.New("durable publication observation store is required")
-	ErrPublicationCountBackwards      = state.ErrVaultPublicationBackwards
-	ErrPublicationCountGap            = state.ErrVaultPublicationGap
-	ErrPublicationCountConflict       = state.ErrVaultPublicationConflict
-	ErrVaultPublicationAncestry       = state.ErrPublicationAncestry
+	ErrReadRecordMissing               = errors.New("required vault record is missing")
+	ErrReadRecordType                  = errors.New("vault record has an unexpected type")
+	ErrReadRecordInvalid               = errors.New("vault record is invalid")
+	ErrReadSnapshotAmbiguous           = errors.New("multiple snapshot records match the head")
+	ErrReadRecordBinding               = errors.New("vault record binding failed")
+	ErrReadRecordContext               = errors.New("vault record context failed")
+	ErrReadRecordSignature             = errors.New("vault snapshot record signature failed")
+	ErrReadEnvelopeInvalid             = errors.New("snapshot envelope is invalid")
+	ErrReadEnvelopeSignature           = errors.New("snapshot envelope signature failed")
+	ErrReadBlobMissing                 = errors.New("snapshot blob is missing")
+	ErrReadBlobTransport               = errors.New("snapshot blob transport failed")
+	ErrReadBlobTooLarge                = errors.New("snapshot blob exceeds the read limit")
+	ErrReadBlobTruncated               = errors.New("snapshot blob is truncated")
+	ErrReadBlobSizeMismatch            = errors.New("snapshot blob size differs from its record")
+	ErrReadBlobCIDMismatch             = errors.New("snapshot blob CID mismatch")
+	ErrReadPreviousPolicyRequired      = errors.New("predecessor policy is required")
+	ErrReadUnexpectedPrevious          = errors.New("predecessor policy is unexpected at genesis")
+	ErrReadControlRequired             = errors.New("predecessor control is required")
+	ErrReadControlType                 = errors.New("predecessor control record is invalid")
+	ErrReadControlSignature            = errors.New("predecessor control signature failed")
+	ErrReadControlSigner               = errors.New("predecessor control signer is invalid")
+	ErrReadControlEpoch                = errors.New("predecessor control epoch is invalid")
+	ErrReadControlPolicyDigest         = errors.New("predecessor control policy digest is invalid")
+	ErrReadControlLinkage              = errors.New("control predecessor linkage is invalid")
+	ErrPolicyAncestry                  = vault.ErrPolicyAncestry
+	ErrReadVaultAuthentication         = errors.New("vault authentication failed")
+	ErrReadHeadEnvelopeLinkage         = errors.New("head and envelope predecessor linkage disagree")
+	ErrReadSignerMismatch              = errors.New("head and envelope signers disagree")
+	ErrReadRecipientSet                = errors.New("envelope recipient set differs from policy")
+	ErrReadDecryption                  = errors.New("snapshot decryption failed")
+	ErrPublicationObservationRequired  = errors.New("durable publication observation store is required")
+	ErrPublicationCountBackwards       = state.ErrVaultPublicationBackwards
+	ErrPublicationCountGap             = state.ErrVaultPublicationGap
+	ErrPublicationCountConflict        = state.ErrVaultPublicationConflict
+	ErrVaultPublicationAncestry        = state.ErrPublicationAncestry
+	ErrVaultPublicationControlAncestry = state.ErrVaultPublicationControlAncestry
 )
 
 type ReadStage string
@@ -111,6 +113,7 @@ type ReadResult struct {
 	PublicationCount         uint64
 	PublicationCountBaseline uint64
 	HeadCID                  []byte
+	ControlCID               []byte
 	EpochSeq                 uint64
 	Plaintext                []byte
 	Freshness                FreshnessStatus
@@ -121,10 +124,13 @@ type VaultReader struct {
 	ObservationStore PublicationObservationStore
 	Budgets          Budgets
 	MaxBlobBytes     int64
+	Clock            func() time.Time
 }
 
 type PublicationObservationStore interface {
 	RecordVaultPublicationObservation(context.Context, state.VaultPublicationObservation) error
+	VaultPublicationEpoch(context.Context, [32]byte) (uint64, bool, error)
+	RecordVaultEpochFirstSeen(context.Context, [32]byte, uint64, int64) error
 }
 
 type PublicationCountOptions struct {
@@ -133,6 +139,8 @@ type PublicationCountOptions struct {
 	PrevHeadCID     []byte
 	ParentCID       []byte
 	EnforceParent   bool
+	FirstSeenAt     int64
+	RecordFirstSeen bool
 }
 
 func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult, options PublicationCountOptions) error {
@@ -154,10 +162,31 @@ func CheckPublicationCount(ctx context.Context, store PublicationObservationStor
 	if _, err := cid.Cast(result.HeadCID); err != nil {
 		return ErrReadVaultAuthentication
 	}
-	return store.RecordVaultPublicationObservation(ctx, state.VaultPublicationObservation{
+	if _, err := cid.Cast(result.ControlCID); err != nil {
+		return ErrReadVaultAuthentication
+	}
+	previousEpoch, hasPreviousEpoch, err := store.VaultPublicationEpoch(ctx, vaultID)
+	if err != nil {
+		return err
+	}
+	if err := store.RecordVaultPublicationObservation(ctx, state.VaultPublicationObservation{
 		Vault: vaultID, Epoch: result.EpochSeq, PublicationCount: result.PublicationCount, HeadCID: bytes.Clone(result.HeadCID),
+		ControlCID: bytes.Clone(result.ControlCID), PrevControlCID: bytes.Clone(result.Control.PrevControlCID),
 		PrevHeadCID: bytes.Clone(options.PrevHeadCID), ParentCID: bytes.Clone(options.ParentCID), EnforceParent: options.EnforceParent,
-	})
+	}); err != nil {
+		return err
+	}
+	if options.RecordFirstSeen && (!hasPreviousEpoch || previousEpoch != result.EpochSeq) {
+		return store.RecordVaultEpochFirstSeen(ctx, vaultID, result.EpochSeq, options.FirstSeenAt)
+	}
+	return nil
+}
+
+func currentTime(clock func() time.Time) time.Time {
+	if clock != nil {
+		return clock()
+	}
+	return time.Now()
 }
 
 type storedCertificate struct {
@@ -195,6 +224,7 @@ func (r VaultReader) Read(ctx context.Context, request ReadRequest) (ReadResult,
 		if err := CheckPublicationCount(ctx, r.ObservationStore, request.Vault, result, PublicationCountOptions{
 			MaxPublications: uint64(result.Policy.MaxPublications), EnforceMaximum: true,
 			PrevHeadCID: result.Head.PrevHeadCID, ParentCID: result.Envelope.Parent, EnforceParent: true,
+			FirstSeenAt: currentTime(r.Clock).Unix(), RecordFirstSeen: true,
 		}); err != nil {
 			return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: err}
 		}
@@ -325,10 +355,15 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 		return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: fmt.Errorf("%w: %w", ErrReadVaultAuthentication, err)}
 	}
 
+	controlCID, err := rawBlobCID(controlObject)
+	if err != nil {
+		return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: ErrReadVaultAuthentication}
+	}
 	result := ReadResult{
 		Policy: policy, Control: control, Head: head, Snapshot: snapshot,
 		Envelope: envelope, EnvelopeCID: cid.Cid(snapshot.Blob.Ref).String(), Freshness: FreshnessUnverified,
-		PublicationCount: head.PublicationCount, PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), EpochSeq: head.EpochSeq,
+		PublicationCount: head.PublicationCount, PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID),
+		ControlCID: bytes.Clone(controlCID), EpochSeq: head.EpochSeq,
 	}
 	if request.DeviceKey != nil {
 		policyRecordObject, decodeErr := vault.DecodePolicy(policyObject)

@@ -428,7 +428,8 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 		return nil, fmt.Errorf("%w: policy epoch_seq", ErrAuthorization)
 	}
 	policySigner, err := resolveTrustedCertificate(policy.Signer.DeviceID, policy.Signer.KeyID, request)
-	if err != nil || policySigner.Role != RoleRoot {
+	policySignerRole, policySignerRoleExists := policyRole(policy, policy.Signer.DeviceID)
+	if err != nil || policySigner.Role != RoleRoot || !policySignerRoleExists || policySignerRole != policySigner.Role {
 		return nil, fmt.Errorf("%w: policy signer", ErrAuthorization)
 	}
 	policyPrefix, err := encodePolicyPrefix(policy)
@@ -443,7 +444,7 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 		return nil, err
 	}
 	if len(request.Control) > 0 {
-		control, err := authorizeControl(request)
+		control, err := authorizeControl(request, policy)
 		if err != nil {
 			return nil, err
 		}
@@ -871,7 +872,7 @@ func verifyCertificateChain(certificate Certificate, request OpenRequest, depth 
 	return nil
 }
 
-func authorizeControl(request OpenRequest) (Control, error) {
+func authorizeControl(request OpenRequest, policy Policy) (Control, error) {
 	control, err := DecodeControl(request.Control)
 	if err != nil {
 		return Control{}, err
@@ -880,7 +881,8 @@ func authorizeControl(request OpenRequest) (Control, error) {
 		return Control{}, fmt.Errorf("%w: control vault or epoch_seq", ErrAuthorization)
 	}
 	signerCertificate, err := resolveTrustedCertificate(control.Signer.DeviceID, control.Signer.KeyID, request)
-	if err != nil || signerCertificate.Role != RoleRoot {
+	controlSignerRole, controlSignerRoleExists := policyRole(policy, control.Signer.DeviceID)
+	if err != nil || signerCertificate.Role != RoleRoot || !controlSignerRoleExists || controlSignerRole != signerCertificate.Role {
 		return Control{}, fmt.Errorf("%w: control signer", ErrAuthorization)
 	}
 	prefix, err := encodeControlPrefix(control)

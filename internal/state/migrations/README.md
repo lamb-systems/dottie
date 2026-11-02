@@ -9,3 +9,7 @@ Migration 2 adds `transition_attempts` for the durable marker, expected record C
 Migration 3 adds `vault_checkpoints`, one row per vault, retaining the control bytes and freshness fields needed for local rollback comparison. It does not rebuild existing tables.
 
 Migration 4 adds `vault_publication_observations`, one row per vault, retaining the last authenticated epoch, publication count and head snapshot CID used for per-device replay detection. It does not rebuild existing tables.
+
+Migration 7 adds the last authenticated control CID to `vault_publication_observations`; existing rows receive an empty value, which is treated as an unknown control and cannot authorize a later epoch advance until a matching observation is recorded.
+
+Migration 8 adds `vault_epoch_first_seen`, keyed by vault and epoch, with the caller-supplied Unix-seconds time when that epoch was first authenticated locally. Inserts are idempotent and never replace an existing timestamp; no epoch history is backfilled because its original time cannot be recovered.

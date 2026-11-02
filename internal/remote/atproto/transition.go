@@ -22,13 +22,15 @@ import (
 )
 
 var (
-	ErrTransitionDiscarded      = errors.New("prepared transition was discarded after a lost fence")
-	ErrTransitionNotLanded      = errors.New("transition marker is absent from the verified revision")
-	ErrTransitionSuperseded     = errors.New("transition committed but has been superseded")
-	ErrTransitionUnavailable    = errors.New("transition outcome could not be verified")
-	ErrCandidateEnvelopeInvalid = errors.New("candidate is not a valid snapshot envelope")
-	ErrCandidateContextMismatch = errors.New("candidate envelope does not match expected vault, epoch and policy")
-	ErrCandidateUnauthenticated = errors.New("candidate envelope is not authenticated by an authorized signer")
+	ErrTransitionDiscarded             = errors.New("prepared transition was discarded after a lost fence")
+	ErrTransitionNotLanded             = errors.New("transition marker is absent from the verified revision")
+	ErrTransitionSuperseded            = errors.New("transition committed but has been superseded")
+	ErrTransitionUnavailable           = errors.New("transition outcome could not be verified")
+	ErrCandidateEnvelopeInvalid        = errors.New("candidate is not a valid snapshot envelope")
+	ErrCandidateContextMismatch        = errors.New("candidate envelope does not match expected vault, epoch and policy")
+	ErrCandidateUnauthenticated        = errors.New("candidate envelope is not authenticated by an authorized signer")
+	ErrBlobUploadLimitUnadvertised     = errors.New("provider blob upload limit is unadvertised")
+	ErrCandidateExceedsBlobUploadLimit = errors.New("candidate exceeds provider blob upload limit")
 )
 
 const (
@@ -87,10 +89,13 @@ type TransitionAttemptStore interface {
 type ATProtoTransitionIO struct {
 	Reader           RevisionReader
 	Transport        Transport
+	BlobUploadLimit  int64
 	DID              string
 	TrustAnchor      [32]byte
 	PreviousPolicies [][]byte
+	PreviousControls [][]byte
 	ObservationStore PublicationObservationStore
+	Clock            func() time.Time
 }
 
 func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault.Predecessor, error) {
@@ -101,7 +106,7 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 	if err != nil {
 		return nil, vault.Predecessor{}, err
 	}
-	predecessor, err := predecessorFromRevision(revision, io.TrustAnchor, io.PreviousPolicies)
+	predecessor, err := predecessorFromRevision(revision, io.TrustAnchor, io.PreviousPolicies, io.PreviousControls)
 	if err != nil {
 		return nil, vault.Predecessor{}, err
 	}
@@ -123,15 +128,36 @@ func (io ATProtoTransitionIO) ReadCurrent(ctx context.Context) (*Revision, vault
 			return nil, vault.Predecessor{}, err
 		}
 		head := headFromRecord(headRecord)
+		if err := verifyTransitionSnapshotEnvelope(ctx, io.Transport, revision, predecessor, head); err != nil {
+			return nil, vault.Predecessor{}, err
+		}
 		control, decodeErr := vault.DecodeControl(predecessor.Control)
 		if decodeErr != nil {
 			return nil, vault.Predecessor{}, decodeErr
 		}
+		controlCID, err := rawBlobCID(predecessor.Control)
+		if err != nil {
+			return nil, vault.Predecessor{}, ErrReadVaultAuthentication
+		}
 		if err := CheckPublicationCount(ctx, io.ObservationStore, head.Vault, ReadResult{
 			Control: toControlRecord(control), Head: headRecord, PublicationCount: head.PublicationCount,
-			PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), EpochSeq: head.EpochSeq,
-		}, PublicationCountOptions{PrevHeadCID: head.PrevHeadCID, EnforceParent: false}); err != nil {
+			PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID), ControlCID: controlCID, EpochSeq: head.EpochSeq,
+		}, PublicationCountOptions{PrevHeadCID: head.PrevHeadCID, EnforceParent: false, FirstSeenAt: currentTime(io.Clock).Unix(), RecordFirstSeen: true}); err != nil {
 			return nil, vault.Predecessor{}, err
+		}
+	} else if io.ObservationStore != nil {
+		policy, err := vault.DecodePolicy(predecessor.Policy)
+		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
+		previousEpoch, found, err := io.ObservationStore.VaultPublicationEpoch(ctx, policy.Vault)
+		if err != nil {
+			return nil, vault.Predecessor{}, err
+		}
+		if !found || previousEpoch != policy.EpochSeq {
+			if err := io.ObservationStore.RecordVaultEpochFirstSeen(ctx, policy.Vault, policy.EpochSeq, currentTime(io.Clock).Unix()); err != nil {
+				return nil, vault.Predecessor{}, err
+			}
 		}
 	}
 	return revision, predecessor, nil
@@ -158,6 +184,12 @@ func (io ATProtoTransitionIO) StageCandidate(ctx context.Context, data []byte, e
 	}
 	if err := verifyCandidateEnvelopeSignature(data, envelope, expectedPolicy, certificates); err != nil {
 		return nil, "", errors.Join(ErrCandidateUnauthenticated, err)
+	}
+	if io.BlobUploadLimit <= 0 {
+		return nil, "", ErrBlobUploadLimitUnadvertised
+	}
+	if int64(len(data)) > io.BlobUploadLimit {
+		return nil, "", ErrCandidateExceedsBlobUploadLimit
 	}
 	status, body, err := io.Transport.Do(ctx, "POST", "com.atproto.repo.uploadBlob", nil, data, "application/octet-stream")
 	if err != nil {
@@ -740,7 +772,49 @@ func predecessorPolicyEvidence(current vault.Policy, candidates [][]byte) ([]byt
 	return selected, nil
 }
 
-func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousPolicies [][]byte) (vault.Predecessor, error) {
+func predecessorControlEvidence(current vault.Control, candidates [][]byte) ([]byte, error) {
+	if len(current.PrevControlCID) == 0 {
+		if current.EpochSeq == 0 {
+			return nil, nil
+		}
+		return nil, ErrReadControlLinkage
+	}
+	if len(candidates) == 0 {
+		return nil, ErrReadControlRequired
+	}
+	var selected []byte
+	for _, candidate := range candidates {
+		decoded, err := DecodeRecord(candidate)
+		if err != nil {
+			continue
+		}
+		record, ok := decoded.(ControlRecord)
+		if !ok {
+			continue
+		}
+		object, err := vault.EncodeControl(controlFromRecord(record))
+		if err != nil {
+			continue
+		}
+		controlCID, err := rawBlobCID(object)
+		if err != nil || !bytes.Equal(controlCID, current.PrevControlCID) {
+			continue
+		}
+		if err := VerifyRecordBinding(candidate, object); err != nil {
+			return nil, ErrReadControlType
+		}
+		if selected != nil && !bytes.Equal(selected, candidate) {
+			return nil, ErrReadControlLinkage
+		}
+		selected = bytes.Clone(candidate)
+	}
+	if selected == nil {
+		return nil, ErrReadControlLinkage
+	}
+	return selected, nil
+}
+
+func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousPolicies, previousControls [][]byte) (vault.Predecessor, error) {
 	if revision == nil {
 		return vault.Predecessor{}, fmt.Errorf("%w: verified revision is required", ErrUntrustedCar)
 	}
@@ -858,6 +932,9 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		if !exists {
 			return vault.Predecessor{}, fmt.Errorf("%w: current head signer certificate is absent", vault.ErrAuthorization)
 		}
+		if roleForDevice(policyObject.Roles, signerCertificate.DeviceID) != signerCertificate.Role || !rolePermitted(signerCertificate.Role, vault.RolePublisher) {
+			return vault.Predecessor{}, fmt.Errorf("%w: current head signer role", vault.ErrPublicationAuthority)
+		}
 		if err := verifyVaultObjectSignature(headBytes, "dottie/v1/sig-head", headObject.Signature[:], signerCertificate.SigningPublicKey[:]); err != nil {
 			return vault.Predecessor{}, err
 		}
@@ -936,9 +1013,18 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 	if !exists {
 		return vault.Predecessor{}, fmt.Errorf("%w: policy signer certificate is absent", vault.ErrAuthorization)
 	}
-	request := ReadRequest{Vault: policyObject.Vault, TrustAnchor: trustAnchor, PreviousPolicy: previousPolicy}
-	if err := authorizePolicyPredecessor(request, policyObject, policyBytes, policySigner, storedCertificates); err != nil {
+	previousControl, err := predecessorControlEvidence(controlObject, previousControls)
+	if err != nil {
+		return vault.Predecessor{}, err
+	}
+	request := ReadRequest{Vault: policyObject.Vault, TrustAnchor: trustAnchor, PreviousPolicy: previousPolicy, PreviousControl: previousControl}
+	if err := authorizePolicyPredecessor(request, policyObject, policyBytes, policySigner, storedCertificates, controlObject); err != nil {
 		return vault.Predecessor{}, fmt.Errorf("%w: predecessor policy authentication: %w", ErrReadVaultAuthentication, err)
+	}
+	if !isReadGenesis(policyObject, controlObject) {
+		if err := authorizeControlPredecessor(request, policyObject, controlObject, storedCertificates); err != nil {
+			return vault.Predecessor{}, fmt.Errorf("%w: predecessor control authentication: %w", ErrReadVaultAuthentication, err)
+		}
 	}
 	if err := VerifyRecordContext(policyProven.Data, RecordContext{
 		Certificate: certificateData[rootRecord.DeviceID], PreviousPolicy: previousPolicy, TrustAnchor: trustAnchor,
@@ -950,6 +1036,60 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		HeadCID: headCID, Control: controlBytes, Policy: policyBytes, Certificates: certificates,
 		TrustAnchor: trustAnchor,
 	}, nil
+}
+
+func verifyTransitionSnapshotEnvelope(ctx context.Context, transport Transport, revision *Revision, predecessor vault.Predecessor, head vault.Head) error {
+	snapshotBytes, snapshot, err := findSnapshotRecord(revision, head.SnapshotCID)
+	if err != nil {
+		return err
+	}
+	blobCID := cid.Cid(snapshot.Blob.Ref)
+	blob, err := (VaultReader{Transport: transport}).fetchBlob(ctx, revision.did, blobCID, snapshot.Blob.Size)
+	if err != nil {
+		return err
+	}
+	computedBlobCID, err := rawBlobCID(blob)
+	if err != nil || !bytes.Equal(computedBlobCID, blobCID.Bytes()) {
+		return &ReadError{Stage: ReadStageBlobCID, Err: ErrReadBlobCIDMismatch}
+	}
+	envelope, err := vault.DecodeEnvelope(blob)
+	if err != nil {
+		return &ReadError{Stage: ReadStageEnvelope, Err: fmt.Errorf("%w: %w", ErrReadEnvelopeInvalid, err)}
+	}
+	if err := VerifyRecordBinding(snapshotBytes, blob); err != nil {
+		return readBindingError(err)
+	}
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	if err != nil {
+		return fmt.Errorf("%w: current policy decode: %w", ErrReadVaultAuthentication, err)
+	}
+	control, err := vault.DecodeControl(predecessor.Control)
+	if err != nil {
+		return fmt.Errorf("%w: current control decode: %w", ErrReadVaultAuthentication, err)
+	}
+	policyDigest, err := vault.ComputePolicyDigest(predecessor.Policy)
+	if err != nil || envelope.Vault != policy.Vault || envelope.EpochSeq != policy.EpochSeq || envelope.PolicyDigest != policyDigest || head.Vault != policy.Vault || head.EpochSeq != envelope.EpochSeq || head.PolicyDigest != envelope.PolicyDigest || !bytes.Equal(head.SnapshotCID, computedBlobCID) || !bytes.Equal(head.BlobCID, computedBlobCID) {
+		return ErrReadVaultAuthentication
+	}
+	if !bytes.Equal(head.PrevHeadCID, envelope.Parent) {
+		return ErrReadHeadEnvelopeLinkage
+	}
+	if head.Signer.DeviceID != envelope.DeviceID || !bytes.Equal(head.Signer.KeyID, envelope.KeyID) {
+		return ErrReadSignerMismatch
+	}
+	signer, found := certificateForVaultSigner(predecessor.Certificates, envelope.DeviceID, envelope.KeyID)
+	if !found || signer.Vault != policy.Vault || signer.CertEpoch > policy.EpochSeq || roleForDevice(policy.Roles, signer.DeviceID) != signer.Role || !rolePermitted(signer.Role, vault.RolePublisher) {
+		return fmt.Errorf("%w: snapshot signer is not authorized by the current policy", ErrReadVaultAuthentication)
+	}
+	for _, revoked := range control.Revoked {
+		if revoked.DeviceID == signer.DeviceID && revoked.CertEpoch >= signer.CertEpoch {
+			return fmt.Errorf("%w: snapshot signer is revoked", ErrReadVaultAuthentication)
+		}
+	}
+	if err := verifyEnvelopeSignature(blob, envelope, ed25519.PublicKey(signer.SigningPublicKey[:])); err != nil {
+		return &ReadError{Stage: ReadStageEnvelopeSignature, Err: fmt.Errorf("%w: %w", ErrReadEnvelopeSignature, err)}
+	}
+	return nil
 }
 
 func verifyPredecessorAuthority(policy vault.Policy, control vault.Control, certificates [][]byte, trustAnchor [32]byte) error {
