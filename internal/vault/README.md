@@ -264,6 +264,12 @@ signed-object examples. `kind-ambiguity.hex` is a structural negative vector tha
 an envelope and, when the kind check is ignored, as a checkpoint body. The regeneration test
 rebuilds each vector and compares exact bytes without overwriting existing files.
 
+## Offline vault export archive primitives
+
+`export.go` defines a versioned `DTVA` USTAR archive for caller-supplied signed policy/control/certificate/checkpoint/head objects, lineage and recovery positions, and referenced encrypted snapshot blobs. The manifest inventories every archive entry by kind, length, digest and member ordinal, and records fixed limitations plus omission codes from a closed set. It has no free-form DID or descriptive metadata. The core binding is the 32-byte vault ID and anchor fingerprint. The reader streams bounded members, requires current to descend from the authenticated checkpoint through supplied control and policy predecessors, validates policy publication bounds, and refuses missing checkpoint/current/recovery blob CIDs before returning in-memory objects. It never writes an import.
+
+This is not a working `account export` or `account import` feature. There is no local artifact store for policy, certificates, head history, envelopes, retained recovery points or payloads, so commands wait for that store. The APIs do not access the network. The filesystem writer requires a caller-supplied capture-selection predicate and uses a pinned directory handle for output, but the library cannot prove that the callback checks trusted local selections; product wiring must provide the trusted boundary. The manifest states that caller-supplied inventory is not proof of completeness and includes this warning: **A repository CAR holds references, not payloads, and is not a complete blob backup.** See [`docs/recovery.md`](../../docs/recovery.md) for the format and validation order.
+
 ## Size measurements
 
 Measurements use the canonical `codec = none` archive. The synthetic tree contains one
