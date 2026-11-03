@@ -276,7 +276,7 @@ func TestGNOMEPresetIsStructuredUnsupported(t *testing.T) {
 	var reason *UnsupportedReason
 	require.ErrorAs(t, preview.Unsupported, &reason)
 	assert.Equal(t, model.SourceGNOME, reason.Source)
-	assert.Equal(t, "DOT-G01", reason.Boundary)
+	assert.Equal(t, "DOT-G03", reason.Boundary)
 	_, err = Materialize(preset, config.Default(), paths)
 	assert.ErrorIs(t, err, ErrSourceNotCapturable)
 }

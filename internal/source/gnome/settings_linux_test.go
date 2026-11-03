@@ -3,6 +3,7 @@
 package gnome
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,6 +74,11 @@ func schemaDirectory(t *testing.T) string {
 	require.True(t, ok, "locate native test source")
 	fixture := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../tests/testdata/gsettings"))
 	compiled := filepath.Join(t.TempDir(), "schemas")
+	return compileSchemas(t, fixture, compiled)
+}
+
+func compileSchemas(t *testing.T, fixture, compiled string) string {
+	t.Helper()
 	require.NoError(t, os.MkdirAll(compiled, 0700))
 	command := exec.Command("glib-compile-schemas", "--strict", "--targetdir", compiled, fixture)
 	output, err := command.CombinedOutput()
@@ -79,12 +86,111 @@ func schemaDirectory(t *testing.T) string {
 	return compiled
 }
 
+func defaultSchemaEnvironment(t *testing.T, backend string) []string {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	config := filepath.Join(root, "config")
+	dataHome := filepath.Join(root, "data-home")
+	cache := filepath.Join(root, "cache")
+	tmp := filepath.Join(root, "tmp")
+	dataDirs := filepath.Join(root, "data")
+	for _, dir := range []string{home, config, dataHome, cache, tmp, filepath.Join(dataDirs, "glib-2.0", "schemas")} {
+		require.NoError(t, os.MkdirAll(dir, 0700))
+	}
+	_, sourceFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "locate native test source")
+	fixture := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../tests/testdata/gsettings"))
+	compiled := filepath.Join(dataDirs, "glib-2.0", "schemas")
+	compileSchemas(t, fixture, compiled)
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=" + tmp,
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + config,
+		"XDG_DATA_HOME=" + dataHome,
+		"XDG_CACHE_HOME=" + cache,
+		"XDG_DATA_DIRS=" + dataDirs,
+		"GSETTINGS_BACKEND=" + backend,
+		"LANG=C.UTF-8",
+		"G_DEBUG=fatal-warnings",
+		isolatedTestMarker + "=1",
+		defaultProcessMarker + "=1",
+	}
+}
+
+const defaultProcessMarker = "DOTTIE_GNOME_DEFAULT_TEST_CHILD"
+
 func openMemory(t *testing.T, schemas string, observed ...string) *Settings {
 	t.Helper()
 	settings, err := Open(schemas, "org.dottie.Test", "", MemoryBackend, observed)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = settings.Close() })
 	return settings
+}
+
+func TestOpenDefaultSubprocessHelper(t *testing.T) {
+	if os.Getenv(defaultProcessMarker) != "1" {
+		return
+	}
+	backend := os.Getenv("GSETTINGS_BACKEND")
+	switch backend {
+	case "memory", "null":
+		missing, err := OpenDefault("org.dottie.Missing", "")
+		require.Nil(t, missing)
+		require.ErrorIs(t, err, ErrSchemaNotFound)
+		settings, err := OpenDefault("org.dottie.Test", "")
+		require.Nil(t, settings)
+		require.ErrorIs(t, err, ErrBackendUnavailable)
+		capture, err := Capture(context.Background(), CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}})
+		require.ErrorIs(t, err, ErrBackendUnavailable)
+		require.Empty(t, capture.Entries)
+		require.Empty(t, capture.Unknown)
+	case "keyfile":
+		settings, err := OpenDefault("org.dottie.Test", "")
+		require.NoError(t, err)
+		defer settings.Close()
+		require.Equal(t, "/org/dottie/test/", settings.Path())
+		absent, err := settings.ReadUser("vendor-text")
+		require.NoError(t, err)
+		require.Equal(t, UserValue{Writable: true}, absent)
+		require.NoError(t, settings.Set("vendor-text", "s", "'isolated-keyfile'"))
+		user, err := settings.ReadUser("vendor-text")
+		require.NoError(t, err)
+		require.Equal(t, UserValue{Type: "s", Text: "'isolated-keyfile'", Present: true, Writable: true}, user)
+		captured, err := Capture(context.Background(), CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "vendor-text"}}})
+		require.NoError(t, err)
+		require.Empty(t, captured.Unknown)
+		require.Empty(t, captured.Errors)
+		require.Len(t, captured.Entries, 1)
+		require.NoError(t, captured.Entries[0].Validate())
+		require.NoError(t, captured.Entries[0].Identity().Validate())
+		require.Equal(t, "/org/dottie/test/", captured.Entries[0].Setting.Path)
+		require.Equal(t, model.SettingPresent, captured.Entries[0].Setting.State)
+		require.Equal(t, &model.VariantValue{Type: "s", Text: "'isolated-keyfile'"}, captured.Entries[0].Setting.Value)
+		_, err = OpenDefault("org.dottie.Test", "/org/dottie/test/")
+		require.Error(t, err, "fixed-path schema accepted an explicit path")
+		relocatable, err := OpenDefault("org.dottie.Test.Relocatable", "/org/dottie/instance/")
+		require.NoError(t, err)
+		require.Equal(t, "/org/dottie/instance/", relocatable.Path())
+		require.NoError(t, relocatable.Close())
+		_, err = OpenDefault("org.dottie.Test.Relocatable", "")
+		require.Error(t, err, "relocatable schema accepted a missing path")
+	default:
+		require.FailNow(t, "unexpected subprocess backend", backend)
+	}
+}
+
+func TestOpenDefaultUsesPersistentBackendAndDefaultSchemaSource(t *testing.T) {
+	for _, backend := range []string{"memory", "null", "keyfile"} {
+		backend := backend
+		t.Run(backend, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "-test.run=^TestOpenDefaultSubprocessHelper$")
+			command.Env = defaultSchemaEnvironment(t, backend)
+			output, err := command.CombinedOutput()
+			require.NoError(t, err, "default backend subprocess failed: %s", output)
+		})
+	}
 }
 
 func readKey(t *testing.T, settings *Settings, key string) Snapshot {
@@ -319,6 +425,77 @@ func TestValidationDoesNotMutateAndSchemaSourceDoesNotFallback(t *testing.T) {
 			require.Equal(t, "'relocatable'", value.Effective.Text, "valid relocatable schema read failed at %q: %#v", path, value)
 		})
 	}
+}
+
+func TestReadUserPreservesOverrideAndWritability(t *testing.T) {
+	schemas := schemaDirectory(t)
+	settings := openMemory(t, schemas)
+	require.Equal(t, "/org/dottie/test/", settings.Path())
+	absent, err := settings.ReadUser("vendor-text")
+	require.NoError(t, err)
+	require.Equal(t, UserValue{Writable: true}, absent)
+	require.NoError(t, settings.Set("vendor-text", "s", "'user-value'"))
+	present, err := settings.ReadUser("vendor-text")
+	require.NoError(t, err)
+	require.Equal(t, UserValue{Type: "s", Text: "'user-value'", Present: true, Writable: true}, present)
+	require.NoError(t, settings.Set("pair", "(is)", "(7, 'seven')"))
+	pair, err := settings.ReadUser("pair")
+	require.NoError(t, err)
+	require.Equal(t, "(is)", pair.Type)
+	require.Equal(t, "(7, 'seven')", pair.Text)
+	require.True(t, pair.Present)
+	require.True(t, pair.Writable)
+
+	null, err := Open(schemas, "org.dottie.Test", "", NullBackend, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = null.Close() })
+	readOnly, err := null.ReadUser("vendor-text")
+	require.NoError(t, err)
+	require.Equal(t, UserValue{Writable: false}, readOnly)
+	_, err = settings.ReadUser("missing-key")
+	require.ErrorIs(t, err, ErrKeyNotFound)
+	_, err = settings.Read("missing-key")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrKeyNotFound, "the existing Read API must keep its untyped error behavior")
+}
+
+func TestReadUserRejectsOversizedTypeAndRenderedText(t *testing.T) {
+	wideType := "(" + strings.Repeat("i", 260) + ")"
+	wideValue := "(" + strings.TrimSuffix(strings.Repeat("0,", 260), ",") + ")"
+	fixture := t.TempDir()
+	schema := fmt.Sprintf("<schemalist><schema id=\"org.dottie.WideType\" path=\"/org/dottie/wide/\"><key name=\"wide\" type=\"%s\"><default>%s</default></key></schema></schemalist>", wideType, wideValue)
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "wide.gschema.xml"), []byte(schema), 0600))
+	wideSettings, err := Open(compileSchemas(t, fixture, filepath.Join(t.TempDir(), "schemas")), "org.dottie.WideType", "", MemoryBackend, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = wideSettings.Close() })
+	require.NoError(t, setUserValueForTest(wideSettings, "wide", wideValue))
+	_, err = wideSettings.ReadUser("wide")
+	require.Error(t, err, "oversized GVariant type was returned")
+
+	settings := openMemory(t, schemaDirectory(t))
+	compactItems := "[" + strings.TrimSuffix(strings.Repeat("'x',", 14000), ",") + "]"
+	require.LessOrEqual(t, len(compactItems), maxValueBytes)
+	require.NoError(t, settings.Set("items", "as", compactItems))
+	_, err = settings.ReadUser("items")
+	require.Error(t, err, "oversized rendered GVariant text was returned")
+}
+
+func TestNativeFieldBoundsAndRelocatablePath(t *testing.T) {
+	schemas := schemaDirectory(t)
+	settings := openMemory(t, schemas)
+	_, err := settings.Read(strings.Repeat("k", maxModelFieldBytes+1))
+	require.Error(t, err)
+	require.Error(t, settings.Set("enabled", strings.Repeat("i", maxModelFieldBytes+1), "1"))
+	_, err = Open(schemas, strings.Repeat("s", maxModelFieldBytes+1), "", MemoryBackend, nil)
+	require.Error(t, err)
+
+	path := "/" + strings.Repeat("a", maxPathBytes-2) + "/"
+	relocatable, err := Open(schemas, "org.dottie.Test.Relocatable", path, MemoryBackend, nil)
+	require.NoError(t, err)
+	require.Equal(t, path, relocatable.Path())
+	require.NoError(t, relocatable.Close())
+	_, err = Open(schemas, "org.dottie.Test.Relocatable", path+"a", MemoryBackend, nil)
+	require.Error(t, err)
 }
 
 func TestNullBackendIsReadOnly(t *testing.T) {

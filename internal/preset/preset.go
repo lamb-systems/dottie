@@ -57,7 +57,7 @@ type UnsupportedReason struct {
 }
 
 func (r *UnsupportedReason) Error() string {
-	return fmt.Sprintf("%s: source %q is not capturable until %s", ErrSourceNotCapturable, r.Source, r.Boundary)
+	return fmt.Sprintf("%s: source %q has no preset key-selection authority until %s", ErrSourceNotCapturable, r.Source, r.Boundary)
 }
 
 func (r *UnsupportedReason) Is(target error) bool {
@@ -121,7 +121,7 @@ func BuildPreview(p Preset, paths platform.Paths) (Preview, error) {
 		EffectiveMode: (config.Target{}).ModeOrDefault(current.Defaults),
 	}
 	if p.Source == model.SourceGNOME {
-		unsupported := &UnsupportedReason{Source: p.Source, Boundary: "DOT-G01"}
+		unsupported := &UnsupportedReason{Source: p.Source, Boundary: "DOT-G03"}
 		preview.Unsupported = unsupported
 		return preview, unsupported
 	}
@@ -151,7 +151,7 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 	}
 	proposal := cloneConfig(c)
 	if p.Source == model.SourceGNOME {
-		return proposal, &UnsupportedReason{Source: p.Source, Boundary: "DOT-G01"}
+		return proposal, &UnsupportedReason{Source: p.Source, Boundary: "DOT-G03"}
 	}
 	for index, root := range p.Roots {
 		existing, found := matchingRoot(proposal, root)

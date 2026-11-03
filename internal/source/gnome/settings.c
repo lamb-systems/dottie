@@ -6,7 +6,8 @@
 #include <string.h>
 
 #define DOTTIE_MAX_OBSERVED_KEYS 64
-#define DOTTIE_MAX_FIELD_BYTES 4096
+#define DOTTIE_MAX_MODEL_FIELD_BYTES 255
+#define DOTTIE_MAX_PATH_BYTES 4096
 #define DOTTIE_MAX_VALUE_BYTES 65536
 #define DOTTIE_DISPATCH_BUDGET 64
 #define DOTTIE_MAX_TEST_WORK 10000
@@ -16,8 +17,11 @@ typedef struct {
 } DottieWork;
 
 struct DottieSettings {
+    GSettingsSchemaSource *schema_source;
+    gboolean owns_schema_source;
     GSettingsSchema *schema;
     GSettingsBackend *backend;
+    gchar *path;
     GSettings *settings;
     GSettings *peer;
     GMainContext *context;
@@ -49,7 +53,7 @@ static gboolean valid_path(const gchar *path) {
         return FALSE;
     }
     length = strlen(path);
-    return length > 0 && path[0] == '/' && path[length - 1] == '/' && strstr(path, "//") == NULL;
+    return length > 0 && length <= DOTTIE_MAX_PATH_BYTES && path[0] == '/' && path[length - 1] == '/' && strstr(path, "//") == NULL;
 }
 
 static gint find_key(DottieSettings *settings, const gchar *key) {
@@ -89,7 +93,7 @@ static gboolean load_observed_keys(DottieSettings *settings, const gchar *list, 
             g_strfreev(parts);
             return FALSE;
         }
-        if (parts[i][0] == '\0' || strlen(parts[i]) > DOTTIE_MAX_FIELD_BYTES || !g_settings_schema_has_key(settings->schema, parts[i])) {
+        if (parts[i][0] == '\0' || strlen(parts[i]) > DOTTIE_MAX_MODEL_FIELD_BYTES || !g_settings_schema_has_key(settings->schema, parts[i])) {
             set_error(error_message, "invalid or unknown observed key: %s", parts[i]);
             g_strfreev(parts);
             return FALSE;
@@ -138,6 +142,10 @@ static void release_settings(DottieSettings *settings) {
     if (settings->schema != NULL) {
         g_settings_schema_unref(settings->schema);
     }
+    if (settings->schema_source != NULL && settings->owns_schema_source) {
+        g_settings_schema_source_unref(settings->schema_source);
+    }
+    g_free(settings->path);
     if (settings->context != NULL) {
         g_main_context_unref(settings->context);
     }
@@ -151,7 +159,7 @@ static void release_settings(DottieSettings *settings) {
     g_free(settings);
 }
 
-DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schema_id, const gchar *path, gint backend_kind, const gchar *observed_keys, gboolean make_peer, gchar **error_message) {
+DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schema_id, const gchar *path, gint backend_kind, const gchar *observed_keys, gboolean make_peer, gint *open_error, gchar **error_message) {
     DottieSettings *settings = NULL;
     GSettingsSchemaSource *source = NULL;
     GSettingsSchema *schema = NULL;
@@ -159,19 +167,24 @@ DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schem
     const gchar *fixed_path;
     const gchar *resolved_path;
     gboolean pushed = FALSE;
+    gboolean default_source;
     guint i;
     if (error_message != NULL) {
         *error_message = NULL;
     }
-    if (!valid_text_field(schema_dir, DOTTIE_MAX_FIELD_BYTES) || !valid_text_field(schema_id, DOTTIE_MAX_FIELD_BYTES) || (path != NULL && !valid_text_field(path, DOTTIE_MAX_FIELD_BYTES))) {
+    if (open_error != NULL) {
+        *open_error = DOTTIE_SETTINGS_OPEN_ERROR_NONE;
+    }
+    default_source = backend_kind == 3;
+    if ((!default_source && !valid_text_field(schema_dir, DOTTIE_MAX_PATH_BYTES)) || !valid_text_field(schema_id, DOTTIE_MAX_MODEL_FIELD_BYTES) || (path != NULL && !valid_text_field(path, DOTTIE_MAX_PATH_BYTES))) {
         set_error(error_message, "schema directory, id, or path is invalid");
         return NULL;
     }
-    if (backend_kind != 1 && backend_kind != 2) {
-        set_error(error_message, "backend must be explicitly memory or null");
+    if (backend_kind != 1 && backend_kind != 2 && backend_kind != 3) {
+        set_error(error_message, "backend must be explicitly memory, null, or default");
         return NULL;
     }
-    if (observed_keys == NULL || strlen(observed_keys) > (DOTTIE_MAX_OBSERVED_KEYS * (DOTTIE_MAX_FIELD_BYTES + 1))) {
+    if (observed_keys == NULL || strlen(observed_keys) > (DOTTIE_MAX_OBSERVED_KEYS * (DOTTIE_MAX_MODEL_FIELD_BYTES + 1))) {
         set_error(error_message, "observed key set is invalid");
         return NULL;
     }
@@ -181,40 +194,79 @@ DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schem
     settings->dirty = g_new0(gboolean, DOTTIE_MAX_OBSERVED_KEYS);
     g_main_context_push_thread_default(settings->context);
     pushed = TRUE;
-    source = g_settings_schema_source_new_from_directory(schema_dir, NULL, FALSE, &error);
-    if (source == NULL) {
-        set_error(error_message, "load schema source: %s", error != NULL ? error->message : "unknown GIO error");
-        g_clear_error(&error);
-        goto fail;
+    if (default_source) {
+        source = g_settings_schema_source_get_default();
+        if (source == NULL) {
+            if (open_error != NULL) {
+                *open_error = DOTTIE_SETTINGS_OPEN_ERROR_SCHEMA_NOT_FOUND;
+            }
+            set_error(error_message, "default GSettings schema source is unavailable");
+            goto fail;
+        }
+        settings->schema_source = source;
+        schema = g_settings_schema_source_lookup(source, schema_id, TRUE);
+    } else {
+        source = g_settings_schema_source_new_from_directory(schema_dir, NULL, FALSE, &error);
+        if (source == NULL) {
+            set_error(error_message, "load schema source: %s", error != NULL ? error->message : "unknown GIO error");
+            g_clear_error(&error);
+            goto fail;
+        }
+        settings->schema_source = source;
+        settings->owns_schema_source = TRUE;
+        schema = g_settings_schema_source_lookup(source, schema_id, FALSE);
+        g_settings_schema_source_unref(settings->schema_source);
+        settings->schema_source = NULL;
+        settings->owns_schema_source = FALSE;
     }
-    schema = g_settings_schema_source_lookup(source, schema_id, FALSE);
-    g_settings_schema_source_unref(source);
-    source = NULL;
     if (schema == NULL) {
-        set_error(error_message, "schema not found in supplied directory: %s", schema_id);
+        if (open_error != NULL) {
+            *open_error = DOTTIE_SETTINGS_OPEN_ERROR_SCHEMA_NOT_FOUND;
+        }
+        set_error(error_message, default_source ? "schema not found in default source: %s" : "schema not found in supplied directory: %s", schema_id);
         goto fail;
     }
     settings->schema = schema;
     fixed_path = g_settings_schema_get_path(schema);
     if (fixed_path != NULL) {
-        if (path != NULL && path[0] != '\0' && !g_str_equal(path, fixed_path)) {
-            set_error(error_message, "supplied path conflicts with fixed schema path");
+        if (path != NULL && path[0] != '\0') {
+            set_error(error_message, "fixed-path schema does not accept a supplied path");
+            goto fail;
+        }
+        if (strlen(fixed_path) > DOTTIE_MAX_PATH_BYTES) {
+            set_error(error_message, "resolved schema path exceeds %u bytes", DOTTIE_MAX_PATH_BYTES);
             goto fail;
         }
         resolved_path = fixed_path;
     } else {
-        if (!valid_path(path)) {
+        if (!valid_path(path) || strlen(path) > DOTTIE_MAX_PATH_BYTES) {
             set_error(error_message, "relocatable schemas require a valid explicit path");
             goto fail;
         }
         resolved_path = path;
     }
+    settings->path = g_strdup(resolved_path);
     if (!load_observed_keys(settings, observed_keys, error_message)) {
         goto fail;
     }
-    settings->backend = backend_kind == 1 ? g_memory_settings_backend_new() : g_null_settings_backend_new();
+    if (backend_kind == 1) {
+        settings->backend = g_memory_settings_backend_new();
+    } else if (backend_kind == 2) {
+        settings->backend = g_null_settings_backend_new();
+    } else {
+        const gchar *backend_name;
+        settings->backend = g_settings_backend_get_default();
+        backend_name = settings->backend != NULL ? G_OBJECT_TYPE_NAME(settings->backend) : "(unavailable)";
+        if (settings->backend == NULL || (!g_str_equal(backend_name, "GKeyfileSettingsBackend") && !g_str_equal(backend_name, "DConfSettingsBackend"))) {
+            if (open_error != NULL) {
+                *open_error = DOTTIE_SETTINGS_OPEN_ERROR_BACKEND_UNAVAILABLE;
+            }
+            set_error(error_message, "default GSettings backend is not persistent and supported: %s", backend_name);
+            goto fail;
+        }
+    }
     if (settings->backend == NULL) {
-        set_error(error_message, "create explicit isolated GSettings backend failed");
+        set_error(error_message, "create GSettings backend failed");
         goto fail;
     }
     settings->settings = g_settings_new_full(settings->schema, settings->backend, resolved_path);
@@ -242,9 +294,6 @@ DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schem
     return settings;
 
 fail:
-    if (source != NULL) {
-        g_settings_schema_source_unref(source);
-    }
     if (schema != NULL && settings->schema == NULL) {
         g_settings_schema_unref(schema);
     }
@@ -261,7 +310,7 @@ void dottie_settings_close(DottieSettings *settings) {
 
 static GSettingsSchemaKey *get_schema_key(DottieSettings *settings, const gchar *key, gchar **error_message) {
     GSettingsSchemaKey *schema_key;
-    if (key == NULL || strlen(key) > DOTTIE_MAX_FIELD_BYTES || !g_settings_schema_has_key(settings->schema, key)) {
+    if (key == NULL || strlen(key) > DOTTIE_MAX_MODEL_FIELD_BYTES || !g_settings_schema_has_key(settings->schema, key)) {
         set_error(error_message, "unknown schema key: %s", key != NULL ? key : "(null)");
         return NULL;
     }
@@ -344,12 +393,83 @@ void dottie_read_free(DottieRead *read_value) {
     g_free(read_value);
 }
 
+DottieUserRead *dottie_settings_read_user(DottieSettings *settings, const gchar *key, gint *read_error, gchar **error_message) {
+    GSettingsSchemaKey *schema_key;
+    GVariant *user = NULL;
+    DottieUserRead *result = NULL;
+    gchar *local_error = NULL;
+    gchar **error_target = error_message != NULL ? error_message : &local_error;
+    if (error_target != &local_error) {
+        *error_target = NULL;
+    }
+    if (read_error != NULL) {
+        *read_error = DOTTIE_SETTINGS_READ_ERROR_NONE;
+    }
+    schema_key = get_schema_key(settings, key, error_target);
+    if (schema_key == NULL) {
+        if (read_error != NULL) {
+            *read_error = key != NULL && strlen(key) <= DOTTIE_MAX_MODEL_FIELD_BYTES && g_settings_schema_has_key(settings->schema, key)
+                ? DOTTIE_SETTINGS_READ_ERROR_READ_FAILED
+                : DOTTIE_SETTINGS_READ_ERROR_KEY_NOT_FOUND;
+        }
+        g_free(local_error);
+        return NULL;
+    }
+    result = g_new0(DottieUserRead, 1);
+    result->resolved_path = g_strdup(settings->path);
+    result->writable = g_settings_is_writable(settings->settings, key);
+    user = g_settings_get_user_value(settings->settings, key);
+    result->present = user != NULL;
+    if (user != NULL) {
+        result->variant_type = variant_type_text(user);
+        result->text = variant_print_text(user);
+        if (result->variant_type == NULL || result->text == NULL || strlen(result->variant_type) > DOTTIE_MAX_MODEL_FIELD_BYTES || strlen(result->text) > DOTTIE_MAX_VALUE_BYTES) {
+            set_error(error_target, "user value type or text exceeds the supported size");
+            goto done;
+        }
+    }
+    if (result->resolved_path == NULL || strlen(result->resolved_path) > DOTTIE_MAX_PATH_BYTES) {
+        set_error(error_target, "resolved schema path is invalid");
+        goto done;
+    }
+
+done:
+    if (user != NULL) {
+        g_variant_unref(user);
+    }
+    g_settings_schema_key_unref(schema_key);
+    if (*error_target != NULL) {
+        if (read_error != NULL) {
+            *read_error = DOTTIE_SETTINGS_READ_ERROR_READ_FAILED;
+        }
+        dottie_user_read_free(result);
+        g_free(local_error);
+        return NULL;
+    }
+    g_free(local_error);
+    return result;
+}
+
+void dottie_user_read_free(DottieUserRead *read_value) {
+    if (read_value == NULL) {
+        return;
+    }
+    g_free(read_value->variant_type);
+    g_free(read_value->text);
+    g_free(read_value->resolved_path);
+    g_free(read_value);
+}
+
+gchar *dottie_settings_path(DottieSettings *settings) {
+    return settings != NULL ? g_strdup(settings->path) : NULL;
+}
+
 static GVariant *parse_checked_value(GSettingsSchemaKey *schema_key, const gchar *key, const gchar *type, const gchar *text, gchar **error_message) {
     GVariantType *variant_type;
     GVariant *value;
     GError *error = NULL;
     const gchar *end = NULL;
-    if (!valid_text_field(type, DOTTIE_MAX_FIELD_BYTES) || !valid_text_field(text, DOTTIE_MAX_VALUE_BYTES) || !g_variant_type_string_is_valid(type)) {
+    if (!valid_text_field(type, DOTTIE_MAX_MODEL_FIELD_BYTES) || !valid_text_field(text, DOTTIE_MAX_VALUE_BYTES) || !g_variant_type_string_is_valid(type)) {
         set_error(error_message, "invalid or oversized GVariant type/text");
         return NULL;
     }
@@ -493,6 +613,49 @@ static gboolean work_cb(gpointer user_data) {
     return work->remaining > 0 ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
 }
 
+gboolean dottie_test_settings_set_user_value(DottieSettings *settings, const gchar *key, const gchar *text, gchar **error_message) {
+    GSettingsSchemaKey *schema_key;
+    GVariant *value;
+    GError *error = NULL;
+    const gchar *end = NULL;
+    gboolean accepted;
+    if (error_message != NULL) {
+        *error_message = NULL;
+    }
+    schema_key = get_schema_key(settings, key, error_message);
+    if (schema_key == NULL) {
+        return FALSE;
+    }
+    if (!valid_text_field(text, DOTTIE_MAX_VALUE_BYTES)) {
+        set_error(error_message, "invalid test GVariant text");
+        g_settings_schema_key_unref(schema_key);
+        return FALSE;
+    }
+    value = g_variant_parse(g_settings_schema_key_get_value_type(schema_key), text, NULL, &end, &error);
+    if (value == NULL) {
+        set_error(error_message, "parse test GVariant: %s", error != NULL ? error->message : "invalid value");
+        g_clear_error(&error);
+        g_settings_schema_key_unref(schema_key);
+        return FALSE;
+    }
+    while (end != NULL && *end != '\0' && g_ascii_isspace(*end)) {
+        end++;
+    }
+    if (end == NULL || *end != '\0' || !g_settings_schema_key_range_check(schema_key, value)) {
+        set_error(error_message, "invalid test GVariant value");
+        g_variant_unref(value);
+        g_settings_schema_key_unref(schema_key);
+        return FALSE;
+    }
+    accepted = g_settings_set_value(settings->settings, key, value);
+    g_variant_unref(value);
+    g_settings_schema_key_unref(schema_key);
+    if (!accepted) {
+        set_error(error_message, "GSettings rejected test value for key: %s", key);
+    }
+    return accepted;
+}
+
 gboolean dottie_settings_queue_test_work(DottieSettings *settings, guint count, gchar **error_message) {
     DottieWork *work;
     if (error_message != NULL) {
@@ -520,7 +683,7 @@ gboolean dottie_test_variant_text_equal(const gchar *type, const gchar *first_te
     if (error_message != NULL) {
         *error_message = NULL;
     }
-    if (!valid_text_field(type, DOTTIE_MAX_FIELD_BYTES) || !g_variant_type_string_is_valid(type) || !valid_text_field(first_text, DOTTIE_MAX_VALUE_BYTES) || !valid_text_field(second_text, DOTTIE_MAX_VALUE_BYTES)) {
+    if (!valid_text_field(type, DOTTIE_MAX_MODEL_FIELD_BYTES) || !g_variant_type_string_is_valid(type) || !valid_text_field(first_text, DOTTIE_MAX_VALUE_BYTES) || !valid_text_field(second_text, DOTTIE_MAX_VALUE_BYTES)) {
         set_error(error_message, "invalid or oversized test GVariant text");
         return FALSE;
     }

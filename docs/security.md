@@ -17,7 +17,11 @@ for someone deciding whether to trust the tool with their configuration.
 | Recovery kit and checkpoints | yes, vault library; `account recovery` and `account verify` | restore driven end to end |
 | Vault export and import | yes, library only (`EncodeExportArchive`/`ReadExportArchive`); no command | a product export/import command |
 | Remote vault sync | no; `dottie plan` previews a local view bundle only | a sync command that publishes and reads a vault |
-| GNOME settings capture and apply | boundary only, opt-in cgo | the GNOME capture work to G04 |
+| GNOME settings capture and apply | selected-key capture library only, opt-in cgo; apply absent | real desktop validation at G04 |
+
+The opt-in GNOME capture boundary reads only explicitly selected keys and never copies a dconf database
+wholesale. The default backend refuses memory and any backend outside the persistent keyfile/dconf allowlist;
+synthetic native tests use temporary homes and isolated keyfile data, not real preferences.
 
 The CLI exposes target selection, `dottie plan`, and the `account` command group (`login`, `logout`, `status`,
 `bootstrap`, `enroll`, `recovery`, `verify`). The first three manage OAuth authorization only. No command

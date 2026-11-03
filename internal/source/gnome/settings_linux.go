@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	maxFieldBytes   = 4096
-	maxValueBytes   = 65536
-	maxObservedKeys = 64
+	maxFieldBytes      = 4096
+	maxModelFieldBytes = 255
+	maxPathBytes       = 4096
+	maxValueBytes      = 65536
+	maxObservedKeys    = 64
 )
 
 type Backend uint8
@@ -29,12 +31,26 @@ type Backend uint8
 const (
 	MemoryBackend Backend = iota + 1
 	NullBackend
+	DefaultBackend
+)
+
+var (
+	ErrBackendUnavailable = errors.New("no persistent default GSettings backend is available")
+	ErrSchemaNotFound     = errors.New("GSettings schema not found")
+	ErrKeyNotFound        = errors.New("GSettings key not found")
 )
 
 type Value struct {
 	Type    string
 	Text    string
 	Present bool
+}
+
+type UserValue struct {
+	Type     string
+	Text     string
+	Present  bool
+	Writable bool
 }
 
 type Snapshot struct {
@@ -50,19 +66,20 @@ type DrainResult struct {
 }
 
 type Settings struct {
-	mu     sync.Mutex
-	ptr    *C.DottieSettings
-	closed bool
+	mu           sync.Mutex
+	ptr          *C.DottieSettings
+	resolvedPath string
+	closed       bool
 }
 
 func Open(schemaDir, schemaID, path string, backend Backend, observedKeys []string) (*Settings, error) {
 	if err := validateField("schema directory", schemaDir, maxFieldBytes); err != nil {
 		return nil, err
 	}
-	if err := validateField("schema id", schemaID, maxFieldBytes); err != nil {
+	if err := validateField("schema id", schemaID, maxModelFieldBytes); err != nil {
 		return nil, err
 	}
-	if err := validateField("schema path", path, maxFieldBytes); err != nil {
+	if err := validateField("schema path", path, maxPathBytes); err != nil {
 		return nil, err
 	}
 	if backend != MemoryBackend && backend != NullBackend {
@@ -73,7 +90,7 @@ func Open(schemaDir, schemaID, path string, backend Backend, observedKeys []stri
 	}
 	seen := make(map[string]struct{}, len(observedKeys))
 	for _, key := range observedKeys {
-		if err := validateField("observed key", key, maxFieldBytes); err != nil {
+		if err := validateField("observed key", key, maxModelFieldBytes); err != nil {
 			return nil, err
 		}
 		if strings.ContainsRune(key, '\n') {
@@ -94,6 +111,16 @@ func Open(schemaDir, schemaID, path string, backend Backend, observedKeys []stri
 	return openNative(schemaDir, schemaID, path, backendKind, strings.Join(observedKeys, "\n"), false)
 }
 
+func OpenDefault(schemaID, path string) (*Settings, error) {
+	if err := validateField("schema id", schemaID, maxModelFieldBytes); err != nil {
+		return nil, err
+	}
+	if err := validateField("schema path", path, maxPathBytes); err != nil {
+		return nil, err
+	}
+	return openNative("", schemaID, path, C.int(DefaultBackend), "", false)
+}
+
 func validateField(name, value string, maximum int) error {
 	if len(value) > maximum || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
 		return fmt.Errorf("%s is invalid or exceeds %d bytes", name, maximum)
@@ -110,15 +137,31 @@ func openNative(schemaDir, schemaID, path string, backendKind C.int, observed st
 	defer C.free(unsafe.Pointer(cPath))
 	cObserved := C.CString(observed)
 	defer C.free(unsafe.Pointer(cObserved))
+	var openError C.int
 	var cError *C.char
-	ptr := C.dottie_settings_open(cSchemaDir, cSchemaID, cPath, backendKind, cObserved, cbool(makePeer), &cError)
+	ptr := C.dottie_settings_open(cSchemaDir, cSchemaID, cPath, backendKind, cObserved, cbool(makePeer), &openError, &cError)
 	if ptr == nil {
-		return nil, nativeError(cError, "open GSettings handle failed")
+		openErr := nativeError(cError, "open GSettings handle failed")
+		switch openError {
+		case C.DOTTIE_SETTINGS_OPEN_ERROR_SCHEMA_NOT_FOUND:
+			return nil, fmt.Errorf("%w: %s", ErrSchemaNotFound, openErr)
+		case C.DOTTIE_SETTINGS_OPEN_ERROR_BACKEND_UNAVAILABLE:
+			return nil, fmt.Errorf("%w: %s", ErrBackendUnavailable, openErr)
+		default:
+			return nil, openErr
+		}
 	}
 	if cError != nil {
 		C.dottie_free(unsafe.Pointer(cError))
 	}
-	return &Settings{ptr: ptr}, nil
+	cResolvedPath := C.dottie_settings_path(ptr)
+	if cResolvedPath == nil {
+		C.dottie_settings_close(ptr)
+		return nil, errors.New("resolved GSettings path is unavailable")
+	}
+	resolvedPath := C.GoString(cResolvedPath)
+	C.dottie_free(unsafe.Pointer(cResolvedPath))
+	return &Settings{ptr: ptr, resolvedPath: resolvedPath}, nil
 }
 
 func cbool(value bool) C.gboolean {
@@ -138,7 +181,7 @@ func nativeError(message *C.char, fallback string) error {
 }
 
 func (settings *Settings) Read(key string) (Snapshot, error) {
-	if err := validateField("key", key, maxFieldBytes); err != nil {
+	if err := validateField("key", key, maxModelFieldBytes); err != nil {
 		return Snapshot{}, err
 	}
 	settings.mu.Lock()
@@ -166,10 +209,10 @@ func (settings *Settings) Read(key string) (Snapshot, error) {
 }
 
 func (settings *Settings) Set(key, variantType, text string) error {
-	if err := validateField("key", key, maxFieldBytes); err != nil {
+	if err := validateField("key", key, maxModelFieldBytes); err != nil {
 		return err
 	}
-	if err := validateField("variant type", variantType, maxFieldBytes); err != nil {
+	if err := validateField("variant type", variantType, maxModelFieldBytes); err != nil {
 		return err
 	}
 	if err := validateField("variant text", text, maxValueBytes); err != nil {
@@ -197,7 +240,7 @@ func (settings *Settings) Set(key, variantType, text string) error {
 }
 
 func (settings *Settings) Reset(key string) error {
-	if err := validateField("key", key, maxFieldBytes); err != nil {
+	if err := validateField("key", key, maxModelFieldBytes); err != nil {
 		return err
 	}
 	settings.mu.Lock()
@@ -238,6 +281,46 @@ func (settings *Settings) Drain() (DrainResult, error) {
 		C.dottie_free(unsafe.Pointer(cError))
 	}
 	return result, nil
+}
+
+func (settings *Settings) ReadUser(key string) (UserValue, error) {
+	if err := validateField("key", key, maxModelFieldBytes); err != nil {
+		return UserValue{}, err
+	}
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	if settings.closed || settings.ptr == nil {
+		return UserValue{}, errors.New("GSettings handle is closed")
+	}
+	cKey := C.CString(key)
+	defer C.free(unsafe.Pointer(cKey))
+	var readError C.int
+	var cError *C.char
+	readValue := C.dottie_settings_read_user(settings.ptr, cKey, &readError, &cError)
+	if readValue == nil {
+		readErr := nativeError(cError, "read GSettings user value failed")
+		if readError == C.DOTTIE_SETTINGS_READ_ERROR_KEY_NOT_FOUND {
+			return UserValue{}, fmt.Errorf("%w: %s", ErrKeyNotFound, readErr)
+		}
+		return UserValue{}, readErr
+	}
+	defer C.dottie_user_read_free(readValue)
+	if C.GoString(readValue.resolved_path) != settings.resolvedPath {
+		return UserValue{}, errors.New("GSettings resolved path changed")
+	}
+	result := UserValue{Present: readValue.present != 0, Writable: readValue.writable != 0}
+	if result.Present {
+		result.Type = C.GoString(readValue.variant_type)
+		result.Text = C.GoString(readValue.text)
+	}
+	if cError != nil {
+		C.dottie_free(unsafe.Pointer(cError))
+	}
+	return result, nil
+}
+
+func (settings *Settings) Path() string {
+	return settings.resolvedPath
 }
 
 func (settings *Settings) Close() error {

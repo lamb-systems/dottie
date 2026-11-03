@@ -88,7 +88,7 @@ func (settings *Settings) queueTestWork(count uint) error {
 }
 
 func variantTextEqual(variantType, first, second string) (bool, error) {
-	if err := validateField("variant type", variantType, maxFieldBytes); err != nil {
+	if err := validateField("variant type", variantType, maxModelFieldBytes); err != nil {
 		return false, err
 	}
 	if err := validateField("first variant text", first, maxValueBytes); err != nil {
@@ -113,6 +113,26 @@ func variantTextEqual(variantType, first, second string) (bool, error) {
 
 type defaultSentinel struct {
 	ptr *C.DottieSentinel
+}
+
+func setUserValueForTest(settings *Settings, key, text string) error {
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	if settings.closed || settings.ptr == nil {
+		return errors.New("GSettings handle is closed")
+	}
+	cKey := C.CString(key)
+	defer C.free(unsafe.Pointer(cKey))
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+	var cError *C.char
+	if C.dottie_test_settings_set_user_value(settings.ptr, cKey, cText, &cError) == 0 {
+		return nativeError(cError, "seed native test value failed")
+	}
+	if cError != nil {
+		C.dottie_free(unsafe.Pointer(cError))
+	}
+	return nil
 }
 
 func newDefaultSentinel() (*defaultSentinel, error) {

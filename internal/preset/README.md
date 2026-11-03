@@ -7,11 +7,14 @@ they cannot contain commands, hooks, downloads, package requests, or consent ove
 
 `BuildPreview` validates caller-supplied presets, resolves file roots against the
 provided HOME and XDG paths, reports the destination's effective default mode, and
-performs no filesystem mutation or config write. GNOME presets retain their catalog
-information but return a structured `ErrSourceNotCapturable` reason until the GNOME capture work; a
-preset cannot report whether anything is captured locally.
+performs no filesystem mutation or config write. The selected-key GNOME capture
+library exists, but GNOME presets retain their catalog information and return a
+structured `ErrSourceNotCapturable` reason until DOT-G03 defines supported preset key
+selection. Catalog data cannot select capture keys or report whether anything is
+captured locally; no CLI wiring is provided.
 
-`Materialize` returns a configuration proposal and never writes it. Each new target has
+`Materialize` returns a configuration proposal and never writes it. GNOME materialization
+remains unsupported because presets do not have key-selection authority. Each new target has
 an empty mode and inherits the destination default, which may be `auto-apply`; presets
 cannot grant or widen consent. Proposed roots pass both `config.CheckAddition` and
 `config.Config.Validate`. Existing identical logical roots are no-ops that preserve
