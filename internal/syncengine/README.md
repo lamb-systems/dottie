@@ -3,8 +3,9 @@
 `Reconcile` is a pure, deterministic decision function. It consumes an explicit `BaseView`, a
 `LocalView`, remote entries, and caller-supplied validated target bindings. It performs no I/O,
 uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan. The
-separate journaled `Apply` consumer accepts only supported file operations and does not change the
-reconciliation function or authorize target roots.
+separate journaled `Apply` consumer accepts supported file operations and library-level GNOME
+settings set/reset with a supplied backend; it does not change the reconciliation function or
+authorize target roots.
 
 ## Input and ownership
 
@@ -52,11 +53,13 @@ unknown or unmatched entry remains, and `unresolved_entries` gives the count. Th
 then a lower bound over resolved entries, not a constructed candidate snapshot or a promise about
 the remote.
 
-The current observation model cannot express a reset: `ObservationPresent` accepts only present
-file or setting entries, and a `SettingReset` is rejected. Reset is therefore not a preview action
-in v1. Unsupported file kinds are likewise rejected during model validation before a reconciliation
-decision exists, so unsupported is not a preview outcome here. A later model/reconciler change must
-make each state representable before preview can distinguish it. This pure layer does not inspect
+An explicit GNOME reset is represented as an `ObservationPresent` carrying a `SettingReset` entry,
+while present file observations retain their existing validation. `BuildPreview` treats present and
+reset settings as transferable candidates and can represent reset-to-present or present-to-reset
+upload/download changes without retaining a setting value in the preview. The journaled apply consumer
+accepts supported file operations and library-level GNOME setting set/reset when the caller supplies a
+settings backend; CLI/preset activation remains later work. Unsupported file kinds are rejected during model validation before a reconciliation
+decision exists, so unsupported is not a preview outcome here. This pure layer does not inspect
 target roots, so it cannot infer a disappeared-root risk from supplied decisions. The CLI's JSON
 bundle is only a caller-supplied seam; it does not make capture or synchronization operational.
 
@@ -169,14 +172,22 @@ GNOME target MUST list every key it did not successfully read in `LocalView.Unkn
 neither in `Entries` nor in `Unknown` is treated as known-absent and can drive a deletion, which is
 correct only if the caller's observation really covered it. This is the contract L10 relies on.
 
-## Journaled filesystem apply
+## Journaled apply
 
 `Apply` consumes the content-free preview together with caller-resolved destination roots, an exact
-set of postimage bytes/digests/modes for create and change entries, a local `ModePolicy`, and an
-injected filesystem boundary. It refuses settings entries, directories, symlinks, root deletion,
-unmatched content and unsupported actions before writing a journal row. The mode policy has a
-restrictive `0600` default and optional per-target overrides; an incoming content mode must match
-that local choice and is never transplanted.
+set of postimage bytes/digests/modes for file create/change entries, a local `ModePolicy`, an
+injected filesystem boundary, and—when the preview contains GNOME settings—an exact set of
+canonicalized setting postimages plus a `SettingsBackend`. It refuses directories, symlinks, root
+deletion, unmatched content and unsupported actions before writing a journal row. File mode policy
+has a restrictive `0600` default and optional per-target overrides; an incoming content mode must
+match that local choice and is never transplanted.
+
+Settings are observed and precondition-checked, canonicalized against the schema key, journaled with
+a small typed-value backup, rechecked, set or reset, synchronized by the adapter, and read back
+exactly. A failure stops the sequence; earlier applied entries remain journaled. `PartialApplyError`
+reports the applied prefix and the failed entry. Recovery and rollback have settings-aware variants;
+the file-only functions remain wrappers with a nil settings backend. Pruning an eligible setting
+backup clears the journal's stored value fields in the same transaction.
 
 Before acting, apply observes all requested paths and compares each available preview digest and
 mode; it repeats the comparison immediately before each journaled operation. The filesystem operation
@@ -207,8 +218,11 @@ for the same destination, and retains the backup. Rollback intent is persisted b
 interrupted or indeterminate restores are not retried as successful restores and their backups are
 not expired. Each restore is verified against the recorded preimage before being marked rolled-back.
 Verified rolled-back material is pruned; verified applied backups expire after seven days. Failed
-and indeterminate backups are never pruned. The global rollback-material
-limit is 256 MiB until targets are associated with vaults; an apply that would exceed it fails with
+and indeterminate backups are never pruned. The state journal's setting foundations define
+`setting-set`, `setting-reset` and `setting-read-back` stages and enumerate journal rows in SQLite
+`rowid` insertion order. Pruning an eligible setting backup atomically detaches the backup and clears
+its preimage/postimage value type and text fields; unresolved rows retain their recovery material.
+The global rollback-material limit is 256 MiB until targets are associated with vaults; an apply that would exceed it fails with
 a typed error naming the entries holding existing material, and no existing backup is dropped to
 make room. Age cleanup and bound checks use the injected clock. If a future case is unclear, retain
 the backup rather than deleting it on a judgment call.

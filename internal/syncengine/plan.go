@@ -374,7 +374,7 @@ func presentEntry(entry *model.Entry) bool {
 	if entry.File != nil {
 		return entry.File.State == model.FilePresent
 	}
-	return entry.Setting != nil && entry.Setting.State == model.SettingPresent
+	return entry.Setting != nil && (entry.Setting.State == model.SettingPresent || entry.Setting.State == model.SettingReset)
 }
 
 func withDecisionReason(entry PreviewEntry, decision Decision) PreviewEntry {

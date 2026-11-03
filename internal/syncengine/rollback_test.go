@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -342,4 +343,254 @@ func TestRollbackMaterialLimitNamesExistingHolders(t *testing.T) {
 	assert.Equal(t, int64(4), limitError.RequestedBytes)
 	assert.Equal(t, int64(6), limitError.LimitBytes)
 	assert.Equal(t, []string{"journal-file"}, limitError.Entries)
+}
+
+func TestRecoverInterruptedSettingsClassifications(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		current    SettingValue
+		locked     bool
+		readError  bool
+		nilBackend bool
+		want       string
+	}{
+		{name: "preimage", current: SettingValue{Present: true, Type: "s", Text: "before"}, want: "failed"},
+		{name: "postimage", current: SettingValue{Present: true, Type: "s", Text: "after"}, want: "indeterminate"},
+		{name: "neither", current: SettingValue{Present: true, Type: "s", Text: "other"}, want: "indeterminate"},
+		{name: "locked", current: SettingValue{Present: true, Type: "s", Text: "before"}, locked: true, want: "indeterminate"},
+		{name: "read error", current: SettingValue{Present: true, Type: "s", Text: "before"}, readError: true, want: "indeterminate"},
+		{name: "nil backend", current: SettingValue{Present: true, Type: "s", Text: "before"}, nilBackend: true, want: "indeterminate"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := applyTestStore(t)
+			key := settingTestKey("settings")
+			appendSettingJournal(t, store, "pending-setting", key, model.SettingPresent, "s", "before", model.SettingPresent, "s", "after", "pending", 100)
+			backend := newFakeSettingsBackend()
+			backend.values[key] = test.current
+			backend.locked = test.locked
+			if test.readError {
+				backend.observeErrors[1] = errors.New("read failed")
+			}
+			var selected SettingsBackend = backend
+			if test.nilBackend {
+				selected = nil
+			}
+			report, err := RecoverInterruptedWithSettings(context.Background(), store, nil, selected, func() time.Time { return time.Unix(100, 0) })
+			require.NoError(t, err)
+			require.Len(t, report.Entries, 1)
+			assert.Equal(t, test.want, report.Entries[0].Outcome)
+			assert.Equal(t, key, report.Entries[0].Key)
+			assert.Zero(t, backend.writeCount)
+			rows, err := store.JournalEntries(context.Background(), key.TargetID)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, test.want, rows[0].State)
+		})
+	}
+}
+
+func TestInterruptedMixedApplyRecoversPendingSettingAfterAppliedFile(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	writeApplyFile(t, filepath.Join(root, "file"), []byte("old"), 0o600)
+	fileEntry, filePost := applyEntry("file", PreviewChange, []byte("new"), 0o600, []byte("old"), 0o600)
+	key := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+	before := backend.values[key]
+	settingEntry := settingTestEntry(key, &before)
+	postimage := settingTestPostimage(key, model.SettingPresent, "s", "after")
+	backend.beforeSet = func() { panic("interrupted before setting write") }
+	request := ApplyRequest{
+		Preview: Preview{Targets: []PreviewTarget{
+			{ID: "target", Entries: []PreviewEntry{fileEntry}},
+			{ID: "settings", Entries: []PreviewEntry{settingEntry}},
+		}, Complete: true},
+		Roots: map[string]string{"target": root}, ModePolicy: ModePolicy{Default: 0o600}, Content: []Postimage{filePost},
+		Settings: backend, SettingPostimages: []SettingPostimage{postimage}, Now: func() time.Time { return time.Unix(100, 0) },
+	}
+	assert.Panics(t, func() { _ = Apply(context.Background(), store, request) })
+	assert.Equal(t, []byte("new"), readApplyFile(t, filepath.Join(root, "file")))
+	report, err := RecoverInterruptedWithSettings(context.Background(), store, nil, backend, request.Now)
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 1)
+	assert.Equal(t, key, report.Entries[0].Key)
+	assert.Equal(t, "failed", report.Entries[0].Outcome)
+	assert.Equal(t, SettingValue{Present: true, Type: "s", Text: "before", Writable: true}, mustObserveSetting(t, backend, key))
+}
+
+func TestRollbackSettingsPresentResetAndSameTimestampReverseOrder(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		before     SettingValue
+		postState  model.SettingState
+		postType   string
+		postText   string
+		wantAbsent bool
+	}{
+		{name: "present to reset", before: SettingValue{Present: true, Type: "s", Text: "before"}, postState: model.SettingReset, wantAbsent: true},
+		{name: "reset to present", before: SettingValue{}, postState: model.SettingPresent, postType: "s", postText: "after"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := applyTestStore(t)
+			key := settingTestKey("settings")
+			backend := newFakeSettingsBackend()
+			backend.values[key] = test.before
+			before := test.before
+			entry := settingTestEntry(key, &before)
+			postimage := settingTestPostimage(key, test.postState, test.postType, test.postText)
+			require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+			report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+			require.NoError(t, err)
+			require.Len(t, report.Entries, 1)
+			assert.Equal(t, "rolled-back", report.Entries[0].Outcome)
+			assert.Equal(t, key, report.Entries[0].Key)
+			current := mustObserveSetting(t, backend, key)
+			assert.Equal(t, test.before.Present, current.Present)
+			if test.before.Present {
+				assert.Equal(t, test.before.Type, current.Type)
+				assert.Equal(t, test.before.Text, current.Text)
+			} else {
+				assert.False(t, current.Present)
+			}
+		})
+	}
+
+	store := applyTestStore(t)
+	key := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "A"}
+	for _, transition := range []struct{ before, after string }{{"A", "B"}, {"B", "C"}} {
+		before := SettingValue{Present: true, Type: "s", Text: transition.before}
+		entry := settingTestEntry(key, &before)
+		postimage := settingTestPostimage(key, model.SettingPresent, "s", transition.after)
+		require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+	}
+	report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 2)
+	assert.Equal(t, []string{"rolled-back", "rolled-back"}, []string{report.Entries[0].Outcome, report.Entries[1].Outcome})
+	assert.Equal(t, "A", mustObserveSetting(t, backend, key).Text)
+}
+
+func TestRollbackSettingsAliasBlockingNilBackendAndRecheck(t *testing.T) {
+	t.Run("alias blocking", func(t *testing.T) {
+		store := applyTestStore(t)
+		key := settingTestKey("settings")
+		alias := settingTestKey("settings-alias")
+		appendSettingJournal(t, store, "older-setting", key, model.SettingPresent, "s", "A", model.SettingPresent, "s", "B", "applied", 100)
+		appendSettingJournal(t, store, "newer-alias", alias, model.SettingPresent, "s", "B", model.SettingPresent, "s", "C", "applied", 100)
+		backend := newFakeSettingsBackend()
+		backend.values[alias] = SettingValue{Present: true, Type: "s", Text: "B"}
+		report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 2)
+		assert.Equal(t, "skipped-newer-edit", report.Entries[0].Outcome)
+		assert.Equal(t, "skipped-newer-edit", report.Entries[1].Outcome)
+		assert.Zero(t, backend.writeCount)
+	})
+
+	t.Run("nil backend", func(t *testing.T) {
+		store := applyTestStore(t)
+		key := settingTestKey("settings")
+		appendSettingJournal(t, store, "setting-no-backend", key, model.SettingPresent, "s", "before", model.SettingPresent, "s", "after", "applied", 100)
+		report, err := RollbackAppliedWithSettings(context.Background(), store, nil, nil, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
+	})
+
+	t.Run("postimage changes after rollback intent", func(t *testing.T) {
+		store := applyTestStore(t)
+		key := settingTestKey("settings")
+		backend := newFakeSettingsBackend()
+		backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+		before := backend.values[key]
+		entry := settingTestEntry(key, &before)
+		postimage := settingTestPostimage(key, model.SettingPresent, "s", "after")
+		require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+		backend.observeCalls = 0
+		backend.writeCount = 0
+		backend.observeHook = func(call int, observedKey model.EntryKey) {
+			if call == 2 {
+				backend.setNative(observedKey, SettingValue{Present: true, Type: "s", Text: "user edit"})
+			}
+		}
+		report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "skipped-newer-edit", report.Entries[0].Outcome)
+		assert.Equal(t, "user edit", mustObserveSetting(t, backend, key).Text)
+		assert.Zero(t, backend.writeCount)
+	})
+}
+
+func TestRollbackBlocksOlderSettingBehindNewerIndeterminateHistory(t *testing.T) {
+	store := applyTestStore(t)
+	key := settingTestKey("settings")
+	appendSettingJournal(t, store, "older-setting", key, model.SettingPresent, "s", "A", model.SettingPresent, "s", "B", "applied", 100)
+	newer := appendSettingJournal(t, store, "newer-indeterminate", key, model.SettingPresent, "s", "C", model.SettingPresent, "s", "B", "", 101)
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), newer.ID, "pending", "indeterminate", state.JournalStageIndeterminate))
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "B"}
+	report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 1)
+	assert.Equal(t, "skipped-newer-edit", report.Entries[0].Outcome)
+	assert.Equal(t, "B", mustObserveSetting(t, backend, key).Text)
+	assert.Zero(t, backend.writeCount)
+}
+
+func TestRollbackSettingPersistsIntentBeforeMutationAndRejectsIntentFailure(t *testing.T) {
+	t.Run("intent before mutation", func(t *testing.T) {
+		store := applyTestStore(t)
+		key := settingTestKey("settings")
+		backend := newFakeSettingsBackend()
+		backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+		before := backend.values[key]
+		entry := settingTestEntry(key, &before)
+		postimage := settingTestPostimage(key, model.SettingPresent, "s", "after")
+		require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+		backend.beforeSet = func() {
+			rows, err := store.JournalEntries(context.Background(), key.TargetID)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, state.JournalStageRollbackPending, rows[0].Stage)
+		}
+		report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "rolled-back", report.Entries[0].Outcome)
+	})
+
+	t.Run("intent write failure", func(t *testing.T) {
+		base := t.TempDir()
+		paths := platform.Paths{Home: filepath.Join(base, "home"), StateHome: filepath.Join(base, "state")}
+		store, err := state.Open(paths)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = store.Close() })
+		key := settingTestKey("settings")
+		require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{ID: key.TargetID, Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1}))
+		appendSettingJournal(t, store, "intent-failure", key, model.SettingPresent, "s", "before", model.SettingPresent, "s", "after", "applied", 100)
+		dbPath := filepath.Join(paths.AppStateDir(), "state.db")
+		db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
+		require.NoError(t, err)
+		_, err = db.Exec("CREATE TRIGGER reject_rollback_intent BEFORE UPDATE OF stage ON apply_journal WHEN NEW.stage = 'rollback-pending' BEGIN SELECT RAISE(ABORT, 'intent rejected'); END")
+		require.NoError(t, err)
+		require.NoError(t, db.Close())
+		backend := newFakeSettingsBackend()
+		backend.values[key] = SettingValue{Present: true, Type: "s", Text: "after"}
+		report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
+		assert.Zero(t, backend.writeCount)
+		assert.Equal(t, "after", mustObserveSetting(t, backend, key).Text)
+
+		report, err = RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+		require.NoError(t, err)
+		require.Len(t, report.Entries, 1)
+		assert.Equal(t, "indeterminate", report.Entries[0].Outcome)
+		assert.Zero(t, backend.writeCount)
+	})
 }

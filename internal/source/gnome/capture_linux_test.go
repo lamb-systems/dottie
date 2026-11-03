@@ -238,11 +238,11 @@ func TestCaptureValidatesRequestBeforeOpening(t *testing.T) {
 	assert.Zero(t, opens, "invalid requests must be rejected before settings I/O")
 }
 
-func TestCaptureRejectsFixedPathAndRequiresRelocatablePath(t *testing.T) {
+func TestCaptureRejectsMismatchedFixedPathAndRequiresRelocatablePath(t *testing.T) {
 	schemas := schemaDirectory(t)
 	memoryCaptureOpener(t, schemas)
 	for _, key := range []KeyRef{
-		{SchemaID: "org.dottie.Test", Path: "/org/dottie/test/", Key: "enabled"},
+		{SchemaID: "org.dottie.Test", Path: "/org/dottie/mismatch/", Key: "enabled"},
 		{SchemaID: "org.dottie.Test.Relocatable", Key: "label"},
 	} {
 		result, err := Capture(context.Background(), CaptureRequest{TargetID: "desktop", Keys: []KeyRef{key}})

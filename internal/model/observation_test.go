@@ -13,6 +13,8 @@ func TestObservationValidation(t *testing.T) {
 
 	presentSetting := Entry{TargetID: "settings", Setting: &SettingEntry{SchemaID: "org.example.Desktop", Path: "/", Key: "enabled", State: SettingPresent, Value: &VariantValue{Type: "b", Text: "true"}}}
 	assert.NoError(t, (Observation{State: ObservationPresent, Identity: presentSetting.Identity(), Entry: &presentSetting}).Validate())
+	resetSetting := Entry{TargetID: "settings", Setting: &SettingEntry{SchemaID: "org.example.Desktop", Path: "/", Key: "enabled", State: SettingReset}}
+	assert.NoError(t, (Observation{State: ObservationPresent, Identity: resetSetting.Identity(), Entry: &resetSetting}).Validate())
 
 	for _, state := range []ObservationState{ObservationMissing, ObservationUnknown, ObservationUntracked} {
 		t.Run(string(state), func(t *testing.T) {
@@ -28,7 +30,7 @@ func TestPresentObservationRequiresMatchingPresentEntry(t *testing.T) {
 	invalid := []Observation{
 		{State: ObservationPresent, Identity: identity},
 		{State: ObservationPresent, Identity: identity, Entry: &deleted},
-		{State: ObservationPresent, Identity: reset.Identity(), Entry: &reset},
+		{State: ObservationPresent, Identity: identity, Entry: &reset},
 		{State: ObservationPresent, Identity: identity, Entry: &Entry{TargetID: "files", File: &FileEntry{Path: "other", State: FilePresent, Kind: FileRegular, Content: []byte{}}}},
 		{State: ObservationPresent, Identity: identity, Entry: &Entry{TargetID: "files", File: &FileEntry{Path: "config", State: FilePresent, Kind: FileRegular}}},
 		{State: ObservationPresent, Identity: EntryKey{TargetID: "files", Source: SourceFiles, FilePath: "../invalid"}, Entry: &deleted},

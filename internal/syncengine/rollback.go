@@ -31,6 +31,7 @@ func (e *RollbackMaterialLimitError) Error() string {
 
 type JournalResult struct {
 	JournalID string
+	Key       model.EntryKey
 	TargetID  string
 	FilePath  string
 	Outcome   string
@@ -48,6 +49,10 @@ type RollbackReport struct {
 }
 
 func RecoverInterrupted(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, now func() time.Time) (RecoveryReport, error) {
+	return RecoverInterruptedWithSettings(ctx, store, filesystem, nil, now)
+}
+
+func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, settings SettingsBackend, now func() time.Time) (RecoveryReport, error) {
 	if store == nil {
 		return RecoveryReport{}, errors.New("recovery state store is required")
 	}
@@ -64,6 +69,14 @@ func RecoverInterrupted(ctx context.Context, store *state.Store, filesystem file
 	}
 	for _, entry := range entries {
 		result := journalResult(entry)
+		if entry.Identity.Source == model.SourceGNOME {
+			result, err = recoverPendingSetting(ctx, store, settings, entry, result)
+			if err != nil {
+				return report, err
+			}
+			report.Entries = append(report.Entries, result)
+			continue
+		}
 		if err := verifyJournalRoot(filesystem, entry); err != nil {
 			if transitionErr := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); transitionErr != nil {
 				return report, errors.Join(err, transitionErr)
@@ -116,7 +129,37 @@ func RecoverInterrupted(ctx context.Context, store *state.Store, filesystem file
 	return report, nil
 }
 
+func recoverPendingSetting(ctx context.Context, store *state.Store, settings SettingsBackend, entry state.JournalEntry, result JournalResult) (JournalResult, error) {
+	resolve := func(outcome, reason, stage string) (JournalResult, error) {
+		if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", outcome, stage); err != nil {
+			return result, err
+		}
+		result.Outcome = outcome
+		result.Reason = reason
+		return result, nil
+	}
+	if settings == nil {
+		return resolve("indeterminate", "settings backend is unavailable", state.JournalStageIndeterminate)
+	}
+	observed, err := settings.Observe(ctx, entry.Identity)
+	if err != nil || !observed.Writable {
+		return resolve("indeterminate", "setting could not be observed or is locked", state.JournalStageIndeterminate)
+	}
+	switch {
+	case settingValueMatchesFingerprint(observed, entry.Identity, entry.Postimage):
+		return resolve("indeterminate", "setting matches the postimage but cannot be distinguished from an identical user edit", state.JournalStageIndeterminate)
+	case settingValueMatchesFingerprint(observed, entry.Identity, entry.Preimage):
+		return resolve("failed", "setting still matches preimage", state.JournalStagePrecondition)
+	default:
+		return resolve("indeterminate", "setting matches neither preimage nor postimage", state.JournalStageIndeterminate)
+	}
+}
+
 func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, now func() time.Time) (RollbackReport, error) {
+	return RollbackAppliedWithSettings(ctx, store, filesystem, nil, now)
+}
+
+func RollbackAppliedWithSettings(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, settings SettingsBackend, now func() time.Time) (RollbackReport, error) {
 	if store == nil {
 		return RollbackReport{}, errors.New("rollback state store is required")
 	}
@@ -139,33 +182,41 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 	blockedDestinations := make(map[string]bool)
 	for index := len(entries) - 1; index >= 0; index-- {
 		entry := entries[index]
-		if entry.State != "applied" {
-			continue
-		}
-		result := journalResult(entry)
-		destination := entry.RootPath + "\x00" + entry.DestinationPath
-		if blockedDestinations[destination] {
-			result.Outcome = "skipped-newer-edit"
-			result.Reason = "newer journal history was left unresolved; older history was not restored"
-			report.Entries = append(report.Entries, result)
-			continue
-		}
+		destination := rollbackIdentity(entry)
 		if entry.Stage == state.JournalStageRollbackSkipped {
 			blockedDestinations[destination] = true
-			result.Outcome = "skipped-newer-edit"
-			result.Reason = "a previous rollback preserved a newer edit; this outcome is durable"
-			report.Entries = append(report.Entries, result)
+			if entry.State == "applied" {
+				result := journalResult(entry)
+				result.Outcome = "skipped-newer-edit"
+				result.Reason = "a previous rollback preserved a newer edit; this outcome is durable"
+				report.Entries = append(report.Entries, result)
+			}
 			continue
 		}
-		if entry.Stage == state.JournalStageRollbackPending || entry.Stage == state.JournalStageRollbackIndeterminate || entry.Stage != state.JournalStageVerified {
-			if entry.Stage == state.JournalStageRollbackPending || entry.Stage == state.JournalStageVerified {
+		if entry.State == "indeterminate" {
+			blockedDestinations[destination] = true
+			continue
+		}
+		if entry.State == "applied" && (entry.Stage == state.JournalStageRollbackPending || entry.Stage == state.JournalStageRollbackIndeterminate || entry.Stage != state.JournalStageVerified) {
+			if entry.Stage == state.JournalStageRollbackPending {
 				if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
 					return report, err
 				}
 			}
 			blockedDestinations[destination] = true
+			result := journalResult(entry)
 			result.Outcome = "indeterminate"
 			result.Reason = "a previous or unresolved rollback attempt has no durable completion proof"
+			report.Entries = append(report.Entries, result)
+			continue
+		}
+		if entry.State != "applied" {
+			continue
+		}
+		result := journalResult(entry)
+		if blockedDestinations[destination] {
+			result.Outcome = "skipped-newer-edit"
+			result.Reason = "newer journal history was left unresolved; older history was not restored"
 			report.Entries = append(report.Entries, result)
 			continue
 		}
@@ -178,6 +229,12 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 			result.Reason = reason
 			report.Entries = append(report.Entries, result)
 			return nil
+		}
+		if entry.Identity.Source == model.SourceGNOME {
+			if err := rollbackSettingEntry(ctx, store, settings, entry, currentTime, destination, blockedDestinations, &report, result); err != nil {
+				return report, err
+			}
+			continue
 		}
 		if entry.BackupRef == "" {
 			result.Outcome = "applied"
@@ -241,8 +298,15 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 			report.Entries = append(report.Entries, result)
 			continue
 		}
-		if err := store.BeginJournalRollback(ctx, entry.ID); err != nil {
-			return report, err
+		if err := store.BeginJournalRollbackWithBackup(ctx, entry.ID, entry.BackupRef); err != nil {
+			if markErr := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); markErr != nil {
+				return report, errors.Join(err, markErr)
+			}
+			blockedDestinations[destination] = true
+			result.Outcome = "indeterminate"
+			result.Reason = "rollback backup was detached before intent could be persisted"
+			report.Entries = append(report.Entries, result)
+			continue
 		}
 		if err := restorePreimage(filesystem, entry, backup); err != nil {
 			var precondition *files.PreconditionError
@@ -298,7 +362,125 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 }
 
 func journalResult(entry state.JournalEntry) JournalResult {
-	return JournalResult{JournalID: entry.ID, TargetID: entry.Identity.TargetID, FilePath: entry.Identity.FilePath}
+	return JournalResult{JournalID: entry.ID, Key: entry.Identity, TargetID: entry.Identity.TargetID, FilePath: entry.Identity.FilePath}
+}
+
+func rollbackIdentity(entry state.JournalEntry) string {
+	if entry.Identity.Source == model.SourceGNOME {
+		return entry.Identity.SchemaID + "\x00" + entry.Identity.SettingsPath + "\x00" + entry.Identity.SettingKey
+	}
+	return entry.RootPath + "\x00" + entry.DestinationPath
+}
+
+func rollbackSettingEntry(ctx context.Context, store *state.Store, settings SettingsBackend, entry state.JournalEntry, now time.Time, destination string, blocked map[string]bool, report *RollbackReport, result JournalResult) error {
+	indeterminate := func(reason string) error {
+		if err := store.RecordJournalRollbackIndeterminate(ctx, entry.ID); err != nil {
+			return err
+		}
+		blocked[destination] = true
+		result.Outcome = "indeterminate"
+		result.Reason = reason
+		report.Entries = append(report.Entries, result)
+		return nil
+	}
+	skipped := func(reason string) error {
+		if err := store.RecordJournalRollbackSkipped(ctx, entry.ID); err != nil {
+			return err
+		}
+		blocked[destination] = true
+		result.Outcome = "skipped-newer-edit"
+		result.Reason = reason
+		report.Entries = append(report.Entries, result)
+		return nil
+	}
+	if settings == nil {
+		return indeterminate("settings backend is unavailable")
+	}
+	if entry.BackupRef == "" {
+		result.Outcome = "applied"
+		result.Reason = "rollback backup expired or was already pruned"
+		report.Entries = append(report.Entries, result)
+		return nil
+	}
+	observed, err := settings.Observe(ctx, entry.Identity)
+	if err != nil || !observed.Writable {
+		return indeterminate("setting could not be observed or is locked")
+	}
+	if observed.Present {
+		if _, _, err := settingFingerprint(observed, entry.Identity); err != nil {
+			return indeterminate("setting observation is invalid")
+		}
+	}
+	if !settingValueMatchesFingerprint(observed, entry.Identity, entry.Postimage) {
+		return skipped("setting no longer matches intended postimage; left unchanged")
+	}
+	backup, err := store.Payload(entry.BackupRef)
+	if err != nil {
+		return indeterminate("rollback backup is unavailable")
+	}
+	if !settingBackupMatchesPreimage(backup, entry.Preimage) {
+		return indeterminate("rollback backup does not match recorded preimage")
+	}
+	if err := store.BeginJournalRollbackWithBackup(ctx, entry.ID, entry.BackupRef); err != nil {
+		return indeterminate("rollback backup was detached before intent could be persisted")
+	}
+	observed, err = settings.Observe(ctx, entry.Identity)
+	if err != nil || !observed.Writable {
+		return indeterminate("setting could not be rechecked or is locked before restore")
+	}
+	if observed.Present {
+		if _, _, err := settingFingerprint(observed, entry.Identity); err != nil {
+			return indeterminate("setting recheck is invalid")
+		}
+	}
+	if !settingValueMatchesFingerprint(observed, entry.Identity, entry.Postimage) {
+		return skipped("setting changed before restore; left unchanged")
+	}
+	if entry.Preimage.State == string(model.SettingPresent) {
+		err = settings.Set(ctx, entry.Identity, entry.Preimage.ValueType, entry.Preimage.ValueText)
+	} else if entry.Preimage.State == string(model.SettingReset) {
+		err = settings.Reset(ctx, entry.Identity)
+	} else {
+		err = errors.New("journal preimage has an unsupported setting state")
+	}
+	if err != nil {
+		return indeterminate("setting restore failed")
+	}
+	verified, err := settings.Observe(ctx, entry.Identity)
+	if err != nil || !settingValueMatchesFingerprint(verified, entry.Identity, entry.Preimage) {
+		return indeterminate("restored setting did not verify against preimage")
+	}
+	if err := store.TransitionJournalEntry(ctx, entry.ID, "applied", "rolled-back", state.JournalStageRolledBack); err != nil {
+		return err
+	}
+	pruned, err := store.PruneJournalBackupIfEligible(ctx, entry.ID, now)
+	if err != nil {
+		result.Outcome = "rolled-back"
+		result.Reason = "restore verified; backup retained because pruning failed"
+		report.Entries = append(report.Entries, result)
+		return err
+	}
+	result.Outcome = "rolled-back"
+	if pruned {
+		result.Reason = "backup restored and verified"
+		report.Pruned = append(report.Pruned, entry.ID)
+	} else {
+		result.Reason = "backup restored and verified; backup retained for a retained recovery point"
+	}
+	report.Entries = append(report.Entries, result)
+	return nil
+}
+
+func settingBackupMatchesPreimage(backup []byte, preimage state.Fingerprint) bool {
+	if preimage.State == string(model.SettingReset) {
+		return len(backup) == 0 && preimage == state.NewSettingFingerprint(model.SettingReset, "", "")
+	}
+	if preimage.State != string(model.SettingPresent) {
+		return false
+	}
+	payload := []byte(preimage.ValueType + "\x00" + preimage.ValueText)
+	digest := sha256.Sum256(payload)
+	return len(payload) == len(backup) && string(payload) == string(backup) && preimage == state.NewSettingFingerprint(model.SettingPresent, preimage.ValueType, preimage.ValueText) && hex.EncodeToString(digest[:]) == preimage.Digest
 }
 
 func verifyJournalRoot(filesystem files.ApplyFileSystem, entry state.JournalEntry) error {

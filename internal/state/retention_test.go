@@ -587,6 +587,33 @@ func storeUnreferencedPayload(t *testing.T, store *Store, payload []byte) string
 	return reference
 }
 
+func TestRetentionPruneRedactsSettingValues(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	ctx := context.Background()
+	require.NoError(t, store.PutTarget(ctx, TargetDescriptor{ID: "settings", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1}))
+	key := model.EntryKey{TargetID: "settings", Source: model.SourceGNOME, SchemaID: "org.example.Settings", SettingsPath: "/", SettingKey: "enabled"}
+	preimage := NewSettingFingerprint(model.SettingPresent, "s", "before")
+	postimage := NewSettingFingerprint(model.SettingPresent, "s", "after")
+	entry, err := store.AppendJournal(ctx, JournalEntry{
+		ID: "setting-aged", Operation: "setting-set", State: "pending", Stage: JournalStagePending,
+		Identity: key, Preimage: preimage, Postimage: postimage, CreatedAt: 10,
+	}, []byte("s\x00before"))
+	require.NoError(t, err)
+	require.NoError(t, store.TransitionJournalEntry(ctx, entry.ID, "pending", "applied", JournalStageVerified))
+	request := configureRetentionPruneOwner(t, store, entry.BackupRef, true)
+	report, err := store.ApplyRetentionPrune(ctx, request, true)
+	require.NoError(t, err)
+	assert.Contains(t, report.PrunedBackupIDs, entry.ID)
+	rows, err := store.JournalEntries(ctx, "settings")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].BackupRef)
+	assert.Empty(t, rows[0].Preimage.ValueType)
+	assert.Empty(t, rows[0].Preimage.ValueText)
+	assert.Empty(t, rows[0].Postimage.ValueType)
+	assert.Empty(t, rows[0].Postimage.ValueText)
+}
+
 func TestRetentionPrunePlanSortsPayloads(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	ctx := context.Background()

@@ -168,8 +168,12 @@ func TestOpenDefaultSubprocessHelper(t *testing.T) {
 		require.Equal(t, "/org/dottie/test/", captured.Entries[0].Setting.Path)
 		require.Equal(t, model.SettingPresent, captured.Entries[0].Setting.State)
 		require.Equal(t, &model.VariantValue{Type: "s", Text: "'isolated-keyfile'"}, captured.Entries[0].Setting.Value)
-		_, err = OpenDefault("org.dottie.Test", "/org/dottie/test/")
-		require.Error(t, err, "fixed-path schema accepted an explicit path")
+		fixed, err := OpenDefault("org.dottie.Test", "/org/dottie/test/")
+		require.NoError(t, err, "fixed-path schema rejected its resolved path")
+		require.Equal(t, "/org/dottie/test/", fixed.Path())
+		require.NoError(t, fixed.Close())
+		_, err = OpenDefault("org.dottie.Test", "/org/dottie/other/")
+		require.Error(t, err, "fixed-path schema accepted a mismatched path")
 		relocatable, err := OpenDefault("org.dottie.Test.Relocatable", "/org/dottie/instance/")
 		require.NoError(t, err)
 		require.Equal(t, "/org/dottie/instance/", relocatable.Path())
@@ -489,6 +493,13 @@ func TestNativeFieldBoundsAndRelocatablePath(t *testing.T) {
 	_, err = Open(schemas, strings.Repeat("s", maxModelFieldBytes+1), "", MemoryBackend, nil)
 	require.Error(t, err)
 
+	fixed, err := Open(schemas, "org.dottie.Test", "/org/dottie/test/", MemoryBackend, nil)
+	require.NoError(t, err)
+	require.Equal(t, "/org/dottie/test/", fixed.Path())
+	require.NoError(t, fixed.Close())
+	_, err = Open(schemas, "org.dottie.Test", "/org/dottie/other/", MemoryBackend, nil)
+	require.Error(t, err)
+
 	path := "/" + strings.Repeat("a", maxPathBytes-2) + "/"
 	relocatable, err := Open(schemas, "org.dottie.Test.Relocatable", path, MemoryBackend, nil)
 	require.NoError(t, err)
@@ -496,6 +507,41 @@ func TestNativeFieldBoundsAndRelocatablePath(t *testing.T) {
 	require.NoError(t, relocatable.Close())
 	_, err = Open(schemas, "org.dottie.Test.Relocatable", path+"a", MemoryBackend, nil)
 	require.Error(t, err)
+}
+
+func TestCanonicalizeAndSync(t *testing.T) {
+	settings := openMemory(t, schemaDirectory(t))
+	cases := []struct {
+		name     string
+		key      string
+		typeName string
+		text     string
+		want     string
+	}{
+		{name: "trailing whitespace", key: "vendor-text", typeName: "s", text: "'canonical'  \t\n", want: "'canonical'"},
+		{name: "annotated empty container", key: "items", typeName: "as", text: "@as []", want: "@as []"},
+		{name: "empty container", key: "items", typeName: "as", text: "[]", want: "@as []"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			gotType, gotText, err := settings.Canonicalize(testCase.key, testCase.typeName, testCase.text)
+			require.NoError(t, err)
+			require.Equal(t, testCase.typeName, gotType)
+			require.Equal(t, testCase.want, gotText)
+		})
+	}
+	_, _, err := settings.Canonicalize("enabled", "s", "'wrong-type'")
+	require.Error(t, err)
+	require.NoError(t, settings.Set("vendor-text", "s", "'synced-value'"))
+	require.NoError(t, settings.Sync())
+	readBack, err := settings.ReadUser("vendor-text")
+	require.NoError(t, err)
+	require.Equal(t, UserValue{Type: "s", Text: "'synced-value'", Present: true, Writable: true}, readBack)
+	require.NoError(t, settings.Reset("vendor-text"))
+	require.NoError(t, settings.Sync())
+	readBack, err = settings.ReadUser("vendor-text")
+	require.NoError(t, err)
+	require.Equal(t, UserValue{Writable: true}, readBack)
 }
 
 func TestNullBackendIsReadOnly(t *testing.T) {

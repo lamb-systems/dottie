@@ -751,7 +751,7 @@ func (s *Store) JournalEntries(ctx context.Context, targetID string) ([]JournalE
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
-FROM apply_journal WHERE target_id = ? ORDER BY created_at, id`, targetID)
+FROM apply_journal WHERE target_id = ? ORDER BY rowid`, targetID)
 }
 
 func (s *Store) JournalEntriesAll(ctx context.Context) ([]JournalEntry, error) {
@@ -759,7 +759,7 @@ func (s *Store) JournalEntriesAll(ctx context.Context) ([]JournalEntry, error) {
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
-FROM apply_journal ORDER BY created_at, id`)
+FROM apply_journal ORDER BY rowid`)
 }
 
 func (s *Store) PendingJournalEntries(ctx context.Context) ([]JournalEntry, error) {
@@ -767,7 +767,7 @@ func (s *Store) PendingJournalEntries(ctx context.Context) ([]JournalEntry, erro
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
 postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
-FROM apply_journal WHERE state = 'pending' ORDER BY created_at, id`)
+FROM apply_journal WHERE state = 'pending' ORDER BY rowid`)
 }
 
 func (s *Store) readJournalEntries(ctx context.Context, query string, args ...any) ([]JournalEntry, error) {

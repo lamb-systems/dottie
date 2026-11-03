@@ -229,8 +229,8 @@ DottieSettings *dottie_settings_open(const gchar *schema_dir, const gchar *schem
     settings->schema = schema;
     fixed_path = g_settings_schema_get_path(schema);
     if (fixed_path != NULL) {
-        if (path != NULL && path[0] != '\0') {
-            set_error(error_message, "fixed-path schema does not accept a supplied path");
+        if (path != NULL && path[0] != '\0' && !g_str_equal(path, fixed_path)) {
+            set_error(error_message, "supplied path does not match fixed schema path");
             goto fail;
         }
         if (strlen(fixed_path) > DOTTIE_MAX_PATH_BYTES) {
@@ -502,6 +502,57 @@ static GVariant *parse_checked_value(GSettingsSchemaKey *schema_key, const gchar
     return value;
 }
 
+gboolean dottie_settings_canonicalize(DottieSettings *settings, const gchar *key, const gchar *type, const gchar *text, gchar **canonical_type, gchar **canonical_text, gchar **error_message) {
+    GSettingsSchemaKey *schema_key = NULL;
+    GVariant *value = NULL;
+    gchar *type_text = NULL;
+    gchar *printed_text = NULL;
+    gboolean success = FALSE;
+    if (canonical_type != NULL) {
+        *canonical_type = NULL;
+    }
+    if (canonical_text != NULL) {
+        *canonical_text = NULL;
+    }
+    if (error_message != NULL) {
+        *error_message = NULL;
+    }
+    if (canonical_type == NULL || canonical_text == NULL) {
+        set_error(error_message, "canonical output pointers are required");
+        goto done;
+    }
+    schema_key = get_schema_key(settings, key, error_message);
+    if (schema_key == NULL) {
+        goto done;
+    }
+    value = parse_checked_value(schema_key, key, type, text, error_message);
+    if (value == NULL) {
+        goto done;
+    }
+    type_text = variant_type_text(value);
+    printed_text = variant_print_text(value);
+    if (type_text == NULL || printed_text == NULL || strlen(type_text) > DOTTIE_MAX_MODEL_FIELD_BYTES || strlen(printed_text) > DOTTIE_MAX_VALUE_BYTES) {
+        set_error(error_message, "canonical GVariant type or text exceeds the supported size");
+        goto done;
+    }
+    *canonical_type = type_text;
+    type_text = NULL;
+    *canonical_text = printed_text;
+    printed_text = NULL;
+    success = TRUE;
+
+done:
+    g_free(type_text);
+    g_free(printed_text);
+    if (value != NULL) {
+        g_variant_unref(value);
+    }
+    if (schema_key != NULL) {
+        g_settings_schema_key_unref(schema_key);
+    }
+    return success;
+}
+
 static gboolean set_on_settings(DottieSettings *owner, GSettings *target, const gchar *key, const gchar *type, const gchar *text, gchar **error_message) {
     GSettingsSchemaKey *schema_key = get_schema_key(owner, key, error_message);
     GVariant *value;
@@ -553,6 +604,10 @@ gboolean dottie_settings_reset(DottieSettings *settings, const gchar *key, gchar
         *error_message = NULL;
     }
     return reset_on_settings(settings, settings->settings, key, error_message);
+}
+
+void dottie_settings_sync(void) {
+    g_settings_sync();
 }
 
 gchar *dottie_settings_drain(DottieSettings *settings, gboolean *more_work, gchar **error_message) {

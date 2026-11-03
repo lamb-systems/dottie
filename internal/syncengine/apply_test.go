@@ -3,6 +3,7 @@ package syncengine
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,6 +30,12 @@ func applyTestStore(t *testing.T) *state.Store {
 	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{
 		ID: "target", Version: 1, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		LogicalBase: model.RootHome, LogicalPath: "prefs", Kind: model.SelectionDirectory, Mode: "review", CreatedAt: 1,
+	}))
+	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{
+		ID: "settings", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1,
+	}))
+	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{
+		ID: "settings-alias", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1,
 	}))
 	return store
 }
@@ -432,4 +439,420 @@ func (f *faultApplyFile) Sync() error {
 		return syscall.EIO
 	}
 	return f.ApplyFile.Sync()
+}
+
+type fakeSettingsBackend struct {
+	values            map[model.EntryKey]SettingValue
+	locked            bool
+	observeErrors     map[int]error
+	canonicalizeError error
+	setError          error
+	resetError        error
+	observeCalls      int
+	writeCount        int
+	canonicalize      func(string, string) (string, string)
+	observeHook       func(int, model.EntryKey)
+	beforeSet         func()
+}
+
+func newFakeSettingsBackend() *fakeSettingsBackend {
+	return &fakeSettingsBackend{values: make(map[model.EntryKey]SettingValue), observeErrors: make(map[int]error)}
+}
+
+func (b *fakeSettingsBackend) Observe(ctx context.Context, key model.EntryKey) (SettingValue, error) {
+	if err := ctx.Err(); err != nil {
+		return SettingValue{}, err
+	}
+	b.observeCalls++
+	if b.observeHook != nil {
+		b.observeHook(b.observeCalls, key)
+	}
+	if err := b.observeErrors[b.observeCalls]; err != nil {
+		return SettingValue{}, err
+	}
+	value, exists := b.values[key]
+	if !exists {
+		for candidate, candidateValue := range b.values {
+			if candidate.SchemaID == key.SchemaID && candidate.SettingsPath == key.SettingsPath && candidate.SettingKey == key.SettingKey {
+				value = candidateValue
+				exists = true
+				break
+			}
+		}
+	}
+	value.Writable = !b.locked
+	if !exists {
+		return SettingValue{Writable: !b.locked}, nil
+	}
+	return value, nil
+}
+
+func (b *fakeSettingsBackend) Canonicalize(ctx context.Context, key model.EntryKey, valueType, text string) (SettingValue, error) {
+	if err := ctx.Err(); err != nil {
+		return SettingValue{}, err
+	}
+	if b.canonicalizeError != nil {
+		return SettingValue{}, b.canonicalizeError
+	}
+	if b.canonicalize != nil {
+		valueType, text = b.canonicalize(valueType, text)
+	}
+	return SettingValue{Present: true, Type: valueType, Text: text, Writable: !b.locked}, nil
+}
+
+func (b *fakeSettingsBackend) Set(ctx context.Context, key model.EntryKey, valueType, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.beforeSet != nil {
+		b.beforeSet()
+	}
+	if b.setError != nil {
+		return b.setError
+	}
+	if b.locked {
+		return errors.New("setting is locked")
+	}
+	b.setNative(key, SettingValue{Present: true, Type: valueType, Text: text})
+	b.writeCount++
+	return nil
+}
+
+func (b *fakeSettingsBackend) Reset(ctx context.Context, key model.EntryKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.resetError != nil {
+		return b.resetError
+	}
+	if b.locked {
+		return errors.New("setting is locked")
+	}
+	b.setNative(key, SettingValue{})
+	b.writeCount++
+	return nil
+}
+
+func (b *fakeSettingsBackend) setNative(key model.EntryKey, value SettingValue) {
+	found := false
+	for candidate := range b.values {
+		if candidate.SchemaID == key.SchemaID && candidate.SettingsPath == key.SettingsPath && candidate.SettingKey == key.SettingKey {
+			b.values[candidate] = value
+			found = true
+		}
+	}
+	if !found {
+		b.values[key] = value
+	}
+}
+
+func settingTestKey(targetID string) model.EntryKey {
+	return model.EntryKey{TargetID: targetID, Source: model.SourceGNOME, SchemaID: "org.example.Settings", SettingsPath: "/", SettingKey: "enabled"}
+}
+
+func settingTestEntry(key model.EntryKey, before *SettingValue) PreviewEntry {
+	entry := PreviewEntry{Key: key, Action: PreviewCreate, DecisionAction: ActionDownload, State: PreviewStateMissing}
+	if before != nil {
+		entry.Action = PreviewChange
+		entry.State = ""
+		payload := []byte{}
+		if before.Present {
+			payload = []byte(before.Type + "\x00" + before.Text)
+		}
+		digest := sha256.Sum256(payload)
+		entry.Preimage = &PreviewPreimage{Digest: fmtDigest(digest[:])}
+	}
+	return entry
+}
+
+func settingTestPostimage(key model.EntryKey, state model.SettingState, valueType, text string) SettingPostimage {
+	postimage := SettingPostimage{TargetID: key.TargetID, SchemaID: key.SchemaID, SettingsPath: key.SettingsPath, SettingKey: key.SettingKey, State: state}
+	if state == model.SettingPresent {
+		postimage.Value = &model.VariantValue{Type: valueType, Text: text}
+	}
+	return postimage
+}
+
+func settingApplyRequest(key model.EntryKey, entry PreviewEntry, postimages []SettingPostimage, backend SettingsBackend) ApplyRequest {
+	return ApplyRequest{
+		Preview:  Preview{Targets: []PreviewTarget{{ID: key.TargetID, Entries: []PreviewEntry{entry}}}, Complete: true},
+		Settings: backend, SettingPostimages: postimages, Now: func() time.Time { return time.Unix(100, 0) },
+	}
+}
+
+func appendSettingJournal(t *testing.T, store *state.Store, id string, key model.EntryKey, preState model.SettingState, preType, preText string, postState model.SettingState, postType, postText string, stateName string, createdAt int64) state.JournalEntry {
+	t.Helper()
+	preimage := state.NewSettingFingerprint(preState, preType, preText)
+	postimage := state.NewSettingFingerprint(postState, postType, postText)
+	backup := []byte{}
+	if preState == model.SettingPresent {
+		backup = []byte(preType + "\x00" + preText)
+	}
+	operation := "setting-set"
+	if postState == model.SettingReset {
+		operation = "setting-reset"
+	}
+	entry, err := store.AppendJournal(context.Background(), state.JournalEntry{
+		ID: id, Operation: operation, State: "pending", Stage: state.JournalStagePending,
+		Identity: key, Preimage: preimage, Postimage: postimage, CreatedAt: createdAt,
+	}, backup)
+	require.NoError(t, err)
+	if stateName == "applied" {
+		require.NoError(t, store.TransitionJournalEntry(context.Background(), id, "pending", "applied", state.JournalStageVerified))
+	}
+	return entry
+}
+
+func TestApplyCancellationAfterCompletedEntryReportsPrefix(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	first, firstPost := applyEntry("first.txt", PreviewCreate, []byte("first"), 0o600, nil, 0)
+	second, secondPost := applyEntry("second.txt", PreviewCreate, []byte("second"), 0o600, nil, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	previous := applyBetweenOperations
+	applyBetweenOperations = func(applied int) {
+		if applied == 1 {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { applyBetweenOperations = previous })
+	err := Apply(ctx, store, applyRequest(root, []PreviewEntry{first, second}, []Postimage{firstPost, secondPost}))
+	var partial *PartialApplyError
+	require.ErrorAs(t, err, &partial)
+	assert.ErrorIs(t, err, context.Canceled)
+	require.Len(t, partial.Applied, 1)
+	assert.Equal(t, "first.txt", partial.Applied[0].FilePath)
+	assert.Equal(t, "second.txt", partial.Failed.Key.FilePath)
+}
+
+func TestApplyMixedCancellationReportsAppliedPrefix(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	fileEntry, filePost := applyEntry("file.txt", PreviewCreate, []byte("data"), 0o600, nil, 0)
+	settingKey := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[settingKey] = SettingValue{Present: true, Type: "s", Text: "before"}
+	before := backend.values[settingKey]
+	settingEntry := settingTestEntry(settingKey, &before)
+	postimage := settingTestPostimage(settingKey, model.SettingPresent, "s", "after")
+	backend.observeErrors[1] = context.Canceled
+	request := ApplyRequest{
+		Preview: Preview{Targets: []PreviewTarget{
+			{ID: "target", Entries: []PreviewEntry{fileEntry}},
+			{ID: "settings", Entries: []PreviewEntry{settingEntry}},
+		}, Complete: true},
+		Roots: map[string]string{"target": root}, ModePolicy: ModePolicy{Default: 0o600}, Content: []Postimage{filePost},
+		Settings: backend, SettingPostimages: []SettingPostimage{postimage}, Now: func() time.Time { return time.Unix(100, 0) },
+	}
+	err := Apply(context.Background(), store, request)
+	var partial *PartialApplyError
+	require.ErrorAs(t, err, &partial)
+	assert.ErrorIs(t, err, context.Canceled)
+	require.Len(t, partial.Applied, 1)
+	assert.Equal(t, "target", partial.Applied[0].TargetID)
+	assert.Equal(t, settingKey, partial.Failed.Key)
+	assert.Equal(t, []byte("data"), readApplyFile(t, filepath.Join(root, "file.txt")))
+}
+
+func TestApplySettingsPresentResetAndRollbackInputs(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		before     SettingValue
+		postState  model.SettingState
+		postType   string
+		postText   string
+		wantAbsent bool
+	}{
+		{name: "present", before: SettingValue{Present: true, Type: "s", Text: "before"}, postState: model.SettingPresent, postType: "b", postText: "true"},
+		{name: "reset", before: SettingValue{Present: true, Type: "b", Text: "true"}, postState: model.SettingReset, wantAbsent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := applyTestStore(t)
+			key := settingTestKey("settings")
+			backend := newFakeSettingsBackend()
+			backend.values[key] = test.before
+			before := test.before
+			entry := settingTestEntry(key, &before)
+			postimage := settingTestPostimage(key, test.postState, test.postType, test.postText)
+			require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+			current, err := backend.Observe(context.Background(), key)
+			require.NoError(t, err)
+			assert.Equal(t, !test.wantAbsent, current.Present)
+			if !test.wantAbsent {
+				assert.Equal(t, test.postType, current.Type)
+				assert.Equal(t, test.postText, current.Text)
+			}
+			rows, err := store.JournalEntries(context.Background(), key.TargetID)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, key, rows[0].Identity)
+			assert.Equal(t, "applied", rows[0].State)
+			if test.before.Present {
+				assert.Equal(t, state.NewSettingFingerprint(model.SettingPresent, test.before.Type, test.before.Text), rows[0].Preimage)
+			} else {
+				assert.Equal(t, state.NewSettingFingerprint(model.SettingReset, "", ""), rows[0].Preimage)
+			}
+			assert.Equal(t, state.NewSettingFingerprint(test.postState, test.postType, test.postText), rows[0].Postimage)
+			assert.NotEmpty(t, rows[0].BackupRef)
+			backup, err := store.Payload(rows[0].BackupRef)
+			require.NoError(t, err)
+			assert.Equal(t, []byte(test.before.Type+"\x00"+test.before.Text), backup)
+		})
+	}
+}
+
+func TestApplySettingsPreconditionsAndValidationDoNotWrite(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		setup   func(*fakeSettingsBackend)
+		wantErr error
+	}{
+		{name: "precondition", setup: func(backend *fakeSettingsBackend) {
+			backend.values[settingTestKey("settings")] = SettingValue{Present: true, Type: "s", Text: "changed"}
+		}, wantErr: ErrPreconditionChanged},
+		{name: "post-journal precondition", setup: func(backend *fakeSettingsBackend) {
+			backend.observeHook = func(call int, key model.EntryKey) {
+				if call == 2 {
+					backend.setNative(key, SettingValue{Present: true, Type: "s", Text: "changed"})
+				}
+			}
+		}},
+		{name: "locked", setup: func(backend *fakeSettingsBackend) { backend.locked = true }},
+		{name: "missing schema or key", setup: func(backend *fakeSettingsBackend) { backend.observeErrors[1] = errors.New("key missing") }},
+		{name: "wrong type", setup: func(backend *fakeSettingsBackend) { backend.canonicalizeError = errors.New("type mismatch") }},
+		{name: "set failure", setup: func(backend *fakeSettingsBackend) { backend.setError = errors.New("write failed") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := applyTestStore(t)
+			key := settingTestKey("settings")
+			backend := newFakeSettingsBackend()
+			backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+			test.setup(backend)
+			before := SettingValue{Present: true, Type: "s", Text: "before"}
+			entry := settingTestEntry(key, &before)
+			postimage := settingTestPostimage(key, model.SettingPresent, "b", "true")
+			err := Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend))
+			if test.wantErr != nil {
+				assert.ErrorIs(t, err, test.wantErr)
+			} else {
+				assert.Error(t, err)
+			}
+			assert.Zero(t, backend.writeCount)
+			rows, readErr := store.JournalEntries(context.Background(), key.TargetID)
+			require.NoError(t, readErr)
+			if test.name == "set failure" {
+				require.Len(t, rows, 1)
+				assert.Equal(t, "failed", rows[0].State)
+			} else if test.name == "post-journal precondition" {
+				require.Len(t, rows, 1)
+				assert.Equal(t, "indeterminate", rows[0].State)
+			} else {
+				assert.Empty(t, rows)
+			}
+		})
+	}
+}
+
+func TestApplySettingsRequiresExactPostimages(t *testing.T) {
+	store := applyTestStore(t)
+	key := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+	before := backend.values[key]
+	entry := settingTestEntry(key, &before)
+	postimage := settingTestPostimage(key, model.SettingPresent, "b", "true")
+	request := settingApplyRequest(key, entry, nil, backend)
+	assert.Error(t, Apply(context.Background(), store, request))
+	request.SettingPostimages = []SettingPostimage{postimage, postimage}
+	assert.Error(t, Apply(context.Background(), store, request))
+	request.SettingPostimages = []SettingPostimage{postimage, settingTestPostimage(settingTestKey("settings-alias"), model.SettingReset, "", "")}
+	assert.Error(t, Apply(context.Background(), store, request))
+	request.SettingPostimages = []SettingPostimage{postimage}
+	request.Settings = nil
+	assert.Error(t, Apply(context.Background(), store, request))
+	entry.Action = PreviewDelete
+	entry.DecisionAction = ActionDeleteLocal
+	request = settingApplyRequest(key, entry, []SettingPostimage{settingTestPostimage(key, model.SettingReset, "", "")}, backend)
+	assert.Error(t, Apply(context.Background(), store, request))
+	assert.Zero(t, backend.writeCount)
+	rows, err := store.JournalEntries(context.Background(), key.TargetID)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}
+
+func TestApplySettingsCanonicalReadbackAndRollbackPrunesBackup(t *testing.T) {
+	store := applyTestStore(t)
+	key := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+	backend.canonicalize = func(valueType, text string) (string, string) { return valueType, strings.TrimSpace(text) }
+	before := backend.values[key]
+	entry := settingTestEntry(key, &before)
+	postimage := settingTestPostimage(key, model.SettingPresent, "s", " after ")
+	require.NoError(t, Apply(context.Background(), store, settingApplyRequest(key, entry, []SettingPostimage{postimage}, backend)))
+	assert.Equal(t, "after", mustObserveSetting(t, backend, key).Text)
+	rows, err := store.JournalEntries(context.Background(), key.TargetID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "after", rows[0].Postimage.ValueText)
+	backup, err := store.Payload(rows[0].BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("s\x00before"), backup)
+	report, err := RollbackAppliedWithSettings(context.Background(), store, nil, backend, func() time.Time { return time.Unix(100, 0) })
+	require.NoError(t, err)
+	require.Len(t, report.Entries, 1)
+	assert.Equal(t, "rolled-back", report.Entries[0].Outcome)
+	assert.Equal(t, "before", mustObserveSetting(t, backend, key).Text)
+	rows, err = store.JournalEntries(context.Background(), key.TargetID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].BackupRef)
+	assert.Empty(t, rows[0].Preimage.ValueType)
+	assert.Empty(t, rows[0].Preimage.ValueText)
+	assert.Empty(t, rows[0].Postimage.ValueType)
+	assert.Empty(t, rows[0].Postimage.ValueText)
+}
+
+func TestApplySettingsCanonicalizesAndReportsMixedPartialFailure(t *testing.T) {
+	store := applyTestStore(t)
+	root := t.TempDir()
+	writeApplyFile(t, filepath.Join(root, "file"), []byte("old"), 0o600)
+	fileEntry, filePost := applyEntry("file", PreviewChange, []byte("new"), 0o600, []byte("old"), 0o600)
+	key := settingTestKey("settings")
+	backend := newFakeSettingsBackend()
+	backend.values[key] = SettingValue{Present: true, Type: "s", Text: "before"}
+	backend.canonicalize = func(valueType, text string) (string, string) { return valueType, strings.TrimSpace(text) }
+	backend.setError = errors.New("backend refused write")
+	before := backend.values[key]
+	settingEntry := settingTestEntry(key, &before)
+	postimage := settingTestPostimage(key, model.SettingPresent, "s", " after ")
+	request := ApplyRequest{
+		Preview: Preview{Targets: []PreviewTarget{
+			{ID: "target", Entries: []PreviewEntry{fileEntry}},
+			{ID: "settings", Entries: []PreviewEntry{settingEntry}},
+		}, Complete: true},
+		Roots: map[string]string{"target": root}, ModePolicy: ModePolicy{Default: 0o600}, Content: []Postimage{filePost},
+		Settings: backend, SettingPostimages: []SettingPostimage{postimage}, Now: func() time.Time { return time.Unix(100, 0) },
+	}
+	err := Apply(context.Background(), store, request)
+	var partial *PartialApplyError
+	require.ErrorAs(t, err, &partial)
+	assert.Len(t, partial.Applied, 1)
+	assert.Equal(t, fileEntry.Key, partial.Applied[0].Key)
+	assert.Equal(t, settingEntry.Key, partial.Failed.Key)
+	assert.Equal(t, "failed", partial.Failed.Outcome)
+	assert.ErrorIs(t, err, backend.setError)
+	assert.Equal(t, []byte("new"), readApplyFile(t, filepath.Join(root, "file")))
+	rows, err := store.JournalEntries(context.Background(), "settings")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "after", rows[0].Postimage.ValueText)
+	assert.Equal(t, SettingValue{Present: true, Type: "s", Text: "before", Writable: true}, mustObserveSetting(t, backend, key))
+}
+
+func mustObserveSetting(t *testing.T, backend SettingsBackend, key model.EntryKey) SettingValue {
+	t.Helper()
+	value, err := backend.Observe(context.Background(), key)
+	require.NoError(t, err)
+	return value
 }

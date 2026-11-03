@@ -21,6 +21,22 @@ var ErrPreconditionChanged = errors.New("apply precondition changed")
 var ErrNotActionable = errors.New("preview entry is not actionable for local apply")
 var ErrRecoveryRequired = errors.New("pending apply journal entries require recovery before apply")
 
+var applyBetweenOperations func(int)
+
+type PartialApplyError struct {
+	Applied []JournalResult
+	Failed  JournalResult
+	Cause   error
+}
+
+func (e *PartialApplyError) Error() string {
+	return fmt.Sprintf("apply stopped after %d applied entries at %s/%s: %v", len(e.Applied), e.Failed.Key.TargetID, entryKeyName(e.Failed.Key), e.Cause)
+}
+
+func (e *PartialApplyError) Unwrap() error {
+	return e.Cause
+}
+
 type UnsupportedApplyEntryError struct {
 	Key    model.EntryKey
 	Reason string
@@ -56,29 +72,68 @@ type ModePolicy struct {
 	Overrides map[string]os.FileMode
 }
 
+type SettingValue struct {
+	Present  bool
+	Type     string
+	Text     string
+	Writable bool
+}
+
+type SettingsBackend interface {
+	Observe(context.Context, model.EntryKey) (SettingValue, error)
+	Canonicalize(context.Context, model.EntryKey, string, string) (SettingValue, error)
+	Set(context.Context, model.EntryKey, string, string) error
+	Reset(context.Context, model.EntryKey) error
+}
+
+type SettingPostimage struct {
+	TargetID     string
+	SchemaID     string
+	SettingsPath string
+	SettingKey   string
+	State        model.SettingState
+	Value        *model.VariantValue
+}
+
+func (p SettingPostimage) identity() model.EntryKey {
+	return model.EntryKey{TargetID: p.TargetID, Source: model.SourceGNOME, SchemaID: p.SchemaID, SettingsPath: p.SettingsPath, SettingKey: p.SettingKey}
+}
+
+func (p SettingPostimage) entry() model.SettingEntry {
+	return model.SettingEntry{SchemaID: p.SchemaID, Path: p.SettingsPath, Key: p.SettingKey, State: p.State, Value: p.Value}
+}
+
 type ApplyRequest struct {
-	Preview    Preview
-	Roots      map[string]string
-	ModePolicy ModePolicy
-	Content    []Postimage
-	FileSystem files.ApplyFileSystem
-	Now        func() time.Time
+	Preview           Preview
+	Roots             map[string]string
+	ModePolicy        ModePolicy
+	Content           []Postimage
+	Settings          SettingsBackend
+	SettingPostimages []SettingPostimage
+	FileSystem        files.ApplyFileSystem
+	Now               func() time.Time
 }
 
 type applyOperation struct {
-	entry           PreviewEntry
-	root            string
-	rootPath        string
-	destinationPath string
-	rootDevice      int64
-	rootInode       int64
-	postimage       *Postimage
-	filesystem      files.ApplyFileSystem
-	post            state.Fingerprint
-	operation       string
-	destination     os.FileMode
-	journalID       string
-	journalAdded    bool
+	entry            PreviewEntry
+	root             string
+	rootPath         string
+	destinationPath  string
+	rootDevice       int64
+	rootInode        int64
+	postimage        *Postimage
+	settingPostimage SettingPostimage
+	settingPost      SettingValue
+	setting          bool
+	filesystem       files.ApplyFileSystem
+	settings         SettingsBackend
+	pre              state.Fingerprint
+	post             state.Fingerprint
+	operation        string
+	destination      os.FileMode
+	journalID        string
+	journalAdded     bool
+	outcome          string
 }
 
 func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error {
@@ -107,28 +162,43 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 	if err != nil {
 		return err
 	}
+	applied := make([]JournalResult, 0, len(operations))
 	for index := range operations {
+		operation := &operations[index]
 		if err := ctx.Err(); err != nil {
+			if len(applied) != 0 {
+				return applyFailure(applied, operation, err)
+			}
 			return err
 		}
-		operation := &operations[index]
+		if operation.setting {
+			result, applyErr := applySettingOperation(ctx, store, request, operation, &backupUsage)
+			if applyErr != nil {
+				return applyFailure(applied, operation, applyErr)
+			}
+			applied = append(applied, result)
+			if applyBetweenOperations != nil {
+				applyBetweenOperations(len(applied))
+			}
+			continue
+		}
 		current, err := files.ObserveFile(filesystem, operation.root, operation.entry.Key.FilePath)
 		if err != nil {
-			return fmt.Errorf("recheck %s before apply: %w", operation.entry.Key.FilePath, err)
+			return applyFailure(applied, operation, fmt.Errorf("recheck %s before apply: %w", operation.entry.Key.FilePath, err))
 		}
 		if err := checkPreviewPreimage(operation.entry, current); err != nil {
-			return err
+			return applyFailure(applied, operation, err)
 		}
 		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
-			return fmt.Errorf("recheck destination root before apply: %w", err)
+			return applyFailure(applied, operation, fmt.Errorf("recheck destination root before apply: %w", err))
 		}
 		id, err := newJournalID()
 		if err != nil {
-			return err
+			return applyFailure(applied, operation, err)
 		}
 		operation.journalID = id
 		if err := checkJournalBackupUsage(backupUsage, current.Data, MaxRollbackMaterialBytes); err != nil {
-			return err
+			return applyFailure(applied, operation, err)
 		}
 		entry := state.JournalEntry{
 			ID:              id,
@@ -145,22 +215,23 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 			CreatedAt:       request.Now().Unix(),
 		}
 		if _, err := store.AppendJournal(ctx, entry, current.Data); err != nil {
-			return fmt.Errorf("journal %s before apply: %w", operation.entry.Key.FilePath, err)
+			return applyFailure(applied, operation, fmt.Errorf("journal %s before apply: %w", operation.entry.Key.FilePath, err))
 		}
 		addJournalBackupUsage(&backupUsage, current.Data, operation.journalID)
 		operation.journalAdded = true
 		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
-			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStagePrecondition, err))
 		}
 		current, err = files.ObserveFile(filesystem, operation.root, operation.entry.Key.FilePath)
 		if err != nil {
-			return failApply(ctx, store, operation, state.JournalStagePrecondition, fmt.Errorf("recheck %s after journaling: %w", operation.entry.Key.FilePath, err))
+			cause := fmt.Errorf("recheck %s after journaling: %w", operation.entry.Key.FilePath, err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStagePrecondition, cause))
 		}
 		if err := checkPreviewPreimage(operation.entry, current); err != nil {
-			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStagePrecondition, err))
 		}
 		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
-			return failApply(ctx, store, operation, state.JournalStagePrecondition, err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStagePrecondition, err))
 		}
 		expected := files.ExpectedPreimage{Exists: current.Exists, Digest: current.Digest, Mode: current.Mode}
 		if operation.operation == "delete" {
@@ -173,21 +244,32 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 			if errors.As(err, &precondition) {
 				err = fmt.Errorf("%w: %w", ErrPreconditionChanged, err)
 			}
-			return failApply(ctx, store, operation, journalStage(err, operation.operation), err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, journalStage(err, operation.operation), err))
 		}
 		verified, err := files.ObserveFile(filesystem, operation.root, operation.entry.Key.FilePath)
 		if err != nil {
-			return failApply(ctx, store, operation, state.JournalStageReadBack, fmt.Errorf("read back %s: %w", operation.entry.Key.FilePath, err))
+			cause := fmt.Errorf("read back %s: %w", operation.entry.Key.FilePath, err)
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStageReadBack, cause))
 		}
 		if operation.operation == "delete" {
 			if verified.Exists {
-				return failApply(ctx, store, operation, state.JournalStageReadBack, errors.New("deleted path still exists after apply"))
+				err = errors.New("deleted path still exists after apply")
 			}
 		} else if !verified.Exists || verified.Digest != operation.post.Digest || verified.Mode != uint32(operation.destination.Perm()) {
-			return failApply(ctx, store, operation, state.JournalStageReadBack, errors.New("read-back does not match intended postimage"))
+			err = errors.New("read-back does not match intended postimage")
+		}
+		if err != nil {
+			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStageReadBack, err))
 		}
 		if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "applied", state.JournalStageVerified); err != nil {
-			return fmt.Errorf("mark apply journal %s applied: %w", operation.entry.Key.FilePath, err)
+			operation.outcome = "indeterminate"
+			return applyFailure(applied, operation, fmt.Errorf("mark apply journal %s applied: %w", operation.entry.Key.FilePath, err))
+		}
+		result := journalResult(state.JournalEntry{ID: operation.journalID, Identity: operation.entry.Key})
+		result.Outcome = "applied"
+		applied = append(applied, result)
+		if applyBetweenOperations != nil {
+			applyBetweenOperations(len(applied))
 		}
 	}
 	return nil
@@ -197,6 +279,15 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 	for _, target := range request.Preview.Targets {
 		for _, entry := range target.Entries {
 			if entry.DecisionAction == ActionUnchanged && entry.Action == "" {
+				continue
+			}
+			if entry.Key.Source == model.SourceGNOME {
+				if entry.DecisionAction != ActionDownload {
+					return nil, &NotActionableError{Key: entry.Key, Action: entry.DecisionAction}
+				}
+				if entry.Action != PreviewCreate && entry.Action != PreviewChange {
+					return nil, unsupportedApply(entry.Key, "setting deletes are not applicable")
+				}
 				continue
 			}
 			if entry.DecisionAction != ActionDownload && entry.DecisionAction != ActionDeleteLocal {
@@ -215,8 +306,24 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 		}
 		content[key] = postimage
 	}
+	settingPostimages := make(map[model.EntryKey]SettingPostimage, len(request.SettingPostimages))
+	for _, postimage := range request.SettingPostimages {
+		identity := postimage.identity()
+		if err := identity.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid setting postimage identity: %w", err)
+		}
+		if _, exists := settingPostimages[identity]; exists {
+			return nil, fmt.Errorf("duplicate setting postimage for %s/%s/%s", identity.SchemaID, identity.SettingsPath, identity.SettingKey)
+		}
+		if err := postimage.entry().Validate(); err != nil {
+			return nil, fmt.Errorf("invalid setting postimage: %w", err)
+		}
+		settingPostimages[identity] = postimage
+	}
 	seen := make(map[string]struct{})
+	previewKeys := make(map[model.EntryKey]struct{})
 	needsContent := make(map[string]struct{})
+	needsSettings := make(map[model.EntryKey]struct{})
 	targetIDs := make(map[string]struct{}, len(request.Preview.Targets))
 	operations := make([]applyOperation, 0)
 	for _, target := range request.Preview.Targets {
@@ -235,19 +342,45 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 			if err := entry.Key.Validate(); err != nil {
 				return nil, unsupportedApply(entry.Key, "invalid entry identity")
 			}
-			if entry.Key.Source != model.SourceFiles {
-				return nil, unsupportedApply(entry.Key, "settings entries are not applied by this filesystem path")
-			}
-			id := postimageID(entry.Key.TargetID, entry.Key.FilePath)
-			if _, exists := seen[id]; exists {
+			if _, exists := previewKeys[entry.Key]; exists {
 				return nil, unsupportedApply(entry.Key, "duplicate preview entry")
 			}
-			seen[id] = struct{}{}
+			previewKeys[entry.Key] = struct{}{}
 			if entry.Action == "" {
 				if entry.State != PreviewStateUnchanged || (entry.DecisionAction != "" && entry.DecisionAction != ActionUnchanged) {
 					return nil, unsupportedApply(entry.Key, "entry has no resolved local action")
 				}
 				continue
+			}
+			if entry.Key.Source == model.SourceGNOME {
+				if entry.DecisionAction != ActionDownload {
+					return nil, &NotActionableError{Key: entry.Key, Action: entry.DecisionAction}
+				}
+				if entry.Action != PreviewCreate && entry.Action != PreviewChange {
+					return nil, unsupportedApply(entry.Key, "setting deletes are not applicable")
+				}
+				switch entry.State {
+				case "", PreviewStateMissing, PreviewStateUnmatched:
+				default:
+					return nil, unsupportedApply(entry.Key, "entry state is unresolved or unsupported")
+				}
+				postimage, exists := settingPostimages[entry.Key]
+				if !exists {
+					return nil, unsupportedApply(entry.Key, "matching setting postimage is missing")
+				}
+				if request.Settings == nil {
+					return nil, unsupportedApply(entry.Key, "settings backend is required")
+				}
+				needsSettings[entry.Key] = struct{}{}
+				operation := applyOperation{entry: entry, setting: true, settings: request.Settings, settingPostimage: postimage, operation: "setting-set"}
+				if postimage.State == model.SettingReset {
+					operation.operation = "setting-reset"
+				}
+				operations = append(operations, operation)
+				continue
+			}
+			if entry.Key.Source != model.SourceFiles {
+				return nil, unsupportedApply(entry.Key, "entry source is not applicable")
 			}
 			if entry.DecisionAction != ActionDownload && entry.DecisionAction != ActionDeleteLocal {
 				return nil, &NotActionableError{Key: entry.Key, Action: entry.DecisionAction}
@@ -260,6 +393,11 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 			default:
 				return nil, unsupportedApply(entry.Key, "entry state is unresolved or unsupported")
 			}
+			id := postimageID(entry.Key.TargetID, entry.Key.FilePath)
+			if _, exists := seen[id]; exists {
+				return nil, unsupportedApply(entry.Key, "duplicate preview entry")
+			}
+			seen[id] = struct{}{}
 			if entry.Key.FilePath == "." && entry.Action == PreviewDelete {
 				return nil, unsupportedApply(entry.Key, "deleting the target root is not representable")
 			}
@@ -341,7 +479,201 @@ func prepareApply(request ApplyRequest, filesystem files.ApplyFileSystem) ([]app
 			return nil, unsupportedApply(key, "postimage does not match a create or change action")
 		}
 	}
+	for identity := range settingPostimages {
+		if _, matched := needsSettings[identity]; !matched {
+			return nil, unsupportedApply(identity, "setting postimage does not match a create or change action")
+		}
+	}
 	return operations, nil
+}
+
+func entryKeyName(key model.EntryKey) string {
+	if key.Source == model.SourceGNOME {
+		return key.SchemaID + "/" + key.SettingsPath + "/" + key.SettingKey
+	}
+	return key.FilePath
+}
+
+func applyFailure(applied []JournalResult, operation *applyOperation, cause error) error {
+	if len(applied) == 0 {
+		return cause
+	}
+	failed := journalResult(state.JournalEntry{ID: operation.journalID, Identity: operation.entry.Key})
+	failed.Outcome = operation.outcome
+	if failed.Outcome == "" {
+		failed.Outcome = "failed"
+	}
+	failed.Reason = cause.Error()
+	return &PartialApplyError{Applied: append([]JournalResult(nil), applied...), Failed: failed, Cause: cause}
+}
+
+func applySettingOperation(ctx context.Context, store *state.Store, request ApplyRequest, operation *applyOperation, backupUsage *state.JournalBackupUsage) (JournalResult, error) {
+	key := operation.entry.Key
+	observed, err := operation.settings.Observe(ctx, key)
+	if err != nil {
+		return JournalResult{}, fmt.Errorf("observe setting %s before apply: %w", entryKeyName(key), err)
+	}
+	if err := checkSettingPreviewPreimage(operation.entry, observed); err != nil {
+		return JournalResult{}, err
+	}
+	if !observed.Writable {
+		return JournalResult{}, fmt.Errorf("setting %s is not writable", entryKeyName(key))
+	}
+	preimage, backup, err := settingFingerprint(observed, key)
+	if err != nil {
+		return JournalResult{}, err
+	}
+	operation.pre = preimage
+	post := operation.settingPostimage
+	if post.State == model.SettingPresent {
+		canonical, err := operation.settings.Canonicalize(ctx, key, post.Value.Type, post.Value.Text)
+		if err != nil {
+			return JournalResult{}, fmt.Errorf("canonicalize setting %s: %w", entryKeyName(key), err)
+		}
+		if !canonical.Present {
+			return JournalResult{}, errors.New("canonicalized setting postimage is not present")
+		}
+		if _, _, err := settingFingerprint(canonical, key); err != nil {
+			return JournalResult{}, fmt.Errorf("invalid canonical setting postimage: %w", err)
+		}
+		operation.settingPost = canonical
+		operation.post = state.NewSettingFingerprint(model.SettingPresent, canonical.Type, canonical.Text)
+	} else {
+		operation.settingPost = SettingValue{}
+		operation.post = state.NewSettingFingerprint(model.SettingReset, "", "")
+	}
+	if err := checkJournalBackupUsage(*backupUsage, backup, MaxRollbackMaterialBytes); err != nil {
+		return JournalResult{}, err
+	}
+	id, err := newJournalID()
+	if err != nil {
+		return JournalResult{}, err
+	}
+	operation.journalID = id
+	entry := state.JournalEntry{
+		ID:        id,
+		Operation: operation.operation,
+		State:     "pending",
+		Stage:     state.JournalStagePending,
+		Identity:  key,
+		Preimage:  operation.pre,
+		Postimage: operation.post,
+		CreatedAt: request.Now().Unix(),
+	}
+	if _, err := store.AppendJournal(ctx, entry, backup); err != nil {
+		return JournalResult{}, fmt.Errorf("journal setting %s before apply: %w", entryKeyName(key), err)
+	}
+	addJournalBackupUsage(backupUsage, backup, id)
+	operation.journalAdded = true
+	observed, err = operation.settings.Observe(ctx, key)
+	if err != nil {
+		cause := fmt.Errorf("reobserve setting %s after journaling: %w", entryKeyName(key), err)
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStagePrecondition, cause)
+	}
+	if err := checkSettingPreviewPreimage(operation.entry, observed); err != nil {
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStagePrecondition, err)
+	}
+	if !observed.Writable {
+		cause := fmt.Errorf("setting %s is no longer writable", entryKeyName(key))
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStagePrecondition, cause)
+	}
+	if !settingValueMatchesFingerprint(observed, key, operation.pre) {
+		cause := fmt.Errorf("%w: setting %s changed after journaling", ErrPreconditionChanged, entryKeyName(key))
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStagePrecondition, cause)
+	}
+	if post.State == model.SettingPresent {
+		err = operation.settings.Set(ctx, key, operation.settingPost.Type, operation.settingPost.Text)
+	} else {
+		err = operation.settings.Reset(ctx, key)
+	}
+	if err != nil {
+		stage := state.JournalStageSettingSet
+		if post.State == model.SettingReset {
+			stage = state.JournalStageSettingReset
+		}
+		cause := fmt.Errorf("write setting %s: %w", entryKeyName(key), err)
+		return JournalResult{}, failSettingApply(ctx, store, operation, stage, cause)
+	}
+	verified, err := operation.settings.Observe(ctx, key)
+	if err != nil {
+		cause := fmt.Errorf("read back setting %s: %w", entryKeyName(key), err)
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStageSettingReadBack, cause)
+	}
+	if !settingValueMatchesFingerprint(verified, key, operation.post) {
+		cause := errors.New("setting read-back does not match intended postimage")
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStageSettingReadBack, cause)
+	}
+	if err := store.TransitionJournalEntry(ctx, id, "pending", "applied", state.JournalStageVerified); err != nil {
+		cause := fmt.Errorf("mark setting journal %s applied: %w", entryKeyName(key), err)
+		return JournalResult{}, failSettingApply(ctx, store, operation, state.JournalStageSettingReadBack, cause)
+	}
+	result := journalResult(state.JournalEntry{ID: id, Identity: key})
+	result.Outcome = "applied"
+	return result, nil
+}
+
+func checkSettingPreviewPreimage(entry PreviewEntry, observed SettingValue) error {
+	if entry.Preimage == nil {
+		if observed.Present {
+			return fmt.Errorf("%w: setting %s appeared after preview", ErrPreconditionChanged, entryKeyName(entry.Key))
+		}
+		return nil
+	}
+	fingerprint, _, err := settingFingerprint(observed, entry.Key)
+	if err != nil {
+		return err
+	}
+	if fingerprint.Digest != entry.Preimage.Digest {
+		return fmt.Errorf("%w: setting preimage differs for %s", ErrPreconditionChanged, entryKeyName(entry.Key))
+	}
+	return nil
+}
+
+func settingFingerprint(observed SettingValue, key model.EntryKey) (state.Fingerprint, []byte, error) {
+	if !observed.Present {
+		return state.NewSettingFingerprint(model.SettingReset, "", ""), []byte{}, nil
+	}
+	value := &model.VariantValue{Type: observed.Type, Text: observed.Text}
+	if err := (model.SettingEntry{SchemaID: key.SchemaID, Path: key.SettingsPath, Key: key.SettingKey, State: model.SettingPresent, Value: value}).Validate(); err != nil {
+		return state.Fingerprint{}, nil, fmt.Errorf("invalid observed setting %s: %w", entryKeyName(key), err)
+	}
+	payload := []byte(observed.Type + "\x00" + observed.Text)
+	return state.NewSettingFingerprint(model.SettingPresent, observed.Type, observed.Text), payload, nil
+}
+
+func settingValueMatchesFingerprint(observed SettingValue, key model.EntryKey, fingerprint state.Fingerprint) bool {
+	if err := fingerprint.Validate(key); err != nil {
+		return false
+	}
+	if fingerprint.State == string(model.SettingReset) {
+		return fingerprint == state.NewSettingFingerprint(model.SettingReset, "", "") && !observed.Present
+	}
+	if fingerprint.State != string(model.SettingPresent) || !observed.Present {
+		return false
+	}
+	if fingerprint != state.NewSettingFingerprint(model.SettingPresent, fingerprint.ValueType, fingerprint.ValueText) {
+		return false
+	}
+	if _, _, err := settingFingerprint(observed, key); err != nil {
+		return false
+	}
+	return observed.Type == fingerprint.ValueType && observed.Text == fingerprint.ValueText
+}
+
+func failSettingApply(ctx context.Context, store *state.Store, operation *applyOperation, stage string, cause error) error {
+	observed, observeErr := operation.settings.Observe(ctx, operation.entry.Key)
+	if observeErr == nil && settingValueMatchesFingerprint(observed, operation.entry.Key, operation.pre) {
+		operation.outcome = "failed"
+		if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
+			return errors.Join(cause, fmt.Errorf("mark setting journal failed: %w", err))
+		}
+	} else {
+		operation.outcome = "indeterminate"
+		if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+			return errors.Join(cause, fmt.Errorf("mark setting journal indeterminate: %w", err))
+		}
+	}
+	return cause
 }
 
 func checkPreviewPreimage(entry PreviewEntry, observed files.ApplyObservation) error {
@@ -368,15 +700,20 @@ func failApply(ctx context.Context, store *state.Store, operation *applyOperatio
 	if operation.journalAdded {
 		observed, observeErr := files.ObserveFile(operation.filesystem, operation.root, operation.entry.Key.FilePath)
 		if operation.entry.Preimage != nil && observeErr == nil && observed.Exists && observed.Digest == operation.entry.Preimage.Digest && observed.Mode == operation.entry.Preimage.Mode {
+			operation.outcome = "failed"
 			if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
 				return errors.Join(cause, fmt.Errorf("mark apply journal failed: %w", err))
 			}
 		} else if operation.entry.Preimage == nil && observeErr == nil && !observed.Exists {
+			operation.outcome = "failed"
 			if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "failed", stage); err != nil {
 				return errors.Join(cause, fmt.Errorf("mark apply journal failed: %w", err))
 			}
-		} else if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
-			return errors.Join(cause, fmt.Errorf("mark apply journal indeterminate: %w", err))
+		} else {
+			operation.outcome = "indeterminate"
+			if err := store.TransitionJournalEntry(ctx, operation.journalID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+				return errors.Join(cause, fmt.Errorf("mark apply journal indeterminate: %w", err))
+			}
 		}
 	}
 	return cause

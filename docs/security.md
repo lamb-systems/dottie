@@ -17,11 +17,23 @@ for someone deciding whether to trust the tool with their configuration.
 | Recovery kit and checkpoints | yes, vault library; `account recovery` and `account verify` | restore driven end to end |
 | Vault export and import | yes, library only (`EncodeExportArchive`/`ReadExportArchive`); no command | a product export/import command |
 | Remote vault sync | no; `dottie plan` previews a local view bundle only | a sync command that publishes and reads a vault |
-| GNOME settings capture and apply | selected-key capture library only, opt-in cgo; apply absent | real desktop validation at G04 |
+| GNOME settings capture and apply | selected-key capture plus library-level settings apply adapter, opt-in cgo; no CLI/preset wiring | real desktop validation at G04 |
 
-The opt-in GNOME capture boundary reads only explicitly selected keys and never copies a dconf database
-wholesale. The default backend refuses memory and any backend outside the persistent keyfile/dconf allowlist;
-synthetic native tests use temporary homes and isolated keyfile data, not real preferences.
+The opt-in GNOME boundary reads only explicitly selected keys and never copies a dconf database
+wholesale. Its library-level settings apply adapter uses the journaled schema/path/key identity, observes only
+user overrides, canonicalizes present values against the schema key, and synchronizes GSettings after Set or
+Reset before read-back. A fixed-path schema accepts only its resolved schema path; a relocatable schema uses
+the explicit journaled path. This synchronization is backend completion, not filesystem `fsync`, and it does
+not prove durability across a crash. `g_settings_sync` has no deadline; a stalled backend can delay
+cancellation or recovery. Setting values remain plaintext in the local journal/backup while retained; pruning
+an eligible setting backup clears the stored value fields in the same transaction. The adapter is not wired to the CLI or presets. The default backend
+refuses memory and any backend outside the persistent keyfile/dconf allowlist; synthetic native tests use
+temporary homes and isolated keyfile data, not real preferences.
+
+Setting preimages and postimages in the local journal and rollback backups are plaintext while retained. They
+follow the existing bounded rollback-material and backup-retention policy; backup pruning removes the
+associated retained journal values. This library boundary does not change account authority or grant remote
+configuration access to local settings.
 
 The CLI exposes target selection, `dottie plan`, and the `account` command group (`login`, `logout`, `status`,
 `bootstrap`, `enroll`, `recovery`, `verify`). The first three manage OAuth authorization only. No command

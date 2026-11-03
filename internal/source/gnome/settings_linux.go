@@ -260,6 +260,65 @@ func (settings *Settings) Reset(key string) error {
 	return nil
 }
 
+func (settings *Settings) Canonicalize(key, variantType, text string) (string, string, error) {
+	if err := validateField("key", key, maxModelFieldBytes); err != nil {
+		return "", "", err
+	}
+	if err := validateField("variant type", variantType, maxModelFieldBytes); err != nil {
+		return "", "", err
+	}
+	if err := validateField("variant text", text, maxValueBytes); err != nil {
+		return "", "", err
+	}
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	if settings.closed || settings.ptr == nil {
+		return "", "", errors.New("GSettings handle is closed")
+	}
+	cKey := C.CString(key)
+	defer C.free(unsafe.Pointer(cKey))
+	cType := C.CString(variantType)
+	defer C.free(unsafe.Pointer(cType))
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+	var canonicalType *C.char
+	var canonicalText *C.char
+	var cError *C.char
+	if C.dottie_settings_canonicalize(settings.ptr, cKey, cType, cText, &canonicalType, &canonicalText, &cError) == 0 {
+		return "", "", nativeError(cError, "canonicalize GSettings value failed")
+	}
+	if canonicalType == nil || canonicalText == nil {
+		if canonicalType != nil {
+			C.dottie_free(unsafe.Pointer(canonicalType))
+		}
+		if canonicalText != nil {
+			C.dottie_free(unsafe.Pointer(canonicalText))
+		}
+		if cError != nil {
+			C.dottie_free(unsafe.Pointer(cError))
+		}
+		return "", "", errors.New("canonical GSettings value is unavailable")
+	}
+	resultType := C.GoString(canonicalType)
+	resultText := C.GoString(canonicalText)
+	C.dottie_free(unsafe.Pointer(canonicalType))
+	C.dottie_free(unsafe.Pointer(canonicalText))
+	if cError != nil {
+		C.dottie_free(unsafe.Pointer(cError))
+	}
+	return resultType, resultText, nil
+}
+
+func (settings *Settings) Sync() error {
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	if settings.closed || settings.ptr == nil {
+		return errors.New("GSettings handle is closed")
+	}
+	C.dottie_settings_sync()
+	return nil
+}
+
 func (settings *Settings) Drain() (DrainResult, error) {
 	settings.mu.Lock()
 	defer settings.mu.Unlock()

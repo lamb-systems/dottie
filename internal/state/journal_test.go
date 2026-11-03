@@ -91,6 +91,95 @@ func TestJournalTransitionsAndBackupPruning(t *testing.T) {
 	assert.ErrorIs(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "failed", JournalStageWrite), ErrInvalidJournalTransition)
 }
 
+func TestJournalPruningRedactsSettingValuesAndProtectsUnresolvedRows(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	descriptor := TargetDescriptor{ID: "settings", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1}
+	require.NoError(t, store.PutTarget(context.Background(), descriptor))
+	identity := model.EntryKey{TargetID: "settings", Source: model.SourceGNOME, SchemaID: "org.example.Settings", SettingsPath: "/", SettingKey: "enabled"}
+	preimage := NewSettingFingerprint(model.SettingPresent, "b", "true")
+	postimage := NewSettingFingerprint(model.SettingReset, "", "")
+	backup := []byte("b\x00true")
+	for _, id := range []string{"eligible-setting", "protected-setting"} {
+		_, err := store.AppendJournal(context.Background(), JournalEntry{
+			ID: id, Operation: "setting-set", State: "pending", Stage: JournalStagePending,
+			Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
+		}, backup)
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), "eligible-setting", "pending", "applied", JournalStageVerified))
+	require.NoError(t, store.TransitionJournalEntry(context.Background(), "protected-setting", "pending", "failed", JournalStageSettingSet))
+	now := time.Unix(1, 0).Add(JournalBackupRetention)
+	require.NoError(t, store.PruneJournalBackup(context.Background(), "eligible-setting", now))
+
+	entries, err := store.JournalEntries(context.Background(), "settings")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	for _, entry := range entries {
+		switch entry.ID {
+		case "eligible-setting":
+			assert.Empty(t, entry.BackupRef)
+			assert.Empty(t, entry.Preimage.ValueType)
+			assert.Empty(t, entry.Preimage.ValueText)
+			assert.Empty(t, entry.Postimage.ValueType)
+			assert.Empty(t, entry.Postimage.ValueText)
+		case "protected-setting":
+			assert.NotEmpty(t, entry.BackupRef)
+			assert.Equal(t, "b", entry.Preimage.ValueType)
+			assert.Equal(t, "true", entry.Preimage.ValueText)
+			assert.Empty(t, entry.Postimage.ValueType)
+			assert.Empty(t, entry.Postimage.ValueText)
+			payload, err := store.Payload(entry.BackupRef)
+			require.NoError(t, err)
+			assert.Equal(t, backup, payload)
+		}
+	}
+}
+
+func TestJournalEntriesUseRowIDInsertionOrder(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
+	for _, item := range []struct {
+		id   string
+		path string
+	}{
+		{id: "z-inserted-first", path: "first.toml"},
+		{id: "a-inserted-second", path: "second.toml"},
+	} {
+		before := []byte(item.id + "-before")
+		_, err := store.AppendJournal(context.Background(), JournalEntry{
+			ID: item.id, Operation: "replace", State: "pending", Stage: JournalStagePending,
+			Identity:  fileIdentity(item.path),
+			Preimage:  NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", before),
+			Postimage: NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte(item.id+"-after")),
+			CreatedAt: 17,
+		}, before)
+		require.NoError(t, err)
+	}
+	want := []string{"z-inserted-first", "a-inserted-second"}
+	for name, lookup := range map[string]func() ([]JournalEntry, error){
+		"target":  func() ([]JournalEntry, error) { return store.JournalEntries(context.Background(), "target") },
+		"all":     func() ([]JournalEntry, error) { return store.JournalEntriesAll(context.Background()) },
+		"pending": func() ([]JournalEntry, error) { return store.PendingJournalEntries(context.Background()) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			entries, err := lookup()
+			require.NoError(t, err)
+			require.Len(t, entries, 2)
+			assert.Equal(t, want, []string{entries[0].ID, entries[1].ID})
+		})
+	}
+}
+
+func TestSettingJournalStagesAreValidFailureAndJournalStages(t *testing.T) {
+	stages := []string{JournalStageSettingSet, JournalStageSettingReset, JournalStageSettingReadBack}
+	for _, stage := range stages {
+		assert.True(t, validJournalFailureStage(stage))
+		assert.True(t, validJournalStage(stage))
+	}
+	assert.False(t, validJournalFailureStage("unknown-setting-stage"))
+	assert.False(t, validJournalStage("unknown-setting-stage"))
+}
+
 func TestJournalPruningPreservesSharedBackupPayload(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))

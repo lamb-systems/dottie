@@ -467,7 +467,12 @@ func (s *Store) ApplyRetentionPrune(ctx context.Context, request RetentionPruneR
 			return err
 		}
 		for _, id := range plan.ExpiredBackupIDs {
-			result, err := tx.ExecContext(ctx, `UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolled-back' AND stage = ?))`, id, JournalStageVerified, JournalStageRolledBack)
+			result, err := tx.ExecContext(ctx, `UPDATE apply_journal SET backup_ref = '',
+preimage_value_type = CASE WHEN source = 'gnome' THEN '' ELSE preimage_value_type END,
+preimage_value_text = CASE WHEN source = 'gnome' THEN '' ELSE preimage_value_text END,
+postimage_value_type = CASE WHEN source = 'gnome' THEN '' ELSE postimage_value_type END,
+postimage_value_text = CASE WHEN source = 'gnome' THEN '' ELSE postimage_value_text END
+WHERE id = ? AND backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolled-back' AND stage = ?))`, id, JournalStageVerified, JournalStageRolledBack)
 			if err != nil {
 				return err
 			}

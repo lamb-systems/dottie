@@ -83,6 +83,17 @@ func NewFingerprint(state string, kind model.FileKind, mode uint32, linkTarget, 
 	return Fingerprint{State: state, Kind: kind, Mode: mode, LinkTarget: linkTarget, ValueType: valueType, ValueText: valueText, Size: int64(len(payload)), Digest: hex.EncodeToString(digest[:])}
 }
 
+func NewSettingFingerprint(state model.SettingState, valueType, valueText string) Fingerprint {
+	var payload []byte
+	if state == model.SettingPresent {
+		payload = []byte(valueType + "\x00" + valueText)
+	} else {
+		valueType = ""
+		valueText = ""
+	}
+	return NewFingerprint(string(state), "", 0, "", valueType, valueText, payload)
+}
+
 func (f Fingerprint) Validate(identity model.EntryKey) error {
 	if f.Size < 0 || len(f.Digest) != sha256.Size*2 {
 		return errors.New("invalid fingerprint size or digest")

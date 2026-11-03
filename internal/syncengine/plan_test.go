@@ -292,6 +292,48 @@ func TestBuildPreviewOrdersTargetsByID(t *testing.T) {
 	assert.Equal(t, []string{"alpha", "beta"}, []string{preview.Targets[0].ID, preview.Targets[1].ID}, "targets are sorted by ID")
 }
 
+func TestBuildPreviewTransfersSettingResets(t *testing.T) {
+	options := settingsBinding(t)
+	targets := []model.Target{options.Bindings[0].Target}
+	baseSetting := setting(model.SettingPresent, "b", "true")
+	resetSetting := setting(model.SettingReset, "", "")
+
+	cases := []struct {
+		name        string
+		local       model.Entry
+		remote      model.Entry
+		observation model.Entry
+		action      Action
+		reason      PreviewReason
+	}{
+		{name: "local reset uploads", local: resetSetting, remote: baseSetting, observation: resetSetting, action: ActionUpload, reason: PreviewReasonLocalChanged},
+		{name: "remote reset downloads", local: baseSetting, remote: resetSetting, observation: baseSetting, action: ActionDownload, reason: PreviewReasonRemoteChanged},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := Reconcile(
+				BaseView{Status: BaseKnown, Entries: []model.Entry{baseSetting}},
+				LocalView{Entries: []model.Entry{test.local}, Coverage: []string{"settings"}},
+				[]model.Entry{test.remote}, options,
+			)
+			require.NoError(t, err)
+			observation := model.Observation{State: model.ObservationPresent, Identity: test.observation.Identity(), Entry: &test.observation}
+			preview, err := BuildPreview(plan, targets, []model.Observation{observation})
+			require.NoError(t, err)
+			require.Len(t, preview.Targets, 1)
+			require.Len(t, preview.Targets[0].Entries, 1)
+			entry := preview.Targets[0].Entries[0]
+			assert.Equal(t, baseSetting.Identity(), entry.Key)
+			assert.Equal(t, PreviewChange, entry.Action)
+			assert.Equal(t, test.action, entry.DecisionAction)
+			assert.Equal(t, test.reason, entry.Reason)
+			assert.True(t, preview.Complete)
+			assert.Equal(t, 0, preview.UnresolvedEntries)
+			assert.Nil(t, entry.Risks)
+		})
+	}
+}
+
 func TestBuildPreviewRejectsObservationWithoutTarget(t *testing.T) {
 	_, err := BuildPreview(Plan{}, nil, []model.Observation{{
 		State:    model.ObservationMissing,

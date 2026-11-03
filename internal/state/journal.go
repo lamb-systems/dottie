@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 const (
@@ -24,6 +26,9 @@ const (
 	JournalStageSyncDirectory         = "sync-directory"
 	JournalStageDelete                = "delete"
 	JournalStageReadBack              = "read-back"
+	JournalStageSettingSet            = "setting-set"
+	JournalStageSettingReset          = "setting-reset"
+	JournalStageSettingReadBack       = "setting-read-back"
 	JournalStageVerified              = "verified"
 	JournalStageIndeterminate         = "indeterminate"
 	JournalStageRolledBack            = "rolled-back"
@@ -95,6 +100,29 @@ func (s *Store) BeginJournalRollback(ctx context.Context, id string) error {
 	return s.setJournalRollbackStage(ctx, id, JournalStageRollbackPending, JournalStageVerified)
 }
 
+func (s *Store) BeginJournalRollbackWithBackup(ctx context.Context, id, backupRef string) error {
+	if err := validateID(id, "journal id"); err != nil {
+		return err
+	}
+	if err := validateID(backupRef, "journal backup reference"); err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied' AND stage = ? AND backup_ref = ?", JournalStageRollbackPending, id, JournalStageVerified, backupRef)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			return fmt.Errorf("%w: journal entry %q backup is no longer retained", ErrInvalidJournalTransition, id)
+		}
+		return nil
+	})
+}
+
 func (s *Store) RecordJournalRollbackIndeterminate(ctx context.Context, id string) error {
 	return s.setJournalRollbackStage(ctx, id, JournalStageRollbackIndeterminate, JournalStageVerified, JournalStageRollbackPending)
 }
@@ -141,9 +169,9 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 	var reference string
 	var remove, pruned bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		var state, stage string
+		var state, stage, source string
 		var createdAt int64
-		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at, source FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt, &source); err != nil {
 			return err
 		}
 		if reference == "" {
@@ -165,7 +193,11 @@ WHERE material.backup_ref = ? OR material.payload_ref = ?`, reference, reference
 		if retainedReferences != 0 {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = ?", id, state); err != nil {
+		query := "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = ?"
+		if source == string(model.SourceGNOME) {
+			query = "UPDATE apply_journal SET backup_ref = '', preimage_value_type = '', preimage_value_text = '', postimage_value_type = '', postimage_value_text = '' WHERE id = ? AND state = ?"
+		}
+		if _, err := tx.ExecContext(ctx, query, id, state); err != nil {
 			return err
 		}
 		pruned = true
@@ -263,7 +295,7 @@ func validJournalFailureStage(stage string) bool {
 	switch stage {
 	case JournalStagePrecondition, JournalStageCreateTemp, JournalStageSetMode, JournalStageWrite,
 		JournalStageSyncFile, JournalStageClose, JournalStageRename, JournalStageSyncDirectory, JournalStageDelete,
-		JournalStageReadBack:
+		JournalStageReadBack, JournalStageSettingSet, JournalStageSettingReset, JournalStageSettingReadBack:
 		return true
 	default:
 		return false
@@ -274,7 +306,8 @@ func validJournalStage(stage string) bool {
 	switch stage {
 	case JournalStagePending, JournalStagePrecondition, JournalStageCreateTemp, JournalStageSetMode, JournalStageWrite,
 		JournalStageSyncFile, JournalStageClose, JournalStageRename, JournalStageSyncDirectory, JournalStageDelete,
-		JournalStageReadBack, JournalStageVerified, JournalStageIndeterminate, JournalStageRolledBack, JournalStageRollbackSkipped,
+		JournalStageReadBack, JournalStageSettingSet, JournalStageSettingReset, JournalStageSettingReadBack,
+		JournalStageVerified, JournalStageIndeterminate, JournalStageRolledBack, JournalStageRollbackSkipped,
 		JournalStageRollbackPending, JournalStageRollbackIndeterminate:
 		return true
 	default:
