@@ -354,7 +354,7 @@ func TestTransitionAttemptSurvivesStoreRestart(t *testing.T) {
 	attempt := TransitionAttempt{
 		ID: "transition-attempt-1", MarkerCollection: "systems.lamb.dottie.vaultSnapshot", MarkerRKey: "snapshot-one",
 		ExpectedRecordCID: "bafyrecord", CandidateBlobCID: "bafyblob", EpochSeq: 4,
-		PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, Evidence: `{"headRecordCid":"bafyhead"}`, CreatedAt: 123,
+		PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, Evidence: `{"retryDisposition":{"version":1,"value":"ambiguous"}}`, CreatedAt: 123,
 	}
 	require.NoError(t, store.BeginTransitionAttempt(context.Background(), attempt))
 	require.NoError(t, store.Close())
@@ -376,6 +376,31 @@ func TestTransitionAttemptSurvivesStoreRestart(t *testing.T) {
 	assert.Equal(t, TransitionAttemptCommitted, got.Outcome)
 	assert.Equal(t, `{"verified":true}`, got.Evidence)
 	require.Error(t, reopened.UpdateTransitionAttempt(context.Background(), attempt.ID, TransitionAttemptNotLanded, `{"verified":false}`))
+}
+
+func TestTransitionAttemptsByMarkerFiltersOrdersAndSurvivesRestart(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	attempts := []TransitionAttempt{
+		{ID: "attempt-b", MarkerCollection: "systems.lamb.dottie.vaultSnapshot", MarkerRKey: "publish-one", ExpectedRecordCID: "bafyrecord-b", CandidateBlobCID: "bafyblob", EpochSeq: 4, PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, CreatedAt: 20},
+		{ID: "attempt-a", MarkerCollection: "systems.lamb.dottie.vaultSnapshot", MarkerRKey: "publish-one", ExpectedRecordCID: "bafyrecord-a", CandidateBlobCID: "bafyblob", EpochSeq: 4, PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, CreatedAt: 20},
+		{ID: "attempt-other", MarkerCollection: "systems.lamb.dottie.vaultSnapshot", MarkerRKey: "publish-two", ExpectedRecordCID: "bafyrecord-c", CandidateBlobCID: "bafyblob", EpochSeq: 4, PolicyDigest: strings.Repeat("a", 64), Outcome: TransitionAttemptPrepared, CreatedAt: 10},
+	}
+	for _, attempt := range attempts {
+		require.NoError(t, store.BeginTransitionAttempt(context.Background(), attempt))
+	}
+	require.NoError(t, store.Close())
+
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, err := reopened.TransitionAttemptsByMarker(context.Background(), "systems.lamb.dottie.vaultSnapshot", "publish-one")
+	require.NoError(t, err)
+	assert.Equal(t, []TransitionAttempt{attempts[1], attempts[0]}, got)
+	_, err = reopened.TransitionAttemptsByMarker(context.Background(), "", "publish-one")
+	assert.Error(t, err)
+	_, err = reopened.TransitionAttemptsByMarker(context.Background(), "systems.lamb.dottie.vaultSnapshot", "bad\x00rkey")
+	assert.Error(t, err)
 }
 
 func TestRestartPreservesRecordsAndPayloadsAfterCacheDeletion(t *testing.T) {

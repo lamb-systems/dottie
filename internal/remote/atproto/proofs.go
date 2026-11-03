@@ -31,7 +31,95 @@ var (
 	ErrBatchRejected               = errors.New("publication batch was rejected")
 	ErrAmbiguousTransport          = errors.New("publication or read transport outcome is ambiguous")
 	ErrCandidateMayBeDisclosed     = errors.New("a rejected publication may have left the staged candidate retrievable by CID")
+	ErrPublicationQuota            = errors.New("provider quota or storage limit rejected the publication")
+	ErrPublicationRateLimited      = errors.New("provider rate limit rejected the publication")
+	ErrPublicationBatchTooLarge    = errors.New("publication batch exceeds a provider request limit")
+	ErrPublicationIDReuse          = errors.New("publication marker already exists with different content")
+	ErrPublicationStarved          = errors.New("publication retry budget exhausted after ambiguous outcomes")
+	ErrPublicationQueued           = errors.New("publication remains queued pending provider availability or authorization")
+	ErrPublicationUnavailable      = errors.New("publication outcome could not be verified")
+	ErrPublicationRejected         = errors.New("publication was rejected")
+	ErrPublicationSuperseded       = errors.New("publication was committed but its head was superseded")
+	ErrPublicationRetryFenceLost   = errors.New("publication retry lost its commit fence")
+	ErrPublicationState            = errors.New("publication attempt state could not be persisted")
 )
+
+type ReadStatusError struct {
+	StatusCode int
+	Code       string
+}
+
+func (e *ReadStatusError) Error() string {
+	if code := safeStatusText(e.Code); code != "" {
+		return fmt.Sprintf("repository read returned HTTP %d (%s)", e.StatusCode, code)
+	}
+	return fmt.Sprintf("repository read returned HTTP %d", e.StatusCode)
+}
+
+type ProviderStatusError struct {
+	StatusCode int
+	Code       string
+}
+
+func (e *ProviderStatusError) Error() string {
+	if code := safeStatusText(e.Code); code != "" {
+		return fmt.Sprintf("provider returned HTTP %d (%s)", e.StatusCode, code)
+	}
+	return fmt.Sprintf("provider returned HTTP %d", e.StatusCode)
+}
+
+func safeProviderCode(body []byte) string {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return ""
+	}
+	return safeStatusText(response.Error)
+}
+
+func safeStatusText(code string) string {
+	switch code {
+	case "InvalidSwap", "QuotaExceeded", "StorageQuotaExceeded", "RateLimitExceeded", "BlobTooLarge", "RequestTooLarge", "PayloadTooLarge", "AuthRequired":
+		return code
+	default:
+		return ""
+	}
+}
+
+var errSafeTransport = errors.New("transport error")
+
+func safeTransportCause(err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, sentinel := range []error{
+		ErrAuthMethodConfiguration, ErrAuthMethodHost, ErrAuthMethodSession, ErrAuthMethodTransport,
+		ErrAuthMethodNonce, ErrAuthMethodToken, ErrAuthMethodRelocated, ErrAuthMethodNonReplayable,
+		ErrSessionUnavailable, ErrSessionRefreshPending, ErrSessionBusy, ErrSessionLockUnavailable,
+		ErrAmbiguousTransport, ErrRevisionMoving, ErrFenceLost, ErrBatchRejected, ErrPublicationQuota,
+		ErrPublicationRateLimited, ErrPublicationBatchTooLarge, ErrPublicationIDReuse,
+		ErrCandidateExceedsBlobUploadLimit, ErrCandidateMayBeDisclosed,
+		context.Canceled, context.DeadlineExceeded,
+	} {
+		if errors.Is(err, sentinel) {
+			return sentinel
+		}
+	}
+	var readStatus *ReadStatusError
+	if errors.As(err, &readStatus) {
+		return &ReadStatusError{StatusCode: readStatus.StatusCode, Code: safeStatusText(readStatus.Code)}
+	}
+	var providerStatus *ProviderStatusError
+	if errors.As(err, &providerStatus) {
+		return &ProviderStatusError{StatusCode: providerStatus.StatusCode, Code: safeStatusText(providerStatus.Code)}
+	}
+	var authStatus *AuthStatusError
+	if errors.As(err, &authStatus) {
+		return &AuthStatusError{StatusCode: authStatus.StatusCode, Err: errSafeTransport}
+	}
+	return errSafeTransport
+}
 
 type Budgets struct {
 	MaxCarBytes          int64
@@ -213,13 +301,14 @@ func (r RevisionReader) IsCurrent(ctx context.Context, did string, cached *Revis
 func (r RevisionReader) latest(ctx context.Context, did string) (latestCommit, error) {
 	status, body, err := r.Transport.Do(ctx, "GET", "com.atproto.sync.getLatestCommit", url.Values{"did": {did}}, nil, "")
 	if err != nil {
-		return latestCommit{}, fmt.Errorf("%w: getLatestCommit request failed", ErrAmbiguousTransport)
-	}
-	if status >= 500 {
-		return latestCommit{}, fmt.Errorf("%w: getLatestCommit returned HTTP %d", ErrAmbiguousTransport, status)
+		return latestCommit{}, fmt.Errorf("%w: getLatestCommit request failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
 	}
 	if status < 200 || status >= 300 {
-		return latestCommit{}, fmt.Errorf("getLatestCommit returned HTTP %d", status)
+		statusErr := &ReadStatusError{StatusCode: status, Code: safeProviderCode(body)}
+		if status >= 500 {
+			return latestCommit{}, fmt.Errorf("%w: %w", ErrAmbiguousTransport, statusErr)
+		}
+		return latestCommit{}, statusErr
 	}
 	var current latestCommit
 	if err := json.Unmarshal(body, &current); err != nil || current.CID == "" {
@@ -236,17 +325,18 @@ func (r RevisionReader) latest(ctx context.Context, did string) (latestCommit, e
 func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([]byte, cid.Cid, error) {
 	status, stream, err := r.Transport.OpenStream(ctx, "com.atproto.sync.getRepo", url.Values{"did": {did}})
 	if err != nil {
-		return nil, cid.Undef, fmt.Errorf("%w: getRepo request failed", ErrAmbiguousTransport)
+		return nil, cid.Undef, fmt.Errorf("%w: getRepo request failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
 	}
 	if stream == nil {
 		return nil, cid.Undef, fmt.Errorf("%w: getRepo returned no response body", ErrAmbiguousTransport)
 	}
 	defer stream.Close()
-	if status >= 500 {
-		return nil, cid.Undef, fmt.Errorf("%w: getRepo returned HTTP %d", ErrAmbiguousTransport, status)
-	}
 	if status < 200 || status >= 300 {
-		return nil, cid.Undef, fmt.Errorf("getRepo returned HTTP %d", status)
+		statusErr := &ReadStatusError{StatusCode: status}
+		if status >= 500 {
+			return nil, cid.Undef, fmt.Errorf("%w: %w", ErrAmbiguousTransport, statusErr)
+		}
+		return nil, cid.Undef, statusErr
 	}
 	limited := io.LimitReader(stream, budgets.MaxCarBytes+1)
 	carBytes, err := io.ReadAll(limited)
@@ -254,7 +344,7 @@ func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([
 		return nil, cid.Undef, untrustedBound("MaxCarBytes", len(carBytes))
 	}
 	if err != nil {
-		return nil, cid.Undef, fmt.Errorf("%w: getRepo response stream failed", ErrAmbiguousTransport)
+		return nil, cid.Undef, fmt.Errorf("%w: getRepo response stream failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
 	}
 	root, err := validateCARBudgets(carBytes, budgets)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,22 +61,32 @@ func (io *publicationTestIO) StageCandidate(_ context.Context, data []byte, _ va
 	return blob, cidText, err
 }
 
-func (io *publicationTestIO) applyPublication(_ context.Context, _ *Revision, publication FencedSnapshotPublication) error {
+func (io *publicationTestIO) applyPublication(_ context.Context, _ *Revision, publication FencedSnapshotPublication) (string, error) {
 	io.applyCount++
 	io.publication = append(io.publication, publication)
 	if io.applyError != nil {
-		return io.applyError
+		return "", io.applyError
 	}
 	io.latest = publicationResolutionRevision(publication)
-	return nil
+	return "", nil
 }
 
 func publicationResolutionRevision(publication FencedSnapshotPublication) *Revision {
 	revision := publicationTestRevision()
-	markerCID, _ := recordCIDText(publication.SnapshotReference.Record)
-	headCID, _ := recordCIDText(publication.VaultHead.Record)
-	revision.membership[RecordKey{Collection: VaultSnapshotNSID, RKey: publication.SnapshotReference.RKey}] = markerCID
-	revision.membership[RecordKey{Collection: VaultHeadNSID, RKey: "self"}] = headCID
+	snapshot, err := decodeRecordJSON(publication.SnapshotReference.Record)
+	if err != nil {
+		return nil
+	}
+	if err := addPublicationTestRecord(revision, RecordKey{Collection: VaultSnapshotNSID, RKey: publication.SnapshotReference.RKey}, snapshot); err != nil {
+		return nil
+	}
+	head, err := decodeRecordJSON(publication.VaultHead.Record)
+	if err != nil {
+		return nil
+	}
+	if err := addPublicationTestRecord(revision, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, head); err != nil {
+		return nil
+	}
 	return revision
 }
 
@@ -421,6 +432,75 @@ func TestPublishFencedAlwaysEncodesSwapCommit(t *testing.T) {
 	var writes []json.RawMessage
 	if err := json.Unmarshal(input["writes"], &writes); err != nil || len(writes) != 3 {
 		require.False(t, err != nil || len(writes) != 3, "encoded batch writes=%d error=%v", len(writes), err)
+	}
+}
+
+func TestApplyWritesPreservesCausesAndClassifiesProviderStatuses(t *testing.T) {
+	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
+	revision, err := publicationRevisionForPredecessor(predecessor)
+	require.NoError(t, err)
+	fenced, err := snapshotPublication(publication, signer.Signing, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), revision, predecessor)
+	require.NoError(t, err)
+
+	cause := ErrAuthMethodSession
+	transport := &proofTransport{doError: cause}
+	_, err = publishSnapshotFenced(context.Background(), transport, revision, fenced)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.ErrorIs(t, err, cause)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+
+	transport = &proofTransport{doError: errors.New("provider leaked super-secret-token")}
+	_, err = publishSnapshotFenced(context.Background(), transport, revision, fenced)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.NotContains(t, err.Error(), "super-secret-token")
+
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		want       error
+		disclosure bool
+	}{
+		{name: "quota", status: 400, body: `{"error":"QuotaExceeded","message":"private body"}`, want: ErrPublicationQuota, disclosure: true},
+		{name: "rate limit", status: 429, body: `{"error":"RateLimitExceeded"}`, want: ErrPublicationRateLimited, disclosure: true},
+		{name: "batch too large", status: 413, body: `{"error":"RequestTooLarge"}`, want: ErrPublicationBatchTooLarge, disclosure: true},
+		{name: "payload too large", status: 400, body: `{"error":"PayloadTooLarge"}`, want: ErrPublicationBatchTooLarge, disclosure: true},
+		{name: "fence lost", status: 400, body: `{"error":"InvalidSwap","message":"private body"}`, want: ErrFenceLost},
+		{name: "other rejection", status: 400, body: `{"error":"InvalidRequest"}`, want: ErrBatchRejected, disclosure: true},
+		{name: "auth hold", status: 401, body: `{"error":"AuthRequired"}`, want: ErrPublicationQueued, disclosure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &proofTransport{doStatus: tc.status, doBody: []byte(tc.body)}
+			_, err := publishSnapshotFenced(context.Background(), transport, revision, fenced)
+			require.ErrorIs(t, err, tc.want)
+			assert.Equal(t, tc.disclosure, errors.Is(err, ErrCandidateMayBeDisclosed))
+			if tc.status == 401 {
+				assert.ErrorIs(t, err, ErrBatchRejected)
+			}
+			assert.NotContains(t, err.Error(), "private body")
+		})
+	}
+}
+
+func TestApplyWritesStatusSurvivesBodyReadError(t *testing.T) {
+	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
+	revision, err := publicationRevisionForPredecessor(predecessor)
+	require.NoError(t, err)
+	fenced, err := snapshotPublication(publication, signer.Signing, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), revision, predecessor)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{status: 413, want: ErrPublicationBatchTooLarge},
+		{status: 400, want: ErrBatchRejected},
+		{status: 401, want: ErrPublicationQueued},
+	} {
+		transport := &proofTransport{doStatus: tc.status, doError: io.ErrUnexpectedEOF}
+		_, err := publishSnapshotFenced(context.Background(), transport, revision, fenced)
+		require.ErrorIs(t, err, tc.want)
+		assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+		assert.NotContains(t, err.Error(), "unexpected EOF")
 	}
 }
 

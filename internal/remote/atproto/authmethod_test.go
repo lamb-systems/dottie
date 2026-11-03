@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/stretchr/testify/assert"
@@ -240,4 +244,75 @@ func mustAuthRequest(t *testing.T, endpoint string) *http.Request {
 func tokenHash(token string) string {
 	digest := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+type blockingAuthTransport struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func (t *blockingAuthTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.calls.Add(1)
+	t.once.Do(func() {
+		close(t.entered)
+		<-t.release
+	})
+	return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: request}, nil
+}
+
+func TestAuthMethodLockHonorsContextCancellation(t *testing.T) {
+	_, client, _ := newFakeOAuth(t)
+	identity, err := client.Discover(context.Background(), testHandle)
+	require.NoError(t, err)
+	auth, err := NewAuthMethod(client, identity, testHandle, testAuthSession(t, identity, "access-token-shape"))
+	require.NoError(t, err)
+	transport := &blockingAuthTransport{entered: make(chan struct{}), release: make(chan struct{})}
+	httpClient := &http.Client{Transport: transport}
+	done := make(chan error, 1)
+	go func() {
+		_, authErr := auth.DoWithAuth(httpClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+		done <- authErr
+	}()
+	<-transport.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://shard.example/resource", nil)
+	require.NoError(t, err)
+	_, err = auth.DoWithAuth(httpClient, request, syntax.NSID("com.atproto.sync.getBlob"))
+	require.ErrorIs(t, err, ErrAuthMethodTransport)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, int32(1), transport.calls.Load())
+	close(transport.release)
+	assert.NoError(t, <-done)
+}
+
+type failingAuthBody struct{}
+
+func (failingAuthBody) Read([]byte) (int, error) {
+	return 0, errors.New("provider leaked super-secret-token")
+}
+
+func (failingAuthBody) Close() error { return nil }
+
+type statusBodyTransport struct {
+	status int
+}
+
+func (t statusBodyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: t.status, Header: make(http.Header), Body: failingAuthBody{}, Request: request}, nil
+}
+
+func TestAuthMethodPreservesStatusOnChallengeBodyReadError(t *testing.T) {
+	_, client, _ := newFakeOAuth(t)
+	identity, err := client.Discover(context.Background(), testHandle)
+	require.NoError(t, err)
+	auth, err := NewAuthMethod(client, identity, testHandle, testAuthSession(t, identity, "access-token-shape"))
+	require.NoError(t, err)
+	httpClient := &http.Client{Transport: statusBodyTransport{status: http.StatusBadRequest}}
+	_, err = auth.DoWithAuth(httpClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	require.ErrorIs(t, err, ErrAuthMethodTransport)
+	assert.Equal(t, http.StatusBadRequest, authStatusFromError(err))
+	assert.NotContains(t, err.Error(), "super-secret-token")
 }

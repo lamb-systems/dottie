@@ -27,7 +27,7 @@ func (t *ATClientTransport) Do(ctx context.Context, method, endpoint string, que
 	}
 	response, err := t.Client.Do(ctx, request)
 	if err != nil {
-		return 0, nil, err
+		return authStatusFromError(err), nil, err
 	}
 	if response == nil || response.Body == nil {
 		return 0, nil, errors.New("XRPC client returned an empty response")
@@ -55,7 +55,7 @@ func (t *ATClientTransport) OpenStream(ctx context.Context, endpoint string, que
 	}
 	response, err := t.Client.Do(ctx, request)
 	if err != nil {
-		return 0, nil, err
+		return authStatusFromError(err), nil, err
 	}
 	if response == nil || response.Body == nil {
 		return 0, nil, errors.New("XRPC client returned an empty response")

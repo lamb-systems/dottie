@@ -659,6 +659,33 @@ FROM transition_attempts ORDER BY created_at, id`)
 	return attempts, err
 }
 
+func (s *Store) TransitionAttemptsByMarker(ctx context.Context, collection, rkey string) ([]TransitionAttempt, error) {
+	if err := validateID(collection, "transition marker collection"); err != nil {
+		return nil, err
+	}
+	if err := validateID(rkey, "transition marker rkey"); err != nil {
+		return nil, err
+	}
+	var attempts []TransitionAttempt
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT id, marker_collection, marker_rkey, expected_record_cid, candidate_blob_cid, epoch_seq, policy_digest, outcome, evidence, created_at
+FROM transition_attempts WHERE marker_collection = ? AND marker_rkey = ? ORDER BY created_at, id`, collection, rkey)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var attempt TransitionAttempt
+			if err := rows.Scan(&attempt.ID, &attempt.MarkerCollection, &attempt.MarkerRKey, &attempt.ExpectedRecordCID, &attempt.CandidateBlobCID, &attempt.EpochSeq, &attempt.PolicyDigest, &attempt.Outcome, &attempt.Evidence, &attempt.CreatedAt); err != nil {
+				return err
+			}
+			attempts = append(attempts, attempt)
+		}
+		return rows.Err()
+	})
+	return attempts, err
+}
+
 func (s *Store) TransitionAttempt(ctx context.Context, id string) (TransitionAttempt, error) {
 	if err := validateID(id, "transition attempt id"); err != nil {
 		return TransitionAttempt{}, err

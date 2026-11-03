@@ -1,8 +1,8 @@
 # Native AT Protocol remote boundary
 
-The package implements the OAuth identity boundary, bounded repository proofs and one fenced
-`applyWrites` publication operation. It does not provide generic record or blob CRUD, encrypt
-snapshot content, or wire synchronization into the CLI.
+The package implements the OAuth identity boundary, bounded repository proofs, one fenced
+`applyWrites` publication operation and a bounded retry API for ordinary publications. It does not
+provide generic record or blob CRUD, encrypt snapshot content, or wire synchronization into the CLI.
 
 ## Vault record binding
 
@@ -313,8 +313,8 @@ cleanup cannot verify or delete, output includes the complete run-id tracked pai
 reconciliation against a fresh verified revision without deleting unrelated records. An aborted run
 can therefore be reconciled from output alone. The test refuses to overwrite a pre-existing
 head/control `self`; this is an intentional restart hazard because those records may belong to a
-prior aborted run. These are integration-test mechanisms only: **no production retry or recovery loop
-exists**.
+prior aborted run. These are integration-test mechanisms only; the live harness records eligibility
+and does not invoke the library retry API. `PublishWithRetry` is not wired into the CLI or `syncengine`.
 
 ## Probe isolation and live PDS matrix
 
@@ -510,13 +510,42 @@ after staging and immediately before the fenced write. A policy digest mismatch 
 The local attempt row is committed before the blob upload request for both ordinary publication and
 transitions. It stores the unique snapshot marker, expected DAG-CBOR record CID, candidate blob CID,
 epoch, policy digest, outcome and resolution evidence, but no snapshot bytes or key material.
-`TransitionAttempts` enumerates rows for restart recovery; `ResolvePublicationAttempt` and
-`ResolveTransitionAttempt` verify current repository membership and do not send another batch. A
-verified marker plus matching head CID is the evidence for ordinary publication; transition commit
-additionally requires matching control CID. A present marker no longer bound by the current head/control is recorded as
-`committed-but-superseded`. The caller must throw away every candidate after a lost fence and
-prepare again from the latest verified policy and head; neither commit path has an internal retry
-loop. Every other failure after candidate transmission joins `ErrCandidateMayBeDisclosed`, including
+Ordinary publication evidence also stores a versioned retry disposition (`ambiguous`, `rejected`,
+`quota`, `rate-limited`, `upload-too-large`, `batch-too-large` or `fence-lost`) before its outcome
+update; the terminal `committed` outcome is authoritative rather than a disposition. `TransitionAttempts` enumerates rows for restart recovery, and
+`TransitionAttemptsByMarker` scans the small attempts table without an index or schema migration.
+`ResolvePublicationAttempt` and `ResolveTransitionAttempt` verify repository membership and do not
+send another batch. `PublishWithRetry` always observes the current verified revision before using
+historical rows. It accepts a no-op only when the marker's expected record CID is present and the
+proven head's `snapshotCid` and `blobCid` bind the requested snapshot. A different record CID is
+publication-ID reuse; a matching marker no longer bound by the current head is
+`committed-but-superseded`. A terminal committed or unavailable row is not current success by itself.
+
+Only a durable `ambiguous` disposition plus a fully verified current absence permits another write.
+Definitive rejection, quota, rate-limit, size and fence dispositions cannot be bypassed after restart;
+missing or unknown disposition fails closed. HTTP 401/403 is an auth hold recorded as ambiguous/queued,
+retryable only after renewal and verified current absence, not a data rejection. A failed definitive
+disposition or terminal-status write returns `ErrPublicationState` and stops the current invocation; a
+restart can see only the last durable ambiguous row, so a lost classification is indistinguishable from a
+timeout and is documented as a limit. The statuses are `committed`, `queued`, `starved`,
+`fence-lost`, `committed-but-superseded`, `unavailable` and `rejected`; only `committed` has nil
+error, and only with current marker/head evidence. The retrier serializes operations by marker within
+the process and bounds reads, uploads, writes and delays by its operation context. Defaults are three
+observation/write cycles, 250 ms base delay, 5 s cap and 10 s elapsed; these are code defaults, not
+measured provider tuning. Each eligible retry calls `CommitPublication` again and re-uploads the
+caller-supplied sealed snapshot, preserving the same content CID. This restores possible availability
+for an expired temporary upload; it is not a privacy repair and does not undo a post-rejection
+disclosure window. An explicit expired/missing-blob 4xx at apply time is a definitive other-rejection,
+not a retry trigger; re-upload availability comes from ambiguous/restart retry cycles. Candidate bytes
+are not persisted: the caller must re-supply the same sealed publication after restart, and retains
+candidate responsibility until P06/B03 adds a durable outbox. `PublishWithRetry`, `CommitPublication`
+and `ResolvePublicationAttempt` share the process-local marker lock. The concrete auth method's mutex is
+context-cancelable, so the retry operation context bounds waits behind another request. Transport error
+text is reduced to fixed classifications before entering returned errors or attempt evidence.
+
+`CommitPublication` is a one-attempt primitive; `PublishWithRetry` is a separate library API not yet
+wired to `syncengine` or a CLI workflow. `CommitTransition` remains resolve-only by design. Every
+post-transmission failure other than a lost fence can carry `ErrCandidateMayBeDisclosed`, including
 an unknown result resolved as not landed or unavailable.
 
 `TestLiveLedgerSharedRootRace` is gated by `DOTTIE_LIVE_LEDGER=1` and the existing disposable

@@ -108,6 +108,45 @@ legitimate caller supplied no clock would block a publication whose available co
 The fence does not protect bytes already uploaded, because the upload precedes the fenced commit that would
 reject them.
 
+## Publication retries (P05 library boundary)
+
+`PublishWithRetry` is a transport-library API for ordinary publications; it is not wired into the CLI or
+`internal/syncengine`. `CommitPublication` remains a one-attempt primitive, and administrative
+`CommitTransition` remains resolve-only. Retry defaults are three observation/write cycles, a 250 ms base
+delay, a 5 s cap and 10 s maximum elapsed time. These are unmeasured code defaults, not provider tuning.
+
+The durable logical identity is the snapshot marker plus its locally computed expected DAG-CBOR record CID.
+Every retry operation first reads a current verified revision. A matching marker and expected record CID is
+committed only when the proven head's `snapshotCid` and `blobCid` bind the requested sealed snapshot; a
+marker with another CID is ID reuse, and a matching marker no longer bound by the head is superseded. A
+terminal historical `committed` row is not current success. Versioned retry dispositions persist ambiguous,
+rejected, quota, rate-limited, upload-size, batch-size and fence-lost outcomes before attempt status updates;
+the terminal `committed` outcome itself is authoritative. Only an ambiguous disposition plus a fully verified
+current absence permits another write; missing or unknown disposition fails closed. Quota, rate-limit and
+auth/offline conditions remain queued; an HTTP 401/403 is an auth hold recorded as ambiguous/queued and may be
+retried only after renewal and a verified current absence, never as a data rejection. Exhausted repeated
+ambiguous absence is starved; unverifiable reads are unavailable; invalid swap is fence-lost;
+policy/size/definitive rejection is rejected. A committed result has nil error only with current marker/head
+evidence. If a definitive disposition or terminal status cannot be persisted, the invocation returns
+`ErrPublicationState` and does not retry; a later restart can only see the last durable ambiguous row, so a
+lost classification is indistinguishable from a timeout and remains a documented limit.
+
+The restart guarantee is conditional on the caller re-supplying the same sealed publication and marker.
+P05 does not persist candidate bytes or provide an outbox; candidate ownership remains with the caller until
+P06/B03. Every eligible attempt uploads the same bytes and therefore the same content CID. This can restore
+availability when a temporary upload expired, but is not a privacy repair and does not undo a measured
+post-rejection disclosure window. An explicit expired/missing-blob 4xx at apply time is a definitive
+other-rejection, not a retry trigger; re-upload availability comes from ambiguous/restart retry cycles. A
+provider-side upload 413 is treated as possible disclosure and rejected; a local pre-upload size refusal is
+not. Pending quota/rate work is reported as queued but cannot be resumed automatically until the
+outbox/workflow integration exists. Same-marker serialization is process-local for `PublishWithRetry`,
+`CommitPublication` and `ResolvePublicationAttempt`; the state database lock coordinates its own store access,
+not an invented distributed marker lock. The concrete authentication method's serialization is
+context-cancelable, so a publication operation's bounded context also bounds waiting behind another request.
+Underlying transport errors are reduced to fixed classifications before they reach returned errors or durable
+attempt evidence; arbitrary provider text is not propagated. The retrier proves its marker/head observation,
+not global freshness or the provider's at-most-one-effect behavior.
+
 ## Measured limits
 
 From live runs on two hosting categories.

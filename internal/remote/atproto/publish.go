@@ -100,6 +100,50 @@ type applyWritesError struct {
 	Error string `json:"error"`
 }
 
+func applyWritesStatusError(status int, response []byte) error {
+	code := safeProviderCode(response)
+	statusErr := &ProviderStatusError{StatusCode: status, Code: code}
+	switch {
+	case status >= 400 && status < 500 && code == "InvalidSwap":
+		return errors.Join(ErrFenceLost, statusErr)
+	case status == 429:
+		return errors.Join(ErrPublicationRateLimited, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && (code == "QuotaExceeded" || code == "StorageQuotaExceeded"):
+		return errors.Join(ErrPublicationQuota, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && code == "RateLimitExceeded":
+		return errors.Join(ErrPublicationRateLimited, ErrCandidateMayBeDisclosed, statusErr)
+	case status == 401 || status == 403:
+		return errors.Join(ErrPublicationQueued, ErrBatchRejected, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && (status == 413 || code == "RequestTooLarge" || code == "PayloadTooLarge"):
+		return errors.Join(ErrPublicationBatchTooLarge, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500:
+		return errors.Join(ErrBatchRejected, ErrCandidateMayBeDisclosed, statusErr)
+	default:
+		return errors.Join(ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, statusErr)
+	}
+}
+
+func uploadBlobStatusError(status int, response []byte) error {
+	code := safeProviderCode(response)
+	statusErr := &ProviderStatusError{StatusCode: status, Code: code}
+	switch {
+	case status == 429:
+		return errors.Join(ErrPublicationRateLimited, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && (code == "QuotaExceeded" || code == "StorageQuotaExceeded"):
+		return errors.Join(ErrPublicationQuota, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && code == "RateLimitExceeded":
+		return errors.Join(ErrPublicationRateLimited, ErrCandidateMayBeDisclosed, statusErr)
+	case status == 401 || status == 403:
+		return errors.Join(ErrPublicationQueued, ErrBatchRejected, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500 && (status == 413 || code == "BlobTooLarge"):
+		return errors.Join(ErrCandidateExceedsBlobUploadLimit, ErrCandidateMayBeDisclosed, statusErr)
+	case status >= 400 && status < 500:
+		return errors.Join(ErrBatchRejected, ErrCandidateMayBeDisclosed, statusErr)
+	default:
+		return errors.Join(ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, statusErr)
+	}
+}
+
 func publishFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedPublication) (PublishResult, error) {
 	if transport == nil || revision == nil || !validDID(revision.did) || revision.commitCID == "" {
 		return PublishResult{}, fmt.Errorf("%w: verified revision and transport are required", ErrBatchRejected)
@@ -135,24 +179,17 @@ func publishFenced(ctx context.Context, transport Transport, revision *Revision,
 	}
 	status, response, err := transport.Do(ctx, "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
-	}
-	if status >= 500 {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, status)
-	}
-	if status >= 400 && status < 500 {
-		var remoteError applyWritesError
-		if json.Unmarshal(response, &remoteError) == nil && remoteError.Error == "InvalidSwap" {
-			return PublishResult{}, ErrFenceLost
+		if status >= 400 && status < 500 {
+			return PublishResult{}, applyWritesStatusError(status, response)
 		}
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrBatchRejected, ErrCandidateMayBeDisclosed, status)
+		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown: %w", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, safeTransportCause(err))
 	}
 	if status < 200 || status >= 300 {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, status)
+		return PublishResult{}, applyWritesStatusError(status, response)
 	}
 	var output applyWritesOutput
 	if len(response) != 0 {
-		if err := json.Unmarshal(response, &output); err != nil {
+		if json.Unmarshal(response, &output) != nil {
 			return PublishResult{}, fmt.Errorf("%w: %w: applyWrites response is malformed after submission", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
 		}
 	}
@@ -162,7 +199,7 @@ func publishFenced(ctx context.Context, transport Transport, revision *Revision,
 type publicationIO interface {
 	ReadCurrent(context.Context) (*Revision, vault.Predecessor, error)
 	StageCandidate(context.Context, []byte, vault.Policy, [][]byte) (json.RawMessage, string, error)
-	applyPublication(context.Context, *Revision, FencedSnapshotPublication) error
+	applyPublication(context.Context, *Revision, FencedSnapshotPublication) (string, error)
 }
 
 type ATProtoPublicationIO struct {
@@ -188,9 +225,9 @@ func (io ATProtoPublicationIO) StageCandidate(ctx context.Context, data []byte, 
 	return (ATProtoTransitionIO{Transport: io.Transport, BlobUploadLimit: io.BlobUploadLimit}).StageCandidate(ctx, data, expectedPolicy, certificates)
 }
 
-func (io ATProtoPublicationIO) applyPublication(ctx context.Context, revision *Revision, publication FencedSnapshotPublication) error {
-	_, err := publishSnapshotFenced(ctx, io.Transport, revision, publication)
-	return err
+func (io ATProtoPublicationIO) applyPublication(ctx context.Context, revision *Revision, publication FencedSnapshotPublication) (string, error) {
+	result, err := publishSnapshotFenced(ctx, io.Transport, revision, publication)
+	return result.CommitCID, err
 }
 
 func publishSnapshotFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedSnapshotPublication) (PublishResult, error) {
@@ -224,24 +261,17 @@ func publishSnapshotFenced(ctx context.Context, transport Transport, revision *R
 	}
 	status, response, err := transport.Do(ctx, "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
-	}
-	if status >= 500 {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, status)
-	}
-	if status >= 400 && status < 500 {
-		var remoteError applyWritesError
-		if json.Unmarshal(response, &remoteError) == nil && remoteError.Error == "InvalidSwap" {
-			return PublishResult{}, ErrFenceLost
+		if status >= 400 && status < 500 {
+			return PublishResult{}, applyWritesStatusError(status, response)
 		}
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrBatchRejected, ErrCandidateMayBeDisclosed, status)
+		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown: %w", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, safeTransportCause(err))
 	}
 	if status < 200 || status >= 300 {
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites returned HTTP %d", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, status)
+		return PublishResult{}, applyWritesStatusError(status, response)
 	}
 	var output applyWritesOutput
 	if len(response) != 0 {
-		if err := json.Unmarshal(response, &output); err != nil {
+		if json.Unmarshal(response, &output) != nil {
 			return PublishResult{}, fmt.Errorf("%w: %w: applyWrites response is malformed after submission", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
 		}
 	}
@@ -337,6 +367,15 @@ func publicationPredecessorMatchesRevision(revision *Revision, predecessor vault
 }
 
 func CommitPublication(ctx context.Context, io ATProtoPublicationIO, store TransitionAttemptStore, publication vault.Publication, signer ed25519.PrivateKey, now time.Time) (PublicationCommitResult, error) {
+	marker, _, err := publicationMarker(publication, signer)
+	if err != nil {
+		return PublicationCommitResult{}, err
+	}
+	release, err := acquirePublicationMarker(ctx, marker)
+	if err != nil {
+		return PublicationCommitResult{}, err
+	}
+	defer release()
 	return commitPublication(ctx, io, store, publication, signer, now)
 }
 
@@ -364,10 +403,16 @@ func commitPublication(ctx context.Context, io publicationIO, store TransitionAt
 	if err != nil {
 		return PublicationCommitResult{}, err
 	}
-	marker := RecordKey{Collection: VaultSnapshotNSID, RKey: preview.SnapshotReference.RKey}
-	markerCID, err := recordCIDText(preview.SnapshotReference.Record)
+	marker, markerCID, err := publicationMarker(publication, signer)
 	if err != nil {
 		return PublicationCommitResult{}, err
+	}
+	if marker.RKey != preview.SnapshotReference.RKey {
+		return PublicationCommitResult{}, fmt.Errorf("%w: publication marker identity disagrees with its record", ErrBatchRejected)
+	}
+	previewCID, err := recordCIDText(preview.SnapshotReference.Record)
+	if err != nil || previewCID != markerCID {
+		return PublicationCommitResult{}, fmt.Errorf("%w: publication marker CID disagrees with its record", ErrBatchRejected)
 	}
 	headCID, err := recordCIDText(preview.VaultHead.Record)
 	if err != nil {
@@ -390,6 +435,21 @@ func commitPublication(ctx context.Context, io publicationIO, store TransitionAt
 	if err := store.BeginTransitionAttempt(ctx, attempt); err != nil {
 		return PublicationCommitResult{}, err
 	}
+	persistDisposition := func(evidence, disposition string) (string, error) {
+		updated, err := persistRetryDisposition(ctx, store, attempt, evidence, disposition)
+		if err == nil {
+			attempt.Evidence = updated
+		}
+		return updated, err
+	}
+	updateOutcome := func(outcome string, evidence string) error {
+		if err := store.UpdateTransitionAttempt(ctx, attemptID, outcome, evidence); err != nil {
+			return err
+		}
+		attempt.Outcome = outcome
+		attempt.Evidence = evidence
+		return nil
+	}
 	currentPolicy, err := vault.DecodePolicy(initialPredecessor.Policy)
 	if err != nil {
 		return PublicationCommitResult{}, fmt.Errorf("%w: current publication policy", ErrBatchRejected)
@@ -397,67 +457,111 @@ func commitPublication(ctx context.Context, io publicationIO, store TransitionAt
 	blobReference, uploadedCID, err := io.StageCandidate(ctx, publication.Snapshot, currentPolicy, initialPredecessor.Certificates)
 	if err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "stageError", err.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, publicationDispositionForError(err))
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
+		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(err, publicationStateError(dispositionErr))
 	}
 	if uploadedCID != blobCID {
 		mismatch := fmt.Errorf("%w: uploaded candidate CID differs from the sealed publication", ErrBatchRejected)
 		updatedEvidence := evidenceWith(string(evidence), "uploadedCID", uploadedCID)
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(mismatch, updateErr, ErrCandidateMayBeDisclosed)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionRejected)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
+		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(mismatch, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
-	if err := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeStaged, string(evidence)); err != nil {
-		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, string(evidence)), errors.Join(err, ErrCandidateMayBeDisclosed)
+	updatedEvidence, dispositionErr := persistDisposition(string(evidence), retryDispositionAmbiguous)
+	if dispositionErr != nil {
+		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, attempt.Evidence), errors.Join(publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
+	if err := updateOutcome(TransitionOutcomeStaged, updatedEvidence); err != nil {
+		return publicationResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(publicationStateError(err), ErrCandidateMayBeDisclosed)
+	}
+	evidence = json.RawMessage(updatedEvidence)
 	currentRevision, currentPredecessor, err := io.ReadCurrent(ctx)
 	if err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "revalidationReadError", err.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeNotLanded, nil, updatedEvidence), errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionAmbiguous)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
+		return publicationResult(attempt, TransitionOutcomeNotLanded, nil, updatedEvidence), errors.Join(err, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
 	if err := publicationPredecessorMatchesRevision(currentRevision, currentPredecessor); err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "revalidationError", err.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(fmt.Errorf("%w: predecessor does not match verified revision: %w", ErrBatchRejected, err), updateErr, ErrCandidateMayBeDisclosed)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionRejected)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
+		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(fmt.Errorf("%w: predecessor does not match verified revision: %w", ErrBatchRejected, err), publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
 	if publication.PolicyDigest != currentPredecessor.PolicyDigest {
 		mismatch := &PreparedPolicyMismatchError{Prepared: publication.PolicyDigest, Current: currentPredecessor.PolicyDigest}
 		updatedEvidence := evidenceWith(string(evidence), "revalidationError", mismatch.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionRejected)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
 		result := publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence)
 		result.Predecessor = &currentPredecessor
-		return result, errors.Join(mismatch, updateErr, ErrCandidateMayBeDisclosed)
+		return result, errors.Join(mismatch, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
 	if err := vault.ValidatePublication(publication, currentPredecessor); err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "revalidationError", err.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionRejected)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
 		result := publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence)
 		result.Predecessor = &currentPredecessor
-		return result, errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+		return result, errors.Join(err, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
 	fencedPublication, err := snapshotPublication(publication, signer, blobReference, currentRevision, currentPredecessor)
 	if err != nil {
 		updatedEvidence := evidenceWith(string(evidence), "recordError", err.Error())
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(err, updateErr, ErrCandidateMayBeDisclosed)
+		updatedEvidence, dispositionErr := persistDisposition(updatedEvidence, retryDispositionRejected)
+		if dispositionErr == nil {
+			dispositionErr = updateOutcome(TransitionOutcomeNotLanded, updatedEvidence)
+		}
+		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(err, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
-	if err := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeSubmitted, string(evidence)); err != nil {
-		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, string(evidence)), errors.Join(err, ErrCandidateMayBeDisclosed)
+	updatedEvidence, dispositionErr = persistDisposition(string(evidence), retryDispositionAmbiguous)
+	if dispositionErr != nil {
+		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, attempt.Evidence), errors.Join(publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
 	}
-	applyErr := io.applyPublication(ctx, currentRevision, fencedPublication)
+	if err := updateOutcome(TransitionOutcomeSubmitted, updatedEvidence); err != nil {
+		return publicationResult(attempt, TransitionOutcomeNotLanded, currentRevision, updatedEvidence), errors.Join(publicationStateError(err), ErrCandidateMayBeDisclosed)
+	}
+	evidence = json.RawMessage(updatedEvidence)
+	commitCID, applyErr := io.applyPublication(ctx, currentRevision, fencedPublication)
 	if errors.Is(applyErr, ErrFenceLost) {
+		updatedEvidence, dispositionErr = persistDisposition(string(evidence), retryDispositionFenceLost)
+		if dispositionErr != nil {
+			return publicationResult(attempt, TransitionOutcomeUnavailable, nil, attempt.Evidence), errors.Join(applyErr, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
+		}
 		latest, latestPredecessor, readErr := io.ReadCurrent(ctx)
-		updatedEvidence := evidenceWith(string(evidence), "fenceLostRevision", revisionCommit(latest))
+		updatedEvidence = evidenceWith(updatedEvidence, "fenceLostRevision", revisionCommit(latest))
 		if readErr != nil {
 			updatedEvidence = evidenceWith(updatedEvidence, "fenceLostReadError", readErr.Error())
 		}
-		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeFenceLost, updatedEvidence)
+		updateErr := updateOutcome(TransitionOutcomeFenceLost, updatedEvidence)
 		result := publicationResult(attempt, TransitionOutcomeFenceLost, latest, updatedEvidence)
 		if readErr == nil {
 			result.Predecessor = &latestPredecessor
 		}
-		return result, errors.Join(&PublicationFenceLostError{Result: result}, updateErr)
+		return result, errors.Join(&PublicationFenceLostError{Result: result}, readErr, publicationStateError(updateErr))
 	}
+	disposition := publicationDispositionForError(applyErr)
+	if applyErr == nil && commitCID == "" {
+		disposition = retryDispositionAmbiguous
+	}
+	updatedEvidence, dispositionErr = persistDisposition(string(evidence), disposition)
+	if dispositionErr != nil {
+		return publicationResult(attempt, TransitionOutcomeUnavailable, nil, attempt.Evidence), errors.Join(applyErr, publicationStateError(dispositionErr), ErrCandidateMayBeDisclosed)
+	}
+	evidence = json.RawMessage(updatedEvidence)
 	resolved, resolveErr := resolveSubmittedPublication(ctx, io, store, attempt, string(evidence))
 	if resolveErr != nil {
 		return resolved, errors.Join(applyErr, resolveErr, ErrCandidateMayBeDisclosed)
@@ -469,6 +573,15 @@ func commitPublication(ctx context.Context, io publicationIO, store TransitionAt
 }
 
 func ResolvePublicationAttempt(ctx context.Context, io ATProtoPublicationIO, store TransitionAttemptStore, attemptID string) (PublicationCommitResult, error) {
+	attempt, err := store.TransitionAttempt(ctx, attemptID)
+	if err != nil {
+		return PublicationCommitResult{}, err
+	}
+	release, err := acquirePublicationMarker(ctx, RecordKey{Collection: attempt.MarkerCollection, RKey: attempt.MarkerRKey})
+	if err != nil {
+		return PublicationCommitResult{}, err
+	}
+	defer release()
 	return resolvePublicationAttempt(ctx, io, store, attemptID)
 }
 
@@ -507,10 +620,105 @@ func resolvePublicationAttempt(ctx context.Context, io publicationIO, store Tran
 }
 
 type publicationAttemptEvidence struct {
-	Version          int    `json:"version"`
-	Kind             string `json:"kind"`
-	HeadRecordCID    string `json:"headRecordCid"`
-	PreparedRevision string `json:"preparedRevision"`
+	Version          int                       `json:"version"`
+	Kind             string                    `json:"kind"`
+	HeadRecordCID    string                    `json:"headRecordCid"`
+	PreparedRevision string                    `json:"preparedRevision"`
+	RetryDisposition *retryDispositionEvidence `json:"retryDisposition,omitempty"`
+}
+
+type retryDispositionEvidence struct {
+	Version int    `json:"version"`
+	Value   string `json:"value"`
+}
+
+const (
+	retryDispositionAmbiguous      = "ambiguous"
+	retryDispositionRejected       = "rejected"
+	retryDispositionQuota          = "quota"
+	retryDispositionRateLimited    = "rate-limited"
+	retryDispositionUploadTooLarge = "upload-too-large"
+	retryDispositionBatchTooLarge  = "batch-too-large"
+	retryDispositionFenceLost      = "fence-lost"
+	retryDispositionCommitted      = "committed"
+)
+
+func validRetryDisposition(value string) bool {
+	switch value {
+	case retryDispositionAmbiguous, retryDispositionRejected, retryDispositionQuota, retryDispositionRateLimited, retryDispositionUploadTooLarge, retryDispositionBatchTooLarge, retryDispositionFenceLost, retryDispositionCommitted:
+		return true
+	default:
+		return false
+	}
+}
+
+func setRetryDisposition(evidence string, value string) (string, error) {
+	if !validRetryDisposition(value) {
+		return "", fmt.Errorf("invalid publication retry disposition")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(evidence), &fields) != nil || fields == nil {
+		return "", fmt.Errorf("publication attempt evidence is malformed")
+	}
+	disposition, err := json.Marshal(retryDispositionEvidence{Version: 1, Value: value})
+	if err != nil {
+		return "", err
+	}
+	fields["retryDisposition"] = disposition
+	updated, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	return string(updated), nil
+}
+
+func parseRetryDisposition(evidence string) (string, bool) {
+	var parsed struct {
+		RetryDisposition *retryDispositionEvidence `json:"retryDisposition"`
+	}
+	if json.Unmarshal([]byte(evidence), &parsed) != nil || parsed.RetryDisposition == nil || parsed.RetryDisposition.Version != 1 || !validRetryDisposition(parsed.RetryDisposition.Value) {
+		return "", false
+	}
+	return parsed.RetryDisposition.Value, true
+}
+
+func persistRetryDisposition(ctx context.Context, store TransitionAttemptStore, attempt state.TransitionAttempt, evidence, value string) (string, error) {
+	updated, err := setRetryDisposition(evidence, value)
+	if err != nil {
+		return "", err
+	}
+	if err := store.UpdateTransitionAttempt(ctx, attempt.ID, attempt.Outcome, updated); err != nil {
+		return "", err
+	}
+	return updated, nil
+}
+
+func publicationStateError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrPublicationState, err)
+}
+
+func publicationDispositionForError(err error) string {
+	switch {
+	case errors.Is(err, ErrFenceLost):
+		return retryDispositionFenceLost
+	case errors.Is(err, ErrPublicationQuota):
+		return retryDispositionQuota
+	case errors.Is(err, ErrPublicationRateLimited):
+		return retryDispositionRateLimited
+	case errors.Is(err, ErrCandidateExceedsBlobUploadLimit):
+		return retryDispositionUploadTooLarge
+	case errors.Is(err, ErrPublicationBatchTooLarge):
+		return retryDispositionBatchTooLarge
+	case errors.Is(err, ErrAmbiguousTransport), errors.Is(err, ErrRevisionMoving), errors.Is(err, ErrPublicationQueued):
+		return retryDispositionAmbiguous
+	case err == nil:
+		return retryDispositionAmbiguous
+	default:
+		return retryDispositionRejected
+	}
 }
 
 func snapshotPublication(publication vault.Publication, signer ed25519.PrivateKey, blobReference json.RawMessage, revision *Revision, predecessor vault.Predecessor) (FencedSnapshotPublication, error) {
@@ -581,6 +789,81 @@ func publicationMarkerRKey(publicationID [16]byte) string {
 	return "publish-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(publicationID[:]))
 }
 
+func publicationMarker(publication vault.Publication, signer ed25519.PrivateKey) (RecordKey, string, error) {
+	if len(signer) != ed25519.PrivateKeySize || len(publication.Snapshot) == 0 {
+		return RecordKey{}, "", fmt.Errorf("%w: sealed snapshot and signing key are required", ErrBatchRejected)
+	}
+	envelope, err := vault.DecodeEnvelope(publication.Snapshot)
+	if err != nil {
+		return RecordKey{}, "", fmt.Errorf("%w: publication snapshot envelope", ErrBatchRejected)
+	}
+	candidateCID := rawTransitionCID(publication.Snapshot)
+	if len(candidateCID) == 0 || !bytes.Equal(publication.SnapshotCID, candidateCID) || !bytes.Equal(publication.BlobCID, candidateCID) {
+		return RecordKey{}, "", fmt.Errorf("%w: publication snapshot CID is invalid", ErrBatchRejected)
+	}
+	blobJSON := blobJSONFromCID(candidateCID, len(publication.Snapshot))
+	if len(blobJSON) == 0 {
+		return RecordKey{}, "", fmt.Errorf("%w: publication blob reference is invalid", ErrBatchRejected)
+	}
+	var blob atdata.Blob
+	if err := json.Unmarshal(blobJSON, &blob); err != nil || !blob.Ref.IsDefined() {
+		return RecordKey{}, "", fmt.Errorf("%w: publication blob reference is invalid", ErrBatchRejected)
+	}
+	record, err := snapshotRecordForPublication(publication, blob, signer)
+	if err != nil {
+		return RecordKey{}, "", err
+	}
+	recordJSON, err := marshalRecord(record)
+	if err != nil {
+		return RecordKey{}, "", fmt.Errorf("%w: encode snapshot marker", ErrBatchRejected)
+	}
+	recordCID, err := recordCIDText(recordJSON)
+	if err != nil {
+		return RecordKey{}, "", err
+	}
+	return RecordKey{Collection: VaultSnapshotNSID, RKey: publicationMarkerRKey(envelope.PublicationID)}, recordCID, nil
+}
+
+type publicationCurrentState string
+
+const (
+	publicationCurrentNotLanded  publicationCurrentState = "not-landed"
+	publicationCurrentCommitted  publicationCurrentState = "committed"
+	publicationCurrentSuperseded publicationCurrentState = "committed-but-superseded"
+)
+
+func currentPublicationOutcome(revision *Revision, marker RecordKey, expectedRecordCID string, snapshotCID []byte) (publicationCurrentState, error) {
+	if revision == nil || marker.Collection == "" || marker.RKey == "" || expectedRecordCID == "" || len(snapshotCID) == 0 {
+		return "", ErrUnprovenMembership
+	}
+	membership := revision.membership
+	markerCID, present := membership[marker]
+	if !present {
+		return publicationCurrentNotLanded, nil
+	}
+	if markerCID != expectedRecordCID {
+		return "", ErrPublicationIDReuse
+	}
+	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
+	headCID, headPresent := membership[headKey]
+	headRecord, recordPresent := revision.records[headKey]
+	if !headPresent || !recordPresent || headCID == "" || headRecord.CID != headCID {
+		return "", ErrUnprovenMembership
+	}
+	decoded, err := DecodeRecord(headRecord.Data)
+	if err != nil {
+		return "", fmt.Errorf("%w: current head record cannot be decoded", ErrUnprovenMembership)
+	}
+	head, ok := decoded.(HeadRecord)
+	if !ok {
+		return "", ErrUnprovenMembership
+	}
+	if bytes.Equal(head.SnapshotCID, snapshotCID) && bytes.Equal(head.BlobCID, snapshotCID) {
+		return publicationCurrentCommitted, nil
+	}
+	return publicationCurrentSuperseded, nil
+}
+
 func publicationResult(attempt state.TransitionAttempt, outcome TransitionOutcome, revision *Revision, evidence string) PublicationCommitResult {
 	return PublicationCommitResult{
 		Outcome: outcome, AttemptID: attempt.ID,
@@ -594,7 +877,7 @@ func resolveSubmittedPublication(ctx context.Context, io publicationIO, store Tr
 	if err != nil {
 		updatedEvidence := evidenceWith(evidence, "resolutionError", err.Error())
 		updateErr := store.UpdateTransitionAttempt(ctx, attempt.ID, TransitionOutcomeUnavailable, updatedEvidence)
-		return publicationResult(attempt, TransitionOutcomeUnavailable, nil, updatedEvidence), errors.Join(fmt.Errorf("%w: %v", ErrTransitionUnavailable, err), updateErr)
+		return publicationResult(attempt, TransitionOutcomeUnavailable, nil, updatedEvidence), errors.Join(fmt.Errorf("%w: %w", ErrTransitionUnavailable, err), publicationStateError(updateErr))
 	}
 	var expected publicationAttemptEvidence
 	if err := json.Unmarshal([]byte(evidence), &expected); err != nil || expected.Version != 1 || expected.Kind != "publication" || expected.HeadRecordCID == "" {
@@ -602,7 +885,7 @@ func resolveSubmittedPublication(ctx context.Context, io publicationIO, store Tr
 		updateErr := store.UpdateTransitionAttempt(ctx, attempt.ID, TransitionOutcomeUnavailable, updatedEvidence)
 		result := publicationResult(attempt, TransitionOutcomeUnavailable, latest, updatedEvidence)
 		result.Predecessor = &latestPredecessor
-		return result, errors.Join(ErrTransitionUnavailable, updateErr)
+		return result, errors.Join(ErrTransitionUnavailable, publicationStateError(updateErr))
 	}
 	membership := latest.Membership()
 	marker := RecordKey{Collection: attempt.MarkerCollection, RKey: attempt.MarkerRKey}
@@ -621,7 +904,7 @@ func resolveSubmittedPublication(ctx context.Context, io publicationIO, store Tr
 	result := publicationResult(attempt, outcome, latest, updatedEvidence)
 	result.Predecessor = &latestPredecessor
 	if err := store.UpdateTransitionAttempt(ctx, attempt.ID, string(outcome), updatedEvidence); err != nil {
-		return result, err
+		return result, publicationStateError(err)
 	}
 	return result, nil
 }

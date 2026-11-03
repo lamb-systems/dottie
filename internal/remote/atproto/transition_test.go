@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"testing"
 	"time"
 
@@ -432,6 +433,83 @@ func newStageCandidateAuthenticationFixture(t *testing.T) (vault.Policy, [][]byt
 	return currentPolicy, enrollment.Recipients, oldEnvelope, currentDigest
 }
 
+func TestStageCandidatePreservesAuthCauseAndClassifiesProviderStatuses(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	writer := ATProtoTransitionIO{BlobUploadLimit: int64(len(publication.Snapshot) + 1)}
+
+	cause := ErrAuthMethodSession
+	transport := &candidateStageTransport{err: cause}
+	writer.Transport = transport
+	_, _, err = writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.ErrorIs(t, err, cause)
+	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+
+	writer.Transport = &candidateStageTransport{err: errors.New("provider leaked super-secret-token")}
+	_, _, err = writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.NotContains(t, err.Error(), "super-secret-token")
+
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		want       error
+		disclosure bool
+	}{
+		{name: "quota", status: 400, body: `{"error":"QuotaExceeded","message":"private body"}`, want: ErrPublicationQuota, disclosure: true},
+		{name: "storage quota", status: 400, body: `{"error":"StorageQuotaExceeded"}`, want: ErrPublicationQuota, disclosure: true},
+		{name: "rate limit", status: 429, body: `{"error":"RateLimitExceeded"}`, want: ErrPublicationRateLimited, disclosure: true},
+		{name: "upload too large", status: 413, body: `{"error":"BlobTooLarge"}`, want: ErrCandidateExceedsBlobUploadLimit, disclosure: true},
+		{name: "other rejection", status: 400, body: `{"error":"InvalidRequest"}`, want: ErrBatchRejected, disclosure: true},
+		{name: "upload invalid swap is not a fence", status: 400, body: `{"error":"InvalidSwap"}`, want: ErrBatchRejected, disclosure: true},
+		{name: "auth hold", status: 401, body: `{"error":"AuthRequired"}`, want: ErrPublicationQueued, disclosure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &candidateStageTransport{status: tc.status, body: []byte(tc.body)}
+			writer.Transport = transport
+			_, _, err := writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+			require.ErrorIs(t, err, tc.want)
+			assert.Equal(t, tc.disclosure, errors.Is(err, ErrCandidateMayBeDisclosed))
+			if tc.status == 401 {
+				assert.ErrorIs(t, err, ErrBatchRejected)
+			}
+			assert.NotContains(t, err.Error(), "private body")
+		})
+	}
+
+	writer.BlobUploadLimit = int64(len(publication.Snapshot) - 1)
+	transport = &candidateStageTransport{}
+	writer.Transport = transport
+	_, _, err = writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+	require.ErrorIs(t, err, ErrCandidateExceedsBlobUploadLimit)
+	assert.NotErrorIs(t, err, ErrCandidateMayBeDisclosed)
+	assert.Zero(t, transport.calls)
+}
+
+func TestStageCandidateStatusSurvivesBodyReadError(t *testing.T) {
+	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	writer := ATProtoTransitionIO{BlobUploadLimit: int64(len(publication.Snapshot) + 1)}
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{status: 413, want: ErrCandidateExceedsBlobUploadLimit},
+		{status: 400, want: ErrBatchRejected},
+		{status: 401, want: ErrPublicationQueued},
+	} {
+		writer.Transport = &candidateStageTransport{status: tc.status, err: io.ErrUnexpectedEOF}
+		_, _, err := writer.StageCandidate(context.Background(), publication.Snapshot, policy, predecessor.Certificates)
+		require.ErrorIs(t, err, tc.want)
+		assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+		assert.NotContains(t, err.Error(), "unexpected EOF")
+	}
+}
+
 func TestATProtoTransitionStageCandidateSignalsPostTransmissionDisclosure(t *testing.T) {
 	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
 	policy, err := vault.DecodePolicy(predecessor.Policy)
@@ -460,7 +538,7 @@ func TestATProtoTransitionStageCandidateSignalsPostTransmissionDisclosure(t *tes
 
 	redirectResponse := &candidateStageTransport{status: 302, body: []byte(`{"error":"Redirect"}`)}
 	_, _, err = (ATProtoTransitionIO{Transport: redirectResponse, BlobUploadLimit: int64(len(publication.Snapshot))}).StageCandidate(ctx, publication.Snapshot, policy, predecessor.Certificates)
-	require.ErrorIs(t, err, ErrBatchRejected)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed,
 		"a post-transmission redirect response must signal possible candidate disclosure")
 }
@@ -510,6 +588,22 @@ func (s *transitionTestStore) TransitionAttempts(_ context.Context) ([]state.Tra
 	for _, attempt := range s.attempts {
 		attempts = append(attempts, attempt)
 	}
+	return attempts, nil
+}
+
+func (s *transitionTestStore) TransitionAttemptsByMarker(_ context.Context, collection, rkey string) ([]state.TransitionAttempt, error) {
+	attempts := make([]state.TransitionAttempt, 0, len(s.attempts))
+	for _, attempt := range s.attempts {
+		if attempt.MarkerCollection == collection && attempt.MarkerRKey == rkey {
+			attempts = append(attempts, attempt)
+		}
+	}
+	sort.Slice(attempts, func(i, j int) bool {
+		if attempts[i].CreatedAt == attempts[j].CreatedAt {
+			return attempts[i].ID < attempts[j].ID
+		}
+		return attempts[i].CreatedAt < attempts[j].CreatedAt
+	})
 	return attempts, nil
 }
 
@@ -1146,6 +1240,19 @@ func TestCommitTransitionResolvesUnknownOutcome(t *testing.T) {
 			assert.Equal(t, 1, io.applyCount)
 		})
 	}
+}
+
+func TestResolveSubmittedTransitionPreservesReadCause(t *testing.T) {
+	fixture := newTransitionTestFixture(t)
+	cause := ErrAuthMethodSession
+	io := newTransitionTestIO(fixture.predecessor)
+	io.readErrors[1] = cause
+	store := newTransitionTestStore()
+	attempt := state.TransitionAttempt{ID: "transition-read-cause", Outcome: TransitionOutcomeSubmitted, Evidence: `{"version":1,"headRecordCid":"bafy-head","controlRecordCid":"bafy-control"}`}
+	require.NoError(t, store.BeginTransitionAttempt(context.Background(), attempt))
+	_, err := resolveSubmittedTransition(context.Background(), io, store, attempt, attempt.Evidence)
+	require.ErrorIs(t, err, ErrTransitionUnavailable)
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestResolveTransitionAttemptAfterUploadCrashDoesNotResend(t *testing.T) {

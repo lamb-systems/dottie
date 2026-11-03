@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/bluesky-social/indigo/atproto/atclient"
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -26,6 +25,27 @@ var (
 	ErrAuthMethodNonReplayable = errors.New("request body is not replayable")
 )
 
+type AuthStatusError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *AuthStatusError) Error() string {
+	return fmt.Sprintf("authentication request returned HTTP %d", e.StatusCode)
+}
+
+func (e *AuthStatusError) Unwrap() error {
+	return e.Err
+}
+
+func authStatusFromError(err error) int {
+	var status *AuthStatusError
+	if errors.As(err, &status) {
+		return status.StatusCode
+	}
+	return 0
+}
+
 type AuthMethodError struct {
 	Kind error
 	Err  error
@@ -39,7 +59,7 @@ func (e *AuthMethodError) Error() string {
 }
 
 func (e *AuthMethodError) Unwrap() error {
-	return e.Kind
+	return errors.Join(e.Kind, e.Err)
 }
 
 type resourceAuthMethod struct {
@@ -48,7 +68,7 @@ type resourceAuthMethod struct {
 	identity Identity
 	origin   string
 	session  *Session
-	mu       sync.Mutex
+	mu       chan struct{}
 }
 
 func NewAuthMethod(client *Client, identity Identity, handle string, session *Session) (atclient.AuthMethod, error) {
@@ -79,7 +99,9 @@ func NewAuthMethod(client *Client, identity Identity, handle string, session *Se
 	if session.DID != identity.DID || session.Issuer != identity.Issuer || session.TokenEndpoint != identity.TokenEndpoint {
 		return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("session DID, issuer or token endpoint does not match discovery"))
 	}
-	return &resourceAuthMethod{client: client, handle: normalizedHandle, identity: identity, origin: origin, session: session}, nil
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	return &resourceAuthMethod{client: client, handle: normalizedHandle, identity: identity, origin: origin, session: session, mu: lock}, nil
 }
 
 func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.Request, _ syntax.NSID) (*http.Response, error) {
@@ -93,8 +115,12 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("HTTP client is required"))
 	}
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	select {
+	case <-a.mu:
+	case <-request.Context().Done():
+		return nil, authMethodError(ErrAuthMethodTransport, request.Context().Err())
+	}
+	defer func() { a.mu <- struct{}{} }()
 	if err := a.validateSession(); err != nil {
 		return nil, authMethodError(ErrAuthMethodSession, err)
 	}
@@ -129,7 +155,7 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		attemptRequest.Header.Set("DPoP", proof)
 		response, err := httpClient.Do(attemptRequest)
 		if err != nil {
-			return nil, authMethodError(ErrAuthMethodTransport, err)
+			return nil, authMethodError(ErrAuthMethodTransport, safeTransportCause(err))
 		}
 		if response == nil {
 			return nil, authMethodError(ErrAuthMethodTransport, errors.New("HTTP client returned an empty response"))
@@ -140,7 +166,7 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		body, readErr := readAndRestoreAuthBody(response)
 		if readErr != nil {
 			_ = response.Body.Close()
-			return nil, authMethodError(ErrAuthMethodTransport, readErr)
+			return nil, authMethodError(ErrAuthMethodTransport, &AuthStatusError{StatusCode: response.StatusCode, Err: safeTransportCause(readErr)})
 		}
 		authSignal := strings.ToLower(response.Header.Get("WWW-Authenticate") + " " + string(body))
 		if strings.Contains(authSignal, "use_dpop_nonce") && response.Header.Get("DPoP-Nonce") != "" {

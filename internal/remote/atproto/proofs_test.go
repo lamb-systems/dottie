@@ -475,6 +475,31 @@ func TestCarBlockRehashesAreChecked(t *testing.T) {
 	}
 }
 
+func TestRevisionReaderPreservesTransportCauseAndTypesReadStatus(t *testing.T) {
+	fixture := makeProofFixture(t, 1)
+	cause := ErrAuthMethodSession
+	transport := &proofTransport{latestStatus: 401, doError: cause}
+	_, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
+	require.ErrorIs(t, err, ErrAmbiguousTransport)
+	assert.ErrorIs(t, err, cause)
+
+	for _, status := range []int{401, 429} {
+		body := []byte(`{"error":"AuthRequired","message":"private provider body"}`)
+		if status == 429 {
+			body = []byte(`{"error":"RateLimitExceeded","message":"private provider body"}`)
+		}
+		transport := &proofTransport{latestStatus: status, latestBody: body}
+		_, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
+		var statusErr *ReadStatusError
+		require.ErrorAs(t, err, &statusErr)
+		assert.Equal(t, status, statusErr.StatusCode)
+		assert.NotContains(t, err.Error(), "private provider body")
+		if status == 429 {
+			assert.Equal(t, "RateLimitExceeded", statusErr.Code)
+		}
+	}
+}
+
 func TestTransportStreamErrorIsAmbiguous(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	transport := &proofTransport{latestCIDs: []string{fixture.root.String()}, streamError: errors.New("connection interrupted"), streamStatus: 200}
@@ -492,5 +517,17 @@ func TestPartialTreeDepthFixtureHasMultipleLevels(t *testing.T) {
 	}
 	if mstDepth(loaded.MST.Root) < 2 {
 		require.GreaterOrEqual(t, mstDepth(loaded.MST.Root), 2, "fixture MST depth=%d", mstDepth(loaded.MST.Root))
+	}
+}
+
+func TestSafeTransportCauseSanitizesTypedStatusCodes(t *testing.T) {
+	for _, cause := range []error{
+		&ReadStatusError{StatusCode: 503, Code: "super-secret-token"},
+		&ProviderStatusError{StatusCode: 400, Code: "super-secret-token"},
+		&AuthStatusError{StatusCode: 401, Err: errors.New("super-secret-token")},
+	} {
+		safe := safeTransportCause(cause)
+		require.NotNil(t, safe)
+		assert.NotContains(t, safe.Error(), "super-secret-token")
 	}
 }

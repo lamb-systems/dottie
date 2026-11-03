@@ -84,6 +84,7 @@ type TransitionAttemptStore interface {
 	UpdateTransitionAttempt(context.Context, string, string, string) error
 	TransitionAttempt(context.Context, string) (state.TransitionAttempt, error)
 	TransitionAttempts(context.Context) ([]state.TransitionAttempt, error)
+	TransitionAttemptsByMarker(context.Context, string, string) ([]state.TransitionAttempt, error)
 }
 
 type ATProtoTransitionIO struct {
@@ -193,14 +194,13 @@ func (io ATProtoTransitionIO) StageCandidate(ctx context.Context, data []byte, e
 	}
 	status, body, err := io.Transport.Do(ctx, "POST", "com.atproto.repo.uploadBlob", nil, data, "application/octet-stream")
 	if err != nil {
-		return nil, "", errors.Join(fmt.Errorf("%w: candidate blob upload outcome is unknown", ErrAmbiguousTransport), ErrCandidateMayBeDisclosed)
+		if status >= 400 && status < 500 {
+			return nil, "", uploadBlobStatusError(status, body)
+		}
+		return nil, "", fmt.Errorf("%w: %w: candidate blob upload outcome is unknown: %w", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, safeTransportCause(err))
 	}
 	if status < 200 || status >= 300 {
-		failure := fmt.Errorf("%w: candidate blob upload returned HTTP %d", ErrBatchRejected, status)
-		if status < 200 || status >= 500 {
-			return nil, "", errors.Join(fmt.Errorf("%w: candidate blob upload outcome is ambiguous", ErrAmbiguousTransport), ErrCandidateMayBeDisclosed)
-		}
-		return nil, "", errors.Join(failure, ErrCandidateMayBeDisclosed)
+		return nil, "", uploadBlobStatusError(status, body)
 	}
 	blob, encodedBlob, err := candidateBlobResponse(body)
 	if err != nil {
@@ -329,7 +329,9 @@ func commitTransition(ctx context.Context, io transitionIO, store TransitionAtte
 	}
 	blobReference, uploadedCID, err := io.StageCandidate(ctx, transition.Snapshot, transitionPolicy, transition.Recipients)
 	if err != nil {
-		return transitionResult(attempt, TransitionOutcomeNotLanded, initialRevision, evidenceWith(string(evidence), "stageError", err.Error())), errors.Join(err, store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, evidenceWith(string(evidence), "stageError", err.Error())), ErrCandidateMayBeDisclosed)
+		updatedEvidence := evidenceWith(string(evidence), "stageError", err.Error())
+		updateErr := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeNotLanded, updatedEvidence)
+		return transitionResult(attempt, TransitionOutcomeNotLanded, initialRevision, updatedEvidence), errors.Join(err, updateErr)
 	}
 	if uploadedCID != blobCID {
 		mismatch := fmt.Errorf("%w: uploaded candidate CID differs from the sealed transition", ErrBatchRejected)
@@ -440,7 +442,7 @@ func resolveSubmittedTransition(ctx context.Context, io transitionIO, store Tran
 	if err != nil {
 		updatedEvidence := evidenceWith(evidence, "resolutionError", err.Error())
 		updateErr := store.UpdateTransitionAttempt(ctx, attempt.ID, TransitionOutcomeUnavailable, updatedEvidence)
-		return transitionResult(attempt, TransitionOutcomeUnavailable, nil, updatedEvidence), errors.Join(fmt.Errorf("%w: %v", ErrTransitionUnavailable, err), updateErr)
+		return transitionResult(attempt, TransitionOutcomeUnavailable, nil, updatedEvidence), errors.Join(fmt.Errorf("%w: %w", ErrTransitionUnavailable, err), updateErr)
 	}
 	var expected transitionAttemptEvidence
 	if err := json.Unmarshal([]byte(evidence), &expected); err != nil || expected.Version != 1 || expected.HeadRecordCID == "" || expected.ControlRecordCID == "" {
