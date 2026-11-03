@@ -307,10 +307,6 @@ func validateCARBudgets(carBytes []byte, budgets Budgets) (cid.Cid, error) {
 			return cid.Undef, fmt.Errorf("%w: duplicate CAR block CID %s", ErrUntrustedCar, block.Cid())
 		}
 		seen[key] = struct{}{}
-		recomputed, err := block.Cid().Prefix().Sum(blockBytes)
-		if err != nil || !recomputed.Equals(block.Cid()) {
-			return cid.Undef, fmt.Errorf("%w: CAR block CID mismatch", ErrUntrustedCar)
-		}
 	}
 	if _, exists := seen[root.KeyString()]; !exists {
 		return cid.Undef, fmt.Errorf("%w: CAR root block is missing", ErrUntrustedCar)
@@ -401,13 +397,6 @@ func verifiedMembership(ctx context.Context, loaded *repo.Repo, budgets Budgets)
 		data, actualCID, err := loaded.GetRecordBytes(ctx, collection, rkey)
 		if err != nil || actualCID == nil {
 			return fmt.Errorf("%w: record bytes are missing", ErrUnprovenMembership)
-		}
-		if !actualCID.Equals(recordCID) {
-			return fmt.Errorf("%w: MST membership CID differs from the loaded record CID", ErrUnprovenMembership)
-		}
-		recomputed, err := recordCID.Prefix().Sum(data)
-		if err != nil || !recomputed.Equals(recordCID) {
-			return fmt.Errorf("%w: record bytes do not hash to the MST membership CID", ErrUnprovenMembership)
 		}
 		membership[key] = recordCID.String()
 		records[key] = ProvenRecord{CID: recordCID.String(), Data: append([]byte(nil), data...)}

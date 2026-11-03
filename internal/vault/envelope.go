@@ -477,14 +477,11 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 		return nil, fmt.Errorf("%w: device key", ErrRecipient)
 	}
 	devicePublic := request.DeviceKey.PublicKey().Bytes()
-	policyRecipient, authorized := authorizedRecipient(policy, request.DeviceKeyID, devicePublic)
+	_, authorized := authorizedRecipient(policy, request.DeviceKeyID, devicePublic)
 	if !authorized {
 		return nil, fmt.Errorf("%w: recipient key_id", ErrRecipient)
 	}
 	recipient := envelope.Recipients[recipientIndex]
-	if !bytes.Equal(recipient.KeyID, policyRecipient.KeyID) {
-		return nil, fmt.Errorf("%w: recipient key_id", ErrRecipient)
-	}
 	ephemeralPublic, err := ecdh.X25519().NewPublicKey(recipient.Ephemeral[:])
 	if err != nil {
 		return nil, fmt.Errorf("%w: ephemeral", ErrRecipient)

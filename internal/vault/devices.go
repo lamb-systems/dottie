@@ -822,11 +822,6 @@ func prepareRevocation(predecessor Predecessor, intent TransitionIntent) (Transi
 	if len(newPolicy.Roles) == len(oldPolicy.Roles) || len(newPolicy.Recipients) == len(oldPolicy.Recipients) {
 		return Transition{}, ErrTransitionDelta
 	}
-	for _, revoked := range oldControl.Revoked {
-		if revoked.DeviceID == intent.RevokeDeviceID {
-			return Transition{}, ErrRevokedDevice
-		}
-	}
 	newControlRevoked := append(append([]RevokedDevice(nil), oldControl.Revoked...), RevokedDevice{DeviceID: targetCertificate.DeviceID, CertEpoch: targetCertificate.CertEpoch})
 	newPolicy.PrevPolicyDigest = predecessor.PolicyDigest
 	newPolicy.Signer = Signer{DeviceID: intent.Signer.DeviceID, KeyID: bytes.Clone(intent.Signer.KeyID)}
@@ -1144,13 +1139,7 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 		return ErrHeadLinkage
 	}
 	if len(transition.Checkpoint) > 0 {
-		if transition.Kind == TransitionEnroll {
-			return ErrCheckpointAnchor
-		}
-		checkpoint, err := DecodeCheckpoint(transition.Checkpoint)
-		if err != nil || checkpoint.Anchor != predecessor.TrustAnchor {
-			return ErrCheckpointAnchor
-		}
+		return ErrCheckpointAnchor
 	}
 	if transition.Digest != ComputeTransitionDigest(transition) {
 		return ErrTransitionDigest

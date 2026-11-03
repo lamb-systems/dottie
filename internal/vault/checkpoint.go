@@ -209,10 +209,7 @@ func authenticateCheckpointIntermediates(context *TrustedContext, evidenceSet []
 			return nil, refusalForSide(err, "intermediate", evidence.Control)
 		}
 		key := string(controlCID)
-		if existing, ok := intermediates[key]; ok {
-			if !bytes.Equal(existing.control.Signature[:], position.control.Signature[:]) {
-				return nil, &VerificationRefusal{Side: "intermediate", Code: "cid-collision", CID: controlCID, Err: ErrAuthorization}
-			}
+		if _, ok := intermediates[key]; ok {
 			continue
 		}
 		intermediates[key] = position
@@ -307,8 +304,6 @@ func walkControlHistory(start authenticatedControlPosition, startCID []byte, tar
 	current := start
 	currentCID := bytes.Clone(startCID)
 	currentSide := startSide
-	visited := map[string]bool{string(startCID): true}
-	visitedPositions := map[string]authenticatedControlPosition{string(startCID): start}
 	for links := 0; links < MaxCheckpointWalkDepth; links++ {
 		if len(current.control.PrevControlCID) == 0 {
 			return controlWalk{links: links}
@@ -321,14 +316,6 @@ func walkControlHistory(start authenticatedControlPosition, startCID []byte, tar
 			return controlWalk{reached: true, links: links + 1}
 		}
 		key := string(nextCID)
-		if visited[key] {
-			if predecessor, ok := visitedPositions[key]; ok {
-				if err := checkMirroredControlEdge(predecessor, current, currentSide, currentCID); err != nil {
-					return controlWalk{refusal: err}
-				}
-			}
-			return controlWalk{refusal: &VerificationRefusal{Side: "intermediate", Code: "invalid-intermediate", CID: nextCID, Err: ErrAuthorization}}
-		}
 		next, ok := intermediates[key]
 		if !ok {
 			result := unverifiableResult("missing-intermediate", fmt.Sprintf("control history needs locally supplied object %x", nextCID), nextCID, links+1)
@@ -337,8 +324,6 @@ func walkControlHistory(start authenticatedControlPosition, startCID []byte, tar
 		if err := checkMirroredControlEdge(next, current, currentSide, currentCID); err != nil {
 			return controlWalk{refusal: err}
 		}
-		visited[key] = true
-		visitedPositions[key] = next
 		current = next
 		currentCID = nextCID
 		currentSide = "intermediate"

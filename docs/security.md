@@ -223,6 +223,16 @@ and `TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey` now prove the hostil
 the production sealing primitive. The earlier framing of recipient substitution as an accepted residual
 risk was wrong.
 
+### Integrity of ingested CAR blocks
+
+Content integrity of a repository CAR — block bytes against their CIDs, and record bytes against the MST membership
+CID — is provided by the pinned `go-car` reader used by repository loading (`CarReader.Next` recomputes each block's
+CID and refuses a mismatch), together with the blockstore being keyed by the CIDs the MST names. Dottie does not
+duplicate those recomputations: a local check after that reader would be unreachable, because the reader refuses
+first. The dependency is covered end to end by the corrupted-CAR tests, so a future parser upgrade that stops
+verifying fails a test rather than silently weakening ingestion. If the parser is replaced, restore the local
+recomputations deliberately.
+
 ### Undetectable limits
 
 - A coherent, correctly signed, older revision is undetectable without an independent freshness floor. Global

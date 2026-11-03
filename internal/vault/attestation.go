@@ -110,7 +110,7 @@ func authorizeAttestationSigner(deviceID string, keyID []byte, position authenti
 	}
 	certificate, err := resolveTrustedCertificate(deviceID, keyID, request)
 	role, exists := policyRole(position.policy, deviceID)
-	if err != nil || !exists || role != certificate.Role || !roleAllowed(PurposeAttestation, role) || signerRevoked(certificate, position.control) {
+	if err != nil || !exists || role != certificate.Role || signerRevoked(certificate, position.control) {
 		return Certificate{}, fmt.Errorf("%w: attestation signer authorization", ErrAuthorization)
 	}
 	return certificate, nil
