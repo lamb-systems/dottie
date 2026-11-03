@@ -21,6 +21,13 @@ per open file description and is released when the lock is closed or the process
 This is an advisory coordinator lock for local filesystems; NFS cross-host exclusion is
 unsupported.
 
+OAuth session commands use `SessionLockPath` for one login-session lock namespace, independent of
+`XDG_STATE_HOME`: an absolute existing `XDG_RUNTIME_DIR` is preferred, then an existing
+`/run/user/<uid>`, then the OS temporary directory. The lock filename includes the effective uid.
+It is opened with `LockFile`, which rejects symlinks/non-regular files, enforces mode 0600 and takes
+a non-blocking exclusive `flock`. A process deliberately using another runtime directory, a
+non-cooperating process, or manual keyring changes are outside this advisory coordination guarantee.
+
 ## Secret Service
 
 `keyring_linux.go` talks to `org.freedesktop.secrets` over D-Bus. It resolves the **default**

@@ -43,6 +43,7 @@ type Identity struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	PARSEndpoint          string
+	RevocationEndpoint    string
 	ScopesSupported       []string
 }
 
@@ -76,6 +77,7 @@ type authorizationMetadata struct {
 	AuthorizationEndpoint string   `json:"authorization_endpoint"`
 	TokenEndpoint         string   `json:"token_endpoint"`
 	PARSEndpoint          string   `json:"pushed_authorization_request_endpoint"`
+	RevocationEndpoint    string   `json:"revocation_endpoint"`
 	ScopesSupported       []string `json:"scopes_supported"`
 }
 
@@ -137,6 +139,11 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 			return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: err}
 		}
 	}
+	if metadata.RevocationEndpoint != "" {
+		if _, err := validateHTTPSURL(metadata.RevocationEndpoint); err != nil {
+			return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server revocation endpoint is invalid")}
+		}
+	}
 	if metadata.AuthorizationEndpoint == "" || metadata.TokenEndpoint == "" || metadata.PARSEndpoint == "" {
 		return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server metadata is missing a required endpoint")}
 	}
@@ -155,6 +162,7 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 		AuthorizationEndpoint: metadata.AuthorizationEndpoint,
 		TokenEndpoint:         metadata.TokenEndpoint,
 		PARSEndpoint:          metadata.PARSEndpoint,
+		RevocationEndpoint:    metadata.RevocationEndpoint,
 		ScopesSupported:       append([]string(nil), metadata.ScopesSupported...),
 	}, nil
 }

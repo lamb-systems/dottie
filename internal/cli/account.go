@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	urfave "github.com/urfave/cli/v3"
@@ -39,6 +40,10 @@ func runAccount(args []string, stdout, stderr io.Writer, openKeyring accountKeyr
 }
 
 func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int) *urfave.Command {
+	return newAccountCommandWithSession(stdout, stderr, openKeyring, exitCode, accountSessionOptions{browser: openAuthorizationURL, env: os.Getenv})
+}
+
+func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions) *urfave.Command {
 	usageHandler := func(_ context.Context, _ *urfave.Command, err error, _ bool) error {
 		return urfave.Exit("usage: "+escapeField(err.Error()), 2)
 	}
@@ -177,11 +182,16 @@ func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFacto
 		},
 	})
 
+	sessionCommands := accountSessionCommands(openKeyring, sessionOptions)
+	for _, command := range sessionCommands {
+		configure(command)
+	}
+
 	root := configure(&urfave.Command{
 		Name:     "account",
-		Commands: []*urfave.Command{bootstrap, enroll, recovery, verify},
+		Commands: append([]*urfave.Command{bootstrap, enroll, recovery, verify}, sessionCommands...),
 		Action: func(_ context.Context, _ *urfave.Command) error {
-			return usageExit("expected bootstrap or enroll")
+			return usageExit("expected login, logout, status, bootstrap, enroll, recovery or verify")
 		},
 		Writer: stdout, ErrWriter: stderr,
 	})

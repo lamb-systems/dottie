@@ -76,6 +76,7 @@ func TestVaultLexiconsParseNamespaceScopeAndWriteSet(t *testing.T) {
 	sort.Strings(actualScopes)
 	sort.Strings(expectedScopes)
 	assert.Equal(t, expectedScopes, actualScopes)
+	assert.Equal(t, VaultScopes(), actualScopes)
 
 	writeSets := [][]string{
 		{VaultPolicyNSID, VaultControlNSID, VaultCertificateNSID, VaultCheckpointNSID},

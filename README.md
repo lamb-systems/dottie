@@ -3,11 +3,14 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: target selection and consent policy persist locally.** Capture, apply,
-encryption, synchronization, restore, account linking and the background service
-remain unimplemented. An opt-in internal GSettings feasibility boundary tests only
-synthetic isolated memory/null backends; it is not CLI capture/apply or a production
-desktop provider. Do not use this scaffold to back up real data.
+**Status: target selection and consent policy persist locally.** Account authorization
+is available through `dottie account login`, `status` and `logout`; it stores OAuth
+sessions in the desktop Secret Service keyring. Capture, apply, encryption,
+synchronization, restore and the background service remain unimplemented. An opt-in
+internal GSettings feasibility boundary tests only synthetic isolated memory/null
+backends; it is not CLI capture/apply or a production desktop provider. Account
+commands do not capture or synchronize data. Do not use this scaffold to back up real
+data.
 
 ## Target design
 
@@ -40,9 +43,10 @@ The native GSettings feasibility boundary has a documentation-derived 2.40 GIO
 API floor, set by the newest minimum version among the symbols used; runtime
 observation is limited to GIO/GLib 2.88.4. This does not validate older libraries,
 GNOME 50 or another architecture. Native dependencies and packaging must be checked
-per platform. Filesystem targets are not inherently GNOME-specific. The initial PDS
-validation targets are independently hosted and Bluesky-hosted accounts; neither
-integration is implemented or verified yet.
+per platform. Filesystem targets are not inherently GNOME-specific. OAuth account
+linking uses the native client, but no live authorization or provider test was run.
+Repository reads, writes and synchronization against independently hosted or
+Bluesky-hosted PDS accounts remain unimplemented and unverified.
 
 ## Develop
 
@@ -58,8 +62,17 @@ make verify
 ./bin/dottie version
 ```
 
+Account authorization can be managed with `./bin/dottie account login --handle HANDLE`,
+`./bin/dottie account status --did DID` (or `--handle HANDLE`), and
+`./bin/dottie account logout --did DID`. Login prints the authorization URL; `--no-browser`
+keeps browser opening manual and `--timeout` accepts 1s–15m (default 5m). Status is
+offline with `--did`; `--refresh` is explicit. Local logout removes the local session;
+`--remote` additionally requests refresh-token revocation and reports only that the
+request was accepted. Account sessions require Secret Service and never fall back to
+files. These commands do not link synchronization or touch target data.
+
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
-`./bin/dottie targets remove -- -custom`. Unimplemented commands return a nonzero status.
+`./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.
 `make build` writes to ignored `bin/`. Make defaults to `GOTOOLCHAIN=local`, avoiding
 implicit toolchain downloads.
 The isolated native GSettings proof is separately opt-in with `make test-gnome` or
@@ -109,9 +122,10 @@ work; the source-comment policy remains a review concern, not an automated check
 
 The default executable remains the CLI and its unit tests. Opt-in native tests
 exercise an isolated GSettings boundary, but no source provider is wired into the
-CLI. Other component directories document their responsibilities. Presets, OAuth
-metadata and the systemd unit are draft examples, not functioning integrations or
-deployable configuration.
+CLI. Account login/status/logout are the exception: they manage the OAuth session only.
+Other component directories document their responsibilities. Presets, OAuth metadata
+and the systemd unit are draft examples, not functioning synchronization integrations
+or deployable configuration.
 
 ## License
 

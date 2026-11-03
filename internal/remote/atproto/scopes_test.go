@@ -8,6 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVaultScopesContainEveryRecordCollectionAndBlob(t *testing.T) {
+	scopes := VaultScopes()
+	assert.Len(t, scopes, 9)
+	for _, required := range []string{
+		"atproto", "repo:" + VaultHeadNSID, "repo:" + VaultControlNSID, "repo:" + VaultSnapshotNSID,
+		"repo:" + VaultPolicyNSID, "repo:" + VaultCertificateNSID, "repo:" + VaultCheckpointNSID,
+		"repo:" + VaultAttestationNSID, "blob:application/octet-stream",
+	} {
+		assert.Contains(t, scopes, required)
+	}
+	assert.NoError(t, ValidateScopes(scopes, scopes, scopes))
+}
+
 func TestAtprotoScopeGrantExactRequiredAndRequestedRules(t *testing.T) {
 	requested := []string{"atproto", "repo:systems.lamb.dottie.vaultHead", "blob:application/octet-stream"}
 	if err := ValidateScopes(requested, []string{"atproto", "repo:systems.lamb.dottie.vaultHead"}, requested); err != nil {

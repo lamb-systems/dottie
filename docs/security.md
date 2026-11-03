@@ -10,7 +10,7 @@ for someone deciding whether to trust the tool with their configuration.
 | Directory selection and consent | yes | — |
 | Filesystem capture with containment | yes, library only | reachable from the CLI |
 | Bounded snapshots | yes | encrypted envelopes |
-| OAuth against a real provider | yes, internal boundary | user-facing account linking |
+| OAuth account authorization and local session management | yes, `account login`, `status`, `logout`; live providers not tested | account authority wired into sync |
 | Blob lifecycle and fenced publication | yes, harness and library | wired into a product command |
 | Encryption and signatures | yes, vault library (ADR 015) | wired into a sync command |
 | Device roles, revocation, epochs | yes, vault library (ADR 014); `account bootstrap`, `enroll`, `recovery`, `verify` | transitions driven end to end against a provider |
@@ -19,24 +19,70 @@ for someone deciding whether to trust the tool with their configuration.
 | Remote vault sync | no; `dottie plan` previews a local view bundle only | a sync command that publishes and reads a vault |
 | GNOME settings capture and apply | boundary only, opt-in cgo | the GNOME capture work to G04 |
 
-The CLI exposes target selection, `dottie plan`, and the `account` command group (`bootstrap`, `enroll`,
-`recovery`, `verify`). Account OAuth linking remains an internal boundary with an unsupported login path. No
-command publishes or reads a vault against a provider, and vault export and import are library functions only.
-No real data should be stored with this build.
+The CLI exposes target selection, `dottie plan`, and the `account` command group (`login`, `logout`, `status`,
+`bootstrap`, `enroll`, `recovery`, `verify`). The first three manage OAuth authorization only. No command
+publishes or reads a vault against a provider, and vault export and import are library functions only. Target
+capture, apply and synchronization are not wired; do not use this build to back up real data.
 
 ## Authorities
 
 Three separate things grant power, and none of them substitutes for another.
 
 **Account authority** is the OAuth session: discovery, PKCE, PAR, DPoP, `iss` and `sub` binding, strict
-scope enforcement, one atomic Secret Service envelope. It grants access to a repository and nothing else.
-This is an internal boundary; there is no command that runs it yet.
+scope enforcement, and one atomic Secret Service envelope. It grants repository access and nothing else.
+`account login`, `status` and `logout` operate on that authorization; they do not capture or sync target data.
 
 **Device authority** is a root-signed certificate naming a signing key, a recipient key, a role and the
 epoch at enrollment. Root, publisher and restore-only are distinct. Not implemented.
 
 **Recovery authority** is material held offline, independent of the account. It can re-establish a root
 device. Not implemented.
+
+## Account session lifecycle
+
+Login discovers the handle, DID, PDS and authorization server, requests PKCE with PAR, and requires the
+canonical `atproto` plus seven vault `repo:` scopes and `blob:application/octet-stream` grant. The refresh
+token and DPoP private key are stored together in one Secret Service item; access tokens, authorization
+codes and DPoP nonces are not persisted. A locked or unavailable keyring is a hard failure with no file
+fallback. Endpoint errors expose only HTTP status and an allow-listed OAuth error code; descriptions and raw
+provider bodies are never surfaced.
+
+Refresh runs under a per-session advisory lock and reloads the envelope while holding that lock. It replaces
+the usable envelope with a secret-free `refresh-pending` marker before sending the refresh request. The marker
+is the point of no return for the old token: every failure after it and before the final save, including a
+transport error with no observed write notification, a lost response or a cancellation after dispatch, leaves
+the marker. A final save that applies but loses its reply leaves the new usable envelope, never the consumed
+token, but the command still reports the persistence outcome as uncertain because durability is unconfirmed. A
+pending session cannot be refreshed again and requires login. This deliberately fails closed because an absent
+write notification does not prove the request was not sent. Cancellation before the marker stores nothing;
+cancellation after dispatch and before the final save may consume the old token and requires login. Cancellation
+during the final save is a persistence-uncertainty case: the new usable envelope may be present, so run status
+before logging in again. Pending local synchronization work is not opened or modified by account commands.
+
+A login cancellation before persistence is attempted stores nothing. A keyring persistence failure or
+cancellation during the save attempt is reported as uncertain, not as "nothing was stored": a lost reply can
+follow an applied write, so the CLI points to status and local logout instead. Once the token response has been
+received, a cancellation may consume the authorization code even though no session is stored.
+
+The runtime lock is selected from `XDG_RUNTIME_DIR`, `/run/user/<uid>`, then the OS temporary directory; it is
+not under `XDG_STATE_HOME`. It coordinates cooperating Dottie processes in the same login session, not manual
+keyring edits, non-cooperating clients or a process deliberately given a different runtime directory. A locked
+or unavailable keyring and an interrupted refresh are reported with recovery guidance, while status itself is
+offline when addressed by DID and never exposes a token.
+
+Local logout takes a DID and deletes its item without decoding it, so corrupt, unknown-version and pending
+items can be removed offline. Remote logout requires a usable session and a validated discovery-advertised
+revocation endpoint. It sends a DPoP proof without an access token, retries a nonce challenge once, and deletes
+the local item only after a 2xx. The result means **revocation request accepted by the authorization server**,
+not that every access token or other device session has been globally invalidated; issued access tokens may
+remain valid until expiry. If the provider accepts the request but local deletion fails, both outcomes are
+reported and the item remains for local cleanup.
+
+`AuthMethod` checks a discovered PDS HTTPS origin before resource use after a refresh. If a changed PDS origin
+is discovered while refreshing (including an `invalid_token` retry), it refuses to retry the resource request
+through the stale auth method. An auth method constructed from stale discovery can still send a currently
+valid access token to the old PDS before it learns of relocation; callers own discovery freshness. No live
+authorization, refresh or revocation test was run for this implementation.
 
 ## What the transport guarantees
 

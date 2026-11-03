@@ -18,14 +18,17 @@ Usage:
   dottie targets remove <id>
   dottie targets mode <id> <auto-apply|review|backup-only>
   dottie plan --from FILE [--json]
+  dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
+  dottie account status (--did DID | --handle HANDLE) [--refresh]
+  dottie account logout (--did DID | --handle HANDLE) [--remote]
   dottie account bootstrap --vault-name NAME --device-id ID
   dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX]
 
 This is a scaffold, not a working synchronizer.
-Account linking, capture, restore, and the background service are not implemented.
-Account bootstrap and enrollment prepare local vault material only; no provider calls
-or synchronization are performed. Target selections and consent policy are persisted locally.
-Capture, apply and synchronization are not implemented.
+Account login/status/logout manage OAuth authorization only; they do not capture or synchronize data.
+Account bootstrap and enrollment prepare local vault material only; no provider calls or synchronization
+are performed by those commands. Target selections and consent policy are persisted locally.
+Capture, apply, restore and synchronization are not implemented.
 
 See README.md for build instructions and current status.
 `

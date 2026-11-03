@@ -29,35 +29,47 @@ const (
 )
 
 type fakeOAuth struct {
-	server                *httptest.Server
-	mu                    sync.Mutex
-	did                   string
-	documentID            string
-	handleStatus          int
-	alsoKnown             []string
-	serviceID             string
-	pds                   string
-	resource              string
-	resourceStatus        int
-	authorizationServer   string
-	metadataIssuer        string
-	authorizationEndpoint string
-	tokenEndpoint         string
-	parEndpoint           string
-	parValues             url.Values
-	tokenValues           url.Values
-	tokenSub              string
-	tokenScope            string
-	tokenRefresh          string
-	tokenAccess           string
-	checkVerifier         bool
-	redirectToken         bool
-	tokenRequests         int
-	resourceProof         string
-	resourceAuth          string
-	resourceResponses     []fakeResourceResponse
-	resourceRequests      []fakeResourceRequest
-	followedRedirect      int
+	server                 *httptest.Server
+	mu                     sync.Mutex
+	did                    string
+	documentID             string
+	handleStatus           int
+	alsoKnown              []string
+	serviceID              string
+	pds                    string
+	resource               string
+	resourceStatus         int
+	authorizationServer    string
+	metadataIssuer         string
+	authorizationEndpoint  string
+	tokenEndpoint          string
+	parEndpoint            string
+	revocationEndpoint     string
+	parStatus              int
+	parValues              url.Values
+	tokenValues            url.Values
+	tokenSub               string
+	tokenScope             string
+	tokenRefresh           string
+	tokenAccess            string
+	checkVerifier          bool
+	redirectToken          bool
+	tokenRequests          int
+	tokenStatus            int
+	tokenErrorBody         string
+	presentedRefreshTokens []string
+	rejectRefreshReuse     bool
+	usedRefreshTokens      map[string]bool
+	pendingAtToken         bool
+	pendingCheck           func() bool
+	revocationResponses    []fakeResourceResponse
+	revocationRequests     []fakeRevocationRequest
+	resourceProof          string
+	resourceAuth           string
+	resourceResponses      []fakeResourceResponse
+	resourceRequests       []fakeResourceRequest
+	afterResourceRequest   func(int)
+	followedRedirect       int
 }
 
 type fakeResourceResponse struct {
@@ -67,6 +79,13 @@ type fakeResourceResponse struct {
 }
 
 type fakeResourceRequest struct {
+	host          string
+	authorization string
+	proof         string
+}
+
+type fakeRevocationRequest struct {
+	form          url.Values
 	authorization string
 	proof         string
 }
@@ -103,8 +122,11 @@ func (r *counterReader) Read(buffer []byte) (int, error) {
 }
 
 type memoryStore struct {
-	mu    sync.Mutex
-	items map[string][]byte
+	mu        sync.Mutex
+	items     map[string][]byte
+	saveHook  func(string, []byte) error
+	loadErr   error
+	deleteErr error
 }
 
 func newMemoryStore() *memoryStore {
@@ -112,6 +134,14 @@ func newMemoryStore() *memoryStore {
 }
 
 func (s *memoryStore) Save(_ context.Context, name string, payload []byte) error {
+	s.mu.Lock()
+	hook := s.saveHook
+	s.mu.Unlock()
+	if hook != nil {
+		if err := hook(name, append([]byte(nil), payload...)); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.items[name] = append([]byte(nil), payload...)
@@ -121,6 +151,9 @@ func (s *memoryStore) Save(_ context.Context, name string, payload []byte) error
 func (s *memoryStore) Load(_ context.Context, name string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
 	payload, ok := s.items[name]
 	if !ok {
 		return nil, errorsNewNotFound{}
@@ -135,6 +168,9 @@ func (errorsNewNotFound) Error() string { return "not found" }
 func (s *memoryStore) Delete(_ context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	delete(s.items, name)
 	return nil
 }
@@ -159,10 +195,12 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *Client, *memoryStore) {
 		authorizationEndpoint: "https://" + issuerHost + "/authorize",
 		tokenEndpoint:         "https://" + issuerHost + "/token",
 		parEndpoint:           "https://" + issuerHost + "/par",
+		revocationEndpoint:    "https://" + issuerHost + "/revoke",
 		tokenSub:              testDID,
 		tokenScope:            "",
 		tokenRefresh:          "refresh-secret-value",
 		tokenAccess:           "access-secret-value",
+		usedRefreshTokens:     make(map[string]bool),
 	}
 	fake.server = httptest.NewTLSServer(http.HandlerFunc(fake.serveHTTP))
 	t.Cleanup(fake.server.Close)
@@ -199,7 +237,7 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 		_, _ = io.WriteString(writer, f.did)
 	case host == didHost && strings.HasPrefix(request.URL.Path, "/did:"):
 		writeJSON(writer, didDocument{ID: f.documentID, AlsoKnownAs: f.alsoKnown, Service: []didService{{ID: f.serviceID, Type: "AtprotoPersonalDataServer", ServiceEndpoint: f.pds}}})
-	case host == pdsHost && request.URL.Path == "/.well-known/oauth-protected-resource":
+	case hostMatchesURL(host, f.pds) && request.URL.Path == "/.well-known/oauth-protected-resource":
 		status := f.resourceStatus
 		if status != 0 {
 			http.Error(writer, "missing", status)
@@ -207,19 +245,39 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 		}
 		writeJSON(writer, protectedResource{Resource: f.resource, AuthorizationServers: []string{f.authorizationServer}})
 	case host == issuerHost && request.URL.Path == "/.well-known/oauth-authorization-server":
-		writeJSON(writer, authorizationMetadata{Issuer: f.metadataIssuer, AuthorizationEndpoint: f.authorizationEndpoint, TokenEndpoint: f.tokenEndpoint, PARSEndpoint: f.parEndpoint, ScopesSupported: []string{"atproto", "repo:com.example.settings", "blob:application/octet-stream"}})
+		writeJSON(writer, authorizationMetadata{Issuer: f.metadataIssuer, AuthorizationEndpoint: f.authorizationEndpoint, TokenEndpoint: f.tokenEndpoint, PARSEndpoint: f.parEndpoint, RevocationEndpoint: f.revocationEndpoint, ScopesSupported: VaultScopes()})
 	case host == issuerHost && request.URL.Path == "/par":
 		_ = request.ParseForm()
 		f.parValues = request.Form
+		if f.parStatus != 0 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(f.parStatus)
+			_, _ = io.WriteString(writer, `{"error":"invalid_request"}`)
+			return
+		}
 		writeJSON(writer, parResponse{RequestURI: "urn:example:request:123", ExpiresIn: 60})
 	case host == issuerHost && request.URL.Path == "/token":
 		f.tokenRequests++
+		if f.pendingCheck != nil {
+			f.pendingAtToken = f.pendingCheck()
+		}
 		if f.redirectToken {
 			http.Redirect(writer, request, "https://"+issuerHost+"/should-not-follow", http.StatusFound)
 			return
 		}
 		_ = request.ParseForm()
 		f.tokenValues = request.Form
+		if request.Form.Get("grant_type") == "refresh_token" {
+			refresh := request.Form.Get("refresh_token")
+			f.presentedRefreshTokens = append(f.presentedRefreshTokens, refresh)
+			if f.rejectRefreshReuse && f.usedRefreshTokens[refresh] {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant"}`)
+				return
+			}
+			f.usedRefreshTokens[refresh] = true
+		}
 		if f.checkVerifier {
 			digest := sha256Sum(request.Form.Get("code_verifier"))
 			if digest != f.parValues.Get("code_challenge") {
@@ -227,19 +285,56 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 				return
 			}
 		}
+		if f.tokenErrorBody != "" {
+			status := f.tokenStatus
+			if status == 0 {
+				status = http.StatusBadRequest
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(status)
+			_, _ = io.WriteString(writer, f.tokenErrorBody)
+			return
+		}
+		status := f.tokenStatus
+		if status != 0 {
+			writer.WriteHeader(status)
+			return
+		}
 		writeJSON(writer, tokenResponse{AccessToken: f.tokenAccess, RefreshToken: f.tokenRefresh, TokenType: "DPoP", Scope: f.tokenScope, Sub: f.tokenSub})
 	case host == issuerHost && request.URL.Path == "/resource":
 		f.resourceProof = request.Header.Get("DPoP")
 		f.resourceAuth = request.Header.Get("Authorization")
 		writer.WriteHeader(http.StatusNoContent)
-	case host == pdsHost && request.URL.Path == "/resource":
+	case hostMatchesURL(host, f.pds) && request.URL.Path == "/resource":
 		f.resourceProof = request.Header.Get("DPoP")
 		f.resourceAuth = request.Header.Get("Authorization")
-		f.resourceRequests = append(f.resourceRequests, fakeResourceRequest{authorization: f.resourceAuth, proof: f.resourceProof})
+		f.resourceRequests = append(f.resourceRequests, fakeResourceRequest{host: host, authorization: f.resourceAuth, proof: f.resourceProof})
 		index := len(f.resourceRequests) - 1
 		var configured fakeResourceResponse
 		if index < len(f.resourceResponses) {
 			configured = f.resourceResponses[index]
+		}
+		if f.afterResourceRequest != nil {
+			f.afterResourceRequest(index)
+		}
+		for name, values := range configured.header {
+			for _, value := range values {
+				writer.Header().Add(name, value)
+			}
+		}
+		status := configured.status
+		if status == 0 {
+			status = http.StatusNoContent
+		}
+		writer.WriteHeader(status)
+		_, _ = io.WriteString(writer, configured.body)
+	case host == issuerHost && request.URL.Path == "/revoke":
+		_ = request.ParseForm()
+		f.revocationRequests = append(f.revocationRequests, fakeRevocationRequest{form: request.Form, authorization: request.Header.Get("Authorization"), proof: request.Header.Get("DPoP")})
+		index := len(f.revocationRequests) - 1
+		var configured fakeResourceResponse
+		if index < len(f.revocationResponses) {
+			configured = f.revocationResponses[index]
 		}
 		for name, values := range configured.header {
 			for _, value := range values {
@@ -258,6 +353,11 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 	default:
 		http.NotFound(writer, request)
 	}
+}
+
+func hostMatchesURL(host, value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && strings.EqualFold(host, parsed.Host)
 }
 
 func writeJSON(writer http.ResponseWriter, value any) {

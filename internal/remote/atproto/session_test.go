@@ -32,7 +32,7 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 		RefreshToken:   NewSecret("old-refresh-token-shape"),
 		DPoPPrivateKey: privateKey,
 	}
-	if err := client.SaveSession(context.Background(), session); err != nil {
+	if err := client.saveSession(context.Background(), session); err != nil {
 		require.NoError(t, err)
 	}
 	clientID := client.ClientID
@@ -53,7 +53,7 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 	}
 	fake.tokenRefresh = "rotated-refresh-token-shape"
 	fake.tokenAccess = "rotated-access-token-shape"
-	refreshed, err := restarted.Refresh(context.Background(), testHandle, loaded)
+	refreshed, _, err := restarted.Refresh(context.Background(), testHandle, loaded)
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -83,6 +83,7 @@ func TestLoadSessionRejectsPartialAndWrongVersionEnvelopes(t *testing.T) {
 	for _, encoded := range []string{
 		`{"version":1,"did":"` + testDID + `"}`,
 		`{"version":2,"did":"` + testDID + `","issuer":"https://bsky.social","token_endpoint":"https://bsky.social/token","scopes":["atproto"],"refresh_token":"refresh","dpop_private_key":"not-a-key"}`,
+		`{"version":1,"did":"` + testDID + `","handle":"bad/handle","issuer":"https://bsky.social","token_endpoint":"https://bsky.social/token","scopes":["atproto"],"refresh_token":"refresh","dpop_private_key":"not-a-key"}`,
 	} {
 		if err := store.Save(context.Background(), name, []byte(encoded)); err != nil {
 			require.NoError(t, err)
@@ -93,24 +94,32 @@ func TestLoadSessionRejectsPartialAndWrongVersionEnvelopes(t *testing.T) {
 	}
 }
 
-func TestRefreshRejectsChangedIssuerOrTokenEndpoint(t *testing.T) {
+func TestRefreshRejectsChangedIssuerTokenEndpointAndDIDBeforeCredentials(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
 	key, err := marshalPrivateKey(generateTestKey(t))
-	if err != nil {
-		require.NoError(t, err)
-	}
-	session := &Session{DID: testDID, Issuer: "https://other.example", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, RefreshToken: NewSecret("refresh"), DPoPPrivateKey: key}
-	if _, err := client.Refresh(context.Background(), testHandle, session); err == nil {
-		require.Error(t, err, "refresh accepted a changed issuer")
-	}
+	require.NoError(t, err)
+	session := &Session{DID: testDID, Handle: testHandle, Issuer: "https://other.example", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, RefreshToken: NewSecret("refresh"), DPoPPrivateKey: key}
+	_, _, err = client.Refresh(context.Background(), testHandle, session)
+	require.ErrorIs(t, err, ErrSessionRelocated)
+
 	session.Issuer = fake.metadataIssuer
 	session.TokenEndpoint = "https://other.example/token"
-	if _, err := client.Refresh(context.Background(), testHandle, session); err == nil {
-		require.Error(t, err, "refresh accepted a changed token endpoint")
-	}
-	if fake.tokenRequests != 0 {
-		require.Equal(t, 0, fake.tokenRequests, "changed discovery caused %d credential-bearing requests", fake.tokenRequests)
-	}
+	_, _, err = client.Refresh(context.Background(), testHandle, session)
+	require.ErrorIs(t, err, ErrSessionRelocated)
+
+	session.TokenEndpoint = fake.tokenEndpoint
+	fake.metadataIssuer = "https://mismatched.example"
+	_, _, err = client.Refresh(context.Background(), testHandle, session)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "refresh")
+
+	fake.metadataIssuer = "https://bsky.social"
+	fake.did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
+	fake.documentID = fake.did
+	fake.serviceID = fake.did + "#atproto_pds"
+	_, _, err = client.Refresh(context.Background(), testHandle, session)
+	require.ErrorIs(t, err, ErrSessionRelocated)
+	assert.Equal(t, 0, fake.tokenRequests)
 }
 
 func TestNoTokenMaterialIsWrittenUnderStateCacheOrConfig(t *testing.T) {
@@ -120,7 +129,7 @@ func TestNoTokenMaterialIsWrittenUnderStateCacheOrConfig(t *testing.T) {
 		require.NoError(t, err)
 	}
 	session := &Session{DID: testDID, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, AccessToken: NewSecret("access-token-shaped-value"), RefreshToken: NewSecret("refresh-token-shaped-value"), DPoPPrivateKey: key}
-	if err := client.SaveSession(context.Background(), session); err != nil {
+	if err := client.saveSession(context.Background(), session); err != nil {
 		require.NoError(t, err)
 	}
 	root := t.TempDir()

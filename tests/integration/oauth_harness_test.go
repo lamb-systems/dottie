@@ -31,10 +31,7 @@ func TestLiveOAuthHarness(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err)
 	}
-	scopes := []string{"atproto", "repo:systems.lamb.dottie.vaultHead", "repo:systems.lamb.dottie.vaultSnapshot", "repo:systems.lamb.dottie.vaultControl", "blob:application/octet-stream"}
-	if override := os.Getenv("DOTTIE_SCOPES"); override != "" {
-		scopes = strings.Fields(override)
-	}
+	scopes := atproto.VaultScopes()
 	fmt.Printf("requesting scopes: %s\n", strings.Join(scopes, " "))
 	identity, err := client.Discover(context.Background(), handle)
 	if err != nil {
@@ -69,7 +66,7 @@ func TestLiveOAuthHarness(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err, "load session from a fresh client: %v", err)
 	}
-	refreshed, err := restarted.Refresh(context.Background(), handle, loaded)
+	refreshed, refreshedIdentity, err := restarted.Refresh(context.Background(), handle, loaded)
 	if err != nil {
 		require.NoError(t, err, "refresh from a fresh client: %v", err)
 	}
@@ -77,8 +74,9 @@ func TestLiveOAuthHarness(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err, "reload session after refresh: %v", err)
 	}
-	if refreshed.Issuer != session.Issuer || reloaded.DID != session.DID {
+	if refreshed.Issuer != session.Issuer || refreshedIdentity.DID != session.DID || reloaded.DID != session.DID {
 		require.Equal(t, session.Issuer, refreshed.Issuer, "refresh changed identity binding: issuer=%q did=%q", refreshed.Issuer, reloaded.DID)
+		require.Equal(t, session.DID, refreshedIdentity.DID, "refresh changed discovered identity binding")
 		require.Equal(t, session.DID, reloaded.DID, "refresh changed identity binding: issuer=%q did=%q", refreshed.Issuer, reloaded.DID)
 	}
 	fmt.Printf("restart=ok refreshed=ok issuer=%s did=%s scopes=%d\n", refreshed.Issuer, reloaded.DID, len(reloaded.Scopes))

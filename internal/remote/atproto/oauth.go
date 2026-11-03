@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,33 @@ import (
 	"github.com/lamb-systems/dottie/internal/platform"
 )
 
-var ErrSessionUnavailable = errors.New("stored session is unusable; sign in again")
+var (
+	ErrSessionUnavailable          = errors.New("stored session is unusable; sign in again")
+	ErrSessionRefreshPending       = errors.New("account refresh was interrupted; sign in again")
+	ErrSessionBusy                 = errors.New("another dottie command is updating the account session; retry when it finishes")
+	ErrSessionRelocated            = errors.New("account authorization server or token endpoint changed; sign in again")
+	ErrRevocationUnsupported       = errors.New("authorization server does not advertise a revocation endpoint")
+	ErrSessionNotFound             = errors.New("no stored account session")
+	ErrSessionLockUnavailable      = errors.New("cannot lock the account session; check the runtime directory and retry")
+	ErrSessionPersistenceUncertain = errors.New("authorization was obtained but keyring persistence is uncertain")
+)
+
+type SessionLockFunc func(context.Context, string) (func() error, error)
+
+type OAuthEndpointError struct {
+	Status int
+	Code   string
+}
+
+func (e *OAuthEndpointError) Error() string {
+	if e.Code == "" || !safeOAuthErrorCode.MatchString(e.Code) {
+		return fmt.Sprintf("OAuth endpoint returned HTTP %d", e.Status)
+	}
+	if _, ok := allowedOAuthErrorCodes[e.Code]; !ok {
+		return fmt.Sprintf("OAuth endpoint returned HTTP %d", e.Status)
+	}
+	return fmt.Sprintf("OAuth endpoint returned HTTP %d (%s)", e.Status, e.Code)
+}
 
 type SessionStore interface {
 	Save(context.Context, string, []byte) error
@@ -42,6 +69,7 @@ type Client struct {
 	Store            SessionStore
 	lookupTXT        TXTLookup
 	callbackAttempts int
+	sessionLock      SessionLockFunc
 	nonceMu          sync.Mutex
 	nonces           map[string]string
 }
@@ -66,6 +94,10 @@ func WithTXTLookup(lookup TXTLookup) ClientOption {
 
 func WithCallbackAttemptLimit(limit int) ClientOption {
 	return func(c *Client) { c.callbackAttempts = limit }
+}
+
+func WithSessionLock(lock SessionLockFunc) ClientOption {
+	return func(c *Client) { c.sessionLock = lock }
 }
 
 func NewClient(clientID string, store SessionStore, options ...ClientOption) (*Client, error) {
@@ -242,6 +274,16 @@ func canonicalScopes(scopes []string) ([]string, error) {
 	return ParseScopes(strings.Join(scopes, " "))
 }
 
+func (f *Flow) Identity() Identity {
+	if f == nil {
+		return Identity{}
+	}
+	identity := f.identity
+	identity.VerificationMethods = append([]VerificationMethod(nil), f.identity.VerificationMethods...)
+	identity.ScopesSupported = append([]string(nil), f.identity.ScopesSupported...)
+	return identity
+}
+
 func (f *Flow) AuthorizationURL() string {
 	if f == nil {
 		return ""
@@ -352,16 +394,32 @@ func (f *Flow) Wait(ctx context.Context) (*Session, error) {
 	defer f.Close()
 	select {
 	case <-ctx.Done():
-		return nil, errors.New("OAuth callback timed out")
+		return nil, authorizationContextError(ctx.Err())
 	case callback := <-f.callback:
 		if callback.err != nil {
 			return nil, callback.err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, authorizationContextError(err)
 		}
 		return f.exchangeCode(ctx, callback.code)
 	}
 }
 
+func authorizationContextError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("authorization timed out: %w", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("authorization canceled: %w", err)
+	}
+	return err
+}
+
 func (f *Flow) exchangeCode(ctx context.Context, code Secret) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, authorizationContextError(err)
+	}
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {f.client.ClientID},
@@ -373,7 +431,41 @@ func (f *Flow) exchangeCode(ctx context.Context, code Secret) (*Session, error) 
 	if err := f.client.postFormDPoP(ctx, f.identity.TokenEndpoint, form, f.key, &result); err != nil {
 		return nil, err
 	}
-	return f.client.finishToken(ctx, f.identity, f.requested, f.required, f.key, result, "")
+	if err := ctx.Err(); err != nil {
+		return nil, authorizationContextError(err)
+	}
+	session, err := f.client.finishToken(ctx, f.identity, f.requested, f.required, f.key, result, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, authorizationContextError(err)
+	}
+	if err := f.client.saveUsableSession(ctx, session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+var safeOAuthErrorCode = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
+
+var allowedOAuthErrorCodes = map[string]struct{}{
+	"invalid_request": {}, "invalid_client": {}, "invalid_grant": {}, "unauthorized_client": {},
+	"unsupported_grant_type": {}, "invalid_scope": {}, "use_dpop_nonce": {}, "server_error": {},
+	"temporarily_unavailable": {}, "access_denied": {},
+}
+
+func sanitizedOAuthCode(body []byte) string {
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil || !safeOAuthErrorCode.MatchString(payload.Error) {
+		return ""
+	}
+	if _, ok := allowedOAuthErrorCodes[payload.Error]; !ok {
+		return ""
+	}
+	return payload.Error
 }
 
 func (c *Client) postFormDPoP(ctx context.Context, endpoint string, form url.Values, key *ecdsa.PrivateKey, output any) error {
@@ -385,11 +477,7 @@ func (c *Client) postFormDPoP(ctx context.Context, endpoint string, form url.Val
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		cleaned := strings.Join(strings.Fields(string(detail)), " ")
-		if cleaned == "" {
-			return fmt.Errorf("OAuth endpoint returned HTTP %d with an empty body", response.StatusCode)
-		}
-		return fmt.Errorf("OAuth endpoint returned HTTP %d: %s", response.StatusCode, cleaned)
+		return &OAuthEndpointError{Status: response.StatusCode, Code: sanitizedOAuthCode(detail)}
 	}
 	const maximum = 1 << 20
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
@@ -437,6 +525,9 @@ func (c *Client) doDPoP(ctx context.Context, method, endpoint string, body io.Re
 		}
 		response, err := c.httpClient().Do(request)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return nil, authorizationContextError(contextErr)
+			}
 			return nil, errors.New("OAuth request failed")
 		}
 		if nonce := response.Header.Get("DPoP-Nonce"); nonce != "" {
@@ -478,7 +569,7 @@ func urlOrigin(endpoint string) string {
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }
 
-func (c *Client) finishToken(ctx context.Context, identity Identity, requested, required []string, key *ecdsa.PrivateKey, result tokenResponse, existingRefresh string) (*Session, error) {
+func (c *Client) finishToken(_ context.Context, identity Identity, requested, required []string, key *ecdsa.PrivateKey, result tokenResponse, existingRefresh string) (*Session, error) {
 	if result.Sub != identity.DID {
 		return nil, errors.New("token subject does not match the discovered DID")
 	}
@@ -509,9 +600,11 @@ func (c *Client) finishToken(ctx context.Context, identity Identity, requested, 
 	}
 	session := &Session{
 		DID:            identity.DID,
+		Handle:         identity.Handle,
 		Issuer:         identity.Issuer,
 		TokenEndpoint:  identity.TokenEndpoint,
 		Scopes:         append([]string(nil), granted...),
+		State:          SessionStateUsable,
 		AccessToken:    NewSecret(result.AccessToken),
 		RefreshToken:   NewSecret(refreshToken),
 		DPoPPrivateKey: privateKey,
@@ -519,54 +612,102 @@ func (c *Client) finishToken(ctx context.Context, identity Identity, requested, 
 	if err := session.Validate(); err != nil {
 		return nil, err
 	}
-	if err := c.SaveSession(ctx, session); err != nil {
-		return nil, fmt.Errorf("cannot save OAuth session to the keyring: %w", err)
-	}
 	return session, nil
 }
 
-func (c *Client) SaveSession(ctx context.Context, session *Session) error {
+func (c *Client) saveSession(ctx context.Context, session *Session) error {
 	if c.Store == nil || session == nil {
 		return platform.ErrKeyringUnavailable
 	}
 	if err := session.Validate(); err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(sessionEnvelope{
+	return c.Store.Save(ctx, sessionItemName(c.ClientID, session.DID), encodeSessionEnvelope(session))
+}
+
+func encodeSessionEnvelope(session *Session) []byte {
+	state := session.State
+	if state == "" {
+		state = SessionStateUsable
+	}
+	encoded, _ := json.Marshal(sessionEnvelope{
 		Version:        sessionEnvelopeVersion,
 		DID:            session.DID,
+		Handle:         session.Handle,
 		Issuer:         session.Issuer,
 		TokenEndpoint:  session.TokenEndpoint,
 		Scopes:         session.Scopes,
+		State:          state,
 		RefreshToken:   session.RefreshToken.Reveal(),
 		DPoPPrivateKey: session.DPoPPrivateKey.Reveal(),
 	})
-	if err != nil {
-		return errors.New("cannot encode OAuth session")
-	}
-	return c.Store.Save(ctx, sessionItemName(c.ClientID, session.DID), encoded)
+	return encoded
 }
 
-func (c *Client) LoadSession(ctx context.Context, did string) (*Session, error) {
+func (c *Client) saveUsableSession(ctx context.Context, session *Session) error {
+	if session == nil {
+		return platform.ErrKeyringUnavailable
+	}
+	item := sessionItemName(c.ClientID, session.DID)
+	release, err := c.acquireSessionLock(ctx, item)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := c.saveSession(ctx, session); err != nil {
+		return fmt.Errorf("%w: %w", ErrSessionPersistenceUncertain, err)
+	}
+	return nil
+}
+
+func (c *Client) LoadSessionStatus(ctx context.Context, did string) (SessionStatus, error) {
+	envelope, _, err := c.loadEnvelope(ctx, did)
+	if err != nil {
+		return SessionStatus{}, err
+	}
+	status, err := envelope.status()
+	if err != nil || status.DID != did {
+		return SessionStatus{}, ErrSessionUnavailable
+	}
+	return status, nil
+}
+
+func (c *Client) loadEnvelope(ctx context.Context, did string) (sessionEnvelope, []byte, error) {
 	if c.Store == nil || !validDID(did) {
-		return nil, ErrSessionUnavailable
+		return sessionEnvelope{}, nil, ErrSessionUnavailable
 	}
 	encoded, err := c.Store.Load(ctx, sessionItemName(c.ClientID, did))
 	if err != nil {
 		if errors.Is(err, platform.ErrKeyringLocked) || errors.Is(err, platform.ErrKeyringUnavailable) {
-			return nil, err
+			return sessionEnvelope{}, nil, err
 		}
-		return nil, ErrSessionUnavailable
+		if errors.Is(err, platform.ErrKeyringItemNotFound) {
+			return sessionEnvelope{}, nil, ErrSessionNotFound
+		}
+		return sessionEnvelope{}, nil, ErrSessionUnavailable
 	}
 	var envelope sessionEnvelope
-	if err := json.Unmarshal(encoded, &envelope); err != nil || envelope.Version != sessionEnvelopeVersion || envelope.DID != did {
-		return nil, ErrSessionUnavailable
+	if json.Unmarshal(encoded, &envelope) != nil || envelope.Version != sessionEnvelopeVersion || envelope.DID != did {
+		return sessionEnvelope{}, nil, ErrSessionUnavailable
+	}
+	return envelope, append([]byte(nil), encoded...), nil
+}
+
+func sessionFromEnvelope(envelope sessionEnvelope) (*Session, error) {
+	status, err := envelope.status()
+	if err != nil {
+		return nil, err
+	}
+	if status.State == SessionStateRefreshPending {
+		return nil, ErrSessionRefreshPending
 	}
 	session := &Session{
 		DID:            envelope.DID,
+		Handle:         envelope.Handle,
 		Issuer:         envelope.Issuer,
 		TokenEndpoint:  envelope.TokenEndpoint,
 		Scopes:         append([]string(nil), envelope.Scopes...),
+		State:          SessionStateUsable,
 		RefreshToken:   NewSecret(envelope.RefreshToken),
 		DPoPPrivateKey: NewSecret(envelope.DPoPPrivateKey),
 	}
@@ -576,41 +717,241 @@ func (c *Client) LoadSession(ctx context.Context, did string) (*Session, error) 
 	return session, nil
 }
 
+func (c *Client) LoadSession(ctx context.Context, did string) (*Session, error) {
+	envelope, _, err := c.loadEnvelope(ctx, did)
+	if err != nil {
+		return nil, err
+	}
+	return sessionFromEnvelope(envelope)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, did string) error {
 	if c.Store == nil || !validDID(did) {
 		return ErrSessionUnavailable
 	}
-	return c.Store.Delete(ctx, sessionItemName(c.ClientID, did))
+	item := sessionItemName(c.ClientID, did)
+	release, err := c.acquireSessionLock(ctx, item)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return c.Store.Delete(ctx, item)
 }
 
-func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (*Session, error) {
-	if session == nil || session.Validate() != nil {
-		return nil, ErrSessionUnavailable
+var localSessionLocks = struct {
+	sync.Mutex
+	locks map[string]chan struct{}
+}{locks: make(map[string]chan struct{})}
+
+func (c *Client) acquireSessionLock(ctx context.Context, item string) (func() error, error) {
+	lock := c.sessionLock
+	if lock == nil {
+		lock = localSessionLock
+	}
+	return lock(ctx, item)
+}
+
+func localSessionLock(ctx context.Context, item string) (func() error, error) {
+	localSessionLocks.Lock()
+	lock := localSessionLocks.locks[item]
+	if lock == nil {
+		lock = make(chan struct{}, 1)
+		localSessionLocks.locks[item] = lock
+	}
+	localSessionLocks.Unlock()
+	select {
+	case lock <- struct{}{}:
+		return func() error { <-lock; return nil }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (*Session, Identity, error) {
+	if session == nil {
+		return nil, Identity{}, ErrSessionUnavailable
+	}
+	if session.State == SessionStateRefreshPending {
+		return nil, Identity{}, ErrSessionRefreshPending
+	}
+	if session.Validate() != nil {
+		return nil, Identity{}, ErrSessionUnavailable
+	}
+	if handle == "" {
+		handle = session.Handle
+	}
+	if handle == "" {
+		return nil, Identity{}, errors.New("account handle is required to refresh this legacy session")
 	}
 	identity, err := c.Discover(ctx, handle)
 	if err != nil {
-		return nil, err
+		return nil, Identity{}, err
 	}
-	if identity.DID != session.DID {
-		return nil, errors.New("discovered DID does not match the stored session")
+	if err := checkSessionBinding(identity, session); err != nil {
+		return nil, identity, err
 	}
-	if identity.Issuer != session.Issuer || identity.TokenEndpoint != session.TokenEndpoint {
-		return nil, errors.New("discovered issuer or token endpoint changed; sign in again")
+	if err := ctx.Err(); err != nil {
+		return nil, identity, authorizationContextError(err)
 	}
-	key, err := parsePrivateKey(session.DPoPPrivateKey)
+	item := sessionItemName(c.ClientID, session.DID)
+	release, err := c.acquireSessionLock(ctx, item)
 	if err != nil {
-		return nil, ErrSessionUnavailable
+		return nil, identity, err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return nil, identity, authorizationContextError(err)
+	}
+	latestEnvelope, _, err := c.loadEnvelope(ctx, session.DID)
+	if err != nil {
+		return nil, identity, err
+	}
+	latestStatus, err := latestEnvelope.status()
+	if err != nil {
+		return nil, identity, ErrSessionUnavailable
+	}
+	if latestStatus.State == SessionStateRefreshPending {
+		return nil, identity, ErrSessionRefreshPending
+	}
+	latest, err := sessionFromEnvelope(latestEnvelope)
+	if err != nil {
+		return nil, identity, err
+	}
+	if err := checkSessionBinding(identity, latest); err != nil {
+		return nil, identity, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, identity, authorizationContextError(err)
+	}
+	pending := latestEnvelope
+	pending.State = SessionStateRefreshPending
+	pending.Handle = identity.Handle
+	pending.RefreshToken = ""
+	pending.DPoPPrivateKey = ""
+	encodedPending, err := json.Marshal(pending)
+	if err != nil {
+		return nil, identity, errors.New("cannot encode refresh-pending session")
+	}
+	if err := c.Store.Save(ctx, item, encodedPending); err != nil {
+		return nil, identity, fmt.Errorf("cannot save refresh-pending session: %w", err)
+	}
+	key, err := parsePrivateKey(latest.DPoPPrivateKey)
+	if err != nil {
+		return nil, identity, fmt.Errorf("%w; refresh outcome is unknown, sign in again", ErrSessionUnavailable)
 	}
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {c.ClientID},
-		"refresh_token": {session.RefreshToken.Reveal()},
+		"refresh_token": {latest.RefreshToken.Reveal()},
 	}
 	var result tokenResponse
-	if err := c.postFormDPoP(ctx, session.TokenEndpoint, form, key, &result); err != nil {
-		return nil, err
+	if err := c.postFormDPoP(ctx, identity.TokenEndpoint, form, key, &result); err != nil {
+		return nil, identity, fmt.Errorf("%w; refresh outcome is unknown, sign in again", err)
 	}
-	return c.finishToken(ctx, identity, session.Scopes, session.Scopes, key, result, session.RefreshToken.Reveal())
+	if err := ctx.Err(); err != nil {
+		return nil, identity, authorizationContextError(err)
+	}
+	refreshed, err := c.finishToken(ctx, identity, latest.Scopes, latest.Scopes, key, result, latest.RefreshToken.Reveal())
+	if err != nil {
+		return nil, identity, fmt.Errorf("%w; refresh outcome is unknown, sign in again", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, identity, authorizationContextError(err)
+	}
+	if err := c.saveSession(ctx, refreshed); err != nil {
+		return nil, identity, fmt.Errorf("%w: %w", ErrSessionPersistenceUncertain, err)
+	}
+	return refreshed, identity, nil
+}
+
+func checkSessionBinding(identity Identity, session *Session) error {
+	if identity.DID != session.DID || identity.Issuer != session.Issuer || identity.TokenEndpoint != session.TokenEndpoint {
+		return ErrSessionRelocated
+	}
+	return nil
+}
+
+type LogoutResult struct {
+	RemoteRevocationAccepted bool
+	LocalDeleted             bool
+}
+
+func (c *Client) Logout(ctx context.Context, did, handle string, session *Session, remote bool) (LogoutResult, error) {
+	if c.Store == nil || !validDID(did) {
+		return LogoutResult{}, ErrSessionUnavailable
+	}
+	item := sessionItemName(c.ClientID, did)
+	if !remote {
+		release, err := c.acquireSessionLock(ctx, item)
+		if err != nil {
+			return LogoutResult{}, err
+		}
+		defer release()
+		if err := c.Store.Delete(ctx, item); err != nil {
+			return LogoutResult{}, err
+		}
+		return LogoutResult{LocalDeleted: true}, nil
+	}
+	if session == nil || session.Validate() != nil || session.DID != did {
+		return LogoutResult{}, ErrSessionUnavailable
+	}
+	if handle == "" {
+		handle = session.Handle
+	}
+	if handle == "" {
+		return LogoutResult{}, errors.New("account handle is required for remote logout")
+	}
+	identity, err := c.Discover(ctx, handle)
+	if err != nil {
+		return LogoutResult{}, err
+	}
+	if err := checkSessionBinding(identity, session); err != nil {
+		return LogoutResult{}, err
+	}
+	if identity.RevocationEndpoint == "" {
+		return LogoutResult{}, ErrRevocationUnsupported
+	}
+	release, err := c.acquireSessionLock(ctx, item)
+	if err != nil {
+		return LogoutResult{}, err
+	}
+	defer release()
+	latestEnvelope, _, err := c.loadEnvelope(ctx, did)
+	if err != nil {
+		return LogoutResult{}, err
+	}
+	latest, err := sessionFromEnvelope(latestEnvelope)
+	if err != nil {
+		return LogoutResult{}, err
+	}
+	if err := checkSessionBinding(identity, latest); err != nil {
+		return LogoutResult{}, err
+	}
+	key, err := parsePrivateKey(latest.DPoPPrivateKey)
+	if err != nil {
+		return LogoutResult{}, ErrSessionUnavailable
+	}
+	form := url.Values{
+		"token":           {latest.RefreshToken.Reveal()},
+		"token_type_hint": {"refresh_token"},
+		"client_id":       {c.ClientID},
+	}
+	body := form.Encode()
+	response, err := c.doDPoP(ctx, http.MethodPost, identity.RevocationEndpoint, strings.NewReader(body), int64(len(body)), "application/x-www-form-urlencoded", nil, key, Secret{})
+	if err != nil {
+		return LogoutResult{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return LogoutResult{}, &OAuthEndpointError{Status: response.StatusCode, Code: sanitizedOAuthCode(detail)}
+	}
+	result := LogoutResult{RemoteRevocationAccepted: true}
+	if err := c.Store.Delete(ctx, item); err != nil {
+		return result, fmt.Errorf("revocation request accepted but local session could not be deleted: %w", err)
+	}
+	result.LocalDeleted = true
+	return result, nil
 }
 
 func sessionItemName(clientID, did string) string {

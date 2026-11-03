@@ -52,4 +52,37 @@ and preimage metadata only; they never emit file contents or GSettings values. T
 the specified bundle and writes stdout only. It does not write state, mutate targets, inspect a
 PDS account or make network calls.
 
+## Account authorization commands
+
+`dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]` performs OAuth discovery,
+PAR/PKCE loopback callback handling, strict scope validation and one-item Secret Service persistence. It
+requests `atproto`, all seven `repo:systems.lamb.dottie.*` scopes and
+`blob:application/octet-stream`. The default callback timeout is five minutes; `--timeout` accepts 1s
+through 15m. The authorization URL and non-secret discovered identifiers are printed before opening
+`xdg-open`. Browser-start failure is a warning: the user can still use the printed URL. `--no-browser`
+skips browser launch. Successful output prints granted scopes and exact `status --did` and `logout --did`
+follow-up commands; codes, access/refresh tokens and DPoP keys are never printed. If the keyring write is
+attempted but its reply is lost, login reports the persistence outcome as uncertain and points to status and
+local logout; it does not claim that nothing was stored. A busy session lock is reported as busy, not as an
+uncertain write. For `status --refresh`, the same uncertainty means the final save may have applied; run status
+again to see whether the item is usable.
+
+`dottie account status --did DID` reads the stored non-secret status offline. It prints only state, handle,
+DID, issuer, token endpoint, scopes and whether a refresh token is present. `--handle HANDLE` performs
+read-only discovery to resolve the DID. `--refresh` is explicit and uses the same serialized refresh path;
+it does not open or modify the state database. A pending refresh is displayed as interrupted and requires
+login. Busy locks, keyring failures, relocation and provider rejection produce actionable errors that say
+pending local changes are preserved.
+
+`dottie account logout --did DID` removes the local item under the session lock without decoding it, so it
+works for corrupt, unknown-version and pending envelopes. `--handle HANDLE` resolves the DID first.
+`--remote` additionally requires a usable session, discovered binding and advertised revocation endpoint;
+local deletion follows only a 2xx response. Output says the revocation request was accepted and warns that
+previously issued access tokens may remain valid until expiry. An accepted remote request with failed local
+delete is reported as a split outcome. `--did` is the offline local logout path.
+
+These commands only manage account authorization. They do not publish or read vault records, touch target
+data, or interact with the state database. All command tests use synthetic OAuth endpoints and temporary
+stores; live accounts, browser launches and Secret Service are not exercised.
+
 Other commands and current implementation status are described in the repository README.

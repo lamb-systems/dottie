@@ -132,9 +132,9 @@ func TestCallbackTimeoutDoesNotExchangeCode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
-	if _, err := flow.Wait(ctx); err == nil || !strings.Contains(err.Error(), "timed out") {
-		require.ErrorContains(t, err, "timed out", "Wait error = %v", err)
-	}
+	_, err = flow.Wait(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "timed out")
 	if fake.tokenRequests != 0 {
 		require.Equal(t, 0, fake.tokenRequests, "callback timeout exchanged a code %d times", fake.tokenRequests)
 	}

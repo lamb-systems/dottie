@@ -42,14 +42,17 @@ DID web document for `did:web`); DID document to the `#atproto_pds` service; the
 resolved DID to the requested `at://` handle. The protected-resource `resource` must bind to the
 PDS, and metadata `issuer` must exactly equal the advertised server identifier. Handle, PDS and
 issuer hosts may differ; a sharded PDS can advertise an authorization server on another host.
-Unsupported DID forms and every discovered non-HTTPS endpoint fail closed. Discovery and
+An advertised `revocation_endpoint` is optional, but when present it must be an absolute HTTPS URL with no
+query or fragment. Unsupported DID forms and every discovered non-HTTPS endpoint fail closed. Discovery and
 credential-bearing requests do not follow redirects.
 
 Authorization uses PAR, a retained verifier-derived PKCE S256 challenge, independently generated
 state, and the actual loopback listener address `http://127.0.0.1:<port>/callback` in both PAR and
 the token exchange. Callback state is compared in constant time; callback issuer and token subject
 are checked against discovery before code exchange and session storage respectively. Grants are
-parsed as `atproto`, `repo:<nsid>` and `blob:<mime>` scopes. Any unrequested grant or missing
+parsed as `atproto`, `repo:<nsid>` and `blob:<mime>` scopes. `VaultScopes()` is the canonical sorted
+set: `atproto`, all seven `repo:systems.lamb.dottie.*` collections, and `blob:application/octet-stream`.
+The metadata scope-set test compares it with `docs/client-metadata.json`. Any unrequested grant or missing
 required scope rejects the session before storage.
 
 ## DPoP, resource authorization and storage
@@ -68,7 +71,9 @@ discovery. The resource-auth state machine is:
 3. Set `Authorization: DPoP <token>` and a fresh DPoP proof containing the token's `ath`.
 4. On a 400/401 `use_dpop_nonce` challenge with `DPoP-Nonce`, save that nonce and retry once with
 a fresh proof. This path never refreshes credentials.
-5. On an `invalid_token` 401, refresh once and retry once with the new token and proof.
+5. On an `invalid_token` 401, refresh once and retry once with the new token and proof. If refresh
+   discovers a different PDS HTTPS origin, return `ErrAuthMethodRelocated` before retrying against either
+   the old or the newly discovered resource origin.
 6. If a challenge requires replay but the body has no `GetBody`, do not retry and return a typed
 non-replayable error. A repeated challenge also returns a typed error; the resource request never
 exceeds two attempts.
@@ -77,13 +82,37 @@ Refresh and transport failures are returned as `*AuthMethodError` values with an
 through `errors.Is`. Ordinary non-challenge HTTP responses are returned unchanged for the API caller
 to inspect.
 
-A single keyring item contains one versioned session envelope with DID, issuer, validated token
-endpoint, scopes, refresh token and DPoP private key. The item name is derived from client id and
-DID. Linux storage uses the Secret Service **default** collection (the only alias gnome-keyring
-accepts; a purpose-named collection cannot be created portably) and replace-on-match item
-creation. A locked or unavailable keyring is a hard failure; there is no file fallback. Partial or
-unknown-version envelopes require a new login. Refresh rediscovers and checks issuer and token
-endpoint before sending the refresh token, and stores a rotated refresh token in the same item.
+A single keyring item contains one version-1 session envelope with DID, optional handle, issuer, validated
+token endpoint, granted scopes, refresh token and DPoP private key. Missing/empty state means `usable` for
+legacy compatibility; `refresh-pending` carries no refresh token or private key and is not usable. Access
+tokens and DPoP nonces stay in process memory only. Linux storage uses the Secret Service **default**
+collection (the only alias gnome-keyring accepts; a purpose-named collection cannot be created portably)
+and replace-on-match item creation. A locked or unavailable keyring is a hard failure; there is no file
+fallback. Partial or unknown-version envelopes require login, while local logout can delete an envelope by
+DID without decoding it.
+
+Refresh resolves the handle (or the stored handle), checks discovered DID/issuer/token endpoint before any
+credential request, acquires the session lock, reloads the current item and checks those bindings again. It
+writes a secret-free `refresh-pending` marker before the token POST. A marker-save error sends no token. The
+marker is the point of no return for the old token: every failure after it and before the final save, including
+a transport error with no observed write notification, a lost response or a cancellation after dispatch, leaves
+the marker. A final save that applies but loses its reply leaves the new usable envelope, never the consumed
+token, and returns `ErrSessionPersistenceUncertain` because durability is unconfirmed. A final save that fails
+before applying leaves the marker. Later refresh on a pending item fails with `ErrSessionRefreshPending`. The
+public save API is intentionally absent; login and locked refresh are the persistence paths. Login checks
+cancellation after callback selection, token response, and before persistence. Only the actual storage call is
+wrapped in `ErrSessionPersistenceUncertain`; a busy or unavailable lock keeps its own typed error. After token
+dispatch a code may already be consumed even though no session is stored; the user must log in again. OAuth
+endpoint errors expose status and an allow-listed code only; raw provider bodies and `error_description` are
+discarded, except internal nonce detection.
+
+The CLI coordinates cooperating processes with an advisory file lock named `dottie-session-<uid>.lock` in
+`XDG_RUNTIME_DIR`, `/run/user/<uid>`, or the temporary directory, in that order. It does not depend on
+`XDG_STATE_HOME`; different runtime directories and non-cooperating/manual keyring changes are outside the
+lock guarantee. Remote logout requires a usable, binding-matched session and an advertised revocation
+endpoint. Its DPoP proof has no access-token `Authorization` header or `ath`; a nonce challenge is retried
+once. A 2xx is reported as a **revocation request accepted**, not global token invalidation. Local deletion
+occurs only after acceptance, and the CLI reports the split outcome if the keyring deletion then fails.
 
 The `Secret` wrapper redacts string, formatting and text/JSON serialization. This prevents normal
 formatting paths from printing codes, tokens or private-key material, but is not a memory-isolation

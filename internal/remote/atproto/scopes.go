@@ -118,3 +118,19 @@ func sortedKeys(set map[string]struct{}) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+func VaultScopes() []string {
+	values := []string{
+		"atproto",
+		"repo:" + VaultHeadNSID,
+		"repo:" + VaultControlNSID,
+		"repo:" + VaultSnapshotNSID,
+		"repo:" + VaultPolicyNSID,
+		"repo:" + VaultCertificateNSID,
+		"repo:" + VaultCheckpointNSID,
+		"repo:" + VaultAttestationNSID,
+		"blob:application/octet-stream",
+	}
+	sort.Strings(values)
+	return values
+}

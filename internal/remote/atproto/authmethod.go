@@ -22,6 +22,7 @@ var (
 	ErrAuthMethodTransport     = errors.New("DPoP resource request failed")
 	ErrAuthMethodNonce         = errors.New("DPoP nonce challenge could not be retried")
 	ErrAuthMethodToken         = errors.New("invalid-token challenge could not be retried")
+	ErrAuthMethodRelocated     = errors.New("discovered PDS origin changed; reconstruct the auth method")
 	ErrAuthMethodNonReplayable = errors.New("request body is not replayable")
 )
 
@@ -99,7 +100,11 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 	}
 	if a.session.AccessToken.Reveal() == "" {
 		if err := a.refresh(request.Context()); err != nil {
-			return nil, authMethodError(ErrAuthMethodSession, err)
+			kind := ErrAuthMethodSession
+			if errors.Is(err, ErrAuthMethodRelocated) {
+				kind = ErrAuthMethodRelocated
+			}
+			return nil, authMethodError(kind, err)
 		}
 	}
 
@@ -162,7 +167,11 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 			}
 			_ = response.Body.Close()
 			if err := a.refresh(request.Context()); err != nil {
-				return nil, authMethodError(ErrAuthMethodSession, err)
+				kind := ErrAuthMethodSession
+				if errors.Is(err, ErrAuthMethodRelocated) {
+					kind = ErrAuthMethodRelocated
+				}
+				return nil, authMethodError(kind, err)
 			}
 			continue
 		}
@@ -172,11 +181,17 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 }
 
 func (a *resourceAuthMethod) refresh(ctx context.Context) error {
-	refreshed, err := a.client.Refresh(ctx, a.handle, a.session)
+	refreshed, identity, err := a.client.Refresh(ctx, a.handle, a.session)
 	if err != nil {
 		return err
 	}
+	origin, err := pdsHTTPSOrigin(identity.PDS)
+	if err != nil || origin != a.origin {
+		return ErrAuthMethodRelocated
+	}
 	*a.session = *refreshed
+	a.identity = identity
+	a.handle = identity.Handle
 	if a.session.AccessToken.Reveal() == "" {
 		return ErrSessionUnavailable
 	}
