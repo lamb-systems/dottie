@@ -1,0 +1,22 @@
+<schemalist>
+  <enum id="org.gnome.desktop.GDesktopClockFormat">
+    <value nick="24h" value="0"/>
+    <value nick="12h" value="1"/>
+  </enum>
+  <enum id="org.gnome.desktop.GDesktopColorScheme">
+    <value nick="default" value="0"/>
+    <value nick="prefer-dark" value="1"/>
+    <value nick="prefer-light" value="2"/>
+  </enum>
+  <enum id="org.gnome.desktop.GDesktopAccentColor">
+    <value nick="blue" value="0"/>
+    <value nick="teal" value="1"/>
+    <value nick="green" value="2"/>
+    <value nick="yellow" value="3"/>
+    <value nick="orange" value="4"/>
+    <value nick="red" value="5"/>
+    <value nick="pink" value="6"/>
+    <value nick="purple" value="7"/>
+    <value nick="slate" value="8"/>
+  </enum>
+</schemalist>

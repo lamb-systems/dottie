@@ -6,11 +6,12 @@ Atmosphere account and its PDS.
 **Status: target selection and consent policy persist locally.** Account authorization
 is available through `dottie account login`, `status` and `logout`; it stores OAuth
 sessions in the desktop Secret Service keyring. An opt-in internal GSettings capture
-library accepts explicit selected keys, but capture is not wired to the CLI or presets;
-apply, encryption, synchronization, restore and the background service remain
-unimplemented. Native memory/null and isolated keyfile tests do not establish a
-production desktop provider. Account commands do not capture or synchronize data. Do
-not use this scaffold to back up real data.
+and apply library is not wired to the CLI. A versioned category matrix publishes the
+appearance, font and clock keys that the GNOME preset resolves; GNOME category
+selection is not persisted yet. End-to-end synchronization, restore and the background
+service remain unimplemented. Native memory/null and isolated keyfile tests do not
+establish a production desktop provider. Account commands do not capture or synchronize
+data. Do not use this scaffold to back up real data.
 
 ## Target design
 
@@ -121,8 +122,8 @@ work; the source-comment policy remains a review concern, not an automated check
 | `packaging`, `tests` | Distribution and integration coverage |
 
 The default executable remains the CLI and its unit tests. The opt-in GSettings
-capture library is not wired into the CLI; account login/status/logout manage the OAuth
-session only.
+capture and apply library is not wired into the CLI; account login/status/logout manage
+the OAuth session only.
 Other component directories document their responsibilities. Presets, OAuth metadata
 and the systemd unit are draft examples, not functioning synchronization integrations
 or deployable configuration.

@@ -1,0 +1,6 @@
+<schemalist>
+  <enum id="org.gnome.desktop.GDesktopClockFormat">
+    <value nick="24h" value="0"/>
+    <value nick="12h" value="1"/>
+  </enum>
+</schemalist>

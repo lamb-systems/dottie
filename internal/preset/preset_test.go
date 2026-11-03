@@ -11,6 +11,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +93,8 @@ func TestClosedSchemaAndPresetValidation(t *testing.T) {
 		{name: "unknown risk", text: strings.Replace(base, "risk=\"executable-config\"", "risk=\"unknown\"", 1), key: "risk"},
 		{name: "files without roots", text: strings.Split(base, "[[roots]]")[0], key: "roots"},
 		{name: "GNOME with roots", text: strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), key: "roots"},
+		{name: "GNOME without categories", text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0], key: "categories"},
+		{name: "GNOME with unknown category", text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0] + "categories = [\"wallpaper\"]\n", key: "categories"},
 		{name: "invalid exclude", text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nexclude = [\"{a,b}\"]", 1), key: "exclude"},
 	}
 	for _, test := range cases {
@@ -119,7 +122,6 @@ func TestBuildPreviewResolvesRelocatedXDGWithoutWrites(t *testing.T) {
 	assert.Equal(t, []string{filepath.Join(paths.ConfigHome, "nvim")}, preview.ResolvedRoots)
 	assert.Equal(t, []string{".git", ".git/**"}, preview.Excludes)
 	assert.Equal(t, config.Review, preview.EffectiveMode)
-	assert.Nil(t, preview.Unsupported)
 	assertMissing(t, configPath)
 	assertMissing(t, paths.AppConfigDir())
 	assertMissing(t, rootPath)
@@ -265,20 +267,60 @@ func TestMaterializeProgressivelyValidatesMultipleRoots(t *testing.T) {
 	assert.Contains(t, err.Error(), "roots[1]")
 }
 
-func TestGNOMEPresetIsStructuredUnsupported(t *testing.T) {
+func TestGNOMEPresetResolvesPublishedCategoryKeys(t *testing.T) {
 	paths := testPaths(t)
 	preset, err := Lookup("gnome")
 	require.NoError(t, err)
+	assert.Equal(t, []string{"appearance", "fonts", "clock"}, preset.Categories)
 	preview, err := BuildPreview(preset, paths)
-	require.ErrorIs(t, err, ErrSourceNotCapturable)
+	require.NoError(t, err)
 	assert.Equal(t, preset.ID, preview.Preset.ID)
-	require.NotNil(t, preview.Unsupported)
-	var reason *UnsupportedReason
-	require.ErrorAs(t, preview.Unsupported, &reason)
-	assert.Equal(t, model.SourceGNOME, reason.Source)
-	assert.Equal(t, "DOT-G03", reason.Boundary)
+	assert.Empty(t, preview.ResolvedRoots)
+	assert.Empty(t, preview.Excludes)
+	assert.Equal(t, config.Review, preview.EffectiveMode)
+	require.Len(t, preview.Settings, 14)
+	assert.Equal(t, matrix.Version, preview.MatrixVersion)
+	for index := 1; index < len(preview.Settings); index++ {
+		previous, current := preview.Settings[index-1], preview.Settings[index]
+		assert.LessOrEqual(t, previous.SchemaID+"\x00"+previous.Path+"\x00"+previous.Key, current.SchemaID+"\x00"+current.Path+"\x00"+current.Key)
+	}
+	assert.Contains(t, preview.Settings, matrix.KeyRef{SchemaID: "org.gnome.desktop.interface", Key: "color-scheme"})
+	assert.Contains(t, preview.Settings, matrix.KeyRef{SchemaID: "org.gnome.desktop.calendar", Key: "show-weekdate"})
+}
+
+func TestGNOMEPresetRejectsInvalidCategorySelection(t *testing.T) {
+	paths := testPaths(t)
+	for _, test := range []struct {
+		name       string
+		categories []string
+	}{
+		{name: "missing", categories: nil},
+		{name: "unknown", categories: []string{"appearance", "wallpaper"}},
+		{name: "duplicate", categories: []string{"appearance", "appearance"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			preset := Preset{ID: "gnome-custom", Name: "Custom GNOME", Source: model.SourceGNOME, Risk: "desktop-preferences", Categories: test.categories}
+			_, err := BuildPreview(preset, paths)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `preset "gnome-custom" key "categories"`)
+			_, err = Materialize(preset, config.Default(), paths)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `preset "gnome-custom" key "categories"`)
+		})
+	}
+}
+
+func TestGNOMEPresetMaterializeRequiresLocalCategoryPolicy(t *testing.T) {
+	paths := testPaths(t)
+	preset, err := Lookup("gnome")
+	require.NoError(t, err)
 	_, err = Materialize(preset, config.Default(), paths)
-	assert.ErrorIs(t, err, ErrSourceNotCapturable)
+	require.ErrorIs(t, err, ErrSourceNotMaterializable)
+	var reason *UnsupportedReason
+	require.ErrorAs(t, err, &reason)
+	assert.Equal(t, model.SourceGNOME, reason.Source)
+	assert.Equal(t, "DOT-P06", reason.Boundary)
+	assert.Contains(t, err.Error(), "persisted local category policy")
 }
 
 func TestHandBuiltPresetIsRevalidatedAtBothBoundaries(t *testing.T) {

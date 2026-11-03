@@ -6,25 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 )
 
-const maxCaptureKeys = 256
+type KeyRef = matrix.KeyRef
 
 type CaptureRequest struct {
 	TargetID string
 	Keys     []KeyRef
-}
-
-type KeyRef struct {
-	SchemaID string
-	Path     string
-	Key      string
 }
 
 type CaptureReason string
@@ -58,7 +51,7 @@ func Capture(ctx context.Context, request CaptureRequest) (CaptureResult, error)
 		return CaptureResult{}, err
 	}
 	keys := append([]KeyRef(nil), request.Keys...)
-	sort.Slice(keys, func(i, j int) bool { return keyRefLess(keys[i], keys[j]) })
+	matrix.SortKeys(keys)
 	result := CaptureResult{}
 	for start := 0; start < len(keys); {
 		if err := ctx.Err(); err != nil {
@@ -148,15 +141,12 @@ func validateCaptureRequest(request CaptureRequest) error {
 	if err := target.Validate(); err != nil {
 		return fmt.Errorf("invalid capture target: %w", err)
 	}
-	if len(request.Keys) > maxCaptureKeys {
-		return fmt.Errorf("capture contains more than %d selected keys", maxCaptureKeys)
+	if len(request.Keys) > matrix.MaxKeys {
+		return fmt.Errorf("capture contains more than %d selected keys", matrix.MaxKeys)
 	}
 	seen := make(map[KeyRef]struct{}, len(request.Keys))
 	for index, key := range request.Keys {
-		if !validCaptureField(key.SchemaID, model.MaxSettingSchemaIDBytes) ||
-			!validCaptureField(key.Key, model.MaxSettingKeyBytes) ||
-			(key.Path != "" && (!validCaptureField(key.Path, model.MaxRelativePathBytes) || !validCapturePath(key.Path))) ||
-			strings.ContainsRune(key.Key, '/') {
+		if err := key.Validate(); err != nil {
 			return fmt.Errorf("invalid capture reference at index %d", index)
 		}
 		if _, ok := seen[key]; ok {
@@ -177,20 +167,6 @@ func validCaptureField(value string, maximum int) bool {
 		}
 	}
 	return true
-}
-
-func validCapturePath(path string) bool {
-	return strings.HasPrefix(path, "/") && strings.HasSuffix(path, "/") && !strings.Contains(path, "//")
-}
-
-func keyRefLess(left, right KeyRef) bool {
-	if left.SchemaID != right.SchemaID {
-		return left.SchemaID < right.SchemaID
-	}
-	if left.Path != right.Path {
-		return left.Path < right.Path
-	}
-	return left.Key < right.Key
 }
 
 func addUnknown(result *CaptureResult, key KeyRef, reason CaptureReason) {

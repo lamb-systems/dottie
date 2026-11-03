@@ -4,4 +4,10 @@ name = "GNOME preferences"
 source = "gnome"
 risk = "desktop-preferences"
 categories = ["appearance", "fonts", "clock"]
-notes = ["Category-to-key mappings and supported schema versions must be implemented and tested before use."]
+notes = [
+  "Keys are limited to the versioned appearance, font and clock matrix reviewed against gsettings-desktop-schemas 51.0; the reviewed range is GNOME 42-51, the product target remains GNOME 50 and other releases are not validated.",
+  "A key with Since 0 is recorded by upstream NEWS before GNOME 42; color-scheme (GNOME 42) and accent-color (GNOME 47) remain missing-key when the installed schema lacks them, and Dottie never substitutes or pins distribution defaults.",
+  "GTK, icon, cursor and font values name assets that must already exist on the destination; Dottie never downloads, installs or reloads them.",
+  "Wallpaper, monitor, GPU, peripheral, input-source, keybinding, media-key and other command-bearing preferences stay local and are not shipped.",
+  "Only explicit user overrides are captured; reset intent restores absence. Capture and apply remain library-only until the CLI and local category policy are wired.",
+]

@@ -15,12 +15,13 @@ import (
 	"github.com/lamb-systems/dottie/internal/ignore"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 )
 
 var (
-	ErrUnknownPreset       = errors.New("unknown preset")
-	ErrSourceNotCapturable = errors.New("preset source is not capturable")
-	ErrConsentConflict     = errors.New("preset conflicts with existing consent or selection")
+	ErrUnknownPreset           = errors.New("unknown preset")
+	ErrSourceNotMaterializable = errors.New("preset source cannot be materialized")
+	ErrConsentConflict         = errors.New("preset conflicts with existing consent or selection")
 )
 
 //go:embed data/*.toml
@@ -47,21 +48,24 @@ type Preview struct {
 	Preset        Preset
 	ResolvedRoots []string
 	Excludes      []string
+	Settings      []matrix.KeyRef
+	MatrixVersion uint32
 	EffectiveMode config.Mode
-	Unsupported   error
 }
 
 type UnsupportedReason struct {
+	Kind     error
 	Source   model.SourceKind
 	Boundary string
+	Detail   string
 }
 
 func (r *UnsupportedReason) Error() string {
-	return fmt.Sprintf("%s: source %q has no preset key-selection authority until %s", ErrSourceNotCapturable, r.Source, r.Boundary)
+	return fmt.Sprintf("%s: source %q %s until %s", r.Kind, r.Source, r.Detail, r.Boundary)
 }
 
 func (r *UnsupportedReason) Is(target error) bool {
-	return target == ErrSourceNotCapturable
+	return target == r.Kind
 }
 
 type document struct {
@@ -121,9 +125,13 @@ func BuildPreview(p Preset, paths platform.Paths) (Preview, error) {
 		EffectiveMode: (config.Target{}).ModeOrDefault(current.Defaults),
 	}
 	if p.Source == model.SourceGNOME {
-		unsupported := &UnsupportedReason{Source: p.Source, Boundary: "DOT-G03"}
-		preview.Unsupported = unsupported
-		return preview, unsupported
+		keys, err := matrix.SelectCategories(p.Categories)
+		if err != nil {
+			return Preview{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
+		}
+		preview.Settings = keys
+		preview.MatrixVersion = matrix.Version
+		return preview, nil
 	}
 	for index, root := range p.Roots {
 		var base string
@@ -151,7 +159,12 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 	}
 	proposal := cloneConfig(c)
 	if p.Source == model.SourceGNOME {
-		return proposal, &UnsupportedReason{Source: p.Source, Boundary: "DOT-G03"}
+		return config.Config{}, &UnsupportedReason{
+			Kind:     ErrSourceNotMaterializable,
+			Source:   p.Source,
+			Boundary: "DOT-P06",
+			Detail:   "needs a persisted local category policy",
+		}
 	}
 	for index, root := range p.Roots {
 		existing, found := matchingRoot(proposal, root)
@@ -288,6 +301,12 @@ func validatePreset(p Preset) error {
 	case model.SourceGNOME:
 		if len(p.Roots) != 0 {
 			return validationError(p.ID, "roots", errors.New("GNOME preset cannot declare filesystem roots"))
+		}
+		if len(p.Categories) == 0 {
+			return validationError(p.ID, "categories", errors.New("GNOME preset requires at least one category"))
+		}
+		if _, err := matrix.SelectCategories(p.Categories); err != nil {
+			return validationError(p.ID, "categories", err)
 		}
 	}
 	seenRoots := make(map[string]struct{}, len(p.Roots))

@@ -1,0 +1,38 @@
+<schemalist gettext-domain="dottie-test">
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="gtk-theme" type="s">
+      <default>'Adwaita'</default>
+    </key>
+    <key name="icon-theme" type="s">
+      <default>'Adwaita'</default>
+    </key>
+    <key name="cursor-theme" type="s">
+      <default>'Adwaita'</default>
+    </key>
+    <key name="font-name" type="s">
+      <default>'Adwaita Sans 11'</default>
+    </key>
+    <key name="document-font-name" type="s">
+      <default>'Adwaita Sans 11'</default>
+    </key>
+    <key name="monospace-font-name" type="s">
+      <default>'Adwaita Mono 11'</default>
+    </key>
+    <key name="text-scaling-factor" type="d">
+      <range min="0.5" max="3.0"/>
+      <default>1.0</default>
+    </key>
+    <key name="clock-format" enum="org.gnome.desktop.GDesktopClockFormat">
+      <default>'24h'</default>
+    </key>
+    <key name="clock-show-date" type="b">
+      <default>true</default>
+    </key>
+    <key name="clock-show-seconds" type="b">
+      <default>false</default>
+    </key>
+    <key name="clock-show-weekday" type="b">
+      <default>false</default>
+    </key>
+  </schema>
+</schemalist>

@@ -10,6 +10,35 @@ coverage outside the selected set; a key must appear in either `Entries` or `Unk
 and deselected keys remain caller-owned `Untracked` decisions. The library does not
 enumerate schemas or infer coverage.
 
+A versioned category matrix in `internal/source/gnome/matrix` publishes the local
+selection units a GNOME preset may name. Matrix version 1 covers `appearance`,
+`fonts` and `clock` with explicit schema, key and GVariant types. It was reviewed
+against the gsettings-desktop-schemas 51.0 surface; `ReviewedMin` is GNOME 42 and
+`ReviewedMax` is GNOME 51, while the product target remains GNOME 50. A key's `Since`
+is 0 when upstream NEWS places it before GNOME 42, otherwise the first reviewed GNOME
+major that introduced it. A category's version floor is the highest `Since` in that
+category, so `appearance` requires GNOME 47 while `fonts` and `clock` require GNOME 42;
+every floor is bounded by `ReviewedMax`. Runtime `missing-key` results come from the
+installed schema surface, not from `Since`: `color-scheme` and `accent-color` are
+reported that way when the schema lacks them and are never replaced with a substitute.
+An unknown category, duplicate category or empty selection is rejected. The matrix
+does not enumerate installed schemas, discover relocatable instances or copy dconf.
+
+Synthetic fixtures under `tests/testdata/gsettings` mirror the published key surface.
+`tests/testdata/gsettings-older` is a synthetic pre-42 surface containing exactly the
+`Since == 0` keys and omitting every positive-`Since` key. Tests check key/type parity,
+the older-fixture introduction bounds, category version floors, full category capture,
+set-then-reset intent, and missing-key reporting for all categories. These are synthetic
+fixtures, not evidence about a real desktop session.
+
+The shipped categories exclude wallpaper, monitor, GPU, peripheral, input-source,
+keybinding and media-key preferences. The last group includes command-bearing values
+that could execute on the destination, so it is not shipped even when a schema is
+available. `text-scaling-factor` ships as a text readability preference; monitor/DPI
+scaling, cursor size and LCD subpixel ordering stay local. Theme, icon, cursor and font
+names reference assets that must already be installed; Dottie never downloads, installs
+or reloads them, and it makes no cross-desktop mapping claim.
+
 The settings apply adapter observes only user overrides, validates the journaled
 schema/path/key identity, and opens settings at the requested path. A fixed-path schema
 accepts its resolved schema path and rejects a different supplied path; a relocatable
@@ -23,8 +52,8 @@ so a stalled backend can delay cancellation, close or recovery reporting.
 
 The journal and rollback backup retain setting values in plaintext while retained;
 they use the existing bounded rollback-material and backup-retention policy. The
-adapter is library-only: it is not wired to the CLI or presets, grants no schema/key
-selection authority, and has no automatic-apply policy or reliable change-watch service.
+adapter is library-only: it is not wired to the CLI or presets, grants no arbitrary
+per-key selection or automatic-apply policy, and has no reliable change-watch service.
 Real desktop validation belongs to G04; do not treat synthetic native tests as evidence
 about actual desktop preferences.
 

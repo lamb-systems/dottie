@@ -7,16 +7,21 @@ they cannot contain commands, hooks, downloads, package requests, or consent ove
 
 `BuildPreview` validates caller-supplied presets, resolves file roots against the
 provided HOME and XDG paths, reports the destination's effective default mode, and
-performs no filesystem mutation or config write. The selected-key GNOME capture
-library exists, but GNOME presets retain their catalog information and return a
-structured `ErrSourceNotCapturable` reason until DOT-G03 defines supported preset key
-selection. Catalog data cannot select capture keys or report whether anything is
-captured locally; no CLI wiring is provided.
+performs no filesystem mutation or config write. GNOME presets declare category IDs
+from the published matrix in `internal/source/gnome/matrix`; preview resolves them to
+the matrix's schema/key references and rejects unknown, duplicate or empty category
+selections. The matrix, not the catalog, owns which keys a category contains. GNOME
+selection therefore does not require a hand-built key list, and catalog data still
+cannot name arbitrary keys.
 
-`Materialize` returns a configuration proposal and never writes it. GNOME materialization
-remains unsupported because presets do not have key-selection authority. Each new target has
-an empty mode and inherits the destination default, which may be `auto-apply`; presets
-cannot grant or widen consent. Proposed roots pass both `config.CheckAddition` and
+`Materialize` returns a configuration proposal and never writes it. GNOME
+materialization is rejected with a structured `ErrSourceNotMaterializable` reason:
+local configuration has no persisted category policy yet, and materializing a GNOME
+target without one would let a later catalog or matrix expansion silently widen an
+approved selection. Preview carries the resolved references and matrix version so that
+later persistence can bind the approval to them. That persistence belongs to DOT-P06.
+Each new file target has an empty mode and inherits the destination default, which may
+be `auto-apply`; presets cannot grant or widen consent. Proposed roots pass both `config.CheckAddition` and
 `config.Config.Validate`. Existing identical logical roots are no-ops that preserve
 their stored id, mode, and excludes. Different excludes for an existing root are
 rejected rather than replacing local policy. IDs are derived only for new roots.
