@@ -83,7 +83,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations", "retention_declarations", "retention_recovery_points", "retention_declaration_history", "retention_declaration_history_points"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations", "retention_declarations", "retention_recovery_points", "retention_declaration_history", "retention_declaration_history_points", "retention_recovery_material"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -189,6 +189,53 @@ func TestVaultPublicationObservationIsDurableAndMonotonicWithinEpoch(t *testing.
 	assert.Equal(t, []byte("control-3"), controlCID)
 }
 
+func TestVaultPublicationObservationRejectsSameEpochControlReplacement(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	defer store.Close()
+	ctx := context.Background()
+	first := VaultPublicationObservation{Vault: [32]byte{13}, Epoch: 4, PublicationCount: 3, HeadCID: []byte("head-3"), ControlCID: []byte("control-4-a")}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first))
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, first), "an identical observation is idempotent")
+
+	replacement := first
+	replacement.ControlCID = []byte("control-4-b")
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, replacement), ErrVaultPublicationControlReplacement)
+
+	nextCount := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: first.Epoch, PublicationCount: first.PublicationCount + 1,
+		HeadCID: []byte("head-4"), ControlCID: replacement.ControlCID, PrevHeadCID: first.HeadCID,
+	}
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, nextCount), ErrVaultPublicationControlReplacement)
+
+	nextEpoch := VaultPublicationObservation{
+		Vault: first.Vault, Epoch: first.Epoch + 1, PublicationCount: 0,
+		HeadCID: []byte("epoch-5-head"), ControlCID: []byte("control-5"), PrevControlCID: first.ControlCID,
+	}
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, nextEpoch), "an epoch advance joined to the stored control remains accepted")
+}
+
+func TestVaultPublicationObservationEstablishesUnknownControlOnce(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	defer store.Close()
+	ctx := context.Background()
+	vault := [32]byte{14}
+	err := store.withTx(ctx, func(tx *sql.Tx) error {
+		_, execErr := tx.ExecContext(ctx, `INSERT INTO vault_publication_observations(vault, epoch, publication_count, head_cid, control_cid)
+VALUES (?, ?, ?, ?, ?)`, vault[:], 2, 1, []byte("head-1"), []byte{})
+		return execErr
+	})
+	require.NoError(t, err, "a row written before control ancestry was stored has an empty control CID")
+	legacy := VaultPublicationObservation{Vault: vault, Epoch: 2, PublicationCount: 1, HeadCID: []byte("head-1"), ControlCID: []byte("control-2")}
+
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, legacy),
+		"an observation recorded before control ancestry was stored may establish the control once")
+
+	replacement := legacy
+	replacement.ControlCID = []byte("control-2-other")
+	assert.ErrorIs(t, store.RecordVaultPublicationObservation(ctx, replacement), ErrVaultPublicationControlReplacement,
+		"once established, a same-epoch control cannot be replaced")
+}
+
 func TestVaultPublicationObservationAcceptsFirstIdempotentAndMidEpochRead(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	defer store.Close()
@@ -218,7 +265,7 @@ func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
+	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE retention_recovery_material; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -229,10 +276,20 @@ func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
 		Vault: first.Vault, Epoch: 5, PublicationCount: 0, HeadCID: []byte("head-5"),
 		ControlCID: []byte("control-5"), PrevControlCID: first.ControlCID,
 	}
-	assert.ErrorIs(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced), ErrVaultPublicationControlAncestry)
-	require.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), first), "a same-epoch observation refreshes the backfilled unknown control")
-	advanced.PrevControlCID = first.ControlCID
-	require.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced))
+	assert.ErrorIs(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced), ErrVaultPublicationControlAncestry,
+		"a migrated row with an unknown control cannot authorise an epoch advance")
+
+	refreshed := first
+	require.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), refreshed),
+		"a same-epoch observation establishes the control for a row migrated without one")
+	replacement := refreshed
+	replacement.ControlCID = []byte("control-4-other")
+	assert.ErrorIs(t, migrated.RecordVaultPublicationObservation(context.Background(), replacement), ErrVaultPublicationControlReplacement,
+		"once established, the migrated control cannot be replaced")
+
+	advanced.PrevControlCID = refreshed.ControlCID
+	assert.NoError(t, migrated.RecordVaultPublicationObservation(context.Background(), advanced),
+		"after the control is established, an epoch advance that joins it is accepted")
 }
 
 func TestVaultPublicationObservationAllowsFirstHigherEpochWithoutControlFloor(t *testing.T) {
@@ -404,7 +461,7 @@ func TestFailedMigrationIsAtomicAndGoodRetrySucceeds(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; DROP TABLE transition_attempts; UPDATE schema_version SET version = 1 WHERE singleton = 1")
+	_, err = raw.Exec("DROP TABLE retention_recovery_material; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; DROP TABLE transition_attempts; UPDATE schema_version SET version = 1 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -463,7 +520,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 9")
+	assert.Contains(t, err.Error(), "supports version 10")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

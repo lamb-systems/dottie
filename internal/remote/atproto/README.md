@@ -136,12 +136,13 @@ limits sized for a small preferences repository; a real account CAR may be large
 revisit the defaults before production reads.
 
 A verified revision carries a read-only `(NSID, rkey) -> record CID` membership view and record
-bytes sourced only from that CAR. `PublishFenced` emits one `com.atproto.repo.applyWrites` batch
-for administrative transitions: the first blob-reference record, head, control and explicitly
-supplied policy/certificate writes are atomic. Ordinary publication uses an unexported fenced sink
-reachable only through `CommitPublication`; it writes only the snapshot reference and head and cannot
-encode a control write. Both paths use the verified revision CID as `swapCommit`, with no unfenced
-fallback.
+bytes sourced only from that CAR. The package-private `publishFenced` primitive emits one
+`com.atproto.repo.applyWrites` batch for administrative transitions: the first blob-reference record,
+head, control and explicitly supplied policy/certificate writes are atomic. It is called by
+`CommitTransition` only after the concrete adapter has authenticated and revalidated the predecessor.
+Ordinary publication uses a separate package-private fenced sink reachable only through
+`CommitPublication`; it writes only the snapshot reference and head and cannot encode a control write.
+Both paths use the verified revision CID as `swapCommit`, with no unfenced fallback.
 A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
@@ -299,13 +300,13 @@ session from the Secret Service keyring, and accepts only `dottiethrowaway.bsky.
 `dottie.wallera.computer` as `DOTTIE_HANDLE`. Any other handle fails closed. It must be run only
 with explicit disposable-account authorization; no live run was performed for this implementation.
 
-The F04 live harness is `TestLiveFence`; it skips unless `DOTTIE_LIVE_FENCE=1`, uses the same
-allowlist and existing keyring sessions, and was not run for this implementation. Run only with
-explicit disposable-account authorization, one provider at a time:
+The F04 live harness is `TestLiveFence` in `fence_live_test.go`; it skips unless
+`DOTTIE_LIVE_FENCE=1`, uses the same allowlist and existing keyring sessions, and was not run for
+this implementation. Run only with explicit disposable-account authorization, one provider at a time:
 
 ```sh
-DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottiethrowaway.bsky.social go test -count=1 -run TestLiveFence ./tests/integration -v
-DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottie.wallera.computer go test -count=1 -run TestLiveFence ./tests/integration -v
+DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottiethrowaway.bsky.social go test -count=1 -run TestLiveFence ./internal/remote/atproto -v
+DOTTIE_LIVE_FENCE=1 DOTTIE_HANDLE=dottie.wallera.computer go test -count=1 -run TestLiveFence ./internal/remote/atproto -v
 ```
 
 Its six rows report initial atomic creation, two stale-writer losses (including the simulated
@@ -438,8 +439,8 @@ is checked before blob processing and does **not** expose the candidate.
 
 Consequences encoded in this package:
 
-- `PublishFenced` reports `ErrCandidateMayBeDisclosed` for every post-submission failure except a
-  lost fence, so callers can never treat "the batch failed" as "nothing is public".
+- `publishFenced` reports `ErrCandidateMayBeDisclosed` for every post-submission failure except a
+  lost fence, so commit callers can never treat "the batch failed" as "nothing is public".
 - Publication is validated exhaustively before sending (record shapes, required writes, duplicate
   targets, blob reference presence) so that the only expected provider-side failure is
   `InvalidSwap`. Anything else must be treated as possible disclosure of the staged candidate.
@@ -461,10 +462,11 @@ writes no control and changes no epoch. The prepared policy digest and predecess
 before staging and against a fresh verified read after staging. A superseded policy is a typed
 `ErrPreparedPolicyMismatch`; the candidate must be discarded and prepared again.
 
-`CommitTransition` accepts a `vault.Transition`, the root signing key, a `TransitionIO` and a
-`TransitionAttemptStore`. `ATProtoTransitionIO` uses `RevisionReader` for verified repository reads,
+`CommitTransition` accepts a `vault.Transition`, the root signing key, a concrete
+`ATProtoTransitionIO` value and a `TransitionAttemptStore`; its private test seam cannot be
+implemented outside this package. The adapter uses `RevisionReader` for verified repository reads,
 uploads the already-sealed successor-epoch snapshot with `application/octet-stream`, and commits
-with one `PublishFenced` `applyWrites` call. The adapter requires caller-held predecessor policy
+with one `publishFenced` `applyWrites` call. The adapter requires caller-held predecessor policy
 record evidence in `PreviousPolicies`; it selects the exact record named by the current policy digest,
 then verifies that evidence's record binding, signature, chain and one-epoch relationship just as the
 read path does. The policy evidence is not taken from the repository under verification. Its durable
@@ -507,12 +509,12 @@ signatures and binding, checks cross-record context, and authenticates the vault
 repository record used by the result comes from the same verified CAR revision. The result exposes
 the authenticated publication count and head snapshot CID. Before returning, `VaultReader.Read`
 requires a durable observation store and calls `CheckPublicationCount` only after the final
-latest-commit stability check. `ATProtoTransitionIO.ReadCurrent` currently enforces the persisted
-publication-count and signed head-ancestry checks (`PrevHeadCID`) before returning a publication or
-transition predecessor. It does not check envelope-parent linkage or enforce policy `max_publications`;
-both are deferred P04 gaps. The state store rejects decreases, conflicting equal counts and same-epoch
-increments that skip a count; a higher epoch starts a new count sequence. Migration 0004 stores epoch,
-count and head CID per vault. The final latest-commit
+latest-commit stability check. `ATProtoTransitionIO.ReadCurrent` verifies the referenced snapshot
+and envelope, including the envelope-parent to signed-head-predecessor join, and enforces persisted
+publication-count and signed head-ancestry checks before returning a publication or transition
+predecessor. It does not enforce policy `max_publications`; the read-side bound remains deferred. The
+state store rejects decreases, conflicting equal counts and same-epoch increments that skip a count;
+a higher epoch starts a new count sequence. Migration 0004 stores epoch, count and head CID per vault. The final latest-commit
 check covers the blob fetch and all validation; a moved revision discards the candidate and restarts
 within a bounded retry count. There is no older-revision fallback or partial result.
 

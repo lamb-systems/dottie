@@ -50,6 +50,26 @@ func TestRetentionPruneBoundaryMustMatchDeclaredRecoveryPoint(t *testing.T) {
 	}
 }
 
+func TestRetentionPruneBoundaryMustBeOldestRetainedRecoveryPoint(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	ctx := context.Background()
+	vaultID := [32]byte{53}
+	oldest := RetentionRecoveryPoint{Epoch: 2, SnapshotCID: []byte("oldest-snapshot")}
+	newer := RetentionRecoveryPoint{Epoch: 3, SnapshotCID: []byte("newer-snapshot")}
+	declaration := testRetentionDeclaration(vaultID, oldest, 2, 1_700_000_000)
+	declaration.RecoveryPoints = []RetentionRecoveryPoint{oldest, newer}
+	declaration, err := store.PutRetentionDeclaration(ctx, declaration)
+	require.NoError(t, err)
+	require.NoError(t, store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, newer, declaration.PolicyDigest)))
+	require.NoError(t, store.RecordVaultPublicationObservation(ctx, VaultPublicationObservation{
+		Vault: vaultID, Epoch: 5, HeadCID: []byte("live-head"), ControlCID: []byte("live-control"),
+	}))
+	_, err = store.PlanRetentionPrune(ctx, RetentionPruneRequest{
+		Vault: vaultID, DeviceID: declaration.DeviceID, Boundary: newer, Now: time.Now(),
+	})
+	assert.ErrorIs(t, err, ErrRetentionBoundaryNewerThanFloor)
+}
+
 func TestRetentionPruneCheckpointMustMatchBoundaryEpochAndSnapshot(t *testing.T) {
 	for _, check := range []struct {
 		name       string

@@ -278,16 +278,21 @@ func RollbackApplied(ctx context.Context, store *state.Store, filesystem files.A
 		if err := store.TransitionJournalEntry(ctx, entry.ID, "applied", "rolled-back", state.JournalStageRolledBack); err != nil {
 			return report, err
 		}
-		if err := store.PruneJournalBackup(ctx, entry.ID, currentTime); err != nil {
+		pruned, err := store.PruneJournalBackupIfEligible(ctx, entry.ID, currentTime)
+		if err != nil {
 			result.Outcome = "rolled-back"
 			result.Reason = "restore verified; backup retained because pruning failed"
 			report.Entries = append(report.Entries, result)
 			return report, err
 		}
 		result.Outcome = "rolled-back"
-		result.Reason = "backup restored and verified"
+		if pruned {
+			result.Reason = "backup restored and verified"
+			report.Pruned = append(report.Pruned, entry.ID)
+		} else {
+			result.Reason = "backup restored and verified; backup retained for a retained recovery point"
+		}
 		report.Entries = append(report.Entries, result)
-		report.Pruned = append(report.Pruned, entry.ID)
 	}
 	return report, nil
 }

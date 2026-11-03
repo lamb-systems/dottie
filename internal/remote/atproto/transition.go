@@ -73,10 +73,10 @@ func (e *TransitionFenceLostError) Is(target error) bool {
 	return target == ErrTransitionDiscarded
 }
 
-type TransitionIO interface {
+type transitionIO interface {
 	ReadCurrent(context.Context) (*Revision, vault.Predecessor, error)
 	StageCandidate(context.Context, []byte, vault.Policy, [][]byte) (json.RawMessage, string, error)
-	ApplyTransition(context.Context, *Revision, FencedPublication) error
+	applyTransition(context.Context, *Revision, FencedPublication) error
 }
 
 type TransitionAttemptStore interface {
@@ -259,12 +259,16 @@ func verifyCandidateEnvelopeSignature(data []byte, envelope vault.Envelope, poli
 	return vault.Verify("dottie/v1/sig-snapshot", preimage, envelope.Signature[:], ed25519.PublicKey(signer.SigningPublicKey[:]))
 }
 
-func (io ATProtoTransitionIO) ApplyTransition(ctx context.Context, revision *Revision, publication FencedPublication) error {
-	_, err := PublishFenced(ctx, io.Transport, revision, publication)
+func (io ATProtoTransitionIO) applyTransition(ctx context.Context, revision *Revision, publication FencedPublication) error {
+	_, err := publishFenced(ctx, io.Transport, revision, publication)
 	return err
 }
 
-func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAttemptStore, transition vault.Transition, signer ed25519.PrivateKey, now time.Time) (TransitionCommitResult, error) {
+func CommitTransition(ctx context.Context, io ATProtoTransitionIO, store TransitionAttemptStore, transition vault.Transition, signer ed25519.PrivateKey, now time.Time) (TransitionCommitResult, error) {
+	return commitTransition(ctx, io, store, transition, signer, now)
+}
+
+func commitTransition(ctx context.Context, io transitionIO, store TransitionAttemptStore, transition vault.Transition, signer ed25519.PrivateKey, now time.Time) (TransitionCommitResult, error) {
 	if io == nil || store == nil || len(signer) != ed25519.PrivateKeySize || now.IsZero() {
 		return TransitionCommitResult{}, fmt.Errorf("%w: transition I/O, store, signer and timestamp are required", ErrBatchRejected)
 	}
@@ -362,7 +366,7 @@ func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAtte
 	if err := store.UpdateTransitionAttempt(ctx, attemptID, TransitionOutcomeSubmitted, string(evidence)); err != nil {
 		return transitionResult(attempt, TransitionOutcomeNotLanded, currentRevision, string(evidence)), errors.Join(err, ErrCandidateMayBeDisclosed)
 	}
-	applyErr := io.ApplyTransition(ctx, currentRevision, publication)
+	applyErr := io.applyTransition(ctx, currentRevision, publication)
 	if errors.Is(applyErr, ErrFenceLost) {
 		latest, latestPredecessor, readErr := io.ReadCurrent(ctx)
 		updatedEvidence := evidenceWith(string(evidence), "fenceLostRevision", revisionCommit(latest))
@@ -386,7 +390,11 @@ func CommitTransition(ctx context.Context, io TransitionIO, store TransitionAtte
 	return resolved, errors.Join(applyErr, outcomeError(resolved.Outcome), ErrCandidateMayBeDisclosed)
 }
 
-func ResolveTransitionAttempt(ctx context.Context, io TransitionIO, store TransitionAttemptStore, attemptID string) (TransitionCommitResult, error) {
+func ResolveTransitionAttempt(ctx context.Context, io ATProtoTransitionIO, store TransitionAttemptStore, attemptID string) (TransitionCommitResult, error) {
+	return resolveTransitionAttempt(ctx, io, store, attemptID)
+}
+
+func resolveTransitionAttempt(ctx context.Context, io transitionIO, store TransitionAttemptStore, attemptID string) (TransitionCommitResult, error) {
 	if io == nil || store == nil {
 		return TransitionCommitResult{}, fmt.Errorf("%w: transition I/O and store are required", ErrBatchRejected)
 	}
@@ -427,7 +435,7 @@ type transitionAttemptEvidence struct {
 	PreparedRevision string `json:"preparedRevision"`
 }
 
-func resolveSubmittedTransition(ctx context.Context, io TransitionIO, store TransitionAttemptStore, attempt state.TransitionAttempt, evidence string) (TransitionCommitResult, error) {
+func resolveSubmittedTransition(ctx context.Context, io transitionIO, store TransitionAttemptStore, attempt state.TransitionAttempt, evidence string) (TransitionCommitResult, error) {
 	latest, _, err := io.ReadCurrent(ctx)
 	if err != nil {
 		updatedEvidence := evidenceWith(evidence, "resolutionError", err.Error())

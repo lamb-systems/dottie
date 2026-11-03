@@ -402,7 +402,7 @@ func TestPublishSnapshotFencedRejectsHeadReferenceOutsideSnapshot(t *testing.T) 
 func TestPublishFencedAlwaysEncodesSwapCommit(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	transport := &proofTransport{doStatus: 200, doBody: []byte(`{"commit":{"cid":"bafybeigdyrzt5sfp7udm7hu76uhy26nfjpy2ytma2if42f2qht6lmtkq3u"}}`)}
-	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
+	_, err := publishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -439,7 +439,7 @@ func TestPublishFencedClassifiesOnlyStructuredInvalidSwap(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			transport := &proofTransport{doStatus: test.status, doBody: []byte(test.body)}
-			_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
+			_, err := publishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
 			if !errors.Is(err, test.want) {
 				require.ErrorIs(t, err, test.want, "publish error=%v want %v", err, test.want)
 			}
@@ -450,7 +450,7 @@ func TestPublishFencedClassifiesOnlyStructuredInvalidSwap(t *testing.T) {
 func TestPublishFencedDoesNotRetryAmbiguousTransport(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	transport := &proofTransport{doError: errors.New("timeout")}
-	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
+	_, err := publishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, validPublication(fixture.root.String()))
 	require.ErrorIs(t, err, ErrAmbiguousTransport, "publish transport error=%v path=%q", err, transport.requestPath)
 	require.Equal(t, "com.atproto.repo.applyWrites", transport.requestPath, "publish transport error=%v path=%q", err, transport.requestPath)
 }
@@ -460,7 +460,7 @@ func TestPublishFencedRejectsInvalidBatchBeforeTransport(t *testing.T) {
 	publication := validPublication(fixture.root.String())
 	publication.VaultHead.Record = json.RawMessage(`not json`)
 	transport := &proofTransport{}
-	_, err := PublishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, publication)
+	_, err := publishFenced(context.Background(), transport, &Revision{did: proofTestDID, commitCID: fixture.root.String()}, publication)
 	require.ErrorIs(t, err, ErrBatchRejected, "invalid batch error=%v request=%q", err, transport.requestPath)
 	require.Equal(t, "", transport.requestPath, "invalid batch error=%v request=%q", err, transport.requestPath)
 }
@@ -481,7 +481,7 @@ func TestPostSubmissionFailuresSignalCandidateDisclosureRisk(t *testing.T) {
 			fixture := makeProofFixture(t, 1)
 			transport := &proofTransport{doStatus: testCase.status, doBody: []byte(testCase.response)}
 			revision := &Revision{did: proofTestDID, commitCID: fixture.root.String()}
-			_, err := PublishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
+			_, err := publishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
 			if !errors.Is(err, testCase.want) {
 				require.ErrorIs(t, err, testCase.want, "error = %v, want %v", err, testCase.want)
 			}
@@ -496,7 +496,7 @@ func TestLostFenceDoesNotSignalCandidateDisclosureRisk(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	transport := &proofTransport{doStatus: 400, doBody: []byte(`{"error":"InvalidSwap"}`)}
 	revision := &Revision{did: proofTestDID, commitCID: fixture.root.String()}
-	_, err := PublishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
+	_, err := publishFenced(context.Background(), transport, revision, validPublication(fixture.root.String()))
 	if !errors.Is(err, ErrFenceLost) {
 		require.ErrorIs(t, err, ErrFenceLost, "error = %v, want ErrFenceLost", err)
 	}

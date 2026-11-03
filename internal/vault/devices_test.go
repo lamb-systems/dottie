@@ -113,14 +113,26 @@ func publicationTestIntent(fixture devicesFixture, predecessor Predecessor) Publ
 	}
 }
 
-func TestPreparePublicationRefusesWithoutTrustedClock(t *testing.T) {
+func TestPreparePublicationUsesCountOnlyWithoutTrustedClock(t *testing.T) {
 	fixture := newDevicesFixture(t)
 	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
 	intent := publicationTestIntent(fixture, predecessor)
 	intent.Clock = nil
-	_, err := PreparePublication(predecessor, intent)
-	require.ErrorIs(t, err, ErrEpochClockMissing,
-		"an epoch age trigger cannot be evaluated without a trusted clock, so publication must refuse rather than skip it")
+	publication, err := PreparePublication(predecessor, intent)
+	require.NoError(t, err)
+	assert.Equal(t, PublicationAgeTriggerNotEvaluatedNoTrustedClock, publication.AgeTriggerStatus)
+
+	policy, err := DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	head, err := DecodeHead(predecessor.Head)
+	require.NoError(t, err)
+	head.PublicationCount = uint64(policy.MaxPublications)
+	predecessor.Head, err = signHead(head, fixture.root.Signing)
+	require.NoError(t, err)
+	intent = publicationTestIntent(fixture, predecessor)
+	intent.Clock = nil
+	_, err = PreparePublication(predecessor, intent)
+	assert.ErrorIs(t, err, ErrPublicationCount)
 }
 
 func newPublicationTestFixture(t *testing.T) (devicesFixture, Predecessor, Publication, PublicationIntent) {
@@ -141,8 +153,9 @@ func TestPreparePublicationRefusesAtAndOverEpochAge(t *testing.T) {
 	policy, err := DecodePolicy(predecessor.Policy)
 	require.NoError(t, err)
 	intent.Clock = func() time.Time { return time.Unix(firstSeenAt+int64(policy.MaxEpochAge)-1, 0) }
-	_, err = PreparePublication(predecessor, intent)
+	publication, err := PreparePublication(predecessor, intent)
 	require.NoError(t, err, "an epoch one second under its age limit permits publication")
+	assert.Equal(t, PublicationAgeTriggerEvaluated, publication.AgeTriggerStatus)
 
 	for _, age := range []int64{int64(policy.MaxEpochAge), int64(policy.MaxEpochAge) + 1} {
 		intent.Clock = func() time.Time { return time.Unix(firstSeenAt+age, 0) }

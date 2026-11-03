@@ -35,7 +35,6 @@ var (
 	ErrPublicationHead       = errors.New("publication head does not match its predecessor")
 	ErrEpochRotationRequired = errors.New("publication requires epoch rotation because max_epoch_age is reached")
 	ErrEpochFirstSeenMissing = errors.New("publication requires epoch rotation because local first-seen state is missing")
-	ErrEpochClockMissing     = errors.New("publication requires a trusted clock to evaluate max_epoch_age")
 	ErrSnapshotEpoch         = errors.New("transition snapshot epoch is invalid")
 	ErrHeadLinkage           = errors.New("transition head linkage is invalid")
 	ErrCheckpointAnchor      = errors.New("transition checkpoint anchor is invalid")
@@ -152,14 +151,22 @@ type PublicationIntent struct {
 	Clock          func() time.Time
 }
 
+type PublicationAgeTriggerStatus string
+
+const (
+	PublicationAgeTriggerEvaluated                  PublicationAgeTriggerStatus = "evaluated"
+	PublicationAgeTriggerNotEvaluatedNoTrustedClock PublicationAgeTriggerStatus = "not-evaluated-no-trusted-clock"
+)
+
 type Publication struct {
-	Predecessor  PredecessorRef
-	PolicyDigest [32]byte
-	Head         []byte
-	Snapshot     []byte
-	SnapshotCID  []byte
-	BlobCID      []byte
-	Digest       [32]byte
+	Predecessor      PredecessorRef
+	PolicyDigest     [32]byte
+	Head             []byte
+	Snapshot         []byte
+	SnapshotCID      []byte
+	BlobCID          []byte
+	Digest           [32]byte
+	AgeTriggerStatus PublicationAgeTriggerStatus
 }
 
 func GenerateDeviceKeys() (ed25519.PrivateKey, *ecdh.PrivateKey, error) {
@@ -514,7 +521,8 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 	if currentHead.PublicationCount == ^uint64(0) || currentHead.PublicationCount >= uint64(policy.MaxPublications) {
 		return Publication{}, ErrPublicationCount
 	}
-	if err := validateEpochAge(intent, policy); err != nil {
+	ageTriggerStatus, err := validateEpochAge(intent, policy)
+	if err != nil {
 		return Publication{}, err
 	}
 	wraps, err := prepareRecipientWraps(policy, intent.Wraps)
@@ -555,6 +563,7 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 	publication := Publication{
 		Predecessor:  PredecessorRef{ControlCID: bytes.Clone(predecessor.ControlCID), PolicyDigest: predecessor.PolicyDigest, EpochSeq: predecessor.EpochSeq, HeadCID: bytes.Clone(predecessor.HeadCID)},
 		PolicyDigest: predecessor.PolicyDigest, Head: headBytes, Snapshot: snapshotBytes, SnapshotCID: snapshotCID, BlobCID: bytes.Clone(snapshotCID),
+		AgeTriggerStatus: ageTriggerStatus,
 	}
 	publication.Digest = ComputePublicationDigest(publication)
 	if err := ValidatePublication(publication, predecessor); err != nil {
@@ -563,24 +572,24 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 	return publication, nil
 }
 
-func validateEpochAge(intent PublicationIntent, policy Policy) error {
+func validateEpochAge(intent PublicationIntent, policy Policy) (PublicationAgeTriggerStatus, error) {
+	if intent.Clock == nil {
+		return PublicationAgeTriggerNotEvaluatedNoTrustedClock, nil
+	}
 	if intent.EpochFirstSeen == nil {
-		return ErrEpochFirstSeenMissing
+		return "", ErrEpochFirstSeenMissing
 	}
 	firstSeenAt, found, err := intent.EpochFirstSeen.VaultEpochFirstSeen(context.Background(), policy.Vault, policy.EpochSeq)
 	if err != nil {
-		return fmt.Errorf("read epoch first-seen time: %w", err)
+		return "", fmt.Errorf("read epoch first-seen time: %w", err)
 	}
 	if !found {
-		return ErrEpochFirstSeenMissing
-	}
-	if intent.Clock == nil {
-		return ErrEpochClockMissing
+		return "", ErrEpochFirstSeenMissing
 	}
 	if intent.Clock().Sub(time.Unix(firstSeenAt, 0)) >= time.Duration(policy.MaxEpochAge)*time.Second {
-		return ErrEpochRotationRequired
+		return "", ErrEpochRotationRequired
 	}
-	return nil
+	return PublicationAgeTriggerEvaluated, nil
 }
 
 func ValidatePublication(publication Publication, predecessor Predecessor) error {

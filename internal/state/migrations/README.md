@@ -10,6 +10,8 @@ Migration 3 adds `vault_checkpoints`, one row per vault, retaining the control b
 
 Migration 4 adds `vault_publication_observations`, one row per vault, retaining the last authenticated epoch, publication count and head snapshot CID used for per-device replay detection. It does not rebuild existing tables.
 
-Migration 7 adds the last authenticated control CID to `vault_publication_observations`; existing rows receive an empty value, which is treated as an unknown control and cannot authorize a later epoch advance until a matching observation is recorded.
+Migration 7 adds the last authenticated control CID to `vault_publication_observations`; existing rows receive an empty value. The store now treats the observed control as immutable within an epoch, so an empty legacy value cannot be refreshed by a differing same-epoch observation or authorize a later epoch advance.
 
 Migration 8 adds `vault_epoch_first_seen`, keyed by vault and epoch, with the caller-supplied Unix-seconds time when that epoch was first authenticated locally. Inserts are idempotent and never replace an existing timestamp; no epoch history is backfilled because its original time cannot be recovered.
+
+Migration 9 adds current per-device retention declarations and recovery-point inventories, plus immutable declaration history. Migration 10 adds `retention_recovery_material`, associating payload and journal-backup references with recovery-point epochs and snapshot CIDs. Existing and newly declared points get an incomplete inventory marker; pruning refuses until a caller records a complete material inventory.

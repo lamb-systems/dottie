@@ -11,9 +11,9 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 9
-const PayloadRetention = "Referenced payloads are retained; journal backups are pruned only after verified rollback or expiry when no other record references them."
-const RetentionPruneScope = "No epoch-scoped ciphertext cache exists yet, so the epoch dimension currently constrains only which recovery points are retained; when the sync path introduces a snapshot cache, the same declaration and preconditions govern it."
+const LatestSchemaVersion = 10
+const PayloadRetention = "Pruning requires classified material below the oldest retained recovery-point boundary, no retained-point association, no base, intent or conflict reference, and an expired verified journal backup when pruning a backup."
+const RetentionPruneScope = "Epoch-scoped material pruning requires complete payload and backup associations for every retained recovery point; the current sync path does not yet populate those inventories."
 
 var ErrStateLocked = errors.New("state is already locked")
 var ErrUnsupportedSchema = errors.New("unsupported state schema")
@@ -25,11 +25,14 @@ var ErrVaultPublicationGap = errors.New("vault publication observation has a cou
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
 var ErrPublicationAncestry = errors.New("vault publication ancestry does not match the observed head")
 var ErrVaultPublicationControlAncestry = errors.New("vault publication control ancestry does not match the observed control")
+var ErrVaultPublicationControlReplacement = errors.New("vault publication observation would replace the observed control within an epoch")
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 var ErrRetentionDeclarationNotFound = errors.New("retention declaration not found")
 var ErrRetentionBoundaryNotVerified = errors.New("retention boundary is not pinned by a matching verified checkpoint")
 var ErrRetentionLiveHead = errors.New("retention boundary may not include or exceed the live head epoch")
 var ErrRetentionConfirmationRequired = errors.New("retention pruning requires explicit confirmation")
+var ErrRetentionRecoveryPointInventoryUnknown = errors.New("retention recovery-point material inventory is missing or incomplete")
+var ErrRetentionBoundaryNewerThanFloor = errors.New("retention boundary is newer than the oldest retained recovery point")
 
 type TargetDescriptor struct {
 	ID            string
@@ -233,6 +236,23 @@ type RetentionPruneRequest struct {
 	Now      time.Time
 }
 
+type RetentionPruneCandidateKind string
+
+const (
+	RetentionPruneCandidatePayload RetentionPruneCandidateKind = "payload"
+	RetentionPruneCandidateBackup  RetentionPruneCandidateKind = "backup"
+)
+
+type RetentionPruneCandidate struct {
+	Kind                    RetentionPruneCandidateKind
+	Reference               string
+	JournalID               string
+	RecoveryPointEpochs     []uint64
+	RecoveryPointEpochKnown bool
+	Eligible                bool
+	Reasons                 []string
+}
+
 type RetentionPrunePlan struct {
 	Vault             [32]byte
 	DeviceID          string
@@ -242,6 +262,7 @@ type RetentionPrunePlan struct {
 	RecoveryPoints    []RetentionRecoveryPoint
 	PayloadReferences []string
 	ExpiredBackupIDs  []string
+	Candidates        []RetentionPruneCandidate
 	EpochScope        string
 }
 

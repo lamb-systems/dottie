@@ -43,13 +43,21 @@ device. Not implemented.
 A verified revision proves membership of records at a commit the provider asserted. It does not prove who
 wrote them, what policy applied, or that the commit is current.
 
-`VaultReader` enforces one authenticated edge over caller-supplied control history. It refuses forged or
-skipped ancestry; it does not prove the control this device observed. ADR 014:52-54 requires the observed
-control, and only a held checkpoint supplies it.
+`VaultReader` authenticates one control edge over caller-supplied history and joins later observations to the
+control CID durably recorded by this device. A same-epoch re-read must preserve the exact control CID, and an
+epoch advance must name the stored control as its predecessor; a changed same-epoch control returns
+`ErrVaultPublicationControlReplacement`. The first observation has no older local floor, and an epoch advance
+that skips the stored control fails closed. A held checkpoint remains the independent recovery anchor.
 
 The publication fence is measured on two providers: a stale writer loses on a structured error rather than
 silently overwriting. Whether a provider can accept two identical batches and produce two effects is
 **unproven**, because the measurement could not distinguish one commit from two by final membership.
+
+Publication preparation enforces `max_publications` before evaluating age. With a trusted clock, it compares
+against the persisted epoch first-seen time and returns `ErrEpochRotationRequired` at the age threshold. With no
+clock, the age trigger is not evaluated and the returned `Publication.AgeTriggerStatus` is
+`PublicationAgeTriggerNotEvaluatedNoTrustedClock`; the count trigger alone applies. Refusing solely because a
+legitimate caller supplied no clock would block a publication whose available count trigger permits it.
 
 The fence does not protect bytes already uploaded, because the upload precedes the fenced commit that would
 reject them.
@@ -105,27 +113,39 @@ Retention declarations are stored per vault and device with the policy digest, d
 recovery points. A below-policy floor is recorded and surfaced as a confidentiality-compromise signal rather
 than refused. Re-declarations preserve the previous declaration and its digest so the change remains visible.
 
-No epoch-scoped ciphertext cache exists yet, so the epoch dimension currently constrains only which recovery
-points are retained; when the sync path introduces a snapshot cache, the same declaration and preconditions
-govern it.
+No epoch-scoped ciphertext cache exists yet. Migration 10 records associations from `(vault, device, epoch,
+snapshot CID)` recovery points to local payload and journal-backup references. Recovery-material registration
+exists as a state API, but the current sync/cache path has no production producer that associates snapshot
+material with local payloads or backups. A newly declared point starts with an incomplete inventory, and
+`PlanRetentionPrune` refuses with `ErrRetentionRecoveryPointInventoryUnknown` until a caller records a complete
+inventory. The authenticated complete-inventory producer is a blocking prerequisite and does not exist until the
+sync path is wired (P06). Consequently, manual recovery-point pruning is unavailable in production by design.
+V08 is blocked on that producer rather than passing; this is an unmet in-contract prerequisite, not an accepted
+limit. Absence of a link is not treated as proof of a complete inventory.
 
-Pruning currently covers payload files not referenced by any applied base, outbound intent, or conflict, and
-rollback backups past their existing age bound. Dry-run lists the exact payload files and backup entries that
-apply would remove. It preserves any payload still referenced by an applied base, outbound intent, conflict,
-or non-expired journal backup. Apply requires a stored checkpoint whose epoch and snapshot CID exactly match
-the selected retained recovery point and whose policy digest matches the declaration. It also requires an
-observed live head and refuses a boundary epoch greater than or equal to that head.
+The automatic journal age prune is separate and runs during recovery and rollback. It now checks registered
+material against currently retained recovery points before detaching a backup; a matching backup remains
+attached and its payload remains available. This automatic journal prune was the actual deletion risk because
+it ignored retained-point associations; that path is fixed, even though no production producer currently
+populates those associations.
 
-Complete here means pinned by a verified checkpoint, not that every referenced blob is present, because no
-blob inventory is persisted and downloads are transient. This precondition constrains pruning to checked
-evidence; it does not claim the snapshot is reconstructable. The live-head observation also fails closed when
-no head epoch has been observed locally.
+Pruning deletes a payload only when its recovery-point epoch is known and strictly below the oldest retained
+recovery-point boundary, it is not associated with any retained recovery point, and it is unreferenced by
+applied bases, outbound intents, conflicts and non-prunable journal backups. Aged backups are detached only
+after their verified age bound and the same reference/recovery-point checks. Material tied to any retained
+point is protected at every age, and material at or above the boundary is not eligible. A material candidate
+with no classifiable recovery-point epoch is reported as unclassified and preserved. The dry-run plan lists
+each candidate's epoch and the rules that made it eligible or protected it.
+
+The boundary must be the oldest retained point and match a stored checkpoint's epoch and snapshot CID and the
+declaration's policy digest. The observed live head must be later than that boundary. The checkpoint pins the
+boundary but does not prove that every remote blob is present, because downloads are transient; this local
+inventory is not a claim that the snapshot is reconstructable. The live-head observation also fails closed
+when no head epoch has been observed locally.
 
 No content-key store or epoch-scoped ciphertext cache currently exists. The local payload store is plaintext
-and is retained by content references; rollback backups are plaintext and age-pruned only after verified
-apply or rollback. The declaration and preconditions govern any snapshot cache if the sync path introduces
-one. A device's X25519 private key can still unwrap archived wrappers for epochs where it was a recipient, so
-pruning locally held bytes does not revoke a secret someone already kept.
+and rollback backups are plaintext. A device's X25519 private key can still unwrap archived wrappers for
+epochs where it was a recipient, so pruning locally held bytes does not revoke a secret someone already kept.
 
 ## First restore
 
@@ -242,6 +262,9 @@ recomputations deliberately.
   accepts an old epoch is therefore correct, and no refusal case is claimed for epoch age. This is separate
   from `max_publications` and `max_epoch_age` *numeric range* (ADR 014:158-159), which the vault wire decoder
   now refuses with `ErrLimit` when the bounds are out of range (case 20).
-- `ATProtoTransitionIO.ReadCurrent` enforces publication count and head ancestry only; it does not check
-  envelope-parent linkage or the policy `max_publications` bound (P04).
+- `ATProtoTransitionIO.ReadCurrent` enforces publication count, head and control ancestry, predecessor
+  authentication, and verification of the referenced snapshot envelope — including its parent linkage, signer
+  agreement and signature under the epoch-authorized certificate. It does not enforce the policy
+  `max_publications` bound (P04): a transition read can observe a head above the policy maximum, and the
+  publication path is where that bound is refused.
 - Availability: withheld blobs and refused reads are `unavailable`, not a rollback signal.

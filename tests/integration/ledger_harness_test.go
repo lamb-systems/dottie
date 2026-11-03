@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,28 +43,26 @@ type ledgerApplyWrite struct {
 	Value      json.RawMessage `json:"value"`
 }
 
-type ledgerRaceIO struct {
-	base    atproto.TransitionIO
+type ledgerRaceTransport struct {
+	base    atproto.Transport
 	ready   chan<- struct{}
 	release <-chan struct{}
 }
 
-func (io ledgerRaceIO) ReadCurrent(ctx context.Context) (*atproto.Revision, vault.Predecessor, error) {
-	return io.base.ReadCurrent(ctx)
-}
-
-func (io ledgerRaceIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
-	return io.base.StageCandidate(ctx, data, expectedPolicy, certificates)
-}
-
-func (io ledgerRaceIO) ApplyTransition(ctx context.Context, revision *atproto.Revision, publication atproto.FencedPublication) error {
-	io.ready <- struct{}{}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-io.release:
+func (transport ledgerRaceTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+	if endpoint == "com.atproto.repo.applyWrites" {
+		transport.ready <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return 0, nil, ctx.Err()
+		case <-transport.release:
+		}
 	}
-	return io.base.ApplyTransition(ctx, revision, publication)
+	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
+}
+
+func (transport ledgerRaceTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+	return transport.base.OpenStream(ctx, endpoint, query)
 }
 
 func TestLiveLedgerSharedRootRace(t *testing.T) {
@@ -220,17 +220,19 @@ func TestLiveLedgerSharedRootRace(t *testing.T) {
 	ready := make(chan struct{}, 2)
 	release := make(chan struct{})
 	results := make(chan ledgerAttemptResult, 2)
+	ioA.Transport = ledgerRaceTransport{base: transportA, ready: ready, release: release}
+	ioB.Transport = ledgerRaceTransport{base: transportB, ready: ready, release: release}
 	clients := []struct {
-		io     atproto.TransitionIO
+		io     atproto.ATProtoTransitionIO
 		bundle vault.Transition
 		key    []byte
 	}{
-		{io: ledgerRaceIO{base: ioA, ready: ready, release: release}, bundle: attempts[0], key: root.Signing},
-		{io: ledgerRaceIO{base: ioB, ready: ready, release: release}, bundle: attempts[1], key: root.Signing},
+		{io: ioA, bundle: attempts[0], key: root.Signing},
+		{io: ioB, bundle: attempts[1], key: root.Signing},
 	}
 	for _, client := range clients {
 		go func(current struct {
-			io     atproto.TransitionIO
+			io     atproto.ATProtoTransitionIO
 			bundle vault.Transition
 			key    []byte
 		}) {

@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,13 +29,14 @@ import (
 
 type publicationRaceTransport struct {
 	base    atproto.Transport
+	writer  string
 	ready   chan<- string
 	release <-chan struct{}
 }
 
 func (transport publicationRaceTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
 	if endpoint == "com.atproto.repo.applyWrites" {
-		transport.ready <- "publish"
+		transport.ready <- transport.writer
 		select {
 		case <-ctx.Done():
 			return 0, nil, ctx.Err()
@@ -48,30 +48,6 @@ func (transport publicationRaceTransport) Do(ctx context.Context, method, endpoi
 
 func (transport publicationRaceTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
 	return transport.base.OpenStream(ctx, endpoint, query)
-}
-
-type revocationRaceIO struct {
-	base    atproto.TransitionIO
-	ready   chan<- string
-	release <-chan struct{}
-}
-
-func (io revocationRaceIO) ReadCurrent(ctx context.Context) (*atproto.Revision, vault.Predecessor, error) {
-	return io.base.ReadCurrent(ctx)
-}
-
-func (io revocationRaceIO) StageCandidate(ctx context.Context, data []byte, expectedPolicy vault.Policy, certificates [][]byte) (json.RawMessage, string, error) {
-	return io.base.StageCandidate(ctx, data, expectedPolicy, certificates)
-}
-
-func (io revocationRaceIO) ApplyTransition(ctx context.Context, revision *atproto.Revision, publication atproto.FencedPublication) error {
-	io.ready <- "revoke"
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-io.release:
-	}
-	return io.base.ApplyTransition(ctx, revision, publication)
 }
 
 type publicationRaceResult struct {
@@ -246,20 +222,19 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 	release := make(chan struct{})
 	results := make(chan publicationRaceResult, 2)
 	publicationIO := publicationIOA
-	publicationIO.Transport = publicationRaceTransport{base: transportA, ready: ready, release: release}
+	publicationIO.Transport = publicationRaceTransport{base: transportA, writer: "publish", ready: ready, release: release}
 	transitionIOB := atproto.ATProtoTransitionIO{
-		Reader: readerB, Transport: transportB, BlobUploadLimit: blobUploadLimit,
+		Reader: readerB, Transport: publicationRaceTransport{base: transportB, writer: "revoke", ready: ready, release: release}, BlobUploadLimit: blobUploadLimit,
 		DID: identityB.DID, TrustAnchor: bootstrap.Anchor,
 		PreviousPolicies: publicationIOA.PreviousPolicies, PreviousControls: publicationIOA.PreviousControls,
 		ObservationStore: store,
 	}
-	revocationIO := revocationRaceIO{base: transitionIOB, ready: ready, release: release}
 	go func() {
 		result, commitErr := atproto.CommitPublication(ctx, publicationIO, store, publication, root.Signing, time.Now())
 		results <- publicationRaceResult{writer: "ordinary-publication", publication: result, err: commitErr}
 	}()
 	go func() {
-		result, commitErr := atproto.CommitTransition(ctx, revocationIO, store, revocation, root.Signing, time.Now())
+		result, commitErr := atproto.CommitTransition(ctx, transitionIOB, store, revocation, root.Signing, time.Now())
 		results <- publicationRaceResult{writer: "root-revocation", transition: result, err: commitErr}
 	}()
 	writers := make(map[string]bool)

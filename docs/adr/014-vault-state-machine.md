@@ -165,9 +165,11 @@ because restarting it would postpone rotation indefinitely.
 
 Rotation is not authorization. It moves no device into or out of a role, so it does not conflict with ADR
 006's rule that wall-clock time never authorizes a vault action. Age is evaluated against a locally
-tracked first-seen time for the current epoch; with no trusted clock the count trigger alone applies. When
-either threshold is met and no root-capable device is present, the device stops publishing and reports
-that rotation is due.
+tracked first-seen time for the current epoch; with no trusted clock the count trigger alone applies, and
+publication exposes `PublicationAgeTriggerNotEvaluatedNoTrustedClock`. Refusing solely because the clock is
+absent would block a legitimate caller when the available count trigger permits publication. When either
+threshold is met and no root-capable device is present, the device stops publishing and reports that rotation
+is due.
 
 ## Retention
 

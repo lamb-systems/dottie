@@ -100,7 +100,7 @@ type applyWritesError struct {
 	Error string `json:"error"`
 }
 
-func PublishFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedPublication) (PublishResult, error) {
+func publishFenced(ctx context.Context, transport Transport, revision *Revision, publication FencedPublication) (PublishResult, error) {
 	if transport == nil || revision == nil || !validDID(revision.did) || revision.commitCID == "" {
 		return PublishResult{}, fmt.Errorf("%w: verified revision and transport are required", ErrBatchRejected)
 	}

@@ -153,3 +153,107 @@ func TestReadCurrentVerifiesReferencedEnvelopeBeforeObservation(t *testing.T) {
 		})
 	}
 }
+
+func TestReadCurrentAuthenticatesEnvelopeParentAgainstHeadPredecessor(t *testing.T) {
+	fixture := newReadFixture(t)
+	previousHeadCID := fixtureSnapshotCID(t, fixture)
+	envelopeBytes, snapshot := sealFixtureSnapshot(t, fixture, nil, 0xC4, []byte("hostile parent join"))
+	snapshotCID := readRawCID(t, envelopeBytes)
+	head := signFixtureHead(t, fixture, envelopeBytes, 2, previousHeadCID, publisherSigner(), fixtureSigningKey(12))
+	setTransitionReadControlHead(t, &fixture, snapshotCID)
+	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
+
+	tracker := &transitionObservationTracker{store: fixture.observationStore}
+	adapter := transitionReadIO(&fixture, tracker, [][]byte{bytes.Clone(fixture.request.PreviousControl)})
+	_, predecessor, err := adapter.ReadCurrent(context.Background())
+	require.ErrorIs(t, err, ErrReadHeadEnvelopeLinkage)
+	assert.Equal(t, vault.Predecessor{}, predecessor)
+	assertNoTransitionReadPersistence(t, tracker)
+
+	positive := newBuilderReadHistory(t).fixture
+	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
+	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{bytes.Clone(positive.request.PreviousControl)})
+	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
+	require.NoError(t, err, "the PrepareTransition/PreparePublication-built history is accepted")
+	genuineHead, err := vault.DecodeHead(genuine.Head)
+	require.NoError(t, err)
+	genuineEnvelope, err := vault.DecodeEnvelope(positive.transport.blob)
+	require.NoError(t, err)
+	assert.Equal(t, genuineHead.PrevHeadCID, genuineEnvelope.Parent)
+	assert.Equal(t, 1, positiveTracker.calls)
+}
+
+func TestReadCurrentAuthenticatesHeadAndEnvelopeSignerJoin(t *testing.T) {
+	fixture := newReadFixture(t)
+	head := fixtureHeadObject(t, fixture)
+	head.Signer = vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")}
+	headBytes := signReadHead(t, head, fixtureSigningKey(11))
+	signedHead, err := vault.DecodeHead(headBytes)
+	require.NoError(t, err)
+	putReadRecord(t, fixture.records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(signedHead))
+	replaceReadCAR(t, &fixture, fixture.records)
+
+	tracker := &transitionObservationTracker{store: fixture.observationStore}
+	adapter := transitionReadIO(&fixture, tracker, [][]byte{bytes.Clone(fixture.request.PreviousControl)})
+	_, predecessor, err := adapter.ReadCurrent(context.Background())
+	require.ErrorIs(t, err, ErrReadSignerMismatch)
+	assert.Equal(t, vault.Predecessor{}, predecessor)
+	assertNoTransitionReadPersistence(t, tracker)
+
+	positive := newBuilderReadHistory(t).fixture
+	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
+	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{bytes.Clone(positive.request.PreviousControl)})
+	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
+	require.NoError(t, err, "the PreparePublication-built head and envelope signer pair reads")
+	genuineHead, err := vault.DecodeHead(genuine.Head)
+	require.NoError(t, err)
+	genuineEnvelope, err := vault.DecodeEnvelope(positive.transport.blob)
+	require.NoError(t, err)
+	assert.Equal(t, "publisher", genuineHead.Signer.DeviceID)
+	assert.Equal(t, genuineEnvelope.DeviceID, genuineHead.Signer.DeviceID)
+	assert.Equal(t, genuineEnvelope.KeyID, genuineHead.Signer.KeyID)
+	assert.Equal(t, 1, positiveTracker.calls)
+}
+
+func TestReadCurrentAuthenticatesControlPredecessorEpoch(t *testing.T) {
+	fixture, genuinePreviousControl, wrongPreviousControl := readCurrentEpochTwoBuilderFixture(t)
+	currentControlRecord, err := DecodeRecord(fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}])
+	require.NoError(t, err)
+	currentControl := controlFromRecord(currentControlRecord.(ControlRecord))
+	wrongPreviousRecord, err := DecodeRecord(wrongPreviousControl)
+	require.NoError(t, err)
+	wrongPreviousBytes, err := vault.EncodeControl(controlFromRecord(wrongPreviousRecord.(ControlRecord)))
+	require.NoError(t, err)
+	currentControl.PrevControlCID = readRawCID(t, wrongPreviousBytes)
+	currentControlBytes := signReadControl(t, currentControl, fixtureSigningKey(11))
+	currentControl, err = vault.DecodeControl(currentControlBytes)
+	require.NoError(t, err)
+	installControl(t, &fixture, controlRecordFromObject(currentControl))
+	tracker := &transitionObservationTracker{store: fixture.observationStore}
+	adapter := transitionReadIO(&fixture, tracker, [][]byte{wrongPreviousControl})
+	_, predecessor, err := adapter.ReadCurrent(context.Background())
+	require.ErrorIs(t, err, ErrReadControlEpoch)
+	assert.Equal(t, vault.Predecessor{}, predecessor)
+	assertNoTransitionReadPersistence(t, tracker)
+
+	positive, genuinePreviousControl, _ := readCurrentEpochTwoBuilderFixture(t)
+	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
+	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{genuinePreviousControl})
+	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
+	require.NoError(t, err, "the PrepareTransition/PreparePublication-built epoch predecessor control reads")
+	assert.Equal(t, uint64(2), genuine.EpochSeq)
+	assert.Equal(t, 1, positiveTracker.calls)
+}
+
+func setTransitionReadControlHead(t *testing.T, fixture *readFixture, snapshotCID []byte) {
+	t.Helper()
+	key := RecordKey{Collection: VaultControlNSID, RKey: "self"}
+	decoded, err := DecodeRecord(fixture.records[key])
+	require.NoError(t, err)
+	control := controlFromRecord(decoded.(ControlRecord))
+	control.HeadSnapshotCID = bytes.Clone(snapshotCID)
+	controlBytes := signReadControl(t, control, fixtureSigningKey(11))
+	control, err = vault.DecodeControl(controlBytes)
+	require.NoError(t, err)
+	installControl(t, fixture, controlRecordFromObject(control))
+}

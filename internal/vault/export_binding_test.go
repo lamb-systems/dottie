@@ -1,7 +1,7 @@
 package vault
 
 import (
-	"errors"
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,17 +105,27 @@ func signExportTestCheckpoint(t *testing.T, fixture devicesFixture, checkpoint C
 }
 
 func TestExportCheckpointSnapshotMustMatchSignedPosition(t *testing.T) {
-	archive, fixture := exportArchiveForValidationTest(t)
+	input, fixture := exportTestInput(t)
 	position := exportPositionFromTransition(t, fixture.transition)
-	archive.Current = position
-	archive.Checkpoint = exportCheckpointForPosition(t, fixture, position)
-	checkpoint := decodeExportTestCheckpoint(t, archive.Checkpoint)
-	otherSnapshotCID, err := rawCID([]byte("other checkpoint snapshot"))
+	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
+	publication, err := PreparePublication(predecessor, publicationTestIntent(fixture, predecessor))
 	require.NoError(t, err)
-	checkpoint.SnapshotCID = otherSnapshotCID
+	input.Current.Head = bytes.Clone(publication.Head)
+	input.Checkpoint = exportCheckpointForPosition(t, fixture, position)
+	input.Blobs = append(input.Blobs, ExportBlob{CID: bytes.Clone(publication.BlobCID), Data: bytes.Clone(publication.Snapshot)})
+	archive, err := archiveFromInput(input)
+	require.NoError(t, err)
+	require.NoError(t, validateExportSignatures(archive, fixture.kit), "the kit-signed checkpoint matching the signed control is accepted")
+
+	control, err := DecodeControl(position.Control)
+	require.NoError(t, err)
+	checkpoint := decodeExportTestCheckpoint(t, archive.Checkpoint)
+	assert.Equal(t, control.HeadSnapshotCID, checkpoint.SnapshotCID, "the positive checkpoint matches the signed epoch-start snapshot")
+	checkpoint.SnapshotCID = bytes.Clone(publication.SnapshotCID)
+	assert.NotEqual(t, control.HeadSnapshotCID, checkpoint.SnapshotCID, "the hostile checkpoint names the later same-control publication head")
 	archive.Checkpoint = signExportTestCheckpoint(t, fixture, checkpoint)
 
 	err = validateExportSignatures(archive, fixture.kit)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrAuthorization) || errors.Is(err, ErrExportBlob))
+	require.ErrorIs(t, err, ErrAuthorization)
+	assert.ErrorContains(t, err, "checkpoint position is absent or does not match signed control evidence")
 }

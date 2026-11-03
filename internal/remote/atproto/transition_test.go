@@ -279,6 +279,120 @@ func TestATProtoTransitionStageCandidateRejectsRelabelledOldEpochEnvelope(t *tes
 	assert.Zero(t, transport.calls, "rewriting an old-epoch envelope header must not make its old signature valid")
 }
 
+func TestATProtoTransitionStageCandidateRequiresCertificateRoleJoin(t *testing.T) {
+	policy, certificates, candidate, rootSigning := candidateSinkFixture(t)
+	assertCandidateSinkAccepts(t, policy, certificates, candidate)
+
+	hostileCertificates := mutateCandidateSignerCertificate(t, certificates, candidate, rootSigning, func(certificate *vault.Certificate) {
+		certificate.Role = vault.RoleRestoreOnly
+	})
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, candidate)}
+	_, _, err := (ATProtoTransitionIO{Transport: transport, BlobUploadLimit: int64(len(candidate))}).StageCandidate(context.Background(), candidate, policy, hostileCertificates)
+	require.ErrorIs(t, err, ErrCandidateUnauthenticated)
+	assert.Zero(t, transport.calls, "a signer certificate role that differs from the policy binding is refused before upload")
+}
+
+func TestATProtoTransitionStageCandidateRequiresCertificateVaultAndEpochJoin(t *testing.T) {
+	policy, certificates, candidate, rootSigning := candidateSinkFixture(t)
+	assertCandidateSinkAccepts(t, policy, certificates, candidate)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*vault.Certificate)
+	}{
+		{
+			name: "wrong vault",
+			mutate: func(certificate *vault.Certificate) {
+				certificate.Vault[0] ^= 0xff
+			},
+		},
+		{
+			name: "future certificate epoch",
+			mutate: func(certificate *vault.Certificate) {
+				certificate.CertEpoch = policy.EpochSeq + 1
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hostileCertificates := mutateCandidateSignerCertificate(t, certificates, candidate, rootSigning, test.mutate)
+			transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, candidate)}
+			_, _, err := (ATProtoTransitionIO{Transport: transport, BlobUploadLimit: int64(len(candidate))}).StageCandidate(context.Background(), candidate, policy, hostileCertificates)
+			require.ErrorIs(t, err, ErrCandidateUnauthenticated)
+			assert.Zero(t, transport.calls, "a signer certificate outside the policy vault/epoch is refused before upload")
+		})
+	}
+}
+
+func TestATProtoTransitionStageCandidateRequiresUniqueSignerCertificate(t *testing.T) {
+	policy, certificates, candidate, _ := candidateSinkFixture(t)
+	assertCandidateSinkAccepts(t, policy, certificates, candidate)
+	signerCertificate := candidateSignerCertificate(t, certificates, candidate)
+	hostileCertificates := append(clonePublicationByteSlices(certificates), bytes.Clone(signerCertificate))
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, candidate)}
+	_, _, err := (ATProtoTransitionIO{Transport: transport, BlobUploadLimit: int64(len(candidate))}).StageCandidate(context.Background(), candidate, policy, hostileCertificates)
+	require.ErrorIs(t, err, ErrCandidateUnauthenticated)
+	assert.Zero(t, transport.calls, "duplicate matching signer certificates are refused before upload")
+}
+
+func candidateSinkFixture(t *testing.T) (vault.Policy, [][]byte, []byte, ed25519.PrivateKey) {
+	t.Helper()
+	root, _, predecessor, publication := newAtprotoPublicationFixture(t)
+	policy, err := vault.DecodePolicy(predecessor.Policy)
+	require.NoError(t, err)
+	return policy, predecessor.Certificates, publication.Snapshot, root.Signing
+}
+
+func assertCandidateSinkAccepts(t *testing.T, policy vault.Policy, certificates [][]byte, candidate []byte) {
+	t.Helper()
+	transport := &candidateStageTransport{status: 200, body: candidateUploadResponse(t, candidate)}
+	_, _, err := (ATProtoTransitionIO{Transport: transport, BlobUploadLimit: int64(len(candidate))}).StageCandidate(context.Background(), candidate, policy, certificates)
+	require.NoError(t, err, "the authentic candidate and unique matching signer certificate are accepted")
+	assert.Equal(t, 1, transport.calls)
+}
+
+func mutateCandidateSignerCertificate(t *testing.T, certificates [][]byte, candidate []byte, rootSigning ed25519.PrivateKey, mutate func(*vault.Certificate)) [][]byte {
+	t.Helper()
+	signerBytes := candidateSignerCertificate(t, certificates, candidate)
+	signer, err := vault.DecodeCertificate(signerBytes)
+	require.NoError(t, err)
+	mutate(&signer)
+	signer.Signature = [ed25519.SignatureSize]byte{}
+	unsigned, err := vault.EncodeCertificate(signer)
+	require.NoError(t, err)
+	preimage := append([]byte("dottie/v1/sig"), unsigned[:len(unsigned)-ed25519.SignatureSize]...)
+	signature, err := vault.Sign("dottie/v1/sig-certificate", preimage, rootSigning)
+	require.NoError(t, err)
+	copy(signer.Signature[:], signature)
+	encoded, err := vault.EncodeCertificate(signer)
+	require.NoError(t, err)
+	hostile := clonePublicationByteSlices(certificates)
+	for index, certificate := range hostile {
+		decoded, decodeErr := vault.DecodeCertificate(certificate)
+		require.NoError(t, decodeErr)
+		if decoded.DeviceID == signer.DeviceID && bytes.Equal(decoded.KeyID, signer.KeyID) {
+			hostile[index] = encoded
+			return hostile
+		}
+	}
+	require.FailNow(t, "candidate signer certificate was not present")
+	return nil
+}
+
+func candidateSignerCertificate(t *testing.T, certificates [][]byte, candidate []byte) []byte {
+	t.Helper()
+	envelope, err := vault.DecodeEnvelope(candidate)
+	require.NoError(t, err)
+	for _, encoded := range certificates {
+		certificate, decodeErr := vault.DecodeCertificate(encoded)
+		require.NoError(t, decodeErr)
+		if certificate.DeviceID == envelope.DeviceID && bytes.Equal(certificate.KeyID, envelope.KeyID) {
+			return bytes.Clone(encoded)
+		}
+	}
+	require.FailNow(t, "candidate signer certificate was not present")
+	return nil
+}
+
 func newStageCandidateAuthenticationFixture(t *testing.T) (vault.Policy, [][]byte, vault.Envelope, [32]byte) {
 	t.Helper()
 	fixture := newTransitionTestFixture(t)
@@ -440,7 +554,7 @@ func (io *transitionTestIO) StageCandidate(_ context.Context, data []byte, _ vau
 	return reference, blobCID.String(), err
 }
 
-func (io *transitionTestIO) ApplyTransition(_ context.Context, revision *Revision, publication FencedPublication) error {
+func (io *transitionTestIO) applyTransition(_ context.Context, revision *Revision, publication FencedPublication) error {
 	io.applyCount++
 	writes := []RecordWrite{publication.FirstBlobReference, publication.VaultHead, publication.VaultControl}
 	writes = append(writes, publication.Additional...)
@@ -679,7 +793,7 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 	adapter.PreviousPolicies = append(adapter.PreviousPolicies, policyRecordBytesForObject(t, enrollment.Policy))
 	adapter.PreviousControls = append(adapter.PreviousControls, encodeReadControlRecord(t, enrollment.Control))
 	observedAt = time.Unix(201, 0)
-	enrollmentResult, err := CommitTransition(ctx, adapter, fixture.observationStore, enrollment, root.Signing, time.Unix(200, 0))
+	enrollmentResult, err := commitTransition(ctx, adapter, fixture.observationStore, enrollment, root.Signing, time.Unix(200, 0))
 	require.NoError(t, err, enrollmentResult.Evidence)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), enrollmentResult.Outcome)
 
@@ -730,7 +844,7 @@ func TestATProtoAdaptersEnrollPublishAndRevokeAgainstSignedCAR(t *testing.T) {
 		Nonce: [24]byte(publicationTestBytes(t, 24)),
 	})
 	require.NoError(t, err)
-	revocationResult, err := CommitTransition(ctx, adapter, fixture.observationStore, revocation, root.Signing, time.Unix(202, 0))
+	revocationResult, err := commitTransition(ctx, adapter, fixture.observationStore, revocation, root.Signing, time.Unix(202, 0))
 	require.NoError(t, err)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), revocationResult.Outcome)
 	_, predecessor, err = adapter.ReadCurrent(ctx)
@@ -943,7 +1057,7 @@ func TestCommitTransitionRejectsBundleStaleAtFinalRevalidation(t *testing.T) {
 	stale := transitionPredecessorAfter(t, fixture.predecessor, competingBundle)
 	io := newTransitionTestIO(fixture.predecessor, stale)
 	store := newTransitionTestStore()
-	result, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(100, 0))
+	result, err := commitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(100, 0))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.ErrorIs(t, err, ErrPreparedPolicyMismatch)
@@ -962,7 +1076,7 @@ func TestCommitTransitionLostFenceRequiresDiscardAndFreshPreparation(t *testing.
 	io.applyErrors = []error{ErrFenceLost, nil}
 	io.resolution = "not-landed"
 	store := newTransitionTestStore()
-	firstResult, firstErr := CommitTransition(context.Background(), io, store, first, fixture.root.Signing, time.Unix(100, 0))
+	firstResult, firstErr := commitTransition(context.Background(), io, store, first, fixture.root.Signing, time.Unix(100, 0))
 	require.ErrorIs(t, firstErr, ErrFenceLost)
 	assert.ErrorIs(t, firstErr, ErrTransitionDiscarded)
 	assert.NotErrorIs(t, firstErr, ErrCandidateMayBeDisclosed)
@@ -975,7 +1089,7 @@ func TestCommitTransitionLostFenceRequiresDiscardAndFreshPreparation(t *testing.
 	fixture.predecessor = *firstResult.Predecessor
 	second := prepareTransitionTestBundle(t, fixture, 2)
 	require.NotEqual(t, first.Digest, second.Digest)
-	secondResult, secondErr := CommitTransition(context.Background(), io, store, second, fixture.root.Signing, time.Unix(101, 0))
+	secondResult, secondErr := commitTransition(context.Background(), io, store, second, fixture.root.Signing, time.Unix(101, 0))
 	require.NoError(t, secondErr)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), secondResult.Outcome)
 	assert.Equal(t, 2, io.applyCount)
@@ -990,7 +1104,7 @@ func TestCommitTransitionFiveHundredDoesNotResendAndSignalsDisclosure(t *testing
 	io.applyErrors = []error{fmt.Errorf("HTTP 503: %w", ErrAmbiguousTransport)}
 	io.resolution = "not-landed"
 	store := newTransitionTestStore()
-	result, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(102, 0))
+	result, err := commitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(102, 0))
 	require.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.ErrorIs(t, err, ErrTransitionNotLanded)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeNotLanded), result.Outcome)
@@ -1021,7 +1135,7 @@ func TestCommitTransitionResolvesUnknownOutcome(t *testing.T) {
 				io.readErrors[3] = test.readError
 			}
 			store := newTransitionTestStore()
-			result, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(103, 0))
+			result, err := commitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(103, 0))
 			assert.Equal(t, test.want, result.Outcome)
 			if test.wantError == nil {
 				assert.NoError(t, err)
@@ -1040,7 +1154,7 @@ func TestResolveTransitionAttemptAfterUploadCrashDoesNotResend(t *testing.T) {
 	io := newTransitionTestIO(fixture.predecessor)
 	io.readErrors[2] = errors.New("simulated process loss after blob upload")
 	store := newTransitionTestStore()
-	failed, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(104, 0))
+	failed, err := commitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(104, 0))
 	require.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, 0, io.applyCount)
 	reopened := newTransitionTestStore()
@@ -1050,7 +1164,7 @@ func TestResolveTransitionAttemptAfterUploadCrashDoesNotResend(t *testing.T) {
 	}
 	io.readErrors = make(map[int]error)
 	io.latestRevision = transitionTestRevision()
-	resolved, resolveErr := ResolveTransitionAttempt(context.Background(), io, reopened, failed.AttemptID)
+	resolved, resolveErr := resolveTransitionAttempt(context.Background(), io, reopened, failed.AttemptID)
 	require.ErrorIs(t, resolveErr, ErrTransitionNotLanded)
 	assert.ErrorIs(t, resolveErr, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeNotLanded), resolved.Outcome)
@@ -1064,7 +1178,7 @@ func TestCommitRevocationWritesSnapshotHeadControlAndPolicyWithoutCertificate(t 
 	require.NoError(t, err)
 	io := newTransitionTestIO(predecessor)
 	store := newTransitionTestStore()
-	result, commitErr := CommitTransition(context.Background(), io, store, revocation, fixture.root.Signing, time.Unix(160, 0))
+	result, commitErr := commitTransition(context.Background(), io, store, revocation, fixture.root.Signing, time.Unix(160, 0))
 	require.NoError(t, commitErr)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
 	require.Len(t, io.publicationWrites, 1)
@@ -1085,7 +1199,7 @@ func TestCommitTransitionSubmitsCompleteWriteSetOnce(t *testing.T) {
 	bundle := prepareTransitionTestBundle(t, fixture, 5)
 	io := newTransitionTestIO(fixture.predecessor)
 	store := newTransitionTestStore()
-	result, err := CommitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(105, 0))
+	result, err := commitTransition(context.Background(), io, store, bundle, fixture.root.Signing, time.Unix(105, 0))
 	require.NoError(t, err)
 	assert.Equal(t, TransitionOutcome(TransitionOutcomeCommitted), result.Outcome)
 	assert.Equal(t, 1, io.applyCount)
@@ -1112,7 +1226,7 @@ func TestCommitTransitionSubmitsCompleteWriteSetOnce(t *testing.T) {
 	require.NoError(t, err)
 	transport := &transitionApplyTransport{}
 	writer := ATProtoTransitionIO{Transport: transport}
-	require.NoError(t, writer.ApplyTransition(context.Background(), verifiedRevision, publication))
+	require.NoError(t, writer.applyTransition(context.Background(), verifiedRevision, publication))
 	assert.Equal(t, 1, transport.calls)
 	var input applyWritesInput
 	require.NoError(t, json.Unmarshal(transport.body, &input))

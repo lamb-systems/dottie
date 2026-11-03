@@ -39,7 +39,7 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	require.NoError(t, err)
 	_, err = raw.Exec("DROP TABLE vault_epoch_first_seen")
 	require.NoError(t, err)
-	for _, table := range []string{"retention_declaration_history_points", "retention_declaration_history", "retention_recovery_points", "retention_declarations"} {
+	for _, table := range []string{"retention_recovery_material", "retention_declaration_history_points", "retention_declaration_history", "retention_recovery_points", "retention_declarations"} {
 		_, err = raw.Exec("DROP TABLE " + table)
 		require.NoError(t, err)
 	}
@@ -163,6 +163,32 @@ func TestJournalExpiryPrunesOnlyVerifiedAppliedAndRolledBackMaterial(t *testing.
 			assert.Equal(t, []byte("before"), payload)
 		}
 	}
+}
+
+func TestJournalExpiryPreservesBackupRegisteredToRetainedRecoveryPoint(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
+	ctx := context.Background()
+	vaultID := [32]byte{54}
+	point := RetentionRecoveryPoint{Epoch: 2, SnapshotCID: []byte("retained-snapshot")}
+	declaration := testRetentionDeclaration(vaultID, point, 2, 1_700_000_000)
+	_, err := store.PutRetentionDeclaration(ctx, declaration)
+	require.NoError(t, err)
+
+	entry := appendRetentionJournal(t, store, "retained-recovery-backup", 10)
+	require.NoError(t, store.SetRetentionRecoveryPointMaterial(ctx, vaultID, declaration.DeviceID, point, nil, []string{entry.BackupRef}))
+
+	pruned, err := store.PruneExpiredJournalBackups(ctx, time.Unix(10, 0).Add(JournalBackupRetention))
+	require.NoError(t, err)
+	assert.Empty(t, pruned, "a retained recovery backup must not be reported as pruned")
+
+	entries, err := store.JournalEntries(ctx, "target")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, entry.BackupRef, entries[0].BackupRef, "a retained recovery backup must stay attached to its journal entry")
+	payload, err := store.Payload(entry.BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("retained-recovery-backup-before"), payload)
 }
 
 func TestJournalFailedTransitionKeepsBackupForRecovery(t *testing.T) {

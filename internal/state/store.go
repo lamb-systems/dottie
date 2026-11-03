@@ -565,6 +565,16 @@ func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observati
 				return ErrVaultPublicationControlAncestry
 			}
 			if observation.Epoch == uint64(existingEpoch) {
+				idempotentReread := observation.PublicationCount == uint64(existingCount) &&
+					bytes.Equal(observation.HeadCID, existingHeadCID) && bytes.Equal(observation.ControlCID, existingControlCID)
+				if !idempotentReread && !bytes.Equal(observation.ControlCID, existingControlCID) {
+					if len(existingControlCID) != 0 {
+						return ErrVaultPublicationControlReplacement
+					}
+					if len(observation.ControlCID) == 0 {
+						return ErrVaultPublicationControlReplacement
+					}
+				}
 				if observation.PublicationCount < uint64(existingCount) {
 					return ErrVaultPublicationBackwards
 				}

@@ -21,7 +21,12 @@ func (s *Store) PutRetentionDeclaration(ctx context.Context, declaration Retenti
 	if err != nil {
 		return RetentionDeclaration{}, err
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := s.requireRetentionPointMaterialFilesTx(ctx, tx, declaration.Vault, declaration.DeviceID, declaration.RecoveryPoints); err != nil {
+			return err
+		}
 		previous, err := retentionDeclarationTx(ctx, tx, declaration.Vault, declaration.DeviceID)
 		if err != nil && !errors.Is(err, ErrRetentionDeclarationNotFound) {
 			return err
@@ -202,6 +207,10 @@ func insertRetentionPointsTx(ctx context.Context, tx *sql.Tx, vault [32]byte, de
 		if _, err := tx.ExecContext(ctx, "INSERT INTO retention_recovery_points(vault, device_id, ordinal, epoch, snapshot_cid) VALUES (?, ?, ?, ?, ?)", vault[:], deviceID, ordinal, point.Epoch, point.SnapshotCID); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, '', '', 0) ON CONFLICT(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref) DO NOTHING`, vault[:], deviceID, point.Epoch, point.SnapshotCID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -363,6 +372,71 @@ func cloneRetentionDeclaration(declaration RetentionDeclaration) RetentionDeclar
 	return cloned
 }
 
+func (s *Store) SetRetentionRecoveryPointMaterial(ctx context.Context, vault [32]byte, deviceID string, point RetentionRecoveryPoint, payloadReferences, backupReferences []string) error {
+	if err := validateRetentionSubject(deviceID); err != nil {
+		return err
+	}
+	if point.Epoch > uint64(^uint64(0)>>1) || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > 128 {
+		return errors.New("invalid retention recovery point material")
+	}
+	for _, references := range [][]string{payloadReferences, backupReferences} {
+		seen := make(map[string]bool, len(references))
+		for _, reference := range references {
+			if _, err := payloadName(reference); err != nil {
+				return err
+			}
+			if seen[reference] {
+				return errors.New("duplicate retention recovery material reference")
+			}
+			seen[reference] = true
+		}
+	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		declaration, err := retentionDeclarationTx(ctx, tx, vault, deviceID)
+		if err != nil {
+			return err
+		}
+		declared := false
+		for _, candidate := range declaration.RecoveryPoints {
+			if candidate.Epoch == point.Epoch && bytes.Equal(candidate.SnapshotCID, point.SnapshotCID) {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			return ErrRetentionBoundaryNotVerified
+		}
+		for _, reference := range append(append([]string(nil), payloadReferences...), backupReferences...) {
+			if err := s.requirePayloadFile(reference); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND (payload_ref <> '' OR backup_ref <> '')`, vault[:], deviceID, point.Epoch, point.SnapshotCID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, '', '', 1) ON CONFLICT(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref) DO UPDATE SET inventory_complete = 1`, vault[:], deviceID, point.Epoch, point.SnapshotCID); err != nil {
+			return err
+		}
+		for _, reference := range payloadReferences {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, ?, '', 1)`, vault[:], deviceID, point.Epoch, point.SnapshotCID, reference); err != nil {
+				return err
+			}
+		}
+		for _, reference := range backupReferences {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, '', ?, 1)`, vault[:], deviceID, point.Epoch, point.SnapshotCID, reference); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) PlanRetentionPrune(ctx context.Context, request RetentionPruneRequest) (RetentionPrunePlan, error) {
 	if err := validateRetentionPruneRequest(request); err != nil {
 		return RetentionPrunePlan{}, err
@@ -440,20 +514,223 @@ func validateRetentionPruneRequest(request RetentionPruneRequest) error {
 	return nil
 }
 
+type retentionJournalBackup struct {
+	id        string
+	reference string
+	createdAt int64
+	terminal  bool
+	aged      bool
+	eligible  bool
+}
+
+func retainedRecoveryMaterialTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string, points []RetentionRecoveryPoint) (map[string]bool, map[string]bool, error) {
+	payloadReferences := make(map[string]bool)
+	backupReferences := make(map[string]bool)
+	for _, point := range points {
+		rows, err := tx.QueryContext(ctx, `SELECT payload_ref, backup_ref, inventory_complete FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ?`, vault[:], deviceID, point.Epoch, point.SnapshotCID)
+		if err != nil {
+			return nil, nil, err
+		}
+		markerFound := false
+		markerComplete := false
+		for rows.Next() {
+			var payloadRef, backupRef string
+			var complete int
+			if err := rows.Scan(&payloadRef, &backupRef, &complete); err != nil {
+				_ = rows.Close()
+				return nil, nil, err
+			}
+			if payloadRef == "" && backupRef == "" {
+				markerFound = true
+				markerComplete = complete == 1
+			}
+			if payloadRef != "" {
+				payloadReferences[payloadRef] = true
+			}
+			if backupRef != "" {
+				backupReferences[backupRef] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, nil, err
+		}
+		if !markerFound || !markerComplete {
+			return nil, nil, ErrRetentionRecoveryPointInventoryUnknown
+		}
+	}
+	return payloadReferences, backupReferences, nil
+}
+
+func (s *Store) requireRetentionPointMaterialFilesTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string, points []RetentionRecoveryPoint) error {
+	for _, point := range points {
+		rows, err := tx.QueryContext(ctx, `SELECT payload_ref, backup_ref FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND (payload_ref <> '' OR backup_ref <> '')`, vault[:], deviceID, point.Epoch, point.SnapshotCID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var payloadRef, backupRef string
+			if err := rows.Scan(&payloadRef, &backupRef); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			for _, reference := range []string{payloadRef, backupRef} {
+				if reference != "" {
+					if err := s.requirePayloadFile(reference); err != nil {
+						_ = rows.Close()
+						return err
+					}
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) requirePayloadFile(reference string) error {
+	name, err := payloadName(reference)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(filepath.Join(s.payloadDir, name))
+	if err != nil {
+		return fmt.Errorf("retention recovery material %s: %w", reference, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("retention recovery material %s is not a regular payload", reference)
+	}
+	return nil
+}
+
+func globallyRetainedRecoveryReferencesTx(ctx context.Context, tx *sql.Tx) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT material.payload_ref, material.backup_ref
+FROM retention_recovery_material AS material
+JOIN retention_recovery_points AS point
+  ON point.vault = material.vault AND point.device_id = material.device_id
+ AND point.epoch = material.epoch AND point.snapshot_cid = material.snapshot_cid
+WHERE material.payload_ref <> '' OR material.backup_ref <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	references := make(map[string]bool)
+	for rows.Next() {
+		var payloadRef, backupRef string
+		if err := rows.Scan(&payloadRef, &backupRef); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if payloadRef != "" {
+			references[payloadRef] = true
+		}
+		if backupRef != "" {
+			references[backupRef] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return references, nil
+}
+
+func recoveryMaterialEpochsTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string) (map[string]map[uint64]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT epoch, payload_ref, backup_ref FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND (payload_ref <> '' OR backup_ref <> '')`, vault[:], deviceID)
+	if err != nil {
+		return nil, err
+	}
+	epochs := make(map[string]map[uint64]bool)
+	for rows.Next() {
+		var epoch int64
+		var payloadRef, backupRef string
+		if err := rows.Scan(&epoch, &payloadRef, &backupRef); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if epoch < 0 {
+			_ = rows.Close()
+			return nil, errors.New("stored recovery material epoch is malformed")
+		}
+		for _, reference := range []string{payloadRef, backupRef} {
+			if reference == "" {
+				continue
+			}
+			if epochs[reference] == nil {
+				epochs[reference] = make(map[uint64]bool)
+			}
+			epochs[reference][uint64(epoch)] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return epochs, nil
+}
+
+func sortedMaterialEpochs(values map[uint64]bool) []uint64 {
+	epochs := make([]uint64, 0, len(values))
+	for epoch := range values {
+		epochs = append(epochs, epoch)
+	}
+	sort.Slice(epochs, func(i, j int) bool { return epochs[i] < epochs[j] })
+	return epochs
+}
+
+func allEpochsBefore(epochs []uint64, boundary uint64) bool {
+	if len(epochs) == 0 {
+		return false
+	}
+	for _, epoch := range epochs {
+		if epoch >= boundary {
+			return false
+		}
+	}
+	return true
+}
+
+func recoveryPointAllowsPruning(epochs []uint64, boundary uint64, tiedToRetainedPoint bool) bool {
+	return !tiedToRetainedPoint && allEpochsBefore(epochs, boundary)
+}
+
 func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request RetentionPruneRequest) (RetentionPrunePlan, error) {
 	declaration, err := retentionDeclarationTx(ctx, tx, request.Vault, request.DeviceID)
 	if err != nil {
 		return RetentionPrunePlan{}, err
 	}
 	pointFound := false
+	oldestEpoch := uint64(^uint64(0))
 	for _, point := range declaration.RecoveryPoints {
+		if point.Epoch < oldestEpoch {
+			oldestEpoch = point.Epoch
+		}
 		if point.Epoch == request.Boundary.Epoch && bytes.Equal(point.SnapshotCID, request.Boundary.SnapshotCID) {
 			pointFound = true
-			break
 		}
 	}
 	if !pointFound {
 		return RetentionPrunePlan{}, ErrRetentionBoundaryNotVerified
+	}
+	if request.Boundary.Epoch > oldestEpoch {
+		return RetentionPrunePlan{}, ErrRetentionBoundaryNewerThanFloor
 	}
 	var checkpointEpoch int64
 	var checkpointSnapshotCID, checkpointPolicyDigest []byte
@@ -479,41 +756,31 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 	if liveEpoch < 0 || request.Boundary.Epoch >= uint64(liveEpoch) {
 		return RetentionPrunePlan{}, ErrRetentionLiveHead
 	}
+	if _, _, err := retainedRecoveryMaterialTx(ctx, tx, request.Vault, request.DeviceID, declaration.RecoveryPoints); err != nil {
+		return RetentionPrunePlan{}, err
+	}
+	retainedReferences, err := globallyRetainedRecoveryReferencesTx(ctx, tx)
+	if err != nil {
+		return RetentionPrunePlan{}, err
+	}
+	materialEpochs, err := recoveryMaterialEpochsTx(ctx, tx, request.Vault, request.DeviceID)
+	if err != nil {
+		return RetentionPrunePlan{}, err
+	}
 	plan := RetentionPrunePlan{
 		Vault: request.Vault, DeviceID: request.DeviceID, Boundary: RetentionRecoveryPoint{Epoch: request.Boundary.Epoch, SnapshotCID: bytes.Clone(request.Boundary.SnapshotCID)},
 		PolicyDigest: declaration.PolicyDigest, RetentionFloor: declaration.RetentionFloor,
 		RecoveryPoints: cloneRetentionDeclaration(declaration).RecoveryPoints, EpochScope: RetentionPruneScope,
 	}
-	expiredBackupIDs := map[string]bool{}
-	rows, err := tx.QueryContext(ctx, `SELECT id, created_at FROM apply_journal
-WHERE backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolled-back' AND stage = ?)) ORDER BY id`, JournalStageVerified, JournalStageRolledBack)
-	if err != nil {
-		return RetentionPrunePlan{}, err
+	refsByClass := map[string]map[string]bool{
+		"applied base":    {},
+		"outbound intent": {},
+		"conflict":        {},
 	}
-	for rows.Next() {
-		var id string
-		var createdAt int64
-		if err := rows.Scan(&id, &createdAt); err != nil {
-			_ = rows.Close()
-			return RetentionPrunePlan{}, err
-		}
-		if !request.Now.Before(time.Unix(createdAt, 0).Add(JournalBackupRetention)) {
-			plan.ExpiredBackupIDs = append(plan.ExpiredBackupIDs, id)
-			expiredBackupIDs[id] = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return RetentionPrunePlan{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return RetentionPrunePlan{}, err
-	}
-	held := make(map[string]bool)
-	for _, query := range []string{
-		"SELECT payload_ref FROM applied_base WHERE payload_ref <> ''",
-		"SELECT payload_ref FROM outbound_intent WHERE payload_ref <> ''",
-		"SELECT local_payload_ref FROM conflicts WHERE local_payload_ref <> '' UNION SELECT remote_payload_ref FROM conflicts WHERE remote_payload_ref <> ''",
+	for class, query := range map[string]string{
+		"applied base":    "SELECT payload_ref FROM applied_base WHERE payload_ref <> ''",
+		"outbound intent": "SELECT payload_ref FROM outbound_intent WHERE payload_ref <> ''",
+		"conflict":        "SELECT local_payload_ref FROM conflicts WHERE local_payload_ref <> '' UNION SELECT remote_payload_ref FROM conflicts WHERE remote_payload_ref <> ''",
 	} {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {
@@ -525,7 +792,7 @@ WHERE backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolle
 				_ = rows.Close()
 				return RetentionPrunePlan{}, err
 			}
-			held[reference] = true
+			refsByClass[class][reference] = true
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -535,26 +802,100 @@ WHERE backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolle
 			return RetentionPrunePlan{}, err
 		}
 	}
-	journalRows, err := tx.QueryContext(ctx, "SELECT id, backup_ref FROM apply_journal WHERE backup_ref <> ''")
+	rows, err := tx.QueryContext(ctx, `SELECT id, backup_ref, created_at, state, stage FROM apply_journal
+WHERE backup_ref <> '' ORDER BY id`)
 	if err != nil {
 		return RetentionPrunePlan{}, err
 	}
-	for journalRows.Next() {
-		var id, reference string
-		if err := journalRows.Scan(&id, &reference); err != nil {
-			_ = journalRows.Close()
+	var backups []retentionJournalBackup
+	for rows.Next() {
+		var backup retentionJournalBackup
+		var stateValue, stage string
+		if err := rows.Scan(&backup.id, &backup.reference, &backup.createdAt, &stateValue, &stage); err != nil {
+			_ = rows.Close()
 			return RetentionPrunePlan{}, err
 		}
-		if !expiredBackupIDs[id] {
-			held[reference] = true
+		backup.terminal = (stateValue == "applied" && stage == JournalStageVerified) || (stateValue == "rolled-back" && stage == JournalStageRolledBack)
+		backup.aged = !request.Now.Before(time.Unix(backup.createdAt, 0).Add(JournalBackupRetention))
+		backups = append(backups, backup)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return RetentionPrunePlan{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return RetentionPrunePlan{}, err
+	}
+	for index := range backups {
+		backup := &backups[index]
+		epochs := sortedMaterialEpochs(materialEpochs[backup.reference])
+		recoveryEligible := recoveryPointAllowsPruning(epochs, request.Boundary.Epoch, retainedReferences[backup.reference])
+		backup.eligible = backup.terminal && backup.aged && recoveryEligible &&
+			!refsByClass["applied base"][backup.reference] && !refsByClass["outbound intent"][backup.reference] && !refsByClass["conflict"][backup.reference]
+	}
+	for index := range backups {
+		backup := &backups[index]
+		if backup.eligible {
+			for otherIndex, other := range backups {
+				if otherIndex != index && other.reference == backup.reference && !other.eligible {
+					backup.eligible = false
+					break
+				}
+			}
 		}
+		epochs := sortedMaterialEpochs(materialEpochs[backup.reference])
+		classifiedBeforeBoundary := len(epochs) > 0 && allEpochsBefore(epochs, request.Boundary.Epoch)
+		reasons := []string{}
+		if backup.terminal {
+			reasons = append(reasons, "verified applied or rolled-back journal entry")
+		} else {
+			reasons = append(reasons, "journal entry is not in a verified applied or rolled-back state")
+		}
+		if backup.aged {
+			reasons = append(reasons, "journal backup age bound elapsed")
+		} else {
+			reasons = append(reasons, "journal backup is within age bound")
+		}
+		for _, class := range []string{"applied base", "outbound intent", "conflict"} {
+			if refsByClass[class][backup.reference] {
+				reasons = append(reasons, "referenced by "+class)
+			} else {
+				reasons = append(reasons, "unreferenced by "+class)
+			}
+		}
+		if retainedReferences[backup.reference] {
+			reasons = append(reasons, "tied to a retained recovery point")
+		} else {
+			reasons = append(reasons, "not tied to a retained recovery point")
+		}
+		if len(epochs) == 0 {
+			reasons = append(reasons, "recovery-point epoch is unclassified")
+		} else if classifiedBeforeBoundary {
+			reasons = append(reasons, "all associated recovery-point epochs are below the boundary")
+		} else {
+			reasons = append(reasons, "associated recovery-point epoch is at or above the boundary")
+		}
+		if backup.eligible {
+			reasons = append(reasons, "not shared by a non-prunable journal backup")
+			plan.ExpiredBackupIDs = append(plan.ExpiredBackupIDs, backup.id)
+		} else if backup.terminal && backup.aged && !retainedReferences[backup.reference] {
+			for otherIndex, other := range backups {
+				if otherIndex != index && other.reference == backup.reference && !other.eligible {
+					reasons = append(reasons, "shared with a non-prunable journal backup")
+					break
+				}
+			}
+		}
+		plan.Candidates = append(plan.Candidates, RetentionPruneCandidate{
+			Kind: RetentionPruneCandidateBackup, Reference: backup.reference, JournalID: backup.id,
+			RecoveryPointEpochs: epochs, RecoveryPointEpochKnown: len(epochs) > 0, Eligible: backup.eligible, Reasons: reasons,
+		})
 	}
-	if err := journalRows.Err(); err != nil {
-		_ = journalRows.Close()
-		return RetentionPrunePlan{}, err
-	}
-	if err := journalRows.Close(); err != nil {
-		return RetentionPrunePlan{}, err
+	heldByBackup := map[string]bool{}
+	for _, backup := range backups {
+		if !backup.eligible {
+			heldByBackup[backup.reference] = true
+		}
 	}
 	entries, err := os.ReadDir(s.payloadDir)
 	if err != nil {
@@ -576,11 +917,54 @@ WHERE backup_ref <> '' AND ((state = 'applied' AND stage = ?) OR (state = 'rolle
 			continue
 		}
 		reference := "sha256:" + name
-		if !held[reference] {
+		epochs := sortedMaterialEpochs(materialEpochs[reference])
+		classifiedBeforeBoundary := len(epochs) > 0 && allEpochsBefore(epochs, request.Boundary.Epoch)
+		eligible := recoveryPointAllowsPruning(epochs, request.Boundary.Epoch, retainedReferences[reference])
+		reasons := []string{}
+		for _, class := range []string{"applied base", "outbound intent", "conflict"} {
+			if refsByClass[class][reference] {
+				eligible = false
+				reasons = append(reasons, "referenced by "+class)
+			} else {
+				reasons = append(reasons, "unreferenced by "+class)
+			}
+		}
+		if heldByBackup[reference] {
+			eligible = false
+			reasons = append(reasons, "referenced by a non-prunable journal backup")
+		} else {
+			reasons = append(reasons, "unreferenced by non-prunable journal backups")
+		}
+		if retainedReferences[reference] {
+			reasons = append(reasons, "tied to a retained recovery point")
+		} else {
+			reasons = append(reasons, "not tied to a retained recovery point")
+		}
+		if len(epochs) == 0 {
+			reasons = append(reasons, "recovery-point epoch is unclassified")
+		} else if classifiedBeforeBoundary {
+			reasons = append(reasons, "all associated recovery-point epochs are below the boundary")
+		} else {
+			reasons = append(reasons, "associated recovery-point epoch is at or above the boundary")
+		}
+		plan.Candidates = append(plan.Candidates, RetentionPruneCandidate{
+			Kind: RetentionPruneCandidatePayload, Reference: reference, RecoveryPointEpochs: epochs,
+			RecoveryPointEpochKnown: len(epochs) > 0, Eligible: eligible, Reasons: reasons,
+		})
+		if eligible {
 			plan.PayloadReferences = append(plan.PayloadReferences, reference)
 		}
 	}
 	sort.Strings(plan.PayloadReferences)
 	sort.Strings(plan.ExpiredBackupIDs)
+	sort.Slice(plan.Candidates, func(i, j int) bool {
+		if plan.Candidates[i].Kind != plan.Candidates[j].Kind {
+			return plan.Candidates[i].Kind < plan.Candidates[j].Kind
+		}
+		if plan.Candidates[i].Reference != plan.Candidates[j].Reference {
+			return plan.Candidates[i].Reference < plan.Candidates[j].Reference
+		}
+		return plan.Candidates[i].JournalID < plan.Candidates[j].JournalID
+	})
 	return plan, nil
 }

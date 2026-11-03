@@ -128,13 +128,18 @@ func (s *Store) setJournalRollbackStage(ctx context.Context, id, stage string, f
 }
 
 func (s *Store) PruneJournalBackup(ctx context.Context, id string, now time.Time) error {
+	_, err := s.PruneJournalBackupIfEligible(ctx, id, now)
+	return err
+}
+
+func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now time.Time) (bool, error) {
 	if err := validateID(id, "journal id"); err != nil {
-		return err
+		return false, err
 	}
 	s.payloadMu.Lock()
 	defer s.payloadMu.Unlock()
 	var reference string
-	var remove bool
+	var remove, pruned bool
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		var state, stage string
 		var createdAt int64
@@ -149,32 +154,49 @@ func (s *Store) PruneJournalBackup(ctx context.Context, id string, now time.Time
 		if !rolledBack && !aged {
 			return errors.New("journal backup can only be pruned after verified rollback or seven-day expiry of a verified apply")
 		}
+		var retainedReferences int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM retention_recovery_material AS material
+JOIN retention_recovery_points AS point
+  ON point.vault = material.vault AND point.device_id = material.device_id
+ AND point.epoch = material.epoch AND point.snapshot_cid = material.snapshot_cid
+WHERE material.backup_ref = ? OR material.payload_ref = ?`, reference, reference).Scan(&retainedReferences); err != nil {
+			return err
+		}
+		if retainedReferences != 0 {
+			return nil
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = ?", id, state); err != nil {
 			return err
 		}
+		pruned = true
 		var references int
 		if err := tx.QueryRowContext(ctx, `SELECT
 (SELECT count(*) FROM applied_base WHERE payload_ref = ?) +
 (SELECT count(*) FROM outbound_intent WHERE payload_ref = ?) +
 (SELECT count(*) FROM conflicts WHERE local_payload_ref = ? OR remote_payload_ref = ?) +
-(SELECT count(*) FROM apply_journal WHERE backup_ref = ?)`, reference, reference, reference, reference, reference).Scan(&references); err != nil {
+(SELECT count(*) FROM apply_journal WHERE backup_ref = ?) +
+(SELECT count(*) FROM retention_recovery_material AS material
+ JOIN retention_recovery_points AS point
+   ON point.vault = material.vault AND point.device_id = material.device_id
+  AND point.epoch = material.epoch AND point.snapshot_cid = material.snapshot_cid
+ WHERE material.backup_ref = ? OR material.payload_ref = ?)`, reference, reference, reference, reference, reference, reference, reference).Scan(&references); err != nil {
 			return err
 		}
 		remove = references == 0
 		return nil
 	})
-	if err != nil || !remove {
-		return err
+	if err != nil || !pruned || !remove {
+		return pruned, err
 	}
 	name, err := payloadName(reference)
 	if err != nil {
-		return err
+		return pruned, err
 	}
 	path := filepath.Join(s.payloadDir, name)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return pruned, err
 	}
-	return syncDirectory(s.payloadDir)
+	return pruned, syncDirectory(s.payloadDir)
 }
 
 func (s *Store) JournalBackupUsage(ctx context.Context) (JournalBackupUsage, error) {
@@ -226,10 +248,13 @@ func (s *Store) PruneExpiredJournalBackups(ctx context.Context, now time.Time) (
 		if now.Before(time.Unix(entry.CreatedAt, 0).Add(JournalBackupRetention)) {
 			continue
 		}
-		if err := s.PruneJournalBackup(ctx, entry.ID, now); err != nil {
+		prunedEntry, err := s.PruneJournalBackupIfEligible(ctx, entry.ID, now)
+		if err != nil {
 			return pruned, fmt.Errorf("prune expired journal backup %s: %w", entry.ID, err)
 		}
-		pruned = append(pruned, entry.ID)
+		if prunedEntry {
+			pruned = append(pruned, entry.ID)
+		}
 	}
 	return pruned, nil
 }
