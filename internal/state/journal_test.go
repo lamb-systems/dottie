@@ -39,6 +39,10 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	require.NoError(t, err)
 	_, err = raw.Exec("DROP TABLE vault_epoch_first_seen")
 	require.NoError(t, err)
+	for _, table := range []string{"retention_declaration_history_points", "retention_declaration_history", "retention_recovery_points", "retention_declarations"} {
+		_, err = raw.Exec("DROP TABLE " + table)
+		require.NoError(t, err)
+	}
 	_, err = raw.Exec("UPDATE schema_version SET version = 4 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())

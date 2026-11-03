@@ -200,10 +200,11 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err := matchControlPolicy(control, policy); err != nil {
 			return err
 		}
-		if value.RetentionFloor < policy.PolicyRetentionFloor {
-			return &RecordContextError{Field: "retentionFloor"}
+		controlObject, err := vault.EncodeControl(controlFromRecord(control))
+		if err != nil {
+			return &RecordContextError{Field: "controlCid"}
 		}
-		controlCID, err := recordCID(context.Control)
+		controlCID, err := rawBlobCID(controlObject)
 		if err != nil || !bytes.Equal(value.ControlCID, controlCID) {
 			return &RecordContextError{Field: "controlCid"}
 		}

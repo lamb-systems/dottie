@@ -435,18 +435,18 @@ func TestVaultRecordContextRequiresEntriesAndChecksCrossRecordBindings(t *testin
 	assert.Equal(t, "TrustAnchor", trustErr.Entry)
 
 	attestation := byType[VaultAttestationNSID].record.(AttestationRecord)
-	attestation.ControlCID = controlCID
+	controlObject, err := vault.EncodeControl(controlFromRecord(control))
+	require.NoError(t, err)
+	attestation.ControlCID, err = rawBlobCID(controlObject)
+	require.NoError(t, err)
 	attestationBytes, err := EncodeRecord(attestation)
 	require.NoError(t, err)
 	assert.NoError(t, VerifyRecordContext(attestationBytes, RecordContext{Policy: policyBytes, Control: controlBytes}))
 	attestation.RetentionFloor = policy.PolicyRetentionFloor - 1
 	attestationBytes, err = EncodeRecord(attestation)
 	require.NoError(t, err)
-	contextErr = VerifyRecordContext(attestationBytes, RecordContext{Policy: policyBytes, Control: controlBytes})
-	require.Error(t, contextErr)
-	var retentionErr *RecordContextError
-	require.ErrorAs(t, contextErr, &retentionErr)
-	assert.Equal(t, "retentionFloor", retentionErr.Field)
+	assert.NoError(t, VerifyRecordContext(attestationBytes, RecordContext{Policy: policyBytes, Control: controlBytes}),
+		"record context leaves a below-policy-floor declaration for the attestation judgement to surface")
 
 	previousPolicy := policy
 	previousPolicy.EpochSeq = 6

@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 8
+const LatestSchemaVersion = 9
 const PayloadRetention = "Referenced payloads are retained; journal backups are pruned only after verified rollback or expiry when no other record references them."
+const RetentionPruneScope = "No epoch-scoped ciphertext cache exists yet, so the epoch dimension currently constrains only which recovery points are retained; when the sync path introduces a snapshot cache, the same declaration and preconditions govern it."
 
 var ErrStateLocked = errors.New("state is already locked")
 var ErrUnsupportedSchema = errors.New("unsupported state schema")
@@ -24,6 +26,10 @@ var ErrVaultPublicationConflict = errors.New("vault publication count and head C
 var ErrPublicationAncestry = errors.New("vault publication ancestry does not match the observed head")
 var ErrVaultPublicationControlAncestry = errors.New("vault publication control ancestry does not match the observed control")
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
+var ErrRetentionDeclarationNotFound = errors.New("retention declaration not found")
+var ErrRetentionBoundaryNotVerified = errors.New("retention boundary is not pinned by a matching verified checkpoint")
+var ErrRetentionLiveHead = errors.New("retention boundary may not include or exceed the live head epoch")
+var ErrRetentionConfirmationRequired = errors.New("retention pruning requires explicit confirmation")
 
 type TargetDescriptor struct {
 	ID            string
@@ -196,6 +202,54 @@ type VaultPublicationObservation struct {
 	PrevHeadCID      []byte
 	ParentCID        []byte
 	EnforceParent    bool
+}
+
+type RetentionRecoveryPoint struct {
+	Epoch       uint64
+	SnapshotCID []byte
+}
+
+type RetentionDeclaration struct {
+	Vault                     [32]byte
+	DeviceID                  string
+	PolicyDigest              [32]byte
+	RetentionFloor            uint64
+	RecoveryPoints            []RetentionRecoveryPoint
+	DeclarationDigest         [32]byte
+	DeclaredAt                int64
+	PreviousDeclarationDigest [32]byte
+	PreviousDeclaredAt        int64
+}
+
+type RetentionDeclarationRevision struct {
+	RetentionDeclaration
+	Revision int64
+}
+
+type RetentionPruneRequest struct {
+	Vault    [32]byte
+	DeviceID string
+	Boundary RetentionRecoveryPoint
+	Now      time.Time
+}
+
+type RetentionPrunePlan struct {
+	Vault             [32]byte
+	DeviceID          string
+	Boundary          RetentionRecoveryPoint
+	PolicyDigest      [32]byte
+	RetentionFloor    uint64
+	RecoveryPoints    []RetentionRecoveryPoint
+	PayloadReferences []string
+	ExpiredBackupIDs  []string
+	EpochScope        string
+}
+
+type RetentionPruneReport struct {
+	Plan            RetentionPrunePlan
+	DeletedPayloads []string
+	PrunedBackupIDs []string
+	EpochScope      string
 }
 
 type JournalEntry struct {

@@ -83,7 +83,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations", "retention_declarations", "retention_recovery_points", "retention_declaration_history", "retention_declaration_history_points"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -218,7 +218,7 @@ func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE vault_epoch_first_seen; UPDATE schema_version SET version = 6 WHERE singleton = 1")
+	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -404,7 +404,7 @@ func TestFailedMigrationIsAtomicAndGoodRetrySucceeds(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("DROP TABLE transition_attempts; UPDATE schema_version SET version = 1 WHERE singleton = 1")
+	_, err = raw.Exec("DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; DROP TABLE transition_attempts; UPDATE schema_version SET version = 1 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -463,7 +463,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 8")
+	assert.Contains(t, err.Error(), "supports version 9")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

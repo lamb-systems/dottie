@@ -99,16 +99,33 @@ attacker who can read process memory, a dump, swap, or who can replace a binary 
 inside the session and is not excluded by this row. Collapsing those two attackers into one would turn a
 real limit into a comforting sentence.
 
-## Deletion and what it actually buys
+## Retention and deletion limits
 
-Every authorized device is required to delete epoch keys it no longer needs, and retention is derived from
-the recovery points it keeps rather than from a fixed epoch count.
+Retention declarations are stored per vault and device with the policy digest, declared floor, and retained
+recovery points. A below-policy floor is recorded and surfaced as a confidentiality-compromise signal rather
+than refused. Re-declarations preserve the previous declaration and its digest so the change remains visible.
 
-That bounds what a stolen honest device can reveal only if its old keys are genuinely gone. A device
-retains its own X25519 private key, and a stolen private key can unwrap archived wrappers for any epoch that
-was wrapped to it, recovering a content key that was deleted locally. So deletion limits the copies we keep,
-not the capability of anyone who kept a secret. Historical ciphertext also stays readable to anyone holding
-the epoch key, indefinitely.
+No epoch-scoped ciphertext cache exists yet, so the epoch dimension currently constrains only which recovery
+points are retained; when the sync path introduces a snapshot cache, the same declaration and preconditions
+govern it.
+
+Pruning currently covers payload files not referenced by any applied base, outbound intent, or conflict, and
+rollback backups past their existing age bound. Dry-run lists the exact payload files and backup entries that
+apply would remove. It preserves any payload still referenced by an applied base, outbound intent, conflict,
+or non-expired journal backup. Apply requires a stored checkpoint whose epoch and snapshot CID exactly match
+the selected retained recovery point and whose policy digest matches the declaration. It also requires an
+observed live head and refuses a boundary epoch greater than or equal to that head.
+
+Complete here means pinned by a verified checkpoint, not that every referenced blob is present, because no
+blob inventory is persisted and downloads are transient. This precondition constrains pruning to checked
+evidence; it does not claim the snapshot is reconstructable. The live-head observation also fails closed when
+no head epoch has been observed locally.
+
+No content-key store or epoch-scoped ciphertext cache currently exists. The local payload store is plaintext
+and is retained by content references; rollback backups are plaintext and age-pruned only after verified
+apply or rollback. The declaration and preconditions govern any snapshot cache if the sync path introduces
+one. A device's X25519 private key can still unwrap archived wrappers for epochs where it was a recipient, so
+pruning locally held bytes does not revoke a secret someone already kept.
 
 ## First restore
 
@@ -137,7 +154,7 @@ backup.
 | OAuth session and refresh token | Secret Service, one atomic envelope | until logout or reauthorization | writes and deletes repository records; cannot decrypt vault content |
 | Device signing key (Ed25519) | Secret Service | until the device is revoked | forges publications accepted as that device, until revocation lands |
 | Device recipient key (X25519) | Secret Service | until the device is revoked; **not** erased by epoch rotation | unwraps every epoch ever wrapped to that device, including keys deleted locally |
-| Epoch content key | memory, and Secret Service while current | until the epoch is superseded and pruned | decrypts every snapshot under that epoch |
+| Epoch content key | caller-supplied process memory; not persisted by Dottie | used to seal and discarded by the caller | decrypts snapshots under that epoch while held |
 | Recovery kit | offline, not on the machine | until reissued | administrative control of the vault |
 | Local state and captured payloads | filesystem | until deleted | plaintext configuration, as in the filesystem row above |
 

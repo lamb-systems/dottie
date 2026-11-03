@@ -175,6 +175,15 @@ Deletion is an obligation on every authorized device. A device keeps exactly the
 points` need and deletes the rest, so the tunable is how many recovery points are retained, not a raw
 epoch count. The default is 3, as a policy field.
 
+**What is deleted, and what is never held.** Dottie does not persist content keys. A publication's content
+key and nonce are supplied by the caller, used to seal, and discarded; nothing writes them to local state,
+so there is no key material on disk to retain or delete. The retained material a device actually holds for
+an epoch is cached ciphertext (downloaded snapshots and blobs) and rollback copies. Retention and pruning
+therefore apply to those, and the attestation below attests the declared floor, the retained recovery points
+and the deletion of that retained material. An earlier draft stated the obligation over "epoch keys", which
+presupposed a key store the implementation deliberately does not have; deleting nothing is a stronger
+property than deleting on schedule, and this record says so rather than implying a store that does not exist.
+
 Compliance is attested, not verified. The attestation is a separately **device-signed** object, not a field
 the publisher may author: it names its subject `device_id`, the vault, the policy digest, the declared
 retention floor, the recovery points still held, and the control CID it was made against. The device's own

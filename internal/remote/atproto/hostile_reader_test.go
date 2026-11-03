@@ -794,8 +794,11 @@ func TestSeamBoundaryAttestationSignerUnauthenticated(t *testing.T) {
 	_, _, digest := fixturePolicyParts(t, fixture)
 	policyRecordBytes := fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}]
 	controlRecordBytes := fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}]
-	controlCID, err := recordCID(controlRecordBytes)
+	controlDecoded, err := DecodeRecord(controlRecordBytes)
 	require.NoError(t, err)
+	controlObjectBytes, err := vault.EncodeControl(controlFromRecord(controlDecoded.(ControlRecord)))
+	require.NoError(t, err)
+	controlCID := readRawCID(t, controlObjectBytes)
 
 	ghost := fixtureSigningKey(99)
 	ghostPublic := ghost.Public().(ed25519.PublicKey)
