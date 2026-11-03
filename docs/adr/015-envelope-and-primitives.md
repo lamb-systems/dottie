@@ -145,8 +145,13 @@ encodings **together with test vectors** for every signed object and every diges
 task checks the vectors rather than the sentences. A specification that pins bytes without vectors is a
 claim nobody can check.
 
-CIDs are full CIDv1 DAG-CBOR SHA-256 values with their version, codec and multihash framing, which vary
-in length. No field in this envelope is a bare 32-byte digest except the ones that are digests.
+CIDs for Dottie vault objects—envelopes, policies, controls, certificates, checkpoints, attestations
+and heads—are full CIDv1 values using the raw codec and a SHA-256 multihash over the canonical encoded
+object bytes, including the CID version, codec and multihash framing; their lengths vary. The CID
+addresses those canonical bytes directly: their encoding is already pinned by the canonical-form rules
+above, and DAG-CBOR framing would add a second encoding layer without verification value. AT Protocol
+repository records are a different object family and remain DAG-CBOR records with DAG-CBOR CIDs. No
+field in this envelope is a bare 32-byte digest except the ones that are digests.
 
 ## Bounds
 

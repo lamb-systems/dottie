@@ -187,6 +187,11 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 	}
 	rootPublic := rootDevice.Signing.Public().(ed25519.PublicKey)
 	anchor := sha256.Sum256(rootPublic)
+	kitPrivate, err := deriveKitSigningKey(kit, vaultID)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+	kitFingerprint := sha256.Sum256(kitPrivate.Public().(ed25519.PublicKey))
 	rootRecipient := rootDevice.Recipient.PublicKey().Bytes()
 	var recipientPublic [32]byte
 	copy(recipientPublic[:], rootRecipient)
@@ -208,7 +213,7 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 		Roles:                []RoleBinding{{DeviceID: rootDevice.DeviceID, Role: RoleRoot}},
 		Recipients:           []PolicyRecipient{{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID), PublicKey: recipientPublic}},
 		PolicyRetentionFloor: defaults.PolicyRetentionFloor, RetainedRecoveryPoints: defaults.RetainedRecoveryPoints,
-		MaxPublications: defaults.MaxPublications, MaxEpochAge: defaults.MaxEpochAge, RecoveryAnchor: anchor,
+		MaxPublications: defaults.MaxPublications, MaxEpochAge: defaults.MaxEpochAge, RecoveryAnchor: kitFingerprint,
 		Signer: Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
 	}
 	policyBytes, err := signPolicy(policy, rootDevice.Signing)
@@ -231,14 +236,9 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	kitPrivate, err := deriveKitSigningKey(kit, vaultID)
-	if err != nil {
-		return BootstrapResult{}, err
-	}
-	kitKeyID := sha256.Sum256(kitPrivate.Public().(ed25519.PublicKey))
 	checkpoint := Checkpoint{
 		Vault: vaultID, EpochSeq: 0, PolicyDigest: policyDigest, Anchor: anchor, ControlCID: controlCID,
-		Signer: Signer{DeviceID: "recovery-kit", KeyID: kitKeyID[:]},
+		Signer: Signer{DeviceID: "recovery-kit", KeyID: kitFingerprint[:]},
 	}
 	checkpointBytes, err := signCheckpoint(checkpoint, kitPrivate)
 	if err != nil {

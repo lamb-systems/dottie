@@ -483,6 +483,11 @@ func validateExportSignatures(archive ExportArchive, kit []byte) error {
 	if archive.VaultID == ([32]byte{}) || archive.Anchor == ([32]byte{}) || len(kit) != 32 {
 		return fmt.Errorf("%w: archive identity or recovery kit", ErrAuthorization)
 	}
+	kitPublic, err := RecoveryKitSigningPublicKey(kit, archive.VaultID)
+	if err != nil {
+		return fmt.Errorf("%w: recovery kit key", ErrAuthorization)
+	}
+	kitFingerprint := sha256.Sum256(kitPublic)
 	positions := make([]ExportPosition, 0, 1+len(archive.Lineage)+len(archive.RecoveryPoints))
 	positions = append(positions, archive.Current)
 	positions = append(positions, archive.Lineage...)
@@ -490,15 +495,15 @@ func validateExportSignatures(archive ExportArchive, kit []byte) error {
 	if len(archive.Lineage) > maxExportLineagePositions || len(archive.RecoveryPoints) > maxExportRecoveryPoints {
 		return fmt.Errorf("%w: position count", ErrLimit)
 	}
-	currentPolicy, err := validateExportPosition(archive.VaultID, archive.Anchor, archive.Current)
+	currentPolicy, err := validateExportPosition(archive.VaultID, archive.Anchor, kitFingerprint, archive.Current)
 	if err != nil {
 		return fmt.Errorf("%w: current position: %v", ErrExportPolicy, err)
 	}
 	if currentPolicy.EpochSeq != archive.Epoch || mustPolicyDigest(archive.Current.Policy) != archive.PolicyDigest {
 		return fmt.Errorf("%w: manifest epoch or policy digest does not match current position", ErrExportPolicy)
 	}
-	if currentPolicy.RecoveryAnchor != archive.Anchor {
-		return fmt.Errorf("%w: policy recovery anchor differs from manifest", ErrExportPolicy)
+	if currentPolicy.RecoveryAnchor != kitFingerprint {
+		return fmt.Errorf("%w: policy recovery anchor differs from recovery-kit fingerprint", ErrExportPolicy)
 	}
 	positionControls := make(map[string]Control, len(positions))
 	positionByControl := make(map[string]ExportPosition, len(positions))
@@ -506,7 +511,7 @@ func validateExportSignatures(archive ExportArchive, kit []byte) error {
 		if index == 0 {
 			continue
 		}
-		if _, err := validateExportPosition(archive.VaultID, archive.Anchor, position); err != nil {
+		if _, err := validateExportPosition(archive.VaultID, archive.Anchor, kitFingerprint, position); err != nil {
 			return fmt.Errorf("%w: history position %d: %v", ErrExportPolicy, index, err)
 		}
 	}
@@ -523,10 +528,6 @@ func validateExportSignatures(archive ExportArchive, kit []byte) error {
 		}
 		positionControls[string(controlCID)] = control
 		positionByControl[string(controlCID)] = position
-	}
-	kitPublic, err := RecoveryKitSigningPublicKey(kit, archive.VaultID)
-	if err != nil {
-		return fmt.Errorf("%w: recovery kit key", ErrAuthorization)
 	}
 	checkpoint, err := VerifyCheckpoint(archive.Checkpoint, kitPublic)
 	if err != nil {
@@ -740,11 +741,11 @@ func exportCIDName(encoded []byte) string {
 	return value.String()
 }
 
-func validateExportPosition(vaultID, anchor [32]byte, position ExportPosition) (Policy, error) {
+func validateExportPosition(vaultID, trustAnchor, kitFingerprint [32]byte, position ExportPosition) (Policy, error) {
 	if len(position.Policy) == 0 || len(position.Control) == 0 || len(position.Certificates) == 0 || len(position.Certificates) > maxExportCertificates {
 		return Policy{}, fmt.Errorf("%w: missing policy, control or certificate set", ErrIncompleteExport)
 	}
-	control, _, err := verifyControlEvidence(vaultID, anchor, ControlEvidence{
+	control, _, err := verifyControlEvidence(vaultID, trustAnchor, ControlEvidence{
 		Control: position.Control, Policy: position.Policy, Certificates: position.Certificates,
 	})
 	if err != nil {
@@ -754,7 +755,7 @@ func validateExportPosition(vaultID, anchor [32]byte, position ExportPosition) (
 	if err != nil {
 		return Policy{}, err
 	}
-	if policy.RecoveryAnchor != anchor || policy.Vault != vaultID || policy.EpochSeq != control.EpochSeq {
+	if policy.RecoveryAnchor != kitFingerprint || policy.Vault != vaultID || policy.EpochSeq != control.EpochSeq {
 		return Policy{}, ErrAuthorization
 	}
 	policyDigest, err := ComputePolicyDigest(position.Policy)
@@ -764,7 +765,7 @@ func validateExportPosition(vaultID, anchor [32]byte, position ExportPosition) (
 	predecessor := Predecessor{
 		ControlCID: mustRawCID(position.Control), PolicyDigest: policyDigest, EpochSeq: policy.EpochSeq,
 		HeadCID: bytes.Clone(control.HeadSnapshotCID), Control: bytes.Clone(position.Control), Policy: bytes.Clone(position.Policy),
-		Certificates: cloneByteSlices(position.Certificates), TrustAnchor: anchor,
+		Certificates: cloneByteSlices(position.Certificates), TrustAnchor: trustAnchor,
 	}
 	if err := validatePublicationRecipients(predecessor, policy); err != nil {
 		return Policy{}, err

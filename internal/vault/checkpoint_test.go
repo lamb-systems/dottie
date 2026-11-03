@@ -143,6 +143,70 @@ func TestVerifyControlStateCurrent(t *testing.T) {
 	assert.Equal(t, "same-control", result.ReasonCode)
 }
 
+func TestVerifyControlStateRefusesOversizedIntermediatesBeforeAuthentication(t *testing.T) {
+	fixture := newCheckpointFixture(t)
+	genesis := fixture.evidence(t, 0, nil)
+	genesisCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	one := fixture.evidence(t, 1, genesisCID)
+	oneCID, err := rawCID(one.Control)
+	require.NoError(t, err)
+	two := fixture.evidence(t, 2, oneCID)
+	invalid := ControlEvidence{Control: []byte("invalid control"), Policy: []byte("invalid policy")}
+	intermediates := make([]ControlEvidence, MaxCheckpointIntermediates+1)
+	for index := range intermediates {
+		intermediates[index] = invalid
+	}
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+
+	_, err = VerifyControlState(trustedContext, VerificationRequest{Supplied: two, Intermediates: intermediates})
+	var limitErr *CheckpointIntermediatesLimitError
+	require.ErrorAs(t, err, &limitErr)
+	assert.Equal(t, MaxCheckpointIntermediates, limitErr.Limit)
+	assert.Equal(t, MaxCheckpointIntermediates+1, limitErr.Observed)
+	assert.ErrorIs(t, err, ErrLimit)
+	assert.False(t, errors.Is(err, ErrInvalidVerification), "oversized input was authenticated before the inventory limit")
+}
+
+func TestVerifyControlStateAcceptsExactlyCheckpointIntermediateBoundOnDirectShortcut(t *testing.T) {
+	fixture := newCheckpointFixture(t)
+	current := fixture.evidence(t, 0, nil)
+	invalid := ControlEvidence{Control: []byte("invalid control"), Policy: []byte("invalid policy")}
+	intermediates := make([]ControlEvidence, MaxCheckpointIntermediates)
+	for index := range intermediates {
+		intermediates[index] = invalid
+	}
+	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, current)))
+
+	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: current, Intermediates: intermediates})
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointCurrent, result.Outcome)
+}
+
+func TestVerifyControlStateDirectDescendantAndStaleSkipIntermediateAuthentication(t *testing.T) {
+	fixture := newCheckpointFixture(t)
+	genesis := fixture.evidence(t, 0, nil)
+	genesisCID, err := rawCID(genesis.Control)
+	require.NoError(t, err)
+	descendant := fixture.evidence(t, 1, genesisCID)
+	staleContextHeld := descendant
+	invalid := ControlEvidence{Control: []byte("invalid control"), Policy: []byte("invalid policy")}
+
+	descendantContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
+	descendantResult, err := VerifyControlState(descendantContext, VerificationRequest{Supplied: descendant, Intermediates: []ControlEvidence{invalid}})
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointDescendant, descendantResult.Outcome)
+
+	staleContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
+	require.NoError(t, staleContext.SetHeldCheckpoint(*checkpointHeld(t, staleContextHeld)))
+	staleResult, err := VerifyControlState(staleContext, VerificationRequest{Supplied: genesis, Intermediates: []ControlEvidence{invalid}})
+	require.NoError(t, err)
+	assert.Equal(t, CheckpointStale, staleResult.Outcome)
+}
+
 func TestVerifyControlStateRefusesSelfSuppliedAnchorAndCheckpoint(t *testing.T) {
 	requestType := reflect.TypeOf(VerificationRequest{})
 	_, hasTrustAnchor := requestType.FieldByName("TrustAnchor")

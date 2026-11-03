@@ -9,12 +9,13 @@ import (
 type CheckpointOutcome string
 
 const (
-	CheckpointCurrent      CheckpointOutcome = "current"
-	CheckpointDescendant   CheckpointOutcome = "descendant"
-	CheckpointStale        CheckpointOutcome = "stale"
-	CheckpointConflicting  CheckpointOutcome = "conflicting"
-	CheckpointUnverifiable CheckpointOutcome = "unverifiable"
-	MaxCheckpointWalkDepth                   = 8
+	CheckpointCurrent          CheckpointOutcome = "current"
+	CheckpointDescendant       CheckpointOutcome = "descendant"
+	CheckpointStale            CheckpointOutcome = "stale"
+	CheckpointConflicting      CheckpointOutcome = "conflicting"
+	CheckpointUnverifiable     CheckpointOutcome = "unverifiable"
+	MaxCheckpointWalkDepth                       = 8
+	MaxCheckpointIntermediates                   = 4096
 )
 
 var (
@@ -22,6 +23,19 @@ var (
 	ErrConsentNotOffered   = errors.New("consent is available only for unverifiable state")
 	ErrInvalidVerification = errors.New("verification evidence is invalid")
 )
+
+type CheckpointIntermediatesLimitError struct {
+	Limit    int
+	Observed int
+}
+
+func (err *CheckpointIntermediatesLimitError) Error() string {
+	return fmt.Sprintf("%v: checkpoint intermediates observed %d exceeds limit %d", ErrLimit, err.Observed, err.Limit)
+}
+
+func (err *CheckpointIntermediatesLimitError) Unwrap() error {
+	return ErrLimit
+}
 
 type ControlEvidence struct {
 	Control      []byte
@@ -166,40 +180,44 @@ func verifyControlPositionEvidence(vaultID, trustAnchor [32]byte, evidence Contr
 	return authenticatedControlPosition{control: control, policy: policy, policyDigest: policyDigest}, controlCID, nil
 }
 
-func authenticateVerificationRequest(context *TrustedContext, request VerificationRequest) (authenticatedControlPosition, []byte, *authenticatedControlPosition, []byte, map[string]authenticatedControlPosition, error) {
+func authenticateVerificationPositions(context *TrustedContext, request VerificationRequest) (authenticatedControlPosition, []byte, *authenticatedControlPosition, []byte, error) {
 	if context == nil || !context.initialized {
-		return authenticatedControlPosition{}, nil, nil, nil, nil, &VerificationRefusal{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
+		return authenticatedControlPosition{}, nil, nil, nil, &VerificationRefusal{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
 	}
 	supplied, suppliedCID, err := verifyControlPositionEvidence(context.vault, context.anchor, request.Supplied)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, nil, nil, nil, refusalForSide(err, "supplied")
+		return authenticatedControlPosition{}, nil, nil, nil, refusalForSide(err, "supplied")
 	}
 	var heldPosition *authenticatedControlPosition
 	var heldCID []byte
 	if context.held != nil {
 		decoded, computedCID, verifyErr := verifyControlPositionEvidence(context.vault, context.anchor, *context.held)
 		if verifyErr != nil {
-			return authenticatedControlPosition{}, nil, nil, nil, nil, refusalForSide(verifyErr, "held")
+			return authenticatedControlPosition{}, nil, nil, nil, refusalForSide(verifyErr, "held")
 		}
 		heldPosition = &decoded
 		heldCID = computedCID
 	}
-	intermediates := make(map[string]authenticatedControlPosition, len(request.Intermediates))
-	for _, evidence := range request.Intermediates {
-		position, controlCID, verifyErr := verifyControlPositionEvidence(context.vault, context.anchor, evidence)
-		if verifyErr != nil {
-			return authenticatedControlPosition{}, nil, nil, nil, nil, refusalForSide(verifyErr, "intermediate", evidence.Control)
+	return supplied, suppliedCID, heldPosition, heldCID, nil
+}
+
+func authenticateCheckpointIntermediates(context *TrustedContext, evidenceSet []ControlEvidence) (map[string]authenticatedControlPosition, error) {
+	intermediates := make(map[string]authenticatedControlPosition, len(evidenceSet))
+	for _, evidence := range evidenceSet {
+		position, controlCID, err := verifyControlPositionEvidence(context.vault, context.anchor, evidence)
+		if err != nil {
+			return nil, refusalForSide(err, "intermediate", evidence.Control)
 		}
 		key := string(controlCID)
 		if existing, ok := intermediates[key]; ok {
 			if !bytes.Equal(existing.control.Signature[:], position.control.Signature[:]) {
-				return authenticatedControlPosition{}, nil, nil, nil, nil, &VerificationRefusal{Side: "intermediate", Code: "cid-collision", CID: controlCID, Err: ErrAuthorization}
+				return nil, &VerificationRefusal{Side: "intermediate", Code: "cid-collision", CID: controlCID, Err: ErrAuthorization}
 			}
 			continue
 		}
 		intermediates[key] = position
 	}
-	return supplied, suppliedCID, heldPosition, heldCID, intermediates, nil
+	return intermediates, nil
 }
 
 func refusalForSide(err error, side string, encoded ...[]byte) error {
@@ -219,26 +237,32 @@ func refusalForSide(err error, side string, encoded ...[]byte) error {
 	return &VerificationRefusal{Side: side, Code: "invalid-evidence", Err: err}
 }
 
-func compareAuthenticatedControls(supplied authenticatedControlPosition, suppliedCID []byte, held *authenticatedControlPosition, heldCID []byte, intermediates map[string]authenticatedControlPosition) (VerificationResult, error) {
+func compareDirectAuthenticatedControls(supplied authenticatedControlPosition, suppliedCID []byte, held *authenticatedControlPosition, heldCID []byte) (VerificationResult, bool, error) {
 	if held == nil {
-		return unverifiableResult("no-checkpoint", "no checkpoint is held locally", nil, 0), nil
+		return unverifiableResult("no-checkpoint", "no checkpoint is held locally", nil, 0), true, nil
 	}
 	if bytes.Equal(suppliedCID, heldCID) {
-		return VerificationResult{Outcome: CheckpointCurrent, ReasonCode: "same-control", Reason: "the supplied control matches the held checkpoint", NewerControlCID: bytes.Clone(heldCID), validityPassed: true}, nil
+		return VerificationResult{Outcome: CheckpointCurrent, ReasonCode: "same-control", Reason: "the supplied control matches the held checkpoint", NewerControlCID: bytes.Clone(heldCID), validityPassed: true}, true, nil
 	}
 	if bytes.Equal(supplied.control.PrevControlCID, heldCID) {
 		if err := checkMirroredControlEdge(*held, supplied, "supplied", suppliedCID); err != nil {
-			return VerificationResult{}, err
+			return VerificationResult{}, true, err
 		}
-		return VerificationResult{Outcome: CheckpointDescendant, ReasonCode: "direct-descendant", Reason: "the supplied control directly names the held control as its predecessor", NewerControlCID: bytes.Clone(suppliedCID), LinkCount: 1, validityPassed: true}, nil
+		return VerificationResult{Outcome: CheckpointDescendant, ReasonCode: "direct-descendant", Reason: "the supplied control directly names the held control as its predecessor", NewerControlCID: bytes.Clone(suppliedCID), LinkCount: 1, validityPassed: true}, true, nil
 	}
 	if bytes.Equal(held.control.PrevControlCID, suppliedCID) {
 		if err := checkMirroredControlEdge(supplied, *held, "held", heldCID); err != nil {
-			return VerificationResult{}, err
+			return VerificationResult{}, true, err
 		}
-		return VerificationResult{Outcome: CheckpointStale, ReasonCode: "direct-stale", Reason: "the held control directly names the supplied control as its predecessor", NewerControlCID: bytes.Clone(heldCID), LinkCount: 1, validityPassed: true}, nil
+		return VerificationResult{Outcome: CheckpointStale, ReasonCode: "direct-stale", Reason: "the held control directly names the supplied control as its predecessor", NewerControlCID: bytes.Clone(heldCID), LinkCount: 1, validityPassed: true}, true, nil
 	}
+	return VerificationResult{}, false, nil
+}
 
+func compareAuthenticatedControls(supplied authenticatedControlPosition, suppliedCID []byte, held *authenticatedControlPosition, heldCID []byte, intermediates map[string]authenticatedControlPosition) (VerificationResult, error) {
+	if directResult, direct, err := compareDirectAuthenticatedControls(supplied, suppliedCID, held, heldCID); direct || err != nil {
+		return directResult, err
+	}
 	suppliedWalk := walkControlHistory(supplied, suppliedCID, held, heldCID, "supplied", intermediates)
 	if suppliedWalk.refusal != nil {
 		return VerificationResult{}, suppliedWalk.refusal
@@ -331,7 +355,17 @@ func unverifiableResult(code, reason string, neededCID []byte, links int) Verifi
 }
 
 func compareControlCheckpoints(context *TrustedContext, request VerificationRequest) (VerificationResult, error) {
-	supplied, suppliedCID, held, heldCID, intermediates, err := authenticateVerificationRequest(context, request)
+	if len(request.Intermediates) > MaxCheckpointIntermediates {
+		return VerificationResult{}, &CheckpointIntermediatesLimitError{Limit: MaxCheckpointIntermediates, Observed: len(request.Intermediates)}
+	}
+	supplied, suppliedCID, held, heldCID, err := authenticateVerificationPositions(context, request)
+	if err != nil {
+		return VerificationResult{}, err
+	}
+	if directResult, direct, err := compareDirectAuthenticatedControls(supplied, suppliedCID, held, heldCID); direct || err != nil {
+		return directResult, err
+	}
+	intermediates, err := authenticateCheckpointIntermediates(context, request.Intermediates)
 	if err != nil {
 		return VerificationResult{}, err
 	}

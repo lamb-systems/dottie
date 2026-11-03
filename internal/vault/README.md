@@ -231,8 +231,9 @@ atproto package owns staging, durable attempts and the separate fenced write set
 Check 7 proves recipient identity binding only: each envelope key ID maps to the certified key
 named by policy, with no extras or omissions. It cannot prove that encryption used that recipient's
 key correctly without the recipient's private key. Snapshot record schemas and record-to-blob
-binding remain the record schemas work; this package prepares encoded signed objects and raw CIDs without
-introducing a competing snapshot-record codec.
+binding remain the record schemas work; this package prepares encoded signed objects and CIDv1 raw-codec
+SHA-256 CIDs over those canonical bytes. AT Protocol repository records remain DAG-CBOR records with
+DAG-CBOR CIDs; they are a different object family and do not use the vault-object CID codec.
 
 ## Recovery kits and checkpoint verification
 

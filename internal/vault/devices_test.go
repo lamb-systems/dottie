@@ -323,6 +323,10 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	require.NoError(t, verifyCertificateChain(certificate, request, 1, make(map[string]bool)))
 	policy, err := DecodePolicy(first.Policy)
 	require.NoError(t, err)
+	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(kit, first.Vault)
+	require.NoError(t, err)
+	assert.Equal(t, kitFingerprint, policy.RecoveryAnchor, "bootstrap policy recovery anchor must identify the kit signing key")
+	assert.NotEqual(t, first.Anchor, policy.RecoveryAnchor, "policy kit anchor must differ from the root signing-key anchor")
 	policyPrefix, err := encodePolicyPrefix(policy)
 	require.NoError(t, err)
 	require.NoError(t, Verify("dottie/v1/sig-policy", objectSignaturePreimage(policyPrefix), policy.Signature[:], certificate.SigningPublicKey[:]))
@@ -360,7 +364,10 @@ func TestRecoveryKitCheckpointVerificationAndDerivation(t *testing.T) {
 
 	verified, err := VerifyCheckpoint(fixture.bootstrap.Checkpoint, public)
 	require.NoError(t, err)
-	assert.Equal(t, fixture.bootstrap.Anchor, verified.Anchor, "verified anchor")
+	assert.Equal(t, fixture.bootstrap.Anchor, verified.Anchor, "checkpoint continues to carry the root signing-key anchor")
+	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(fixture.kit, fixture.bootstrap.Vault)
+	require.NoError(t, err)
+	assert.NotEqual(t, kitFingerprint, verified.Anchor, "checkpoint root anchor remains distinct from the kit fingerprint")
 
 	otherKit := fixture.kit
 	otherKit[0] ^= 1

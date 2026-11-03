@@ -48,6 +48,57 @@ func TestExportArchiveRoundTripPreservesSignedObjects(t *testing.T) {
 	assert.Equal(t, fixture.bootstrap.Anchor, archive.Anchor, "anchor changed")
 }
 
+func TestValidateExportPositionRequiresKitFingerprintInPolicy(t *testing.T) {
+	fixture := newDevicesFixture(t)
+	policy, err := DecodePolicy(fixture.bootstrap.Policy)
+	require.NoError(t, err)
+	policy.RecoveryAnchor = fixture.bootstrap.Anchor
+	policyBytes, err := signPolicy(policy, fixture.root.Signing)
+	require.NoError(t, err)
+	policyDigest, err := ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	control, err := DecodeControl(fixture.bootstrap.Control)
+	require.NoError(t, err)
+	control.PolicyDigest = policyDigest
+	controlBytes, err := signControl(control, fixture.root.Signing)
+	require.NoError(t, err)
+	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(fixture.kit, fixture.bootstrap.Vault)
+	require.NoError(t, err)
+	position := ExportPosition{Policy: policyBytes, Control: controlBytes, Certificates: [][]byte{fixture.bootstrap.Certificate}}
+
+	_, err = validateExportPosition(fixture.bootstrap.Vault, fixture.bootstrap.Anchor, kitFingerprint, position)
+	require.ErrorIs(t, err, ErrAuthorization)
+}
+
+func TestExportRefusesPolicyRecoveryAnchorSetToRootFingerprint(t *testing.T) {
+	input, fixture := exportTestInput(t)
+	policy, err := DecodePolicy(input.Current.Policy)
+	require.NoError(t, err)
+	policy.RecoveryAnchor = input.AnchorFingerprint
+	policyBytes, err := signPolicy(policy, fixture.root.Signing)
+	require.NoError(t, err)
+	policyDigest, err := ComputePolicyDigest(policyBytes)
+	require.NoError(t, err)
+	control, err := DecodeControl(input.Current.Control)
+	require.NoError(t, err)
+	control.PolicyDigest = policyDigest
+	controlBytes, err := signControl(control, fixture.root.Signing)
+	require.NoError(t, err)
+	input.Current.Policy = policyBytes
+	input.Current.Control = controlBytes
+	input.PolicyDigest = policyDigest
+
+	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(input.RecoveryKit, input.VaultID)
+	require.NoError(t, err)
+	assert.NotEqual(t, kitFingerprint, policy.RecoveryAnchor, "hostile policy must carry the root fingerprint")
+	_, positionErr := validateExportPosition(input.VaultID, input.AnchorFingerprint, kitFingerprint, input.Current)
+	assert.ErrorIs(t, positionErr, ErrAuthorization, "export position accepted a root fingerprint as the policy kit anchor")
+
+	_, err = EncodeExportArchive(input)
+	require.ErrorIs(t, err, ErrExportPolicy)
+	assert.Contains(t, err.Error(), "current position", "export refused the policy for an unrelated validation failure")
+}
+
 func TestReadExportArchiveRoundTripsTwoDistinctReferencedBlobs(t *testing.T) {
 	input, fixture := exportTestInput(t)
 	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
