@@ -11,7 +11,8 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 10
+const LatestSchemaVersion = 13
+const MaxLocalHistoryTargets = 4096
 const PayloadRetention = "Pruning requires classified material below the oldest retained recovery-point boundary, no retained-point association, no base, intent or conflict reference, and an expired verified journal backup when pruning a backup."
 const RetentionPruneScope = "Epoch-scoped material pruning requires complete payload and backup associations for every retained recovery point; the current sync path does not yet populate those inventories."
 
@@ -20,6 +21,12 @@ var ErrUnsupportedSchema = errors.New("unsupported state schema")
 var ErrTargetBindingChanged = errors.New("target binding changed")
 var ErrCheckpointBackwards = errors.New("vault checkpoint update would move backwards")
 var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
+var ErrAuthenticatedPositionEvidenceNotFound = errors.New("authenticated position evidence not found")
+var ErrAuthenticatedPositionEvidenceAmbiguous = errors.New("authenticated position evidence is ambiguous at epoch")
+var ErrAuthenticatedPositionHistoryConflict = errors.New("authenticated position history identity conflicts with stored evidence")
+var ErrVaultSelectionExists = errors.New("vault selection already exists")
+var ErrOnboardingStateConflict = errors.New("onboarding state conflicts with existing local vault state")
+var ErrVaultSelectionNotFound = errors.New("vault selection not found")
 var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
 var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
@@ -170,6 +177,23 @@ type BaseRecord struct {
 	RecordedAt  int64
 }
 
+type JournalHistoryCount struct {
+	State string
+	Stage string
+	Count int64
+}
+
+type LocalHistorySummary struct {
+	TargetID            string
+	JournalCounts       []JournalHistoryCount
+	JournalCount        int64
+	LatestJournalState  string
+	LatestJournalStage  string
+	AppliedBaseCount    int64
+	AppliedBaseRecorded int64
+	AppliedBaseDigest   string
+}
+
 type Intent struct {
 	ID         string
 	Identity   model.EntryKey
@@ -195,6 +219,12 @@ type Checkpoint struct {
 	RecordedAt int64
 }
 
+type VaultSelection struct {
+	Vault      [32]byte
+	DeviceID   string
+	RecordedAt int64
+}
+
 type VaultCheckpoint struct {
 	Vault        [32]byte
 	Anchor       [32]byte
@@ -204,6 +234,18 @@ type VaultCheckpoint struct {
 	Epoch        uint64
 	PolicyDigest [32]byte
 	RecordedAt   int64
+}
+
+type AuthenticatedPositionEvidence struct {
+	Vault              [32]byte
+	Epoch              uint64
+	PolicyDigest       [32]byte
+	Policy             []byte
+	Control            []byte
+	Head               []byte
+	Snapshot           []byte
+	Certificates       [][]byte
+	CheckpointPosition []byte
 }
 
 type VaultPublicationObservation struct {

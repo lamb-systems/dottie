@@ -15,11 +15,12 @@ selection therefore does not require a hand-built key list, and catalog data sti
 cannot name arbitrary keys.
 
 `Materialize` returns a configuration proposal and never writes it. GNOME
-materialization is rejected with a structured `ErrSourceNotMaterializable` reason:
-local configuration has no persisted category policy yet, and materializing a GNOME
-target without one would let a later catalog or matrix expansion silently widen an
-approved selection. Preview carries the resolved references and matrix version so that
-later persistence can bind the approval to them. That persistence belongs to DOT-P06.
+materialization is permitted only when a stored, approved policy exactly matches the
+catalog category IDs, current matrix version and digest of the resolved schema/path/key
+set. Pending, absent or mismatched approval returns typed `ErrReapprovalRequired`; it
+never replaces or widens the stored selection. Preview carries the resolved references,
+matrix version and lowercase key-set digest so a later explicit local approval can bind
+them. A changed matrix therefore requires re-approval.
 Each new file target has an empty mode and inherits the destination default, which may
 be `auto-apply`; presets cannot grant or widen consent. Proposed roots pass both `config.CheckAddition` and
 `config.Config.Validate`. Existing identical logical roots are no-ops that preserve

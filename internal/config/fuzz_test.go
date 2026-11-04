@@ -78,7 +78,7 @@ func pathsAreWithin(root string, paths platform.Paths) bool {
 func knownInvalidTOML() []string {
 	return []string{
 		"config_version = 1\nfuture_key = true\n",
-		"config_version = 2\n",
+		"config_version = 3\n",
 		"config_version = 'one'\n",
 		"config_version = 1\n[defaults]\nmode = 'prompt'\n",
 		"config_version = 1\n[[targets]]\nid = 'files'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = '../outside'\nkind = 'directory'\n",

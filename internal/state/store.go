@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/multiformats/go-multihash"
 )
 
@@ -288,6 +290,111 @@ func (s *Store) AppliedBase(ctx context.Context, targetID string) ([]BaseRecord,
 	return records, err
 }
 
+func (s *Store) LocalHistorySummaries(ctx context.Context, maxTargets int) ([]LocalHistorySummary, error) {
+	if maxTargets < 1 || maxTargets > MaxLocalHistoryTargets {
+		return nil, errors.New("invalid local history summary bound")
+	}
+	const maxJournalGroupsPerTarget = 16
+	var summaries []LocalHistorySummary
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		var targetCount int
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM (
+			SELECT target_id FROM apply_journal UNION SELECT target_id FROM applied_base
+		)`).Scan(&targetCount); err != nil {
+			return err
+		}
+		if targetCount > maxTargets {
+			return errors.New("local history target limit exceeded")
+		}
+		targets := make(map[string]int, targetCount)
+		journalGroups := 0
+		rows, err := conn.QueryContext(ctx, `SELECT target_id, state, stage, COUNT(*) FROM apply_journal GROUP BY target_id, state, stage ORDER BY target_id, state, stage LIMIT ?`, maxTargets*maxJournalGroupsPerTarget+1)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			journalGroups++
+			var targetID, stateName, stage string
+			var count int64
+			if err := rows.Scan(&targetID, &stateName, &stage, &count); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			index, exists := targets[targetID]
+			if !exists {
+				index = len(summaries)
+				targets[targetID] = index
+				summaries = append(summaries, LocalHistorySummary{TargetID: targetID})
+			}
+			summaries[index].JournalCounts = append(summaries[index].JournalCounts, JournalHistoryCount{State: stateName, Stage: stage, Count: count})
+			summaries[index].JournalCount += count
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if journalGroups > maxTargets*maxJournalGroupsPerTarget {
+			return errors.New("local history journal summary limit exceeded")
+		}
+		rows, err = conn.QueryContext(ctx, `SELECT target_id, COUNT(*), MAX(recorded_at) FROM applied_base GROUP BY target_id ORDER BY target_id LIMIT ?`, maxTargets+1)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var targetID string
+			var count, latestRecorded int64
+			if err := rows.Scan(&targetID, &count, &latestRecorded); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if len(targets) == 0 {
+				targets[targetID] = len(summaries)
+				summaries = append(summaries, LocalHistorySummary{TargetID: targetID})
+			} else if _, exists := targets[targetID]; !exists {
+				targets[targetID] = len(summaries)
+				summaries = append(summaries, LocalHistorySummary{TargetID: targetID})
+			}
+			index := targets[targetID]
+			summaries[index].AppliedBaseCount = count
+			summaries[index].AppliedBaseRecorded = latestRecorded
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for index := range summaries {
+			if summaries[index].AppliedBaseCount == 0 {
+				continue
+			}
+			if err := conn.QueryRowContext(ctx, `SELECT digest FROM applied_base WHERE target_id = ? ORDER BY recorded_at DESC, rowid DESC LIMIT 1`, summaries[index].TargetID).Scan(&summaries[index].AppliedBaseDigest); err != nil {
+				return err
+			}
+		}
+		for index := range summaries {
+			var stateName, stage string
+			err := conn.QueryRowContext(ctx, `SELECT state, stage FROM apply_journal WHERE target_id = ? ORDER BY rowid DESC LIMIT 1`, summaries[index].TargetID).Scan(&stateName, &stage)
+			if err == nil {
+				summaries[index].LatestJournalState = stateName
+				summaries[index].LatestJournalStage = stage
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(summaries, func(i, j int) bool { return summaries[i].TargetID < summaries[j].TargetID })
+	return summaries, nil
+}
+
 func (s *Store) AppendIntent(ctx context.Context, intent Intent, payload []byte) (Intent, error) {
 	if err := validateID(intent.ID, "intent id"); err != nil {
 		return Intent{}, err
@@ -429,6 +536,70 @@ func (s *Store) Checkpoints(ctx context.Context) ([]Checkpoint, error) {
 	return values, err
 }
 
+func (s *Store) PutVaultSelection(ctx context.Context, selection VaultSelection) error {
+	if selection.Vault == ([32]byte{}) || selection.RecordedAt < 0 || validateID(selection.DeviceID, "device id") != nil || len(selection.DeviceID) > vault.MaxDeviceIDBytes {
+		return errors.New("invalid vault selection")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var exists int
+		err := tx.QueryRowContext(ctx, "SELECT 1 FROM vault_selections WHERE vault = ? AND device_id = ?", selection.Vault[:], selection.DeviceID).Scan(&exists)
+		if err == nil {
+			return ErrVaultSelectionExists
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO vault_selections(vault, device_id, recorded_at) VALUES (?, ?, ?)", selection.Vault[:], selection.DeviceID, selection.RecordedAt)
+		return err
+	})
+}
+
+func (s *Store) VaultSelections(ctx context.Context) ([]VaultSelection, error) {
+	return s.readVaultSelections(ctx, 0)
+}
+
+func (s *Store) VaultSelectionsBounded(ctx context.Context, maxSelections int) ([]VaultSelection, error) {
+	if maxSelections < 1 || maxSelections > MaxLocalHistoryTargets {
+		return nil, errors.New("invalid vault selection bound")
+	}
+	return s.readVaultSelections(ctx, maxSelections)
+}
+
+func (s *Store) readVaultSelections(ctx context.Context, maxSelections int) ([]VaultSelection, error) {
+	selections := make([]VaultSelection, 0)
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		query := "SELECT vault, device_id, recorded_at FROM vault_selections ORDER BY vault, device_id"
+		var rows *sql.Rows
+		var err error
+		if maxSelections > 0 {
+			rows, err = conn.QueryContext(ctx, query+" LIMIT ?", maxSelections+1)
+		} else {
+			rows, err = conn.QueryContext(ctx, query)
+		}
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var selection VaultSelection
+			var vaultID []byte
+			if err := rows.Scan(&vaultID, &selection.DeviceID, &selection.RecordedAt); err != nil {
+				return err
+			}
+			if len(vaultID) != len(selection.Vault) || selection.RecordedAt < 0 || validateID(selection.DeviceID, "device id") != nil || len(selection.DeviceID) > vault.MaxDeviceIDBytes {
+				return errors.New("stored vault selection is malformed")
+			}
+			copy(selection.Vault[:], vaultID)
+			selections = append(selections, selection)
+			if maxSelections > 0 && len(selections) > maxSelections {
+				return errors.New("vault selection limit exceeded")
+			}
+		}
+		return rows.Err()
+	})
+	return selections, err
+}
+
 func (s *Store) PutVaultCheckpoint(ctx context.Context, checkpoint VaultCheckpoint) error {
 	if len(checkpoint.ControlCID) == 0 || len(checkpoint.ControlCID) > 128 || len(checkpoint.ControlBytes) == 0 || len(checkpoint.SnapshotCID) > 128 || checkpoint.Epoch > uint64(^uint64(0)>>1) {
 		return errors.New("invalid vault checkpoint")
@@ -502,6 +673,575 @@ FROM vault_checkpoints WHERE vault = ?`, vault[:]).Scan(&storedVault, &anchor, &
 		return nil
 	})
 	return checkpoint, err
+}
+
+func (s *Store) PutAuthenticatedPositionEvidence(ctx context.Context, evidence AuthenticatedPositionEvidence) error {
+	certificates, err := validateAuthenticatedPositionEvidence(evidence)
+	if err != nil {
+		return err
+	}
+	if evidence.Epoch > uint64(^uint64(0)>>1) {
+		return errors.New("invalid authenticated position epoch")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := putAuthenticatedPositionEvidenceTx(ctx, tx, evidence, certificates); err != nil {
+			return err
+		}
+		return putAuthenticatedPositionHistoryTx(ctx, tx, evidence, certificates)
+	})
+}
+
+func (s *Store) PutAuthenticatedPositionHistory(ctx context.Context, evidence AuthenticatedPositionEvidence) error {
+	certificates, err := validateAuthenticatedPositionEvidence(evidence)
+	if err != nil {
+		return err
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		return putAuthenticatedPositionHistoryTx(ctx, tx, evidence, certificates)
+	})
+}
+
+func putAuthenticatedPositionHistoryTx(ctx context.Context, tx *sql.Tx, evidence AuthenticatedPositionEvidence, certificates [][]byte) error {
+	head, err := vault.DecodeHead(evidence.Head)
+	if err != nil {
+		return err
+	}
+	if len(head.SnapshotCID) == 0 {
+		return errors.New("authenticated position history head CID is missing")
+	}
+	var policyBytes, controlBytes, headBytes, snapshotBytes, checkpointPosition []byte
+	err = tx.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+FROM authenticated_position_history WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ?`,
+		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID).Scan(&policyBytes, &controlBytes, &headBytes, &snapshotBytes, &checkpointPosition)
+	if err == nil {
+		if !bytes.Equal(policyBytes, evidence.Policy) || !bytes.Equal(controlBytes, evidence.Control) || !bytes.Equal(headBytes, evidence.Head) || !bytes.Equal(snapshotBytes, evidence.Snapshot) {
+			return ErrAuthenticatedPositionHistoryConflict
+		}
+		if len(checkpointPosition) != 0 && len(evidence.CheckpointPosition) != 0 && !bytes.Equal(checkpointPosition, evidence.CheckpointPosition) {
+			return ErrAuthenticatedPositionHistoryConflict
+		}
+		if len(checkpointPosition) == 0 && len(evidence.CheckpointPosition) != 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE authenticated_position_history SET checkpoint_position = ? WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ?`, evidence.CheckpointPosition, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID); err != nil {
+				return err
+			}
+		}
+		return comparePositionHistoryCertificates(ctx, tx, evidence, head.SnapshotCID, certificates)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_history(vault, epoch, policy_digest, head_cid, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID,
+		evidence.Policy, evidence.Control, evidence.Head, evidence.Snapshot, nullableBytes(evidence.CheckpointPosition)); err != nil {
+		return err
+	}
+	for index, certificate := range certificates {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_history_certificates(vault, epoch, policy_digest, head_cid, certificate_index, certificate_bytes)
+VALUES (?, ?, ?, ?, ?, ?)`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID, index, certificate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func comparePositionHistoryCertificates(ctx context.Context, tx *sql.Tx, evidence AuthenticatedPositionEvidence, headCID []byte, expected [][]byte) error {
+	rows, err := tx.QueryContext(ctx, `SELECT certificate_index, certificate_bytes FROM authenticated_position_history_certificates
+WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ? ORDER BY certificate_index`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], headCID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	index := 0
+	for rows.Next() {
+		var storedIndex int
+		var certificate []byte
+		if err := rows.Scan(&storedIndex, &certificate); err != nil {
+			return err
+		}
+		if index >= len(expected) || storedIndex != index || !bytes.Equal(certificate, expected[index]) {
+			return ErrAuthenticatedPositionHistoryConflict
+		}
+		index++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if index != len(expected) {
+		return ErrAuthenticatedPositionHistoryConflict
+	}
+	return nil
+}
+
+func (s *Store) AuthenticatedPositionHistory(ctx context.Context, vaultID [32]byte) ([]AuthenticatedPositionEvidence, error) {
+	positions := make([]AuthenticatedPositionEvidence, 0)
+	seen := make(map[string]struct{})
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+FROM authenticated_position_history WHERE vault = ? ORDER BY epoch, head_cid`, vaultID[:])
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var evidence AuthenticatedPositionEvidence
+			var digest []byte
+			evidence.Vault = vaultID
+			if err := rows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+				rows.Close()
+				return err
+			}
+			if len(digest) != len(evidence.PolicyDigest) {
+				rows.Close()
+				return errors.New("stored authenticated position history digest is malformed")
+			}
+			copy(evidence.PolicyDigest[:], digest)
+			certRows, certErr := conn.QueryContext(ctx, `SELECT certificate_index, certificate_bytes FROM authenticated_position_history_certificates
+WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ? ORDER BY certificate_index`, vaultID[:], evidence.Epoch, digest, mustPositionHeadCID(evidence.Head))
+			if certErr != nil {
+				rows.Close()
+				return certErr
+			}
+			for expectedIndex := 0; certRows.Next(); expectedIndex++ {
+				var index int
+				var certificate []byte
+				if err := certRows.Scan(&index, &certificate); err != nil {
+					certRows.Close()
+					rows.Close()
+					return err
+				}
+				if index != expectedIndex {
+					certRows.Close()
+					rows.Close()
+					return errors.New("stored authenticated position history certificate order is malformed")
+				}
+				evidence.Certificates = append(evidence.Certificates, bytes.Clone(certificate))
+			}
+			if err := certRows.Err(); err != nil {
+				certRows.Close()
+				rows.Close()
+				return err
+			}
+			if err := certRows.Close(); err != nil {
+				rows.Close()
+				return err
+			}
+			if _, err := validateAuthenticatedPositionEvidence(evidence); err != nil {
+				rows.Close()
+				return fmt.Errorf("stored authenticated position history is invalid: %w", err)
+			}
+			headCID := mustPositionHeadCID(evidence.Head)
+			seen[positionHistoryIdentity(evidence.Vault, evidence.Epoch, evidence.PolicyDigest, headCID)] = struct{}{}
+			positions = append(positions, cloneAuthenticatedPositionEvidence(evidence))
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		latestRows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+FROM authenticated_position_evidence WHERE vault = ? ORDER BY epoch`, vaultID[:])
+		if err != nil {
+			return err
+		}
+		defer latestRows.Close()
+		for latestRows.Next() {
+			var evidence AuthenticatedPositionEvidence
+			var digest []byte
+			evidence.Vault = vaultID
+			if err := latestRows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+				return err
+			}
+			if len(digest) != len(evidence.PolicyDigest) {
+				return errors.New("stored authenticated position digest is malformed")
+			}
+			copy(evidence.PolicyDigest[:], digest)
+			certRows, certErr := conn.QueryContext(ctx, `SELECT certificate_index, certificate_bytes FROM authenticated_position_certificates
+WHERE vault = ? AND epoch = ? AND policy_digest = ? ORDER BY certificate_index`, vaultID[:], evidence.Epoch, digest)
+			if certErr != nil {
+				return certErr
+			}
+			for expectedIndex := 0; certRows.Next(); expectedIndex++ {
+				var index int
+				var certificate []byte
+				if err := certRows.Scan(&index, &certificate); err != nil {
+					certRows.Close()
+					return err
+				}
+				if index != expectedIndex {
+					certRows.Close()
+					return errors.New("stored authenticated position certificate order is malformed")
+				}
+				evidence.Certificates = append(evidence.Certificates, bytes.Clone(certificate))
+			}
+			if err := certRows.Err(); err != nil {
+				certRows.Close()
+				return err
+			}
+			if err := certRows.Close(); err != nil {
+				return err
+			}
+			if _, err := validateAuthenticatedPositionEvidence(evidence); err != nil {
+				return fmt.Errorf("stored authenticated position evidence is invalid: %w", err)
+			}
+			headCID := mustPositionHeadCID(evidence.Head)
+			identity := positionHistoryIdentity(evidence.Vault, evidence.Epoch, evidence.PolicyDigest, headCID)
+			if _, exists := seen[identity]; exists {
+				for index := range positions {
+					if positionHistoryIdentity(positions[index].Vault, positions[index].Epoch, positions[index].PolicyDigest, mustPositionHeadCID(positions[index].Head)) != identity {
+						continue
+					}
+					if !sameAuthenticatedPositionContent(positions[index], evidence) || len(positions[index].CheckpointPosition) != 0 && len(evidence.CheckpointPosition) != 0 && !bytes.Equal(positions[index].CheckpointPosition, evidence.CheckpointPosition) {
+						return ErrAuthenticatedPositionHistoryConflict
+					}
+					if len(positions[index].CheckpointPosition) == 0 {
+						positions[index].CheckpointPosition = bytes.Clone(evidence.CheckpointPosition)
+					}
+					break
+				}
+				continue
+			}
+			seen[identity] = struct{}{}
+			positions = append(positions, cloneAuthenticatedPositionEvidence(evidence))
+		}
+		return latestRows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(positions, func(i, j int) bool {
+		if positions[i].Epoch != positions[j].Epoch {
+			return positions[i].Epoch < positions[j].Epoch
+		}
+		left, _ := vault.DecodeHead(positions[i].Head)
+		right, _ := vault.DecodeHead(positions[j].Head)
+		if left.PublicationCount != right.PublicationCount {
+			return left.PublicationCount < right.PublicationCount
+		}
+		return bytes.Compare(left.SnapshotCID, right.SnapshotCID) < 0
+	})
+	return positions, nil
+}
+
+func mustPositionHeadCID(encoded []byte) []byte {
+	head, err := vault.DecodeHead(encoded)
+	if err != nil {
+		return nil
+	}
+	return bytes.Clone(head.SnapshotCID)
+}
+
+func positionHistoryIdentity(vaultID [32]byte, epoch uint64, digest [32]byte, headCID []byte) string {
+	return string(vaultID[:]) + string(binary.BigEndian.AppendUint64(nil, epoch)) + string(digest[:]) + string(headCID)
+}
+
+func sameAuthenticatedPositionContent(left, right AuthenticatedPositionEvidence) bool {
+	if left.Vault != right.Vault || left.Epoch != right.Epoch || left.PolicyDigest != right.PolicyDigest ||
+		!bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || !bytes.Equal(left.Snapshot, right.Snapshot) || len(left.Certificates) != len(right.Certificates) {
+		return false
+	}
+	for index := range left.Certificates {
+		if !bytes.Equal(left.Certificates[index], right.Certificates[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) ImportVaultOnboarding(ctx context.Context, selection VaultSelection, checkpoint VaultCheckpoint, predecessor AuthenticatedPositionEvidence) error {
+	if selection.Vault == ([32]byte{}) || selection.RecordedAt < 0 || validateID(selection.DeviceID, "device id") != nil || len(selection.DeviceID) > vault.MaxDeviceIDBytes {
+		return errors.New("invalid onboarding vault selection")
+	}
+	if len(checkpoint.ControlCID) == 0 || len(checkpoint.ControlCID) > 128 || len(checkpoint.ControlBytes) == 0 || len(checkpoint.SnapshotCID) == 0 || len(checkpoint.SnapshotCID) > 128 || checkpoint.Epoch == 0 || checkpoint.Epoch > uint64(^uint64(0)>>1) || checkpoint.RecordedAt < 0 {
+		return errors.New("invalid onboarding checkpoint")
+	}
+	if err := validateVaultCheckpointObject(checkpoint); err != nil {
+		return err
+	}
+	certificates, err := validateAuthenticatedPositionEvidence(predecessor)
+	if err != nil {
+		return err
+	}
+	if checkpoint.Vault != selection.Vault || predecessor.Vault != selection.Vault || checkpoint.Anchor == ([32]byte{}) || predecessor.Epoch+1 != checkpoint.Epoch {
+		return errors.New("onboarding state positions do not match")
+	}
+	control, err := vault.DecodeControl(checkpoint.ControlBytes)
+	if err != nil || !bytes.Equal(control.PrevControlCID, authenticatedPositionRawCID(predecessor.Control)) || !bytes.Equal(control.HeadSnapshotCID, checkpoint.SnapshotCID) {
+		return errors.New("onboarding checkpoint control does not follow predecessor evidence")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var exists int
+		err := tx.QueryRowContext(ctx, "SELECT 1 FROM vault_selections WHERE vault = ?", selection.Vault[:]).Scan(&exists)
+		if err == nil {
+			return ErrVaultSelectionExists
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		err = tx.QueryRowContext(ctx, "SELECT 1 FROM vault_checkpoints WHERE vault = ?", checkpoint.Vault[:]).Scan(&exists)
+		if err == nil {
+			return ErrOnboardingStateConflict
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO vault_selections(vault, device_id, recorded_at) VALUES (?, ?, ?)", selection.Vault[:], selection.DeviceID, selection.RecordedAt); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO vault_checkpoints(vault, anchor, control_cid, control_bytes, snapshot_cid, epoch, policy_digest, recorded_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, checkpoint.Vault[:], checkpoint.Anchor[:], checkpoint.ControlCID, checkpoint.ControlBytes, checkpoint.SnapshotCID, checkpoint.Epoch, checkpoint.PolicyDigest[:], checkpoint.RecordedAt); err != nil {
+			return err
+		}
+		if err := putAuthenticatedPositionEvidenceTx(ctx, tx, predecessor, certificates); err != nil {
+			return err
+		}
+		return putAuthenticatedPositionHistoryTx(ctx, tx, predecessor, certificates)
+	})
+}
+
+func putAuthenticatedPositionEvidenceTx(ctx context.Context, tx *sql.Tx, evidence AuthenticatedPositionEvidence, certificates [][]byte) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_evidence(vault, epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(vault, epoch, policy_digest) DO UPDATE SET policy_bytes=excluded.policy_bytes, control_bytes=excluded.control_bytes, head_bytes=excluded.head_bytes, snapshot_bytes=excluded.snapshot_bytes, checkpoint_position=excluded.checkpoint_position`,
+		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], evidence.Policy, evidence.Control, evidence.Head, evidence.Snapshot, nullableBytes(evidence.CheckpointPosition))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM authenticated_position_certificates WHERE vault = ? AND epoch = ? AND policy_digest = ?", evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:]); err != nil {
+		return err
+	}
+	for index, certificate := range certificates {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_certificates(vault, epoch, policy_digest, certificate_index, certificate_bytes)
+VALUES (?, ?, ?, ?, ?)`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], index, certificate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) AuthenticatedPositionEvidenceAtEpoch(ctx context.Context, vaultID [32]byte, epoch uint64) (AuthenticatedPositionEvidence, error) {
+	if epoch > uint64(^uint64(0)>>1) {
+		return AuthenticatedPositionEvidence{}, errors.New("invalid authenticated position epoch")
+	}
+	var evidence AuthenticatedPositionEvidence
+	evidence.Vault = vaultID
+	evidence.Epoch = epoch
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, "SELECT policy_digest FROM authenticated_position_evidence WHERE vault = ? AND epoch = ?", vaultID[:], epoch)
+		if err != nil {
+			return err
+		}
+		var digest []byte
+		if !rows.Next() {
+			rows.Close()
+			return ErrAuthenticatedPositionEvidenceNotFound
+		}
+		if err := rows.Scan(&digest); err != nil {
+			rows.Close()
+			return err
+		}
+		if rows.Next() {
+			rows.Close()
+			return ErrAuthenticatedPositionEvidenceAmbiguous
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(digest) != len(evidence.PolicyDigest) {
+			return errors.New("stored authenticated position digest is malformed")
+		}
+		copy(evidence.PolicyDigest[:], digest)
+		if err := conn.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, digest).Scan(&evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+			return err
+		}
+		rows, err = conn.QueryContext(ctx, `SELECT certificate_index, certificate_bytes
+FROM authenticated_position_certificates WHERE vault = ? AND epoch = ? AND policy_digest = ? ORDER BY certificate_index`, vaultID[:], epoch, digest)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for expectedIndex := 0; rows.Next(); expectedIndex++ {
+			var index int
+			var certificate []byte
+			if err := rows.Scan(&index, &certificate); err != nil {
+				return err
+			}
+			if index != expectedIndex {
+				return errors.New("stored authenticated position certificate order is malformed")
+			}
+			evidence.Certificates = append(evidence.Certificates, bytes.Clone(certificate))
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return AuthenticatedPositionEvidence{}, err
+	}
+	if _, err := validateAuthenticatedPositionEvidence(evidence); err != nil {
+		return AuthenticatedPositionEvidence{}, fmt.Errorf("stored authenticated position evidence is invalid: %w", err)
+	}
+	return cloneAuthenticatedPositionEvidence(evidence), nil
+}
+
+func (s *Store) AuthenticatedPositionEvidence(ctx context.Context, vaultID [32]byte, epoch uint64, policyDigest [32]byte) (AuthenticatedPositionEvidence, error) {
+	if epoch > uint64(^uint64(0)>>1) {
+		return AuthenticatedPositionEvidence{}, errors.New("invalid authenticated position epoch")
+	}
+	var evidence AuthenticatedPositionEvidence
+	evidence.Vault = vaultID
+	evidence.Epoch = epoch
+	evidence.PolicyDigest = policyDigest
+	err := s.query(ctx, func(conn *sql.Conn) error {
+		var digest []byte
+		if err := conn.QueryRowContext(ctx, `SELECT policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, policyDigest[:]).Scan(&digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrAuthenticatedPositionEvidenceNotFound
+			}
+			return err
+		}
+		if len(digest) != len(policyDigest) || !bytes.Equal(digest, policyDigest[:]) {
+			return errors.New("stored authenticated position digest is malformed")
+		}
+		rows, err := conn.QueryContext(ctx, `SELECT certificate_index, certificate_bytes
+FROM authenticated_position_certificates WHERE vault = ? AND epoch = ? AND policy_digest = ? ORDER BY certificate_index`, vaultID[:], epoch, policyDigest[:])
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for expectedIndex := 0; rows.Next(); expectedIndex++ {
+			var index int
+			var certificate []byte
+			if err := rows.Scan(&index, &certificate); err != nil {
+				return err
+			}
+			if index != expectedIndex {
+				return errors.New("stored authenticated position certificate order is malformed")
+			}
+			evidence.Certificates = append(evidence.Certificates, bytes.Clone(certificate))
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return AuthenticatedPositionEvidence{}, err
+	}
+	if _, err := validateAuthenticatedPositionEvidence(evidence); err != nil {
+		return AuthenticatedPositionEvidence{}, fmt.Errorf("stored authenticated position evidence is invalid: %w", err)
+	}
+	return cloneAuthenticatedPositionEvidence(evidence), nil
+}
+
+func validateAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidence) ([][]byte, error) {
+	if evidence.Epoch > uint64(^uint64(0)>>1) || len(evidence.Policy) == 0 || len(evidence.Policy) > vault.MaxPolicyObjectBytes || len(evidence.Control) == 0 || len(evidence.Control) > vault.MaxPolicyObjectBytes || len(evidence.Head) == 0 || len(evidence.Head) > vault.MaxPolicyObjectBytes || len(evidence.Snapshot) == 0 || len(evidence.Snapshot) > vault.MaxEnvelopeBytes || len(evidence.CheckpointPosition) > vault.MaxPolicyObjectBytes || len(evidence.Certificates) == 0 || len(evidence.Certificates) > vault.MaxRecipients {
+		return nil, errors.New("authenticated position evidence exceeds its bounds")
+	}
+	policy, err := vault.DecodePolicy(evidence.Policy)
+	if err != nil {
+		return nil, fmt.Errorf("invalid authenticated position policy: %w", err)
+	}
+	policyDigest, err := vault.ComputePolicyDigest(evidence.Policy)
+	if err != nil || policy.Vault != evidence.Vault || policy.EpochSeq != evidence.Epoch || policyDigest != evidence.PolicyDigest {
+		return nil, errors.New("authenticated position policy does not match its key")
+	}
+	control, err := vault.DecodeControl(evidence.Control)
+	if err != nil || control.Vault != evidence.Vault || control.EpochSeq != evidence.Epoch || control.PolicyDigest != evidence.PolicyDigest {
+		return nil, errors.New("authenticated position control does not match its key")
+	}
+	head, err := vault.DecodeHead(evidence.Head)
+	if err != nil || head.Vault != evidence.Vault || head.EpochSeq != evidence.Epoch || head.PolicyDigest != evidence.PolicyDigest {
+		return nil, errors.New("authenticated position head does not match its key")
+	}
+	envelope, err := vault.DecodeEnvelope(evidence.Snapshot)
+	if err != nil || envelope.Purpose != vault.PurposeSnapshot || envelope.Vault != evidence.Vault || envelope.EpochSeq != evidence.Epoch || envelope.PolicyDigest != evidence.PolicyDigest {
+		return nil, errors.New("authenticated position snapshot does not match its key")
+	}
+	snapshotCID := authenticatedPositionRawCID(evidence.Snapshot)
+	if len(snapshotCID) == 0 || !bytes.Equal(head.SnapshotCID, snapshotCID) || !bytes.Equal(head.BlobCID, snapshotCID) || !bytes.Equal(envelope.Parent, head.PrevHeadCID) || head.PublicationCount == 0 && !bytes.Equal(control.HeadSnapshotCID, head.SnapshotCID) {
+		return nil, errors.New("authenticated position head and snapshot do not match")
+	}
+	if len(evidence.CheckpointPosition) != 0 {
+		checkpoint, err := vault.DecodeCheckpoint(evidence.CheckpointPosition)
+		controlCID := authenticatedPositionRawCID(evidence.Control)
+		if err != nil || checkpoint.Vault != evidence.Vault || checkpoint.EpochSeq != evidence.Epoch || checkpoint.PolicyDigest != evidence.PolicyDigest || !bytes.Equal(checkpoint.ControlCID, controlCID) || !bytes.Equal(checkpoint.SnapshotCID, control.HeadSnapshotCID) {
+			return nil, errors.New("authenticated position checkpoint does not match its control position")
+		}
+	}
+	if len(policy.Recipients) != len(evidence.Certificates) {
+		return nil, errors.New("authenticated position certificate set does not match policy recipients")
+	}
+	certificates := make([][]byte, len(evidence.Certificates))
+	decodedCertificates := make([]vault.Certificate, len(evidence.Certificates))
+	seen := make(map[string]struct{}, len(evidence.Certificates))
+	for index, encoded := range evidence.Certificates {
+		if len(encoded) == 0 || len(encoded) > vault.MaxPolicyObjectBytes {
+			return nil, errors.New("authenticated position certificate exceeds its bound")
+		}
+		certificate, err := vault.DecodeCertificate(encoded)
+		if err != nil || certificate.Vault != evidence.Vault {
+			return nil, errors.New("authenticated position certificate is invalid")
+		}
+		identity := certificate.DeviceID + "\x00" + string(certificate.KeyID)
+		if _, duplicate := seen[identity]; duplicate {
+			return nil, errors.New("authenticated position certificate set contains a duplicate")
+		}
+		seen[identity] = struct{}{}
+		decodedCertificates[index] = certificate
+		certificates[index] = bytes.Clone(encoded)
+	}
+	sort.Slice(certificates, func(i, j int) bool {
+		left, _ := vault.DecodeCertificate(certificates[i])
+		right, _ := vault.DecodeCertificate(certificates[j])
+		if left.DeviceID != right.DeviceID {
+			return left.DeviceID < right.DeviceID
+		}
+		return bytes.Compare(left.KeyID, right.KeyID) < 0
+	})
+	for _, recipient := range policy.Recipients {
+		found := false
+		for _, certificate := range decodedCertificates {
+			if certificate.DeviceID == recipient.DeviceID && bytes.Equal(certificate.KeyID, recipient.KeyID) && bytes.Equal(certificate.EncryptionPublicKey[:], recipient.PublicKey[:]) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("authenticated position certificate does not match policy recipient")
+		}
+	}
+	return certificates, nil
+}
+
+func authenticatedPositionRawCID(data []byte) []byte {
+	digest, err := multihash.Sum(data, multihash.SHA2_256, -1)
+	if err != nil {
+		return nil
+	}
+	return cid.NewCidV1(cid.Raw, digest).Bytes()
+}
+
+func cloneAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidence) AuthenticatedPositionEvidence {
+	certificates := evidence.Certificates
+	evidence.Policy = bytes.Clone(evidence.Policy)
+	evidence.Control = bytes.Clone(evidence.Control)
+	evidence.Head = bytes.Clone(evidence.Head)
+	evidence.Snapshot = bytes.Clone(evidence.Snapshot)
+	evidence.CheckpointPosition = bytes.Clone(evidence.CheckpointPosition)
+	evidence.Certificates = make([][]byte, len(certificates))
+	for index := range certificates {
+		evidence.Certificates[index] = bytes.Clone(certificates[index])
+	}
+	return evidence
+}
+
+func nullableBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) RecordVaultEpochFirstSeen(ctx context.Context, vault [32]byte, epoch uint64, firstSeenAt int64) error {

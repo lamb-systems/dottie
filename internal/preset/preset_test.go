@@ -1,6 +1,7 @@
 package preset
 
 import (
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -280,6 +281,9 @@ func TestGNOMEPresetResolvesPublishedCategoryKeys(t *testing.T) {
 	assert.Equal(t, config.Review, preview.EffectiveMode)
 	require.Len(t, preview.Settings, 14)
 	assert.Equal(t, matrix.Version, preview.MatrixVersion)
+	keyDigest, err := matrix.KeySetDigest(preview.Settings)
+	require.NoError(t, err)
+	assert.Equal(t, hex.EncodeToString(keyDigest[:]), preview.KeyDigest)
 	for index := 1; index < len(preview.Settings); index++ {
 		previous, current := preview.Settings[index-1], preview.Settings[index]
 		assert.LessOrEqual(t, previous.SchemaID+"\x00"+previous.Path+"\x00"+previous.Key, current.SchemaID+"\x00"+current.Path+"\x00"+current.Key)
@@ -310,17 +314,57 @@ func TestGNOMEPresetRejectsInvalidCategorySelection(t *testing.T) {
 	}
 }
 
-func TestGNOMEPresetMaterializeRequiresLocalCategoryPolicy(t *testing.T) {
+func TestGNOMEPresetMaterializeRequiresMatchingStoredPolicy(t *testing.T) {
 	paths := testPaths(t)
 	preset, err := Lookup("gnome")
 	require.NoError(t, err)
 	_, err = Materialize(preset, config.Default(), paths)
-	require.ErrorIs(t, err, ErrSourceNotMaterializable)
-	var reason *UnsupportedReason
-	require.ErrorAs(t, err, &reason)
-	assert.Equal(t, model.SourceGNOME, reason.Source)
-	assert.Equal(t, "DOT-P06", reason.Boundary)
-	assert.Contains(t, err.Error(), "persisted local category policy")
+	require.ErrorIs(t, err, ErrReapprovalRequired)
+	var reapproval *ReapprovalError
+	require.ErrorAs(t, err, &reapproval)
+	assert.Empty(t, reapproval.TargetID)
+	assert.Contains(t, err.Error(), "re-approve")
+
+	keys, err := matrix.SelectCategories(preset.Categories)
+	require.NoError(t, err)
+	digest, err := matrix.KeySetDigest(keys)
+	require.NoError(t, err)
+	approved := config.Default()
+	approved.Targets = []config.Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &config.GNOMEPolicy{
+		Approval: config.GNOMEApprovalApproved, Categories: []string{"clock", "appearance", "fonts"},
+		MatrixVersion: matrix.Version, KeyDigest: hex.EncodeToString(digest[:]),
+	}}}
+	materialized, err := Materialize(preset, approved, paths)
+	require.NoError(t, err)
+	assert.Equal(t, approved, materialized)
+}
+
+func TestGNOMEPresetPolicyMismatchRequiresReapprovalWithoutWidening(t *testing.T) {
+	paths := testPaths(t)
+	preset, err := Lookup("gnome")
+	require.NoError(t, err)
+	keys, err := matrix.SelectCategories(preset.Categories)
+	require.NoError(t, err)
+	digest, err := matrix.KeySetDigest(keys)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name   string
+		policy config.GNOMEPolicy
+	}{
+		{name: "pending", policy: config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
+		{name: "category mismatch", policy: config.GNOMEPolicy{Approval: config.GNOMEApprovalApproved, Categories: []string{"appearance"}, MatrixVersion: matrix.Version, KeyDigest: hex.EncodeToString(digest[:])}},
+		{name: "matrix drift", policy: config.GNOMEPolicy{Approval: config.GNOMEApprovalApproved, Categories: append([]string(nil), preset.Categories...), MatrixVersion: matrix.Version + 1, KeyDigest: hex.EncodeToString(digest[:])}},
+		{name: "key drift", policy: config.GNOMEPolicy{Approval: config.GNOMEApprovalApproved, Categories: append([]string(nil), preset.Categories...), MatrixVersion: matrix.Version, KeyDigest: strings.Repeat("0", 64)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := config.Default()
+			current.Targets = []config.Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &test.policy}}
+			before := cloneConfig(current)
+			_, err := Materialize(preset, current, paths)
+			require.ErrorIs(t, err, ErrReapprovalRequired)
+			assert.Equal(t, before, current)
+		})
+	}
 }
 
 func TestHandBuiltPresetIsRevalidatedAtBothBoundaries(t *testing.T) {

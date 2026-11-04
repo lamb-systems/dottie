@@ -3,15 +3,46 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: target selection and consent policy persist locally.** Account authorization
-is available through `dottie account login`, `status` and `logout`; it stores OAuth
-sessions in the desktop Secret Service keyring. An opt-in internal GSettings capture
-and apply library is not wired to the CLI. A versioned category matrix publishes the
-appearance, font and clock keys that the GNOME preset resolves; GNOME category
-selection is not persisted yet. End-to-end synchronization, restore and the background
-service remain unimplemented. Native memory/null and isolated keyfile tests do not
-establish a production desktop provider. Account commands do not capture or synchronize
-data. Do not use this scaffold to back up real data.
+**Status: the coordinator-backed manual workflows now include history, ciphertext export and validation-only import.**
+Account authorization is available through `dottie account login`, `status` and `logout`;
+OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
+persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
+targets upgrade to pending re-approval without inferred categories. The coordinator owns
+verified reads, content-free preview, candidate-bound restore, recovery, local base recording,
+push/sync, device administration, history summaries, export and archive validation. Manual
+read/apply requires a local trust checkpoint and a signed-in account; GNOME apply requires a
+build with the `gsettings` tag and an available settings backend. Bootstrap generates a new
+recovery kit and vault every time and is not idempotent. Explicit multi-vault selection is
+supported by these local commands, not promised as a complete multi-vault product feature.
+
+`dottie history` reports local journal/applied-base summaries and checkpoint metadata without
+content, settings values, absolute paths or secrets. Without `--did`/`--handle` it works
+offline; with one account selector it attempts a verified read and reports `unavailable` or
+`auth-expired` distinctly while retaining exit 0. `dottie export --out FILE --kit-file FILE
+(--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]` writes a complete
+ciphertext-only archive through the coordinator's guarded atomic writer (0600). Existing
+outputs are refused unless `--overwrite` is explicit. Export authenticates its checkpoint
+with the supplied regular kit file, which must have no group/world access and decode to exactly
+32 bytes; the kit is cleared and never stored or archived. Export is complete only for its
+required authenticated closure and depends on the exporting machine having retained the
+authenticated history needed to prove every required predecessor. An onboarding device that
+has not observed prior publication heads can refuse export even when the current snapshot is
+available. Version-1 count-only attestations with nonzero retained-point counts cannot be
+enumerated and refuse export; no archive is written on refusal. `dottie import --archive FILE
+--kit-file FILE --anchor HEX --vault HEX` requires independent expected vault and anchor inputs
+plus the kit; it validates the archive in V06 order and changes no state, configuration, target
+or preference. Validation does not decrypt the snapshot or establish global freshness.
+
+The command exit codes are 0 for success (including history with remote unavailable), 2 for
+usage error, 3 for refusal/conflict/rejection, and 4 for queued, starved, fence-lost,
+superseded, unavailable or another partial/indeterminate push/sync/device outcome. Export
+succeeds with a complete required closure or refuses; it does not report a partial archive as
+success. Push/sync never apply downloaded files or settings; restore remains explicit.
+Signed retention attestations use schema version 2 to enumerate ordered recovery points while
+preserving version-1 count-only decoding; the tagged two-machine gate exercises export/import
+against a shared synthetic MemoryPDS. These offline tests do not establish live PDS compatibility
+or production desktop behavior. P06 remains subject to acceptance review; live PDS validation is
+P07/P08, and real user data must not be used as a fixture.
 
 ## Target design
 
@@ -70,7 +101,9 @@ keeps browser opening manual and `--timeout` accepts 1s–15m (default 5m). Stat
 offline with `--did`; `--refresh` is explicit. Local logout removes the local session;
 `--remote` additionally requests refresh-token revocation and reports only that the
 request was accepted. Account sessions require Secret Service and never fall back to
-files. These commands do not link synchronization or touch target data.
+files. These commands do not touch target data.
+
+Use `./bin/dottie push --did DID` to publish reconciled local changes or `./bin/dottie sync --did DID` to verify a pull and then push. Neither applies downloads; restore remains explicit. Push/sync/device command exit 0 is committed/no-op, 2 usage error, 3 refusal/conflict/rejection, and 4 queued or other partial/indeterminate non-success. `devices list`, root-only `devices enroll`/`revoke`, and newcomer `account import-bundle` transfer only public onboarding evidence. Recovery kit files must be regular files, decode to 32 bytes, and have group/world permissions removed (`chmod 600 FILE`); Dottie never stores the kit. See the CLI README for command flags and disclosures.
 
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
 `./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.
@@ -115,6 +148,12 @@ unrelated-settings check is cross-schema preservation, not key-level isolation w
 the schema being written. The 12-key older-surface case is a synthetic per-key subset,
 not evidence of support for older GNOME categories or automatic degradation.
 
+## Empty-remote two-machine gate
+
+Run `go test -count=1 -tags gsettings ./tests/local` for the offline S2b2 scenario. Publisher A bootstraps and publishes through the real genesis, publication and transition compositions over one shared `atprototest.MemoryPDS`; newcomer B has an independent temporary HOME/XDG tree, state store, fake keyring and device keys. Both use the real `atproto.VaultReader`. A publishes a review-mode file target and approved GNOME appearance category, enrolls B as restore-only and exports the public onboarding bundle. B imports it with the independently supplied anchor, authenticates the successor using imported predecessor evidence, then previews and restores exact file bytes/mode and GNOME present/reset intent through the coordinator. The gate also checks no-op publication/restore, restore-only and revoked-device push refusals, wrong-kit and wrong-anchor controls, stale predecessor refusal, fingerprint-confirmed revocation and historical decryption as a positive control.
+
+**Real versus simulated boundary:** repository signatures, CAR/revision reads, vault authentication/decryption, genesis/publication/transition compositions, MemoryPDS writes, coordinator policy and the native GNOME keyfile backend are real package code. MemoryPDS and all data are synthetic; homes, XDG paths, schemas, keys and settings are temporary. Keyfile operations run in short-lived helper processes so each machine gets an independently initialized process-global GSettings backend. No live PDS, CLI binary sequence, real account, real keyring, desktop session, dconf service or user preference is used. Full CLI-binary acceptance remains deferred to post-S3.
+
 ## Continuous integration
 
 GitHub Actions runs required checks on pull requests and pushes to `main`. The default
@@ -147,9 +186,7 @@ work; the source-comment policy remains a review concern, not an automated check
 | `lexicons`, `web` | Record definitions and static OAuth metadata |
 | `packaging`, `tests` | Distribution and integration coverage |
 
-The default executable remains the CLI and its unit tests. The opt-in GSettings
-capture and apply library is not wired into the CLI; account login/status/logout manage
-the OAuth session only.
+The default executable remains the CLI and its unit tests. Manual push/sync and device administration use the coordinator; restore remains explicit and journaled. Account login/status/logout manage OAuth sessions, and no background synchronization service is wired.
 Other component directories document their responsibilities. Presets, OAuth metadata
 and the systemd unit are draft examples, not functioning synchronization integrations
 or deployable configuration.

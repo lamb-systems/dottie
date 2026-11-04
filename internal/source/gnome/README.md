@@ -11,7 +11,16 @@ and deselected keys remain caller-owned `Untracked` decisions. The library does 
 enumerate schemas or infer coverage.
 
 A versioned category matrix in `internal/source/gnome/matrix` publishes the local
-selection units a GNOME preset may name. Matrix version 1 covers `appearance`,
+selection units a GNOME preset may name. Config version 2 stores each GNOME target's
+approval state, category IDs, matrix version and digest of its resolved schema/path/key
+set. A version-1 GNOME target upgrades as explicitly pending with no inferred categories.
+Preset materialization requires an exact match to the currently resolved selection;
+matrix or category drift requires local re-approval and cannot widen the stored set.
+The key-set digest is SHA-256 over the domain `dottie/v1/gnome-key-set\x00`, a
+big-endian 32-bit key count, then sorted schema ID, path and key fields, each encoded as
+a big-endian 32-bit byte length followed by UTF-8 bytes.
+
+Matrix version 1 covers `appearance`,
 `fonts` and `clock` with explicit schema, key and GVariant types. It was reviewed
 against the gsettings-desktop-schemas 51.0 surface; `ReviewedMin` is GNOME 42 and
 `ReviewedMax` is GNOME 51, while the product target remains GNOME 50. A key's `Since`
@@ -72,3 +81,9 @@ the GNOME 50 target and other architectures have not been empirically tested.
 The capture/`ReadUser` boundary bounds returned type and printed user-value sizes, but
 GLib allocates a printed user value before the boundary can reject an oversized value.
 The legacy `Read` API remains for tests and does not enforce that capture bound.
+
+The S2b2 two-machine gate uses the real keyfile backend for both isolated synthetic homes. Each
+machine's GNOME capture and apply operations run in short-lived helper processes because GLib's
+default GSettings backend is process-global. This is a keyfile integration proof with synthetic
+schemas and settings, not a production desktop session or user-preference test; the gate does not
+execute CLI wiring, and full CLI-binary acceptance is deferred to post-S3.

@@ -146,23 +146,29 @@ type CheckpointRecord struct {
 func (CheckpointRecord) LexiconID() string { return VaultCheckpointNSID }
 
 type AttestationRecord struct {
-	SchemaVersion          int64  `json:"schemaVersion"`
-	Vault                  []byte `json:"vault"`
-	DeviceID               string `json:"deviceId"`
-	PolicyDigest           []byte `json:"policyDigest"`
-	RetentionFloor         uint64 `json:"retentionFloor"`
-	RetainedRecoveryPoints uint16 `json:"retainedRecoveryPoints"`
-	ControlCID             []byte `json:"controlCid"`
-	SignerDeviceID         string `json:"signerDeviceId"`
-	SignerKeyID            []byte `json:"signerKeyId"`
-	Signature              []byte `json:"signature"`
+	SchemaVersion          int64                            `json:"schemaVersion"`
+	Vault                  []byte                           `json:"vault"`
+	DeviceID               string                           `json:"deviceId"`
+	PolicyDigest           []byte                           `json:"policyDigest"`
+	RetentionFloor         uint64                           `json:"retentionFloor"`
+	RetainedRecoveryPoints uint16                           `json:"retainedRecoveryPoints"`
+	RecoveryPoints         []AttestationRecoveryPointRecord `json:"recoveryPoints,omitempty"`
+	ControlCID             []byte                           `json:"controlCid"`
+	SignerDeviceID         string                           `json:"signerDeviceId"`
+	SignerKeyID            []byte                           `json:"signerKeyId"`
+	Signature              []byte                           `json:"signature"`
+}
+
+type AttestationRecoveryPointRecord struct {
+	Epoch       uint64 `json:"epoch"`
+	SnapshotCID []byte `json:"snapshotCid"`
 }
 
 func (AttestationRecord) LexiconID() string { return VaultAttestationNSID }
 
 const (
 	MaxRecordBytes   = vault.MaxPolicyObjectBytes
-	MaxRecordInteger = uint64(1<<53 - 1)
+	MaxRecordInteger = vault.MaxAttestationInteger
 )
 
 var ErrRecord = errors.New("invalid vault record")
@@ -322,7 +328,26 @@ func validateRecordIntegers(record Record) error {
 		}
 		return validateRecordIntegers(*value)
 	case AttestationRecord:
-		return check("retentionFloor", value.RetentionFloor)
+		if err := check("retentionFloor", value.RetentionFloor); err != nil {
+			return err
+		}
+		if value.SchemaVersion == 1 && len(value.RecoveryPoints) != 0 {
+			return &RecordDecodeError{Field: "recoveryPoints", Reason: "not allowed in schema version 1"}
+		}
+		if value.SchemaVersion == 2 && len(value.RecoveryPoints) != int(value.RetainedRecoveryPoints) {
+			return &RecordDecodeError{Field: "retainedRecoveryPoints", Reason: "count does not match recoveryPoints"}
+		}
+		for index, point := range value.RecoveryPoints {
+			if err := check("recoveryPoints.epoch", point.Epoch); err != nil {
+				return err
+			}
+			if len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > vault.MaxParentBytes {
+				return &RecordDecodeError{Field: "recoveryPoints.snapshotCid", Reason: "byte length out of range"}
+			}
+			if index > 0 && !attestationRecoveryPointLess(value.RecoveryPoints[index-1], point) {
+				return &RecordDecodeError{Field: "recoveryPoints", Reason: "duplicate or out-of-order recovery point"}
+			}
+		}
 	case *AttestationRecord:
 		if value == nil {
 			return &RecordDecodeError{Field: "record", Reason: "nil value"}
@@ -754,6 +779,9 @@ func verifyCheckpointBinding(value CheckpointRecord, object vault.Checkpoint) er
 }
 
 func verifyAttestationBinding(value AttestationRecord, object vault.Attestation) error {
+	if value.SchemaVersion != int64(object.SchemaVersion) {
+		return &RecordBindingError{Field: "schemaVersion"}
+	}
 	if err := bindingBytes("vault", value.Vault, object.Vault[:]); err != nil {
 		return err
 	}
@@ -768,6 +796,14 @@ func verifyAttestationBinding(value AttestationRecord, object vault.Attestation)
 	}
 	if uint64(value.RetainedRecoveryPoints) != uint64(object.RetainedRecoveryPoints) {
 		return &RecordBindingError{Field: "retainedRecoveryPoints"}
+	}
+	if len(value.RecoveryPoints) != len(object.RecoveryPoints) {
+		return &RecordBindingError{Field: "recoveryPoints"}
+	}
+	for index, point := range object.RecoveryPoints {
+		if value.RecoveryPoints[index].Epoch != point.Epoch || !bytes.Equal(value.RecoveryPoints[index].SnapshotCID, point.SnapshotCID) {
+			return &RecordBindingError{Field: "recoveryPoints"}
+		}
 	}
 	if err := bindingBytes("controlCid", value.ControlCID, object.ControlCID); err != nil {
 		return err

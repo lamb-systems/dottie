@@ -41,8 +41,9 @@ Four objects are signed. Fields are normative; encodings are in the envelope spe
 | **Head** | `v`, `vault`, `epoch_seq`, `policy_digest`, `snapshot_cid`, `blob_cid`, `publication_count`, `prev_head_cid`, `signer` |
 
 `control.head_snapshot_cid` names the snapshot the epoch **began** with, at the last administrative
-transition — not the live head. An ordinary publication advances the head within the epoch and writes no
-control record, so the two differ by design after the first publication. A reader requires the head's
+transition — not the live head. At genesis the control and count-zero head name the same canonical empty
+snapshot. An ordinary publication advances the head within the epoch and writes no control record, so the
+two differ by design after the first publication. A reader requires the head's
 `epoch_seq` and `policy_digest` to equal the control's, and must **not** require the snapshot identifiers
 to match: an earlier draft did, which made the first publication render the vault unreadable and block
 every later transition.
@@ -107,7 +108,7 @@ after a policy or epoch change.
 
 | Transition | Authority | Predecessor | Successor state | Atomic write set | Lost race |
 | --- | --- | --- | --- | --- | --- |
-| **Bootstrap** | recovery kit | none | `epoch_seq=0`, genesis policy, genesis control, genesis checkpoint, root certificate; **no snapshot exists yet and the head is the explicit empty marker**. The root certificate is **self-signed**; the kit signs the checkpoint that names its key fingerprint, and that fingerprint becomes `TrustAnchor`. | policy, control, certificate, checkpoint | re-read; kit signs again |
+| **Bootstrap** | recovery kit | none | `epoch_seq=0`, genesis policy, genesis control, genesis checkpoint, root certificate, count-zero head and canonical empty snapshot. The root certificate is **self-signed**; the kit signs the checkpoint naming the final control CID and snapshot CID, and the certificate fingerprint becomes `TrustAnchor`. | policy, control, certificate, checkpoint, snapshot blob reference, head | re-read; kit signs again |
 | **Enroll** | root | control C, epoch E | certificate for the new device, `epoch_seq=E+1`, new wrappers, head re-encrypted under E+1 | certificate record, snapshot blob ref, head, control, policy | discard, re-encrypt under E+1 |
 | **Publish** | publisher | control C, epoch E | head advances to the new snapshot and carries `publication_count+1`; epoch and control unchanged | snapshot blob ref, head | re-read, discard candidate |
 | **Policy change** | root | control C, epoch E | new policy document, `epoch_seq=E+1`, new key, new wrappers, head re-encrypted, **reissued certificates for any device whose role changed** | certificate records, snapshot blob ref, head, control, policy | discard, re-encrypt |

@@ -223,7 +223,7 @@ func TestConcurrentSaveAndLoadSupplemental(t *testing.T) {
 			defer group.Done()
 			for i := 0; i < 8; i++ {
 				value := Default()
-				value.Targets = []Target{{ID: fmt.Sprintf("writer-%d-%d", writer, i), Source: model.SourceGNOME}}
+				value.Targets = []Target{{ID: fmt.Sprintf("writer-%d-%d", writer, i), Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
 				if !assert.NoError(t, Save(paths, value), "Save") {
 					return
 				}

@@ -174,9 +174,26 @@ records and blob references, not blob payloads, so an envelope that exceeds the 
 membership budget is not made unverifiable by its own size; it is the record and membership counts that
 matter there, and those are defaults for the read path to revisit.
 
+## Attestation body schema versioning amendment (2026-11-06)
+
+The DTE header version remains the single global wire version `1` for every object kind. The
+retention attestation alone has a body schema version because its v2 form adds an ordered list
+without changing legacy v1 bytes. V1 attestation bodies retain their existing exact layout and
+count-only meaning. A v2 body begins with a big-endian uint16 schema version `2` after the DTE
+header, then carries the common attestation fields, the recovery-point count and ordered
+`{epoch u64, snapshot_cid uint16+bytes}` entries before control CID and signer. The existing
+retained-recovery-point count must equal the v2 list length. The object signature covers the
+body discriminator and every v2 field.
+
+Attestation decoding first accepts only a complete exact v1 layout, then attempts the v2 layout;
+unknown body versions, malformed lengths, non-canonical point ordering and trailing bytes are
+rejected. Re-encoding a decoded v1 attestation emits its original v1 layout, never an implicit
+upgrade. This per-object schema version does not change `wireVersion`, the object kind, or any
+other DTE encoding.
+
 ## Consequences
 
-An unknown `v` is rejected. A downgrade test replays a v0 envelope under a v1 label and expects refusal.
+An unknown DTE `v` is rejected. A downgrade test replays a v0 envelope under a v1 label and expects refusal.
 
 Random 192-bit nonces make reuse vanishingly unlikely, which is a probability rather than an impossibility;
 the specification states the probability.

@@ -60,8 +60,8 @@ func TestTargetsListEmptyAndPopulatedWithoutRootProbes(t *testing.T) {
 	current := config.Default()
 	current.Targets = []config.Target{
 		{ID: "offline", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "does-not-exist", Kind: model.SelectionDirectory, Exclude: []string{".git", ".git/**"}}},
-		{ID: "desktop", Source: model.SourceGNOME},
-		{ID: "line\nbreak", Source: model.SourceGNOME, Mode: config.BackupOnly},
+		{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
+		{ID: "line\nbreak", Source: model.SourceGNOME, Mode: config.BackupOnly, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
 	}
 	require.NoError(t, config.Save(paths, current))
 

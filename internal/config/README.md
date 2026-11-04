@@ -2,8 +2,9 @@
 
 The CLI persists target selections and destination-local consent in
 `$XDG_CONFIG_HOME/dottie/config.toml`. If `XDG_CONFIG_HOME` is unset, empty or
-relative, the standard `$HOME/.config` location is used. The file uses schema version 1;
-unknown keys and unsupported versions fail closed. Reading an absent file returns an
+relative, the standard `$HOME/.config` location is used. The file uses schema version 2;
+unknown keys and unsupported versions fail closed. Version-1 files upgrade in memory before
+validation, and version 2 is written. Reading an absent file returns an
 in-memory default and creates no directories or files. The configuration directory is
 owned by the current user and mode `0700`; the file is mode `0600`.
 
@@ -16,7 +17,7 @@ per-target mode override inherits the default, whose absent value means `review`
 A file target requires a root; a GNOME target is rootless. For example:
 
 ```toml
-config_version = 1
+config_version = 2
 
 [defaults]
 mode = "review"
@@ -30,11 +31,25 @@ base = "xdg-config"
 path = "nvim"
 kind = "directory"
 exclude = [".git", ".git/**"]
+
+[[targets]]
+id = "desktop"
+source = "gnome"
+
+[targets.gnome_policy]
+approval = "approved"
+categories = ["appearance", "fonts", "clock"]
+matrix_version = 1
+key_digest = "<64 lowercase hex characters>"
 ```
 
 Target identifiers are portable and remain part of snapshot identity, but local modes
 and excludes do not enter portable target records. Remote metadata cannot grant local
 filesystem access; roots are resolved from destination-local bases and relative paths.
+A GNOME target records its approval state, category IDs, matrix version and lowercase
+SHA-256 digest of resolved schema/path/key references. File targets cannot carry this
+policy. A pending policy is explicitly unapproved and has no categories, matrix version
+or digest.
 
 Whole-base selections are refused. A selected root must resolve inside one of the two
 portable bases, must not overlap another selected root, and must not equal, contain or
@@ -66,8 +81,12 @@ an explicit identifier is supplied. Normalized or truncated collisions are error
 portable target conversion retains its identifier, source and logical root while
 excluding modes and excludes.
 
+A version-1 GNOME target upgrades to version 2 with approval `pending`; no categories,
+keys or digest are inferred. Saving and loading preserve that state. It must be explicitly
+re-approved through a later local workflow before use. Version-1 configurations without
+GNOME targets upgrade without changing file selections.
+
 This component does not capture files or GNOME settings, interpret excludes, enforce
 consent modes, synchronize or restore data, load presets, remap devices, or support
-profiles and config migration. Multi-process writes are not locked and currently use
-last-writer-wins semantics. Locking must be implemented before consent modes are
-actively enforced.
+profiles. Multi-process writes are not locked and currently use last-writer-wins
+semantics. Locking must be implemented before consent modes are actively enforced.

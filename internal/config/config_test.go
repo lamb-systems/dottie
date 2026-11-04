@@ -60,6 +60,70 @@ func TestLoadAbsentDoesNotCreateState(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "Load created config directory")
 }
 
+func TestLoadUpgradesVersionOneWithoutInventingGNOMEApproval(t *testing.T) {
+	paths := testPaths(t)
+	writeRawConfig(t, paths, "config_version = 1\n[[targets]]\nid = 'desktop'\nsource = 'gnome'\n")
+
+	loaded, err := Load(paths)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), loaded.Version)
+	require.Len(t, loaded.Targets, 1)
+	assert.Equal(t, model.SourceGNOME, loaded.Targets[0].Source)
+	assert.Equal(t, &GNOMEPolicy{Approval: GNOMEApprovalPending}, loaded.Targets[0].GNOMEPolicy)
+	assert.Empty(t, loaded.Targets[0].GNOMEPolicy.Categories)
+	assert.Zero(t, loaded.Targets[0].GNOMEPolicy.MatrixVersion)
+	assert.Empty(t, loaded.Targets[0].GNOMEPolicy.KeyDigest)
+
+	filesOnly := testPaths(t)
+	writeRawConfig(t, filesOnly, "config_version = 1\n[[targets]]\nid = 'files'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'config'\nkind = 'directory'\n")
+	loaded, err = Load(filesOnly)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), loaded.Version)
+	require.Len(t, loaded.Targets, 1)
+	assert.Nil(t, loaded.Targets[0].GNOMEPolicy)
+}
+
+func TestPendingGNOMEApprovalRoundTripsThroughSaveAndLoad(t *testing.T) {
+	paths := testPaths(t)
+	current := Default()
+	current.Targets = []Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
+	require.NoError(t, Save(paths, current))
+	loaded, err := Load(paths)
+	require.NoError(t, err)
+	assert.Equal(t, current, loaded)
+	encoded, err := os.ReadFile(filepath.Join(paths.AppConfigDir(), FileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "approval = ")
+	assert.Contains(t, string(encoded), "pending")
+}
+
+func TestGNOMEPolicyValidationRequiresExactApprovalShape(t *testing.T) {
+	validDigest := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name   string
+		target Target
+	}{
+		{name: "missing policy", target: Target{ID: "desktop", Source: model.SourceGNOME}},
+		{name: "approved without categories", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalApproved, MatrixVersion: 1, KeyDigest: validDigest}}},
+		{name: "approved without matrix", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalApproved, Categories: []string{"appearance"}, KeyDigest: validDigest}}},
+		{name: "approved without digest", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalApproved, Categories: []string{"appearance"}, MatrixVersion: 1}}},
+		{name: "pending with categories", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending, Categories: []string{"appearance"}}}},
+		{name: "pending with matrix", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending, MatrixVersion: 1}}},
+		{name: "pending with digest", target: Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending, KeyDigest: validDigest}}},
+		{name: "files with GNOME policy", target: Target{ID: "files", Source: model.SourceFiles, Root: &Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := Default()
+			current.Targets = []Target{test.target}
+			assert.Error(t, current.Validate())
+		})
+	}
+
+	approved := Default()
+	approved.Targets = []Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalApproved, Categories: []string{"appearance", "clock"}, MatrixVersion: 1, KeyDigest: validDigest}}}
+	assert.NoError(t, approved.Validate())
+}
+
 func TestLoadSymlinkedRegularConfig(t *testing.T) {
 	paths := testPaths(t)
 	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
@@ -124,7 +188,7 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 	}{
 		{name: "unknown key", text: "config_version = 1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\nhook=true\n", want: "targets.root.hook"},
 		{name: "missing version", text: "[defaults]\nmode = 'review'\n", want: "version"},
-		{name: "unsupported version", text: "config_version = 2\n", want: "version"},
+		{name: "unsupported version", text: "config_version = 3\n", want: "version"},
 		{name: "wrong type", text: "config_version = 'one'\n", want: "decode"},
 		{name: "duplicate id", text: "config_version = 1\n[[targets]]\nid='same'\nsource='gnome'\n[[targets]]\nid='same'\nsource='gnome'\n", want: "duplicate"},
 		{name: "bad mode", text: "config_version=1\n[defaults]\nmode='prompt'\n", want: "mode"},
@@ -158,7 +222,7 @@ func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	target := filesTarget("nvim", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	target.Mode = AutoApply
 	target.Root.Exclude = []string{".git", ".git/**", ".git"}
-	c.Targets = []Target{target, {ID: "desktop", Source: model.SourceGNOME}}
+	c.Targets = []Target{target, {ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
 	require.NoError(t, Save(paths, c))
 
 	assert.Len(t, c.Targets[0].Root.Exclude, 3, "Save mutated the caller's excludes")
@@ -178,6 +242,7 @@ func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	assert.Equal(t, AutoApply, loaded.Targets[0].Mode, "round trip lost overrides")
 	assert.Empty(t, loaded.Targets[1].Mode, "round trip invented an override")
 	assert.Equal(t, []string{".git", ".git/**"}, loaded.Targets[0].Root.Exclude, "excludes")
+	assert.Equal(t, &GNOMEPolicy{Approval: GNOMEApprovalPending}, loaded.Targets[1].GNOMEPolicy, "pending GNOME approval")
 }
 
 func TestSaveRefusesUnsafePaths(t *testing.T) {

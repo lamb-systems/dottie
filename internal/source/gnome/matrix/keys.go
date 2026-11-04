@@ -1,6 +1,8 @@
 package matrix
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"sort"
 	"strings"
@@ -48,6 +50,37 @@ func validCapturePath(path string) bool {
 
 func SortKeys(keys []KeyRef) {
 	sort.Slice(keys, func(i, j int) bool { return keyRefLess(keys[i], keys[j]) })
+}
+
+func KeySetDigest(keys []KeyRef) ([32]byte, error) {
+	if len(keys) == 0 || len(keys) > MaxKeys {
+		return [32]byte{}, errors.New("invalid GSettings key set size")
+	}
+	canonical := append([]KeyRef(nil), keys...)
+	for _, key := range canonical {
+		if err := key.Validate(); err != nil {
+			return [32]byte{}, err
+		}
+	}
+	SortKeys(canonical)
+	for index := 1; index < len(canonical); index++ {
+		if canonical[index] == canonical[index-1] {
+			return [32]byte{}, errors.New("duplicate GSettings reference")
+		}
+	}
+	encoded := []byte("dottie/v1/gnome-key-set\x00")
+	var count [4]byte
+	binary.BigEndian.PutUint32(count[:], uint32(len(canonical)))
+	encoded = append(encoded, count[:]...)
+	for _, key := range canonical {
+		for _, field := range []string{key.SchemaID, key.Path, key.Key} {
+			var length [4]byte
+			binary.BigEndian.PutUint32(length[:], uint32(len(field)))
+			encoded = append(encoded, length[:]...)
+			encoded = append(encoded, field...)
+		}
+	}
+	return sha256.Sum256(encoded), nil
 }
 
 func keyRefLess(left, right KeyRef) bool {

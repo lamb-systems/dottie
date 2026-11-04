@@ -107,15 +107,23 @@ type Head struct {
 }
 
 type Attestation struct {
+	SchemaVersion          uint8
 	Vault                  [32]byte
 	DeviceID               string
 	PolicyDigest           [32]byte
 	RetentionFloor         uint64
 	RetainedRecoveryPoints uint16
+	RecoveryPoints         []RetentionRecoveryPoint
 	ControlCID             []byte
 	Signer                 Signer
 	Signature              [ed25519.SignatureSize]byte
 }
+
+const (
+	AttestationVersion1   uint8  = 1
+	AttestationVersion2   uint8  = 2
+	MaxAttestationInteger uint64 = 1<<53 - 1
+)
 
 func EncodePolicy(value Policy) ([]byte, error) {
 	prefix, err := encodePolicyPrefix(value)
@@ -297,11 +305,29 @@ func DecodeAttestation(data []byte) (Attestation, error) {
 	if len(data) > MaxPolicyObjectBytes {
 		return Attestation{}, fmt.Errorf("%w: attestation", ErrLimit)
 	}
-	if err := scanAttestation(data); err != nil {
-		return Attestation{}, err
+	version := AttestationVersion1
+	if legacyErr := scanAttestationV1(data); legacyErr != nil {
+		if len(data) >= 7 && data[5] == 0 {
+			bodyVersion := uint16(data[5])<<8 | uint16(data[6])
+			if bodyVersion == uint16(AttestationVersion2) {
+				if err := scanAttestationV2(data); err != nil {
+					return Attestation{}, err
+				}
+				version = AttestationVersion2
+			} else if bodyVersion > uint16(AttestationVersion2) {
+				return Attestation{}, fmt.Errorf("%w: attestation body version", ErrUnsupportedVersion)
+			} else {
+				return Attestation{}, legacyErr
+			}
+		} else {
+			return Attestation{}, legacyErr
+		}
 	}
 	cursor := wireCursor{data: data, offset: 5}
-	value := Attestation{}
+	value := Attestation{SchemaVersion: version}
+	if version == AttestationVersion2 {
+		_ = cursor.u16()
+	}
 	fixed, _ := cursor.take(32)
 	copy(value.Vault[:], fixed)
 	value.DeviceID = string(cursor.bytes16(MaxDeviceIDBytes))
@@ -309,6 +335,13 @@ func DecodeAttestation(data []byte) (Attestation, error) {
 	copy(value.PolicyDigest[:], fixed)
 	value.RetentionFloor = cursor.u64()
 	value.RetainedRecoveryPoints = cursor.u16()
+	if version == AttestationVersion2 {
+		count := int(cursor.u16())
+		value.RecoveryPoints = make([]RetentionRecoveryPoint, count)
+		for index := range value.RecoveryPoints {
+			value.RecoveryPoints[index] = RetentionRecoveryPoint{Epoch: cursor.u64(), SnapshotCID: cursor.bytes16(MaxParentBytes)}
+		}
+	}
 	value.ControlCID = cursor.bytes16(MaxParentBytes)
 	value.Signer = decodeSigner(&cursor)
 	fixed, _ = cursor.take(ed25519.SignatureSize)
@@ -522,12 +555,43 @@ func encodeAttestationPrefix(value Attestation) ([]byte, error) {
 	if err := validateSigner(value.Signer); err != nil {
 		return nil, err
 	}
+	version := attestationVersion(value)
+	if version != AttestationVersion1 && version != AttestationVersion2 {
+		return nil, fmt.Errorf("%w: attestation version", ErrUnsupportedVersion)
+	}
+	if version == AttestationVersion1 && len(value.RecoveryPoints) != 0 {
+		return nil, fmt.Errorf("%w: version 1 attestation has recovery points", ErrFormat)
+	}
+	if version == AttestationVersion2 {
+		if value.RetentionFloor > MaxAttestationInteger {
+			return nil, fmt.Errorf("%w: retention floor", ErrLimit)
+		}
+		if len(value.RecoveryPoints) > int(^uint16(0)) {
+			return nil, fmt.Errorf("%w: recovery points", ErrLimit)
+		}
+		if len(value.RecoveryPoints) != int(value.RetainedRecoveryPoints) {
+			return nil, fmt.Errorf("%w: retained recovery point count mismatch", ErrFormat)
+		}
+		if err := validateAttestationRecoveryPoints(value.RecoveryPoints); err != nil {
+			return nil, err
+		}
+	}
 	buffer := appendHeader(nil, objectKindAttestation)
+	if version == AttestationVersion2 {
+		buffer = appendU16(buffer, uint16(version))
+	}
 	buffer = append(buffer, value.Vault[:]...)
 	buffer = appendBytes16(buffer, []byte(value.DeviceID))
 	buffer = append(buffer, value.PolicyDigest[:]...)
 	buffer = appendU64(buffer, value.RetentionFloor)
 	buffer = appendU16(buffer, value.RetainedRecoveryPoints)
+	if version == AttestationVersion2 {
+		buffer = appendU16(buffer, uint16(len(value.RecoveryPoints)))
+		for _, point := range value.RecoveryPoints {
+			buffer = appendU64(buffer, point.Epoch)
+			buffer = appendBytes16(buffer, point.SnapshotCID)
+		}
+	}
 	buffer = appendBytes16(buffer, value.ControlCID)
 	buffer = appendSigner(buffer, value.Signer)
 	return limitObject(buffer)
@@ -680,7 +744,7 @@ func scanCheckpoint(data []byte) error {
 	return finishObjectScan(&cursor, data)
 }
 
-func scanAttestation(data []byte) error {
+func scanAttestationV1(data []byte) error {
 	cursor := wireCursor{data: data, offset: 5}
 	if !cursor.skip(32) {
 		return cursor.err
@@ -698,6 +762,88 @@ func scanAttestation(data []byte) error {
 		return err
 	}
 	return finishObjectScan(&cursor, data)
+}
+
+func scanAttestationV2(data []byte) error {
+	cursor := wireCursor{data: data, offset: 5}
+	if version := cursor.u16(); cursor.err != nil || version != uint16(AttestationVersion2) {
+		return fmt.Errorf("%w: attestation body version", ErrUnsupportedVersion)
+	}
+	if !cursor.skip(32) {
+		return cursor.err
+	}
+	if err := scanString16(&cursor, MaxDeviceIDBytes); err != nil {
+		return err
+	}
+	if !cursor.skip(32) {
+		return cursor.err
+	}
+	retentionFloor := cursor.u64()
+	if cursor.err != nil {
+		return cursor.err
+	}
+	if retentionFloor > MaxAttestationInteger {
+		return fmt.Errorf("%w: retention floor", ErrLimit)
+	}
+	count := cursor.u16()
+	pointCount := int(cursor.u16())
+	if cursor.err != nil {
+		return cursor.err
+	}
+	if pointCount != int(count) {
+		return fmt.Errorf("%w: retained recovery point count mismatch", ErrFormat)
+	}
+	var previous RetentionRecoveryPoint
+	for index := 0; index < pointCount; index++ {
+		point := RetentionRecoveryPoint{Epoch: cursor.u64()}
+		if cursor.err != nil {
+			return cursor.err
+		}
+		cidField := cursor.length16(MaxParentBytes)
+		if !cidField.ok {
+			return cidField.err
+		}
+		point.SnapshotCID = cursor.data[cidField.start : cidField.start+cidField.length]
+		if len(point.SnapshotCID) == 0 || point.Epoch > MaxAttestationInteger {
+			return fmt.Errorf("%w: recovery point bounds", ErrLimit)
+		}
+		if index > 0 && !retentionRecoveryPointLess(previous, point) {
+			return fmt.Errorf("%w: recovery points are duplicate or out of order", ErrFormat)
+		}
+		previous = point
+	}
+	if err := scanBytes16(&cursor, MaxParentBytes); err != nil {
+		return err
+	}
+	if err := scanSigner(&cursor); err != nil {
+		return err
+	}
+	return finishObjectScan(&cursor, data)
+}
+
+func attestationVersion(value Attestation) uint8 {
+	if value.SchemaVersion != 0 {
+		return value.SchemaVersion
+	}
+	if len(value.RecoveryPoints) != 0 {
+		return AttestationVersion2
+	}
+	return AttestationVersion1
+}
+
+func validateAttestationRecoveryPoints(points []RetentionRecoveryPoint) error {
+	if len(points) > int(^uint16(0)) {
+		return fmt.Errorf("%w: recovery points", ErrLimit)
+	}
+	for index, point := range points {
+		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > MaxParentBytes {
+			return fmt.Errorf("%w: recovery point bounds", ErrLimit)
+		}
+		if index > 0 && !retentionRecoveryPointLess(points[index-1], point) {
+			return fmt.Errorf("%w: recovery points are duplicate or out of order", ErrFormat)
+		}
+	}
+	return nil
 }
 
 func scanSigner(cursor *wireCursor) error {

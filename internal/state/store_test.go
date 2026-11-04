@@ -1,15 +1,20 @@
 package state
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -18,6 +23,7 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/multiformats/go-multihash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +53,63 @@ func openTestStore(t *testing.T, paths platform.Paths) *Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func TestLocalHistorySummariesAreBoundedAndRedacted(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	ctx := context.Background()
+	require.NoError(t, store.PutTarget(ctx, testDescriptor()))
+	secondDescriptor := testDescriptor()
+	secondDescriptor.ID = "other"
+	secondDescriptor.LogicalPath = "other"
+	require.NoError(t, store.PutTarget(ctx, secondDescriptor))
+	identity := fileIdentity("prefs.toml")
+	before, after := []byte("synthetic before"), []byte("synthetic after")
+	_, err := store.AppendJournal(ctx, JournalEntry{
+		ID: "history-journal", Operation: "replace", State: "pending", Stage: JournalStagePending,
+		Identity: identity, Preimage: NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", before),
+		Postimage: NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", after), CreatedAt: 12,
+	}, before)
+	require.NoError(t, err)
+	err = store.TransitionJournalEntry(ctx, "history-journal", "pending", "applied", JournalStageVerified)
+	require.NoError(t, err)
+	base, err := store.PutAppliedBase(ctx, BaseRecord{
+		Identity: identity, Fingerprint: NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", after), RecordedAt: 15,
+	}, after)
+	require.NoError(t, err)
+	for index := byte(1); index <= 2; index++ {
+		var vaultID [32]byte
+		vaultID[0] = index
+		require.NoError(t, store.PutVaultSelection(ctx, VaultSelection{Vault: vaultID, DeviceID: "device", RecordedAt: int64(index)}))
+	}
+	_, err = store.VaultSelectionsBounded(ctx, 1)
+	assert.ErrorContains(t, err, "selection limit")
+
+	secondIdentity := fileIdentity("second.toml")
+	secondIdentity.TargetID = "other"
+	_, err = store.PutAppliedBase(ctx, BaseRecord{
+		Identity: secondIdentity, Fingerprint: NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("second")), RecordedAt: 20,
+	}, []byte("second"))
+	require.NoError(t, err)
+
+	summaries, err := store.LocalHistorySummaries(ctx, 2)
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+	target := summaries[1]
+	require.Equal(t, "target", target.TargetID)
+	assert.Equal(t, int64(1), target.JournalCount)
+	assert.Equal(t, []JournalHistoryCount{{State: "applied", Stage: JournalStageVerified, Count: 1}}, target.JournalCounts)
+	assert.Equal(t, "applied", target.LatestJournalState)
+	assert.Equal(t, JournalStageVerified, target.LatestJournalStage)
+	assert.Equal(t, int64(1), target.AppliedBaseCount)
+	assert.Equal(t, int64(15), target.AppliedBaseRecorded)
+	assert.Equal(t, base.Fingerprint.Digest, target.AppliedBaseDigest)
+	assert.NotContains(t, fmt.Sprintf("%+v", target), string(after))
+	assert.NotContains(t, fmt.Sprintf("%+v", target), "prefs.toml")
+	_, err = store.LocalHistorySummaries(ctx, 1)
+	assert.ErrorContains(t, err, "target limit")
+	_, err = store.LocalHistorySummaries(ctx, 0)
+	assert.Error(t, err)
 }
 
 func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
@@ -83,7 +146,7 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations", "retention_declarations", "retention_recovery_points", "retention_declaration_history", "retention_declaration_history_points", "retention_recovery_material"} {
+	for _, table := range []string{"schema_version", "targets", "applied_base", "outbound_intent", "conflicts", "checkpoints", "apply_journal", "transition_attempts", "vault_checkpoints", "vault_publication_observations", "retention_declarations", "retention_recovery_points", "retention_declaration_history", "retention_declaration_history_points", "retention_recovery_material", "authenticated_position_evidence", "authenticated_position_certificates", "vault_selections", "authenticated_position_history", "authenticated_position_history_certificates"} {
 		assert.True(t, tables[table], "missing table %s", table)
 	}
 
@@ -97,6 +160,20 @@ func TestFreshOpenPermissionsSchemaAndPragmas(t *testing.T) {
 	assert.Equal(t, 2, synchronous)
 	assert.Equal(t, 1, foreignKeys)
 	assert.Equal(t, 5000, busyTimeout)
+}
+
+func TestVaultSelectionsAreUniqueAndRoundTrip(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	selection := VaultSelection{Vault: [32]byte{1}, DeviceID: "device-a", RecordedAt: 123}
+	require.NoError(t, store.PutVaultSelection(context.Background(), selection))
+	assert.ErrorIs(t, store.PutVaultSelection(context.Background(), selection), ErrVaultSelectionExists)
+	secondDevice := VaultSelection{Vault: selection.Vault, DeviceID: "device-b", RecordedAt: 124}
+	require.NoError(t, store.PutVaultSelection(context.Background(), secondDevice))
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []VaultSelection{selection, secondDevice}, selections)
+	assert.Error(t, store.PutVaultSelection(context.Background(), VaultSelection{DeviceID: "device-b", RecordedAt: 123}))
+	assert.Error(t, store.PutVaultSelection(context.Background(), VaultSelection{Vault: [32]byte{2}, DeviceID: "device-c", RecordedAt: -1}))
 }
 
 func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testing.T) {
@@ -129,6 +206,127 @@ func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testin
 	stored, err = reopened.VaultCheckpoint(context.Background(), checkpoint.Vault)
 	require.NoError(t, err)
 	assert.Equal(t, checkpoint, stored, "checkpoint control bytes survive restart")
+}
+
+func TestAuthenticatedPositionEvidenceRoundTripsWithDeterministicCertificates(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	genesis, root, kit := stateGenesisFixture(t)
+	publisher := stateDeviceFixture(t, "z-position-publisher", "z-position-publisher-key", 12, 22)
+	predecessor := vault.Predecessor{
+		ControlCID: bytes.Clone(genesis.ControlCID), PolicyDigest: genesis.PolicyDigest, EpochSeq: 0,
+		HeadCID: bytes.Clone(genesis.SnapshotCID), Head: bytes.Clone(genesis.Head), Control: bytes.Clone(genesis.Control),
+		Policy: bytes.Clone(genesis.Policy), Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, TrustAnchor: genesis.Anchor,
+	}
+	packed, err := vault.Pack(model.Snapshot{Version: model.SnapshotVersion})
+	require.NoError(t, err)
+	transition, err := vault.PrepareTransition(predecessor, vault.TransitionIntent{
+		Kind: vault.TransitionEnroll, Vault: genesis.Vault, Signer: root, NewDevice: &publisher, RequestedRole: vault.RolePublisher,
+		ContentKey: bytes.Repeat([]byte{41}, 32), Recipients: [][]byte{bytes.Clone(genesis.Certificate)},
+		Wraps: []vault.RecipientWrapInput{
+			{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(bytes.Repeat([]byte{31}, 32)), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24))},
+			{KeyID: bytes.Clone(publisher.KeyID), EphemeralPrivate: [32]byte(bytes.Repeat([]byte{32}, 32)), WrapNonce: [24]byte(bytes.Repeat([]byte{52}, 24))},
+		},
+		Plaintext: packed.Payload, PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{71}, 24)),
+	})
+	require.NoError(t, err)
+	policyDigest, err := vault.ComputePolicyDigest(transition.Policy)
+	require.NoError(t, err)
+	evidence := AuthenticatedPositionEvidence{
+		Vault: genesis.Vault, Epoch: 1, PolicyDigest: policyDigest, Policy: bytes.Clone(transition.Policy),
+		Control: bytes.Clone(transition.Control), Head: bytes.Clone(transition.Head), Snapshot: bytes.Clone(transition.Snapshot),
+		Certificates: [][]byte{bytes.Clone(transition.Recipients[1]), bytes.Clone(transition.Recipients[0])},
+	}
+	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), evidence))
+	stored, err := store.AuthenticatedPositionEvidence(context.Background(), evidence.Vault, evidence.Epoch, evidence.PolicyDigest)
+	require.NoError(t, err)
+	expectedCertificates := [][]byte{bytes.Clone(transition.Recipients[0]), bytes.Clone(transition.Recipients[1])}
+	sort.Slice(expectedCertificates, func(i, j int) bool {
+		left, leftErr := vault.DecodeCertificate(expectedCertificates[i])
+		right, rightErr := vault.DecodeCertificate(expectedCertificates[j])
+		require.NoError(t, leftErr)
+		require.NoError(t, rightErr)
+		if left.DeviceID != right.DeviceID {
+			return left.DeviceID < right.DeviceID
+		}
+		return bytes.Compare(left.KeyID, right.KeyID) < 0
+	})
+	assert.Equal(t, expectedCertificates, stored.Certificates)
+	stored.Policy[0] ^= 0xff
+	stored.Certificates[0][0] ^= 0xff
+	reloaded, err := store.AuthenticatedPositionEvidence(context.Background(), evidence.Vault, evidence.Epoch, evidence.PolicyDigest)
+	require.NoError(t, err)
+	assert.Equal(t, evidence.Policy, reloaded.Policy)
+	assert.Equal(t, expectedCertificates, reloaded.Certificates)
+	missing, err := store.AuthenticatedPositionEvidence(context.Background(), [32]byte{99}, evidence.Epoch, evidence.PolicyDigest)
+	require.ErrorIs(t, err, ErrAuthenticatedPositionEvidenceNotFound)
+	assert.Empty(t, missing.Policy)
+	assert.NoError(t, vault.ValidateGenesis(genesis, kit))
+}
+
+func TestAuthenticatedPositionEvidencePreservesOptionalCheckpointAndSurvivesRestart(t *testing.T) {
+	paths := testPaths(t)
+	store := openTestStore(t, paths)
+	genesis, _, kit := stateGenesisFixture(t)
+	evidence := AuthenticatedPositionEvidence{
+		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
+	}
+	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), evidence))
+	require.NoError(t, store.Close())
+	reopened, err := Open(paths)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	stored, err := reopened.AuthenticatedPositionEvidence(context.Background(), evidence.Vault, evidence.Epoch, evidence.PolicyDigest)
+	require.NoError(t, err)
+	assert.Equal(t, evidence, stored)
+	assert.NoError(t, vault.ValidateGenesis(genesis, kit))
+}
+
+func TestAuthenticatedPositionEvidenceRejectsMismatchedKeysAndOversizedObjects(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	genesis, _, _ := stateGenesisFixture(t)
+	evidence := AuthenticatedPositionEvidence{
+		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Certificates: [][]byte{bytes.Clone(genesis.Certificate)},
+	}
+	wrongDigest := evidence
+	wrongDigest.PolicyDigest[0] ^= 1
+	assert.Error(t, store.PutAuthenticatedPositionEvidence(context.Background(), wrongDigest))
+	oversized := evidence
+	oversized.Policy = make([]byte, vault.MaxPolicyObjectBytes+1)
+	assert.Error(t, store.PutAuthenticatedPositionEvidence(context.Background(), oversized))
+}
+
+func stateGenesisFixture(t *testing.T) (vault.Genesis, vault.DeviceMaterial, []byte) {
+	t.Helper()
+	kit := bytes.Repeat([]byte{17}, 32)
+	recipient, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{21}, 32))
+	require.NoError(t, err)
+	root := vault.DeviceMaterial{
+		DeviceID: "a-state-genesis-root", KeyID: []byte("state-genesis-key"),
+		Signing: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{11}, ed25519.SeedSize)), Recipient: recipient,
+	}
+	genesis, err := vault.ComposeGenesis(vault.GenesisIntent{
+		Kit: kit, VaultName: "state evidence fixture", RootDevice: root, ContentKey: bytes.Repeat([]byte{31}, 32),
+		Wraps: []vault.RecipientWrapInput{{
+			KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(bytes.Repeat([]byte{41}, 32)), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24)),
+		}},
+		PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{71}, 24)),
+	})
+	require.NoError(t, err)
+	return genesis, root, kit
+}
+
+func stateDeviceFixture(t *testing.T, deviceID, keyID string, signingSeed, recipientSeed byte) vault.DeviceMaterial {
+	t.Helper()
+	recipient, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{recipientSeed}, 32))
+	require.NoError(t, err)
+	return vault.DeviceMaterial{
+		DeviceID: deviceID, KeyID: []byte(keyID), Signing: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{signingSeed}, ed25519.SeedSize)), Recipient: recipient,
+	}
 }
 
 func TestVaultEpochFirstSeenIsInsertOnlyAndDurable(t *testing.T) {
@@ -265,7 +463,7 @@ func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE retention_recovery_material; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
+	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE authenticated_position_history_certificates; DROP TABLE authenticated_position_history; DROP TABLE vault_selections; DROP TABLE authenticated_position_certificates; DROP TABLE authenticated_position_evidence; DROP TABLE retention_recovery_material; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -545,7 +743,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 10")
+	assert.Contains(t, err.Error(), "supports version 13")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

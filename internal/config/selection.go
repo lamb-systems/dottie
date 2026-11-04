@@ -106,7 +106,7 @@ func CheckAddition(c Config, paths platform.Paths, added Target) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("existing configuration is invalid: %w", err)
 	}
-	if err := validateTarget(added); err != nil {
+	if err := validateTarget(added, Version); err != nil {
 		return err
 	}
 	if added.Root != nil && added.Root.Path == "." {

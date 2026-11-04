@@ -551,8 +551,22 @@ func TestVaultRecordGoFieldsMatchLexiconProperties(t *testing.T) {
 			require.True(t, ok, "required field %d for %s", index, fixture.record.LexiconID())
 		}
 		sort.Strings(requiredFields)
-		assert.Equal(t, lexiconFields, requiredFields, "required fields for %s", fixture.record.LexiconID())
+		expectedRequired := append([]string(nil), lexiconFields...)
+		if fixture.record.LexiconID() == VaultAttestationNSID {
+			expectedRequired = removeRecordField(expectedRequired, "recoveryPoints")
+		}
+		assert.Equal(t, expectedRequired, requiredFields, "required fields for %s", fixture.record.LexiconID())
 	}
+}
+
+func removeRecordField(fields []string, name string) []string {
+	result := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field != name {
+			result = append(result, field)
+		}
+	}
+	return result
 }
 
 func readLexicons(t *testing.T) []lexiconDocument {

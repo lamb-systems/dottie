@@ -197,6 +197,13 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if !bytes.Equal(value.PolicyDigest, control.PolicyDigest) {
 			return &RecordContextError{Field: "policyDigest"}
 		}
+		if value.SchemaVersion == 2 {
+			for _, point := range value.RecoveryPoints {
+				if point.Epoch > control.EpochSeq {
+					return &RecordContextError{Field: "recoveryPoints.epoch"}
+				}
+			}
+		}
 		if err := matchControlPolicy(control, policy); err != nil {
 			return err
 		}

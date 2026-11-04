@@ -78,7 +78,7 @@ order between the vault and signer is:
 | 03 control | epoch_seq u64; policy_digest[32]; head_snapshot_cid (uint16 length + bytes); revoked count u16 and `{device_id, cert_epoch u64}`; prev_control_cid (uint16 length + bytes) |
 | 04 certificate | device_id; key_id; ed25519_pub[32]; x25519_pub[32]; role u8; cert_epoch u64; issuer device_id; revocation_ref (uint16 length + bytes) |
 | 05 checkpoint | snapshot_cid (uint16 length + bytes); epoch_seq u64; policy_digest[32]; anchor[32]; control_cid (uint16 length + bytes) |
-| 06 attestation | device_id; policy_digest[32]; retention_floor u64; retained_recovery_points u16; control_cid (uint16 length + bytes) |
+| 06 attestation | V1 body: device_id; policy_digest[32]; retention_floor u64; retained_recovery_points u16; control_cid (uint16 length + bytes). V2 body: uint16 schema version `2`; the same fields, followed by recovery-point count and ordered `{epoch u64, snapshot_cid (uint16 length + bytes)}` entries before control_cid |
 | 07 head | epoch_seq u64; policy_digest[32]; snapshot_cid (uint16 length + bytes); blob_cid (uint16 length + bytes); publication_count u64; prev_head_cid (uint16 length + bytes) |
 
 All variable byte fields use uint16 length prefixes; strings are UTF-8 bytes without a
@@ -183,8 +183,11 @@ Bootstrap is deterministic over its inputs. Device Ed25519 and X25519 keys are g
 with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. A 32-byte recovery kit
 and vault name derive the vault identifier. The root device's certificate is self-signed by its
 Ed25519 key. The kit-derived signing key signs only the genesis checkpoint, whose `anchor` is the
-SHA-256 fingerprint of the root signing public key. Genesis policy and control are root-signed,
-and genesis has no snapshot head.
+SHA-256 fingerprint of the root signing public key. `ComposeGenesis` seals the canonical empty
+snapshot and builds the count-zero head, control and kit-signed checkpoint so the control and
+checkpoint bind the final snapshot and control CIDs. `ValidateGenesis` verifies those bindings
+and signatures. This is the seal composition only; repository publication and verified read-back
+are owned by `internal/remote/atproto`.
 
 On first use, the operator supplies the kit and treats it as the root of trust:
 `RecoveryKitSigningPublicKey` derives the verifier key and `VerifyCheckpoint` checks the
@@ -194,8 +197,11 @@ assertion that the vault is theirs, not a provider-derived fact. A stolen kit ca
 attacker's root. A checkpoint older than unseen history cannot reveal that missing history;
 anything below the pinned anchor is still rejected. Later starts use a checkpoint already held
 by the device. `dottie account bootstrap` prints the grouped kit plus vault, anchor, checkpoint
-and kit-public-key fingerprints for independent recording. Durable checkpoint storage is
-the state store's responsibility; V03 stops at verification.
+and kit-public-key fingerprints for independent recording. `SignRecoveryKitCheckpoint` accepts
+a 32-byte kit and the explicit successor vault, root anchor, nonzero supported epoch, policy digest,
+control CID and epoch-start snapshot CID; it derives the same labeled signing key as bootstrap,
+signs one checkpoint and retains no kit. It rejects malformed CIDs, invalid position sizes and
+unsupported administrative epochs. Durable checkpoint storage is the state store's responsibility.
 
 `PrepareTransition` supports enrollment and revocation. Enrollment binds the authenticated
 predecessor's control CID, policy digest, epoch and head CID to a successor root-signed policy,
@@ -217,6 +223,39 @@ seals under the existing epoch and policy. The signed head advances the predeces
 exactly one and points to the new snapshot; publication neither changes epoch nor writes control.
 The current head and policy are revalidated before the candidate can be committed. A count skip,
 repeat, revoked certificate or certificate absent from the policy is refused.
+
+`PreparePublicEnrollment` accepts only a `PublicDeviceInput` for the newcomer: bounded device and
+key IDs, Ed25519 signing public key and X25519 recipient public key. Its approval fingerprint binds
+the vault, device ID, key ID, requested role and both public keys. The administrator supplies its
+own root `DeviceMaterial` for signing; the newcomer's private keys are not accepted. The path shares
+the transition checks with private-material enrollment, including the exact recipient/wrap set,
+certificate bindings, epoch and ancestry checks, and checkpoint exclusion. The older private-material
+`PrepareTransition` API remains unchanged for existing callers.
+
+`OnboardingBundle` is version 1 canonical JSON with exactly these fields: `version`, `vault_id`,
+`anchor_fingerprint`, `recovery_anchor`, `successor_checkpoint`, `successor_policy`,
+`successor_control`, `predecessor_policy`, `predecessor_control`, `predecessor_head`,
+`predecessor_snapshot` and `predecessor_certificates`. The vault ID and fingerprints are 32-byte
+lowercase hex strings; object fields and each certificate are lowercase hex encodings of signed vault
+objects. Policy, control, head, checkpoint and certificate objects are bounded by
+`MaxPolicyObjectBytes` (64 KiB), the predecessor snapshot by `MaxEnvelopeBytes` (384 MiB), and the
+certificate count by `MaxRecipients` (64). The complete JSON is bounded by
+`MaxOnboardingBundleBytes`, which includes the hex expansion of these bounds. No fields are optional.
+Decode rejects unknown or duplicate fields, non-canonical encodings, trailing values, unsupported
+versions and oversized input. The bundle contains no kit, private device key, token, approval or
+snapshot plaintext; the predecessor snapshot is encrypted ciphertext.
+
+Predecessor certificates are deterministically ordered by `(device_id, key_id)`. The bundle binds
+the predecessor policy/control/head/snapshot/certificates to one another and to the successor epoch,
+policy digest and control ancestry; it verifies predecessor certificate chains, head and snapshot
+signatures. The coordinator authenticates predecessor and successor policy/control signatures against
+the explicit root anchor before import, then persists the full predecessor position through the
+existing evidence API. The kit-signed successor checkpoint is bound to the successor control and
+recovery-key fingerprint, but its signature cannot be verified by a newcomer that does not possess the
+kit; the operator-supplied root anchor remains independent and must be confirmed out-of-band. The
+first remote read re-authenticates the successor position and exact checkpoint control. The bundle is
+public evidence, not provider authority. No AT Protocol record-CID assertion is made by this vault
+format.
 
 `ValidateTransition` authenticates the predecessor, requires one-step epoch advance and policy
 and control ancestry, and verifies the successor signatures. Enrollment must add exactly its
@@ -253,7 +292,7 @@ Checkpoint currency is about the control record, not the live head. An ordinary 
 
 ### Retention declarations
 
-`EvaluateRetentionDeclaration` authenticates the supplied control, policy and certificate evidence, returns the policy digest with the declared floor and normalized recovery points, and reports a below-policy floor as compromised for confidentiality without refusing it. It is pure and does not persist declarations. The caller stores the result through `state.Store`, then uses the store's dry-run plan and explicitly confirmed apply operation. State owns declaration history and pruning; vault judging and state persistence add no package dependency. No epoch-scoped ciphertext cache exists, so the epoch dimension currently constrains only retained recovery points; a future snapshot cache uses the same declaration and pruning preconditions.
+`EvaluateRetentionDeclaration` authenticates the supplied control, policy and certificate evidence, returns the policy digest with the declared floor and canonically ordered recovery points, and reports a below-policy floor as compromised for confidentiality without refusing it. `BuildAttestation` emits a device-signed body schema version 2 with the explicit `(epoch, snapshot CID)` list; its count must equal the list length, epochs cannot exceed the authenticated control epoch, and duplicate, unordered or out-of-bound points are rejected. Version-1 count-only attestations decode and re-encode byte-identically. The shared DTE header remains wire version 1. This is pure and does not persist declarations. State owns declaration history and pruning; vault judging and state persistence add no package dependency. No epoch-scoped ciphertext cache exists, so the epoch dimension currently constrains only retained recovery points; a future snapshot cache uses the same declaration and pruning preconditions.
 
 ### Current-format test vectors
 

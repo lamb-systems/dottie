@@ -2,7 +2,9 @@
 
 The package implements the OAuth identity boundary, bounded repository proofs, one fenced
 `applyWrites` publication operation and a bounded retry API for ordinary publications. It does not
-provide generic record or blob CRUD, encrypt snapshot content, or wire synchronization into the CLI.
+provide generic record CRUD or blob management, encrypt snapshot content, or wire synchronization
+into the CLI. `VaultReader.FetchBlob` is a read-only, size-bounded CID fetch for already-proven
+snapshot references; export composition uses it to verify ciphertext without decrypting.
 
 ## Vault record binding
 
@@ -31,6 +33,14 @@ recipient's `keyId` identifies the X25519 wrapping key; a certificate's `keyId` 
 Ed25519 signing key, so the two identifiers must never be compared. The policy does not duplicate
 signing public keys: policy role authorizes the device, the certificate chain binds that device to
 its Ed25519 key, and the certificate record binds both public keys to the signed certificate object.
+
+`vaultAttestation` keeps one collection and one repository scope. Record schema version 1
+remains count-only; schema version 2 carries the ordered `recoveryPoints` array and requires its
+length to match `retainedRecoveryPoints`. The vault object's body schema is bound to the record;
+the DTE header remains version 1. `PublishAttestation` derives a deterministic per-device/control
+rkey, fences one create against a verified revision, resolves duplicates only when record CID,
+membership and signature all match, and requires a verified reread before returning success. A
+relay must verify the original subject-device signature and relays the bytes unchanged.
 
 ## Discovery and identity binding
 
@@ -133,6 +143,11 @@ target. Connect and TLS handshake timeouts are five seconds, response-header tim
 seconds, and the complete request timeout is thirty seconds. Response bodies are limited to 2 MiB
 and over-limit reads fail. The authenticated client uses the native `NewAuthMethod`; the anonymous
 client has no auth method. An offline integration test proves redirect targets are not followed.
+`NewSessionAPIClient` constructs an authenticated Indigo `atclient.APIClient` for the
+exact discovered PDS HTTPS origin. Its dedicated client rejects other origins and
+redirects, and it installs the existing `NewAuthMethod`; callers adapt it with the
+existing `NewATClientTransport` for repository operations. Tests inject only an in-memory
+round tripper backed by a synthetic TLS server.
 
 ## Bounded repository proofs and fenced publication
 
@@ -175,6 +190,24 @@ Both paths use the verified revision CID as `swapCommit`, with no unfenced fallb
 A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is never used for this
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
+
+## Genesis bootstrap composition
+
+`CommitGenesis` is separate from ordinary publication and transition commits. It first
+requires a real verified empty repository revision, stages the sealed canonical empty
+snapshot, and sends policy, control, certificate, checkpoint, snapshot reference and
+count-zero head as one all-creates `applyWrites` batch fenced to that empty revision. It
+never routes through `PreparePublication` or `commitPublication`. Every transmitted batch
+is resolved with a fresh signed revision; success additionally requires exact six-record
+membership, exact checkpoint record binding plus kit authentication, a successful real
+`VaultReader` result and the canonical empty plaintext snapshot. A reread that proves the
+records absent returns `ErrGenesisNotLanded`; a failed or moving reread returns
+`ErrGenesisUnavailable`. The next call reads the repository again before another attempt.
+
+`atprototest` exports builders for canonical records, raw blobs and Indigo-signed
+repository revisions/CARs. The builders use production Indigo primitives and have no
+connection to a live account or PDS. A self-test constructs a genesis-epoch repository
+revision and reads it through the real `VaultReader`.
 
 The live fence harness uses provisional test-only records: `systems.lamb.dottie.vaultSnapshot` at
 `probe-<base32>` with `{$type, probe, blob, createdAt}`; `systems.lamb.dottie.vaultHead` at
@@ -600,3 +633,9 @@ record binding/context/signature, envelope signature, blob missing/transport/siz
 vault authorization and decryption. `ErrRevisionMoving`, `ErrUntrustedCar` and
 `ErrUnprovenMembership` remain the repository-proof failures. Tests use synthetic signed fixtures
 and a fake transport only; they make no live or network requests.
+
+The Linux `gsettings` S2b2 gate in `tests/local/manual_sync_linux_test.go` drives one shared
+`atprototest.MemoryPDS` through real genesis, ordinary publication, enrollment and revocation
+compositions, with the real `VaultReader` reading each signed revision. It proves coordinator-level
+two-machine behavior only; it is not a provider-compatibility result and does not execute the CLI
+binary sequence. Full CLI-binary acceptance remains deferred to post-S3.

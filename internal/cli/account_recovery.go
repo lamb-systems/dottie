@@ -16,6 +16,7 @@ import (
 	urfave "github.com/urfave/cli/v3"
 
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -203,7 +204,11 @@ func runAccountVerify(ctx context.Context, command *urfave.Command) error {
 		if err != nil {
 			return urfave.Exit("verified policy could not be decoded for local recording", 1)
 		}
-		if err := store.PutVaultCheckpoint(ctx, state.VaultCheckpoint{
+		coordinator, err := service.NewCoordinator(service.Dependencies{State: store})
+		if err != nil {
+			return urfave.Exit("cannot prepare coordinator for checkpoint recording", 1)
+		}
+		if err := coordinator.RecordCheckpoint(ctx, state.VaultCheckpoint{
 			Vault: vaultID, Anchor: trustAnchor, ControlCID: result.NewerControlCID, ControlBytes: supplied.Control,
 			SnapshotCID: control.HeadSnapshotCID, Epoch: control.EpochSeq, PolicyDigest: policyDigest, RecordedAt: time.Now().Unix(),
 		}); err != nil {

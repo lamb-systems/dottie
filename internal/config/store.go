@@ -56,6 +56,7 @@ func Load(paths platform.Paths) (Config, error) {
 	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
 		return Config{}, fmt.Errorf("unknown configuration key %q", undecoded[0].String())
 	}
+	config = upgradeConfig(config)
 	config = normalizeConfig(config)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -64,6 +65,7 @@ func Load(paths platform.Paths) (Config, error) {
 }
 
 func Save(paths platform.Paths, c Config) error {
+	c = upgradeConfig(normalizeConfig(c))
 	c = normalizeConfig(c)
 	if err := c.Validate(); err != nil {
 		return err
@@ -134,6 +136,20 @@ func Save(paths platform.Paths, c Config) error {
 		return errors.New("configuration replaced, durability uncertain")
 	}
 	return nil
+}
+
+func upgradeConfig(c Config) Config {
+	if c.Version != 1 {
+		return c
+	}
+	c = normalizeConfig(c)
+	for index := range c.Targets {
+		if c.Targets[index].Source == "gnome" && c.Targets[index].GNOMEPolicy == nil {
+			c.Targets[index].GNOMEPolicy = &GNOMEPolicy{Approval: GNOMEApprovalPending}
+		}
+	}
+	c.Version = Version
+	return c
 }
 
 func encodeConfig(c Config) ([]byte, error) {

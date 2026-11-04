@@ -44,6 +44,11 @@ func newAttestationFixture(t *testing.T) attestationFixture {
 			VaultID: policy.Vault, TrustAnchor: base.trustAnchor, State: state,
 			SignerCertificate: certificateBytes, SigningKey: key,
 			RetentionFloor: policy.PolicyRetentionFloor - 1, RetainedRecoveryPoints: policy.RetainedRecoveryPoints,
+			RecoveryPoints: []RetentionRecoveryPoint{
+				{Epoch: 0, SnapshotCID: []byte("snapshot-zero")},
+				{Epoch: policy.EpochSeq, SnapshotCID: []byte("snapshot-current-a")},
+				{Epoch: policy.EpochSeq, SnapshotCID: []byte("snapshot-current-b")},
+			},
 		},
 		verify: AttestationVerificationRequest{VaultID: policy.Vault, TrustAnchor: base.trustAnchor, State: state},
 		key:    key,

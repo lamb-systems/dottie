@@ -19,13 +19,13 @@ func TestRun(t *testing.T) {
 		out  string
 		err  string
 	}{
-		{name: "default help", code: 0, out: "This is a scaffold"},
+		{name: "default help", code: 0, out: "Usage:"},
 		{name: "help", args: []string{"help"}, code: 0, out: "See README.md for build instructions and current status."},
 		{name: "help flag", args: []string{"--help"}, code: 0, out: "Usage:"},
 		{name: "short help", args: []string{"-h"}, code: 0, out: "Usage:"},
 		{name: "version", args: []string{"version"}, code: 0, out: "dottie dev (scaffold)"},
 		{name: "version flag", args: []string{"--version"}, code: 0, out: "dottie dev (scaffold)"},
-		{name: "unimplemented sync", args: []string{"sync"}, code: 2, err: "unsupported command"},
+		{name: "sync requires account selector", args: []string{"sync"}, code: 2, err: "supply exactly one of --did or --handle"},
 		{name: "unimplemented daemon", args: []string{"serve"}, code: 2, err: "unsupported command"},
 		{name: "unimplemented login", args: []string{"login"}, code: 2, err: "unsupported command"},
 		{name: "unknown", args: []string{"unknown"}, code: 2, err: "unsupported command"},

@@ -44,6 +44,16 @@ func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFacto
 }
 
 func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions) *urfave.Command {
+	if sessionOptions.env == nil {
+		sessionOptions.env = os.Getenv
+	}
+	return newAccountCommandWithImportFactory(stdout, stderr, openKeyring, exitCode, sessionOptions, productionOrchestrationFactory(openKeyring, sessionOptions.env))
+}
+
+func newAccountCommandWithImportFactory(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions, importFactory orchestrationFactory) *urfave.Command {
+	if sessionOptions.env == nil {
+		sessionOptions.env = os.Getenv
+	}
 	usageHandler := func(_ context.Context, _ *urfave.Command, err error, _ bool) error {
 		return urfave.Exit("usage: "+escapeField(err.Error()), 2)
 	}
@@ -93,6 +103,9 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 			if err := keyring.StoreDeviceKeys(ctx, bootstrapped.Vault, material); err != nil {
 				return urfave.Exit(keyringError(err), 1)
 			}
+			if err := recordVaultSelection(ctx, sessionOptions.env, bootstrapped.Vault, material.DeviceID); err != nil {
+				return urfave.Exit("device keys were stored but local vault selection could not be recorded", 1)
+			}
 			kitPublic, err := vault.RecoveryKitSigningPublicKey(kit, bootstrapped.Vault)
 			if err != nil {
 				return urfave.Exit("cannot derive recovery kit signing key", 1)
@@ -107,12 +120,16 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 	roleFlag := &urfave.StringFlag{Name: "role", Usage: "requested role (publisher or restore_only)", OnlyOnce: true}
 	vaultFlag := &urfave.StringFlag{Name: "vault", Usage: "vault fingerprint (64 hexadecimal characters)", OnlyOnce: true}
 	confirmFlag := &urfave.StringFlag{Name: "confirm", Usage: "expected transcript fingerprint", OnlyOnce: true}
+	requestFlag := &urfave.StringFlag{Name: "request", Usage: "write public enrollment request JSON after confirmation", OnlyOnce: true}
 	enroll := configure(&urfave.Command{
 		Name:  "enroll",
-		Flags: []urfave.Flag{vaultFlag, deviceIDFlag, roleFlag, confirmFlag},
+		Flags: []urfave.Flag{vaultFlag, deviceIDFlag, roleFlag, confirmFlag, requestFlag},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			if command.NArg() != 0 || command.String("vault") == "" || command.String("device-id") == "" || command.String("role") == "" {
 				return usageExit("account enroll requires --vault, --device-id and --role")
+			}
+			if command.IsSet("request") && command.String("request") == "" {
+				return usageExit("--request requires a file path")
 			}
 			vaultID, err := parseVaultFingerprint(command.String("vault"))
 			if err != nil {
@@ -155,6 +172,20 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 					}
 					return urfave.Exit("transcript fingerprint confirmation mismatch", 1)
 				}
+				if command.IsSet("request") {
+					requestBytes, _, requestErr := makeEnrollmentRequest(vaultID, material, role)
+					if requestErr != nil {
+						return urfave.Exit("cannot prepare public enrollment request", 1)
+					}
+					defer clear(requestBytes)
+					if writeErr := writePublicRequestFile(command.String("request"), requestBytes); writeErr != nil {
+						return urfave.Exit(escapeErrorMessage(writeErr.Error()), 1)
+					}
+					output += "public enrollment request: written\n"
+				}
+				if err := recordVaultSelection(ctx, sessionOptions.env, vaultID, material.DeviceID); err != nil {
+					return urfave.Exit("device keys were prepared but local vault selection could not be recorded", 1)
+				}
 				output += "transcript confirmed; no certificate or remote operation was performed\n"
 			} else {
 				if err := writeCommandOutput(command, output); err != nil {
@@ -164,6 +195,10 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 			}
 			return writeCommandOutput(command, output)
 		},
+	})
+
+	importBundle := configure(&urfave.Command{
+		Name: "import-bundle", Flags: importBundleFlags(), Action: importBundleAction(importFactory),
 	})
 
 	recovery := configure(&urfave.Command{
@@ -189,9 +224,9 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 
 	root := configure(&urfave.Command{
 		Name:     "account",
-		Commands: append([]*urfave.Command{bootstrap, enroll, recovery, verify}, sessionCommands...),
+		Commands: append([]*urfave.Command{bootstrap, enroll, importBundle, recovery, verify}, sessionCommands...),
 		Action: func(_ context.Context, _ *urfave.Command) error {
-			return usageExit("expected login, logout, status, bootstrap, enroll, recovery or verify")
+			return usageExit("expected login, logout, status, bootstrap, enroll, import-bundle, recovery or verify")
 		},
 		Writer: stdout, ErrWriter: stderr,
 	})
@@ -203,7 +238,7 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 		if errors.As(err, &exitError) {
 			code = exitError.ExitCode()
 		}
-		if code >= 3 || code != 1 && code != 2 {
+		if code != 1 && code != 2 && code != 3 && code != 4 {
 			code = 1
 		}
 		if message := escapeErrorMessage(err.Error()); message != "" {

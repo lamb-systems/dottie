@@ -387,6 +387,25 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	return result, nil
 }
 
+func (r VaultReader) FetchBlob(ctx context.Context, did string, blobCID []byte, declaredSize int64) ([]byte, error) {
+	if r.Transport == nil {
+		return nil, &ReadError{Stage: ReadStageBlob, Err: errors.New("transport is required")}
+	}
+	parsed, err := cid.Cast(blobCID)
+	if err != nil {
+		return nil, &ReadError{Stage: ReadStageBlobCID, Err: ErrReadBlobCIDMismatch}
+	}
+	blob, err := r.fetchBlob(ctx, did, parsed, declaredSize)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := rawBlobCID(blob)
+	if err != nil || !bytes.Equal(actual, blobCID) {
+		return nil, &ReadError{Stage: ReadStageBlobCID, Err: ErrReadBlobCIDMismatch}
+	}
+	return bytes.Clone(blob), nil
+}
+
 func (r VaultReader) fetchBlob(ctx context.Context, did string, blobCID cid.Cid, declaredSize int64) ([]byte, error) {
 	maximum := r.MaxBlobBytes
 	if maximum == 0 {

@@ -14,6 +14,7 @@ type AttestationBuildRequest struct {
 	SigningKey             ed25519.PrivateKey
 	RetentionFloor         uint64
 	RetainedRecoveryPoints uint16
+	RecoveryPoints         []RetentionRecoveryPoint
 }
 
 type AttestationVerificationRequest struct {
@@ -53,9 +54,24 @@ func BuildAttestation(request AttestationBuildRequest) ([]byte, error) {
 	if len(request.SigningKey) != ed25519.PrivateKeySize || !bytes.Equal(request.SigningKey.Public().(ed25519.PublicKey), certificate.SigningPublicKey[:]) {
 		return nil, fmt.Errorf("%w: attestation signing key", ErrAuthorization)
 	}
+	if request.RetentionFloor > MaxAttestationInteger {
+		return nil, fmt.Errorf("%w: attestation retention floor", ErrLimit)
+	}
+	recoveryPoints, err := normalizeRetentionRecoveryPoints(request.RecoveryPoints)
+	if err != nil {
+		return nil, err
+	}
+	if len(recoveryPoints) != int(request.RetainedRecoveryPoints) {
+		return nil, fmt.Errorf("%w: retained recovery point count mismatch", ErrFormat)
+	}
+	for _, point := range recoveryPoints {
+		if point.Epoch > position.control.EpochSeq {
+			return nil, fmt.Errorf("%w: recovery point epoch is newer than the attested control", ErrAuthorization)
+		}
+	}
 	attestation := Attestation{
-		Vault: position.policy.Vault, DeviceID: certificate.DeviceID, PolicyDigest: position.policyDigest,
-		RetentionFloor: request.RetentionFloor, RetainedRecoveryPoints: request.RetainedRecoveryPoints,
+		SchemaVersion: AttestationVersion2, Vault: position.policy.Vault, DeviceID: certificate.DeviceID, PolicyDigest: position.policyDigest,
+		RetentionFloor: request.RetentionFloor, RetainedRecoveryPoints: request.RetainedRecoveryPoints, RecoveryPoints: recoveryPoints,
 		ControlCID: bytes.Clone(controlCID), Signer: Signer{DeviceID: certificate.DeviceID, KeyID: bytes.Clone(certificate.KeyID)},
 	}
 	prefix, err := encodeAttestationPrefix(attestation)
@@ -83,6 +99,11 @@ func VerifyAttestation(encoded []byte, request AttestationVerificationRequest) (
 		attestation.PolicyDigest != position.control.PolicyDigest || !bytes.Equal(attestation.ControlCID, controlCID) ||
 		attestation.Signer.DeviceID != attestation.DeviceID {
 		return AttestationJudgement{}, fmt.Errorf("%w: attestation state or subject", ErrAuthorization)
+	}
+	for _, point := range attestation.RecoveryPoints {
+		if point.Epoch > position.control.EpochSeq {
+			return AttestationJudgement{}, fmt.Errorf("%w: recovery point epoch is newer than the attested control", ErrAuthorization)
+		}
 	}
 	certificate, err := authorizeAttestationSigner(attestation.Signer.DeviceID, attestation.Signer.KeyID, position, request.TrustAnchor, request.State.Certificates)
 	if err != nil {

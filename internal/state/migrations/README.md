@@ -15,3 +15,9 @@ Migration 7 adds the last authenticated control CID to `vault_publication_observ
 Migration 8 adds `vault_epoch_first_seen`, keyed by vault and epoch, with the caller-supplied Unix-seconds time when that epoch was first authenticated locally. Inserts are idempotent and never replace an existing timestamp; no epoch history is backfilled because its original time cannot be recovered.
 
 Migration 9 adds current per-device retention declarations and recovery-point inventories, plus immutable declaration history. Migration 10 adds `retention_recovery_material`, associating payload and journal-backup references with recovery-point epochs and snapshot CIDs. Existing and newly declared points get an incomplete inventory marker; pruning refuses until a caller records a complete material inventory.
+
+Migration 11 adds `authenticated_position_evidence`, keyed by vault, epoch and policy digest, plus an ordered certificate child table. It stores signed policy/control/head bytes, the encrypted snapshot envelope, certificates and an optional checkpoint position. It does not store plaintext snapshot content, keys, kits or credentials, and does not rebuild existing tables.
+
+Migration 12 adds `vault_selections`, keyed by `(vault, device_id)`, with a caller-supplied Unix-seconds recording time. It contains no secrets, anchor or tokens and does not rebuild existing tables.
+
+Migration 13 adds append-only authenticated position history keyed by `(vault, epoch, policy_digest, head snapshot CID)` and ordered certificate rows. It retains optional kit-signed checkpoint-position bytes without storing the kit. Existing latest-position rows are preserved and remain queryable; prior overwritten heads cannot be backfilled.

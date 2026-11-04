@@ -13,6 +13,33 @@ type RetentionRecoveryPoint struct {
 	SnapshotCID []byte
 }
 
+func retentionRecoveryPointLess(left, right RetentionRecoveryPoint) bool {
+	if left.Epoch != right.Epoch {
+		return left.Epoch < right.Epoch
+	}
+	return bytes.Compare(left.SnapshotCID, right.SnapshotCID) < 0
+}
+
+func normalizeRetentionRecoveryPoints(points []RetentionRecoveryPoint) ([]RetentionRecoveryPoint, error) {
+	if len(points) > int(^uint16(0)) {
+		return nil, fmt.Errorf("invalid retention recovery point count")
+	}
+	result := make([]RetentionRecoveryPoint, len(points))
+	for index, point := range points {
+		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > MaxParentBytes {
+			return nil, fmt.Errorf("invalid retention recovery point")
+		}
+		result[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+	}
+	sort.Slice(result, func(i, j int) bool { return retentionRecoveryPointLess(result[i], result[j]) })
+	for index := 1; index < len(result); index++ {
+		if !retentionRecoveryPointLess(result[index-1], result[index]) {
+			return nil, fmt.Errorf("duplicate retention recovery point")
+		}
+	}
+	return result, nil
+}
+
 type RetentionDeclaration struct {
 	Vault          [32]byte
 	DeviceID       string
@@ -38,7 +65,7 @@ type RetentionDeclarationJudgement struct {
 
 func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (RetentionDeclarationJudgement, error) {
 	if request.DeviceID == "" || len(request.DeviceID) > MaxDeviceIDBytes || strings.IndexByte(request.DeviceID, 0) >= 0 ||
-		request.RetentionFloor > uint64(^uint64(0)>>1) || len(request.RecoveryPoints) > int(^uint16(0)) {
+		request.RetentionFloor > MaxAttestationInteger || len(request.RecoveryPoints) > int(^uint16(0)) {
 		return RetentionDeclarationJudgement{}, errors.New("invalid retention declaration")
 	}
 	position, _, err := verifyControlPositionEvidence(request.VaultID, request.TrustAnchor, request.State)
@@ -49,22 +76,13 @@ func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (Retentio
 		Vault: position.policy.Vault, DeviceID: request.DeviceID, PolicyDigest: position.policyDigest,
 		RetentionFloor: request.RetentionFloor, RecoveryPoints: make([]RetentionRecoveryPoint, len(request.RecoveryPoints)),
 	}
-	for index, point := range request.RecoveryPoints {
-		if point.Epoch > uint64(^uint64(0)>>1) || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > MaxParentBytes {
-			return RetentionDeclarationJudgement{}, fmt.Errorf("invalid retention recovery point")
-		}
-		declaration.RecoveryPoints[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+	declaration.RecoveryPoints, err = normalizeRetentionRecoveryPoints(request.RecoveryPoints)
+	if err != nil {
+		return RetentionDeclarationJudgement{}, err
 	}
-	sort.Slice(declaration.RecoveryPoints, func(i, j int) bool {
-		if declaration.RecoveryPoints[i].Epoch != declaration.RecoveryPoints[j].Epoch {
-			return declaration.RecoveryPoints[i].Epoch < declaration.RecoveryPoints[j].Epoch
-		}
-		return bytes.Compare(declaration.RecoveryPoints[i].SnapshotCID, declaration.RecoveryPoints[j].SnapshotCID) < 0
-	})
-	for index := 1; index < len(declaration.RecoveryPoints); index++ {
-		previous, current := declaration.RecoveryPoints[index-1], declaration.RecoveryPoints[index]
-		if current.Epoch == previous.Epoch && bytes.Equal(current.SnapshotCID, previous.SnapshotCID) {
-			return RetentionDeclarationJudgement{}, fmt.Errorf("duplicate retention recovery point")
+	for _, point := range declaration.RecoveryPoints {
+		if point.Epoch > position.control.EpochSeq {
+			return RetentionDeclarationJudgement{}, fmt.Errorf("recovery point epoch is newer than the attested control")
 		}
 	}
 	judgement := RetentionDeclarationJudgement{Declaration: declaration, Status: AttestationStatusMeetsPolicy}

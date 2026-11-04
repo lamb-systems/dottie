@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ipfs/go-cid"
+	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/multiformats/go-multihash"
 )
 
@@ -40,6 +41,7 @@ var (
 	ErrCheckpointAnchor      = errors.New("transition checkpoint anchor is invalid")
 	ErrTransitionSignature   = errors.New("transition object signature is invalid")
 	ErrTransitionDigest      = errors.New("transition digest is invalid")
+	ErrEnrollmentApproval    = errors.New("enrollment approval does not match public device input")
 	ErrUnsupportedTransition = errors.New("transition kind is unsupported")
 )
 
@@ -67,6 +69,25 @@ type BootstrapResult struct {
 	Control     []byte
 	Certificate []byte
 	Checkpoint  []byte
+}
+
+type GenesisIntent struct {
+	Kit           []byte
+	VaultName     string
+	RootDevice    DeviceMaterial
+	ContentKey    []byte
+	Wraps         []RecipientWrapInput
+	PublicationID [16]byte
+	Nonce         [24]byte
+}
+
+type Genesis struct {
+	BootstrapResult
+	Head         []byte
+	Snapshot     []byte
+	SnapshotCID  []byte
+	ControlCID   []byte
+	PolicyDigest [32]byte
 }
 
 type GenesisDefaults struct {
@@ -118,6 +139,27 @@ type TransitionIntent struct {
 	Plaintext      []byte
 	PublicationID  [16]byte
 	Nonce          [24]byte
+}
+
+type PublicDeviceInput struct {
+	DeviceID           string
+	KeyID              []byte
+	SigningPublicKey   []byte
+	RecipientPublicKey []byte
+}
+
+type PublicEnrollmentIntent struct {
+	Vault               [32]byte
+	RootSigner          DeviceMaterial
+	NewDevice           PublicDeviceInput
+	RequestedRole       Role
+	ApprovalFingerprint [32]byte
+	ContentKey          []byte
+	Recipients          [][]byte
+	Wraps               []RecipientWrapInput
+	Plaintext           []byte
+	PublicationID       [16]byte
+	Nonce               [24]byte
 }
 
 type Transition struct {
@@ -257,6 +299,187 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 	}, nil
 }
 
+func ComposeGenesis(intent GenesisIntent) (Genesis, error) {
+	bootstrap, err := Bootstrap(intent.Kit, intent.VaultName, intent.RootDevice)
+	if err != nil {
+		return Genesis{}, err
+	}
+	if len(intent.ContentKey) != 32 {
+		return Genesis{}, fmt.Errorf("%w: genesis content key", ErrFormat)
+	}
+	policy, err := DecodePolicy(bootstrap.Policy)
+	if err != nil {
+		return Genesis{}, err
+	}
+	policyDigest, err := ComputePolicyDigest(bootstrap.Policy)
+	if err != nil {
+		return Genesis{}, err
+	}
+	packed, err := Pack(model.Snapshot{Version: model.SnapshotVersion})
+	if err != nil {
+		return Genesis{}, fmt.Errorf("pack empty genesis snapshot: %w", err)
+	}
+	wraps, err := prepareRecipientWraps(policy, intent.Wraps)
+	if err != nil {
+		return Genesis{}, err
+	}
+	recipients, err := prepareSealRecipients(policy, wraps)
+	if err != nil {
+		return Genesis{}, err
+	}
+	sealed, err := SealPrepared(PreparedSeal{
+		Purpose: PurposeSnapshot, Vault: bootstrap.Vault, PublicationID: intent.PublicationID,
+		EpochSeq: 0, PolicyDigest: policyDigest, DeviceID: intent.RootDevice.DeviceID,
+		KeyID: bytes.Clone(intent.RootDevice.KeyID), Plaintext: packed.Payload,
+		SigningKey: intent.RootDevice.Signing, ContentKey: bytes.Clone(intent.ContentKey),
+		Nonce: intent.Nonce, Recipients: recipients, Policy: policy,
+	})
+	if err != nil {
+		return Genesis{}, err
+	}
+	snapshotBytes, err := EncodeEnvelope(sealed)
+	if err != nil {
+		return Genesis{}, err
+	}
+	snapshotCID, err := rawCID(snapshotBytes)
+	if err != nil {
+		return Genesis{}, err
+	}
+	control, err := DecodeControl(bootstrap.Control)
+	if err != nil {
+		return Genesis{}, err
+	}
+	control.HeadSnapshotCID = bytes.Clone(snapshotCID)
+	controlBytes, err := signControl(control, intent.RootDevice.Signing)
+	if err != nil {
+		return Genesis{}, err
+	}
+	controlCID, err := rawCID(controlBytes)
+	if err != nil {
+		return Genesis{}, err
+	}
+	checkpoint, err := DecodeCheckpoint(bootstrap.Checkpoint)
+	if err != nil {
+		return Genesis{}, err
+	}
+	checkpoint.SnapshotCID = bytes.Clone(snapshotCID)
+	checkpoint.ControlCID = bytes.Clone(controlCID)
+	kitKey, err := deriveKitSigningKey(intent.Kit, bootstrap.Vault)
+	if err != nil {
+		return Genesis{}, err
+	}
+	checkpointBytes, err := signCheckpoint(checkpoint, kitKey)
+	if err != nil {
+		return Genesis{}, err
+	}
+	head, err := signHead(Head{
+		Vault: bootstrap.Vault, EpochSeq: 0, PolicyDigest: policyDigest,
+		SnapshotCID: bytes.Clone(snapshotCID), BlobCID: bytes.Clone(snapshotCID),
+		PublicationCount: 0, Signer: Signer{DeviceID: intent.RootDevice.DeviceID, KeyID: bytes.Clone(intent.RootDevice.KeyID)},
+	}, intent.RootDevice.Signing)
+	if err != nil {
+		return Genesis{}, err
+	}
+	bootstrap.Control = controlBytes
+	bootstrap.Checkpoint = checkpointBytes
+	genesis := Genesis{BootstrapResult: bootstrap, Head: head, Snapshot: snapshotBytes, SnapshotCID: snapshotCID, ControlCID: controlCID, PolicyDigest: policyDigest}
+	if err := ValidateGenesis(genesis, intent.Kit); err != nil {
+		return Genesis{}, err
+	}
+	return genesis, nil
+}
+
+func ValidateGenesis(genesis Genesis, kit []byte) error {
+	policy, err := DecodePolicy(genesis.Policy)
+	if err != nil {
+		return fmt.Errorf("%w: genesis policy", ErrAuthorization)
+	}
+	control, err := DecodeControl(genesis.Control)
+	if err != nil {
+		return fmt.Errorf("%w: genesis control", ErrAuthorization)
+	}
+	certificate, err := DecodeCertificate(genesis.Certificate)
+	if err != nil {
+		return fmt.Errorf("%w: genesis certificate", ErrAuthorization)
+	}
+	checkpoint, err := DecodeCheckpoint(genesis.Checkpoint)
+	if err != nil {
+		return fmt.Errorf("%w: genesis checkpoint", ErrAuthorization)
+	}
+	head, err := DecodeHead(genesis.Head)
+	if err != nil {
+		return fmt.Errorf("%w: genesis head", ErrAuthorization)
+	}
+	envelope, err := DecodeEnvelope(genesis.Snapshot)
+	if err != nil {
+		return fmt.Errorf("%w: genesis snapshot", ErrAuthorization)
+	}
+	policyDigest, err := ComputePolicyDigest(genesis.Policy)
+	if err != nil || policyDigest != genesis.PolicyDigest {
+		return fmt.Errorf("%w: genesis policy digest", ErrAuthorization)
+	}
+	snapshotCID, err := rawCID(genesis.Snapshot)
+	if err != nil || !bytes.Equal(snapshotCID, genesis.SnapshotCID) || !bytes.Equal(snapshotCID, head.SnapshotCID) || !bytes.Equal(snapshotCID, head.BlobCID) || !bytes.Equal(snapshotCID, control.HeadSnapshotCID) || !bytes.Equal(snapshotCID, checkpoint.SnapshotCID) {
+		return fmt.Errorf("%w: genesis snapshot binding", ErrHeadLinkage)
+	}
+	controlCID, err := rawCID(genesis.Control)
+	if err != nil || !bytes.Equal(controlCID, genesis.ControlCID) || !bytes.Equal(controlCID, checkpoint.ControlCID) {
+		return fmt.Errorf("%w: genesis control binding", ErrHeadLinkage)
+	}
+	if policy.Vault != genesis.Vault || policy.EpochSeq != 0 || policy.PrevPolicyDigest != [32]byte{} || control.Vault != genesis.Vault || control.EpochSeq != 0 || control.PolicyDigest != policyDigest || len(control.PrevControlCID) != 0 || len(control.Revoked) != 0 || head.Vault != genesis.Vault || head.EpochSeq != 0 || head.PolicyDigest != policyDigest || head.PublicationCount != 0 || len(head.PrevHeadCID) != 0 || envelope.Vault != genesis.Vault || envelope.EpochSeq != 0 || envelope.PolicyDigest != policyDigest || envelope.Purpose != PurposeSnapshot || len(envelope.Parent) != 0 || checkpoint.Vault != genesis.Vault || checkpoint.EpochSeq != 0 || checkpoint.PolicyDigest != policyDigest {
+		return fmt.Errorf("%w: genesis objects do not describe the count-zero epoch", ErrAuthorization)
+	}
+	if certificate.Vault != genesis.Vault || certificate.Role != RoleRoot || certificate.CertEpoch != 0 || certificate.DeviceID != policy.Signer.DeviceID || certificate.DeviceID != control.Signer.DeviceID || certificate.DeviceID != head.Signer.DeviceID || certificate.DeviceID != envelope.DeviceID || !bytes.Equal(certificate.KeyID, policy.Signer.KeyID) || !bytes.Equal(certificate.KeyID, control.Signer.KeyID) || !bytes.Equal(certificate.KeyID, head.Signer.KeyID) || !bytes.Equal(certificate.KeyID, envelope.KeyID) || certificate.Issuer != certificate.DeviceID || certificate.Signer.DeviceID != certificate.DeviceID || !bytes.Equal(certificate.Signer.KeyID, certificate.KeyID) {
+		return fmt.Errorf("%w: genesis root certificate binding", ErrAuthorization)
+	}
+	anchor := sha256.Sum256(certificate.SigningPublicKey[:])
+	if anchor != genesis.Anchor || checkpoint.Anchor != anchor {
+		return ErrCheckpointAnchor
+	}
+	for _, binding := range policy.Roles {
+		if binding.DeviceID != certificate.DeviceID || binding.Role != RoleRoot {
+			return fmt.Errorf("%w: genesis policy role", ErrAuthorization)
+		}
+	}
+	if len(policy.Roles) != 1 || len(policy.Recipients) != 1 || policy.Recipients[0].DeviceID != certificate.DeviceID || !bytes.Equal(policy.Recipients[0].KeyID, certificate.KeyID) || !bytes.Equal(policy.Recipients[0].PublicKey[:], certificate.EncryptionPublicKey[:]) || !publicationRecipientsMatch(policy, envelope) {
+		return fmt.Errorf("%w: genesis recipient set", ErrAuthorization)
+	}
+	kitAnchor, err := RecoveryKitCheckpointAnchor(kit, genesis.Vault, genesis.Checkpoint)
+	kitFingerprint, fingerprintErr := RecoveryKitPublicKeyFingerprint(kit, genesis.Vault)
+	if err != nil || fingerprintErr != nil || kitAnchor != genesis.Anchor || policy.RecoveryAnchor != kitFingerprint {
+		return fmt.Errorf("%w: genesis checkpoint authentication", ErrCheckpointAnchor)
+	}
+	objects := []struct {
+		context   string
+		prefix    []byte
+		signature []byte
+	}{
+		{context: "dottie/v1/sig-policy", signature: policy.Signature[:]},
+		{context: "dottie/v1/sig-control", signature: control.Signature[:]},
+		{context: "dottie/v1/sig-certificate", signature: certificate.Signature[:]},
+		{context: "dottie/v1/sig-head", signature: head.Signature[:]},
+	}
+	prefixes := [][]byte{}
+	policyPrefix, policyErr := encodePolicyPrefix(policy)
+	controlPrefix, controlErr := encodeControlPrefix(control)
+	certificatePrefix, certificateErr := encodeCertificatePrefix(certificate)
+	headPrefix, headErr := encodeHeadPrefix(head)
+	if policyErr != nil || controlErr != nil || certificateErr != nil || headErr != nil {
+		return fmt.Errorf("%w: genesis object encoding", ErrAuthorization)
+	}
+	prefixes = append(prefixes, policyPrefix, controlPrefix, certificatePrefix, headPrefix)
+	for index := range objects {
+		objects[index].prefix = prefixes[index]
+		if err := Verify(objects[index].context, objectSignaturePreimage(objects[index].prefix), objects[index].signature, certificate.SigningPublicKey[:]); err != nil {
+			return fmt.Errorf("%w: genesis object signature", ErrTransitionSignature)
+		}
+	}
+	if len(genesis.Snapshot) < ed25519.SignatureSize || Verify("dottie/v1/sig-snapshot", objectSignaturePreimage(genesis.Snapshot[:len(genesis.Snapshot)-ed25519.SignatureSize]), envelope.Signature[:], certificate.SigningPublicKey[:]) != nil {
+		return fmt.Errorf("%w: genesis snapshot signature", ErrTransitionSignature)
+	}
+	return nil
+}
+
 func certificateForEnrollment(vaultID [32]byte, device DeviceMaterial, role Role, certEpoch uint64, rootDevice DeviceMaterial, revocationRef []byte) ([]byte, error) {
 	if err := validateDeviceMaterial(rootDevice); err != nil {
 		return nil, err
@@ -282,6 +505,69 @@ func certificateForEnrollment(vaultID [32]byte, device DeviceMaterial, role Role
 	return signCertificate(certificate, rootDevice.Signing)
 }
 
+func certificateForPublicEnrollment(vaultID [32]byte, device PublicDeviceInput, role Role, certEpoch uint64, rootDevice DeviceMaterial, revocationRef []byte) ([]byte, error) {
+	if err := validateDeviceMaterial(rootDevice); err != nil {
+		return nil, err
+	}
+	if err := validatePublicDeviceInput(device); err != nil {
+		return nil, err
+	}
+	if role != RolePublisher && role != RoleRestoreOnly {
+		return nil, fmt.Errorf("%w: enrollment role", ErrAuthorization)
+	}
+	if len(revocationRef) != 0 && len(revocationRef) > MaxParentBytes {
+		return nil, fmt.Errorf("%w: revocation reference", ErrFormat)
+	}
+	var signingPublic [ed25519.PublicKeySize]byte
+	var encryptionPublic [32]byte
+	copy(signingPublic[:], device.SigningPublicKey)
+	copy(encryptionPublic[:], device.RecipientPublicKey)
+	certificate := Certificate{
+		Vault: vaultID, DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID),
+		SigningPublicKey: signingPublic, EncryptionPublicKey: encryptionPublic,
+		Role: role, CertEpoch: certEpoch, Issuer: rootDevice.DeviceID,
+		Signer: Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
+	}
+	return signCertificate(certificate, rootDevice.Signing)
+}
+
+func publicDeviceFromMaterial(material DeviceMaterial) PublicDeviceInput {
+	return PublicDeviceInput{
+		DeviceID: material.DeviceID, KeyID: bytes.Clone(material.KeyID),
+		SigningPublicKey:   bytes.Clone(material.Signing.Public().(ed25519.PublicKey)),
+		RecipientPublicKey: bytes.Clone(material.Recipient.PublicKey().Bytes()),
+	}
+}
+
+func clonePublicDeviceInput(device PublicDeviceInput) PublicDeviceInput {
+	return PublicDeviceInput{
+		DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID),
+		SigningPublicKey: bytes.Clone(device.SigningPublicKey), RecipientPublicKey: bytes.Clone(device.RecipientPublicKey),
+	}
+}
+
+func validatePublicDeviceInput(device PublicDeviceInput) error {
+	if device.DeviceID == "" || len(device.DeviceID) > MaxDeviceIDBytes || !utf8.ValidString(device.DeviceID) || len(device.KeyID) == 0 || len(device.KeyID) > MaxKeyIDBytes {
+		return fmt.Errorf("%w: device identity", ErrFormat)
+	}
+	if len(device.SigningPublicKey) != ed25519.PublicKeySize || len(device.RecipientPublicKey) != 32 {
+		return fmt.Errorf("%w: public device keys", ErrFormat)
+	}
+	publicKey, err := ecdh.X25519().NewPublicKey(device.RecipientPublicKey)
+	if err != nil {
+		return fmt.Errorf("%w: recipient public key", ErrFormat)
+	}
+	privateKeyBytes := bytes.Repeat([]byte{0x42}, 32)
+	privateKey, err := ecdh.X25519().NewPrivateKey(privateKeyBytes)
+	if err != nil {
+		return fmt.Errorf("%w: recipient validation key", ErrFormat)
+	}
+	if _, err := privateKey.ECDH(publicKey); err != nil {
+		return fmt.Errorf("%w: recipient public key", ErrFormat)
+	}
+	return nil
+}
+
 func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transition, error) {
 	if intent.Kind == TransitionRevoke {
 		return prepareRevocation(predecessor, intent)
@@ -292,6 +578,30 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	if intent.NewDevice == nil {
 		return Transition{}, fmt.Errorf("%w: new device", ErrFormat)
 	}
+	return prepareEnrollmentTransition(predecessor, intent, func() (PublicDeviceInput, error) {
+		if err := validateDeviceMaterial(*intent.NewDevice); err != nil {
+			return PublicDeviceInput{}, err
+		}
+		return publicDeviceFromMaterial(*intent.NewDevice), nil
+	}, nil)
+}
+
+func PreparePublicEnrollment(predecessor Predecessor, intent PublicEnrollmentIntent) (Transition, error) {
+	transitionIntent := TransitionIntent{
+		Kind: TransitionEnroll, Vault: intent.Vault, Signer: intent.RootSigner, RequestedRole: intent.RequestedRole,
+		ContentKey: intent.ContentKey, Recipients: intent.Recipients, Wraps: intent.Wraps, Plaintext: intent.Plaintext,
+		PublicationID: intent.PublicationID, Nonce: intent.Nonce,
+	}
+	approval := intent.ApprovalFingerprint
+	return prepareEnrollmentTransition(predecessor, transitionIntent, func() (PublicDeviceInput, error) {
+		if err := validatePublicDeviceInput(intent.NewDevice); err != nil {
+			return PublicDeviceInput{}, err
+		}
+		return clonePublicDeviceInput(intent.NewDevice), nil
+	}, &approval)
+}
+
+func prepareEnrollmentTransition(predecessor Predecessor, intent TransitionIntent, prepareDevice func() (PublicDeviceInput, error), approval *[32]byte) (Transition, error) {
 	if err := validatePredecessor(predecessor); err != nil {
 		return Transition{}, err
 	}
@@ -305,11 +615,15 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	if err := validateDeviceMaterial(intent.Signer); err != nil {
 		return Transition{}, err
 	}
-	if err := validateDeviceMaterial(*intent.NewDevice); err != nil {
+	newDevice, err := prepareDevice()
+	if err != nil {
 		return Transition{}, err
 	}
 	if intent.RequestedRole != RolePublisher && intent.RequestedRole != RoleRestoreOnly {
 		return Transition{}, fmt.Errorf("%w: enrollment role", ErrAuthorization)
+	}
+	if approval != nil && *approval != EnrollmentTranscriptFingerprint(intent.Vault, newDevice.DeviceID, newDevice.KeyID, intent.RequestedRole, newDevice.SigningPublicKey, newDevice.RecipientPublicKey) {
+		return Transition{}, ErrEnrollmentApproval
 	}
 	if oldPolicy.EpochSeq == ^uint64(0) {
 		return Transition{}, fmt.Errorf("%w: epoch overflow", ErrAuthorization)
@@ -326,16 +640,16 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 	if len(intent.ContentKey) != 32 {
 		return Transition{}, fmt.Errorf("%w: content key", ErrFormat)
 	}
-	if len(intent.NewDevice.KeyID) == 0 || bytes.Equal(intent.NewDevice.KeyID, intent.Signer.KeyID) {
+	if len(newDevice.KeyID) == 0 || bytes.Equal(newDevice.KeyID, intent.Signer.KeyID) {
 		return Transition{}, fmt.Errorf("%w: key id", ErrAuthorization)
 	}
 	for _, binding := range oldPolicy.Roles {
-		if binding.DeviceID == intent.NewDevice.DeviceID {
+		if binding.DeviceID == newDevice.DeviceID {
 			return Transition{}, fmt.Errorf("%w: duplicate device id", ErrAuthorization)
 		}
 	}
 	for _, recipient := range oldPolicy.Recipients {
-		if bytes.Equal(recipient.KeyID, intent.NewDevice.KeyID) {
+		if bytes.Equal(recipient.KeyID, newDevice.KeyID) {
 			return Transition{}, fmt.Errorf("%w: duplicate key id", ErrAuthorization)
 		}
 	}
@@ -357,7 +671,7 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 		return Transition{}, fmt.Errorf("%w: predecessor control", ErrPredecessor)
 	}
 	newEpoch := oldPolicy.EpochSeq + 1
-	newCertificateBytes, err := certificateForEnrollment(oldPolicy.Vault, *intent.NewDevice, intent.RequestedRole, newEpoch, intent.Signer, predecessor.ControlCID)
+	newCertificateBytes, err := certificateForPublicEnrollment(oldPolicy.Vault, newDevice, intent.RequestedRole, newEpoch, intent.Signer, predecessor.ControlCID)
 	if err != nil {
 		return Transition{}, err
 	}
@@ -379,12 +693,12 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 			return Transition{}, fmt.Errorf("%w: predecessor recipient certificate", ErrAuthorization)
 		}
 	}
-	if _, exists := oldCertificates[intent.NewDevice.DeviceID]; exists {
+	if _, exists := oldCertificates[newDevice.DeviceID]; exists {
 		return Transition{}, fmt.Errorf("%w: duplicate device id", ErrAuthorization)
 	}
 	for _, existing := range predecessor.Certificates {
 		certificate, decodeErr := DecodeCertificate(existing)
-		if decodeErr == nil && bytes.Equal(certificate.KeyID, intent.NewDevice.KeyID) {
+		if decodeErr == nil && bytes.Equal(certificate.KeyID, newDevice.KeyID) {
 			return Transition{}, fmt.Errorf("%w: duplicate key id", ErrAuthorization)
 		}
 	}

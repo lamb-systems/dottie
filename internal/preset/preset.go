@@ -2,6 +2,7 @@ package preset
 
 import (
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,9 +20,9 @@ import (
 )
 
 var (
-	ErrUnknownPreset           = errors.New("unknown preset")
-	ErrSourceNotMaterializable = errors.New("preset source cannot be materialized")
-	ErrConsentConflict         = errors.New("preset conflicts with existing consent or selection")
+	ErrUnknownPreset      = errors.New("unknown preset")
+	ErrReapprovalRequired = errors.New("GNOME category approval requires re-approval")
+	ErrConsentConflict    = errors.New("preset conflicts with existing consent or selection")
 )
 
 //go:embed data/*.toml
@@ -50,23 +51,23 @@ type Preview struct {
 	Excludes      []string
 	Settings      []matrix.KeyRef
 	MatrixVersion uint32
+	KeyDigest     string
 	EffectiveMode config.Mode
 }
 
-type UnsupportedReason struct {
-	Kind     error
-	Source   model.SourceKind
-	Boundary string
-	Detail   string
+type ReapprovalError struct {
+	TargetID string
+	Reason   string
 }
 
-func (r *UnsupportedReason) Error() string {
-	return fmt.Sprintf("%s: source %q %s until %s", r.Kind, r.Source, r.Detail, r.Boundary)
+func (e *ReapprovalError) Error() string {
+	if e.TargetID == "" {
+		return fmt.Sprintf("%v: %s", ErrReapprovalRequired, e.Reason)
+	}
+	return fmt.Sprintf("%v for target %q: %s", ErrReapprovalRequired, e.TargetID, e.Reason)
 }
 
-func (r *UnsupportedReason) Is(target error) bool {
-	return target == r.Kind
-}
+func (e *ReapprovalError) Unwrap() error { return ErrReapprovalRequired }
 
 type document struct {
 	SchemaVersion uint32   `toml:"schema_version"`
@@ -129,8 +130,13 @@ func BuildPreview(p Preset, paths platform.Paths) (Preview, error) {
 		if err != nil {
 			return Preview{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
 		}
+		digest, err := matrix.KeySetDigest(keys)
+		if err != nil {
+			return Preview{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
+		}
 		preview.Settings = keys
 		preview.MatrixVersion = matrix.Version
+		preview.KeyDigest = hex.EncodeToString(digest[:])
 		return preview, nil
 	}
 	for index, root := range p.Roots {
@@ -159,12 +165,30 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 	}
 	proposal := cloneConfig(c)
 	if p.Source == model.SourceGNOME {
-		return config.Config{}, &UnsupportedReason{
-			Kind:     ErrSourceNotMaterializable,
-			Source:   p.Source,
-			Boundary: "DOT-P06",
-			Detail:   "needs a persisted local category policy",
+		keys, err := matrix.SelectCategories(p.Categories)
+		if err != nil {
+			return config.Config{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
 		}
+		digest, err := matrix.KeySetDigest(keys)
+		if err != nil {
+			return config.Config{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
+		}
+		categoryIDs := normalizedCategories(p.Categories)
+		keyDigest := hex.EncodeToString(digest[:])
+		for _, target := range proposal.Targets {
+			if target.Source != model.SourceGNOME {
+				continue
+			}
+			policy := target.GNOMEPolicy
+			if policy == nil || policy.Approval == config.GNOMEApprovalPending {
+				return config.Config{}, &ReapprovalError{TargetID: target.ID, Reason: "select GNOME categories and approve their resolved key set"}
+			}
+			if policy.Approval != config.GNOMEApprovalApproved || !sameStrings(normalizedCategories(policy.Categories), categoryIDs) || policy.MatrixVersion != matrix.Version || policy.KeyDigest != keyDigest {
+				return config.Config{}, &ReapprovalError{TargetID: target.ID, Reason: "stored GNOME category policy does not match the catalog selection and current matrix"}
+			}
+			return proposal, nil
+		}
+		return config.Config{}, &ReapprovalError{Reason: "create or re-approve a GNOME target with the catalog categories before materializing"}
 	}
 	for index, root := range p.Roots {
 		existing, found := matchingRoot(proposal, root)
@@ -381,6 +405,11 @@ func cloneConfig(c config.Config) config.Config {
 }
 
 func cloneTarget(target config.Target) config.Target {
+	if target.GNOMEPolicy != nil {
+		policy := *target.GNOMEPolicy
+		policy.Categories = append([]string(nil), policy.Categories...)
+		target.GNOMEPolicy = &policy
+	}
 	if target.Root != nil {
 		root := *target.Root
 		root.Exclude = append([]string(nil), root.Exclude...)
@@ -396,6 +425,24 @@ func matchingRoot(c config.Config, root Root) (config.Target, bool) {
 		}
 	}
 	return config.Target{}, false
+}
+
+func normalizedCategories(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameExcludes(a, b []string) bool {

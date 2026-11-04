@@ -1,12 +1,16 @@
 package vault
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/ipfs/go-cid"
 )
 
 var (
@@ -98,4 +102,36 @@ func RecoveryKitPublicKeyFingerprint(kit []byte, vaultID [32]byte) ([32]byte, er
 		return [32]byte{}, err
 	}
 	return sha256.Sum256(publicKey), nil
+}
+
+func SignRecoveryKitCheckpoint(kit []byte, vaultID, anchor [32]byte, epoch uint64, policyDigest [32]byte, controlCID, snapshotCID []byte) ([]byte, error) {
+	if len(kit) != 32 {
+		return nil, fmt.Errorf("%w: recovery kit", ErrFormat)
+	}
+	if epoch == 0 || epoch > uint64(^uint64(0)>>1) {
+		return nil, fmt.Errorf("%w: administrative checkpoint epoch", ErrTransitionEpoch)
+	}
+	if vaultID == ([32]byte{}) || anchor == ([32]byte{}) || policyDigest == ([32]byte{}) {
+		return nil, fmt.Errorf("%w: administrative checkpoint position", ErrFormat)
+	}
+	if len(controlCID) == 0 || len(controlCID) > MaxParentBytes || len(snapshotCID) == 0 || len(snapshotCID) > MaxParentBytes {
+		return nil, fmt.Errorf("%w: administrative checkpoint CID size", ErrFormat)
+	}
+	if _, err := cid.Cast(controlCID); err != nil {
+		return nil, fmt.Errorf("%w: administrative checkpoint control CID", ErrFormat)
+	}
+	if _, err := cid.Cast(snapshotCID); err != nil {
+		return nil, fmt.Errorf("%w: administrative checkpoint snapshot CID", ErrFormat)
+	}
+	key, err := deriveKitSigningKey(kit, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(key)
+	fingerprint := sha256.Sum256(key.Public().(ed25519.PublicKey))
+	return signCheckpoint(Checkpoint{
+		Vault: vaultID, Anchor: anchor, EpochSeq: epoch, PolicyDigest: policyDigest,
+		ControlCID: bytes.Clone(controlCID), SnapshotCID: bytes.Clone(snapshotCID),
+		Signer: Signer{DeviceID: "recovery-kit", KeyID: fingerprint[:]},
+	}, key)
 }

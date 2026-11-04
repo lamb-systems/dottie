@@ -74,6 +74,8 @@ func accountItemKey(vaultID [32]byte, deviceID string) string {
 }
 
 func TestAccountBootstrapStoresKeysAndPrintsFingerprints(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}
 	open := func() (accountKeyring, error) { return keyring, nil }
 	var stdout, stderr bytes.Buffer
@@ -91,9 +93,53 @@ func TestAccountBootstrapStoresKeysAndPrintsFingerprints(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, decodedKit, 32, "displayed recovery kit size")
 	require.Len(t, keyring.items, 1, "root device keys were not stored")
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	store, err := state.Open(paths)
+	require.NoError(t, err)
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	require.Len(t, selections, 1)
+	assert.Equal(t, "root-device", selections[0].DeviceID)
+	require.NoError(t, store.Close())
+	firstVault := selections[0].Vault
+	stdout.Reset()
+	stderr.Reset()
+	code = runAccount([]string{"bootstrap", "--vault-name", "personal", "--device-id", "root-device"}, &stdout, &stderr, open)
+	require.Equal(t, 0, code)
+	paths, err = platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	store, err = state.Open(paths)
+	require.NoError(t, err)
+	selections, err = store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	require.Len(t, selections, 2)
+	assert.Contains(t, [][32]byte{selections[0].Vault, selections[1].Vault}, firstVault)
+	assert.NotEqual(t, selections[0].Vault, selections[1].Vault)
+	assert.Len(t, keyring.items, 2)
+	require.NoError(t, store.Close())
+}
+
+func TestAccountBootstrapKeyringFailureRecordsNoSelection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}, err: platform.ErrKeyringUnavailable}
+	var stdout, stderr bytes.Buffer
+	code := runAccount([]string{"bootstrap", "--vault-name", "personal", "--device-id", "root-device"}, &stdout, &stderr, func() (accountKeyring, error) { return keyring, nil })
+	require.Equal(t, 1, code)
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	store, err := state.Open(paths)
+	require.NoError(t, err)
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, selections)
+	require.NoError(t, store.Close())
 }
 
 func TestAccountEnrollRequiresMatchingTranscriptFingerprint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}
 	open := func() (accountKeyring, error) { return keyring, nil }
 	vaultID := bytes.Repeat([]byte{0x55}, 32)
@@ -117,6 +163,15 @@ func TestAccountEnrollRequiresMatchingTranscriptFingerprint(t *testing.T) {
 	require.Equal(t, 0, code, "matching confirmation must pass")
 	assert.Contains(t, confirmedOut.String(), "transcript confirmed", "confirmation result")
 	assert.Empty(t, confirmedErr.String(), "stderr")
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	stateStore, err := state.Open(paths)
+	require.NoError(t, err)
+	selections, err := stateStore.VaultSelections(context.Background())
+	require.NoError(t, err)
+	require.Len(t, selections, 1)
+	assert.Equal(t, "new-device", selections[0].DeviceID)
+	require.NoError(t, stateStore.Close())
 
 	wrong := strings.Repeat("0", 64)
 	if wrong == fingerprint {

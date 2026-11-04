@@ -81,12 +81,20 @@ func checkpointRecordMap(value CheckpointRecord) map[string]any {
 }
 
 func attestationRecordMap(value AttestationRecord) map[string]any {
-	return map[string]any{
+	object := map[string]any{
 		"$type": VaultAttestationNSID, "schemaVersion": value.SchemaVersion, "vault": value.Vault,
 		"deviceId": value.DeviceID, "policyDigest": value.PolicyDigest, "retentionFloor": int64(value.RetentionFloor),
 		"retainedRecoveryPoints": int64(value.RetainedRecoveryPoints), "controlCid": value.ControlCID,
 		"signerDeviceId": value.SignerDeviceID, "signerKeyId": value.SignerKeyID, "signature": value.Signature,
 	}
+	if value.SchemaVersion == 2 {
+		points := make([]any, len(value.RecoveryPoints))
+		for index, point := range value.RecoveryPoints {
+			points[index] = map[string]any{"epoch": int64(point.Epoch), "snapshotCid": point.SnapshotCID}
+		}
+		object["recoveryPoints"] = points
+	}
+	return object
 }
 
 func decodeSnapshotRecord(object map[string]any) (Record, error) {
@@ -383,13 +391,25 @@ func decodeCheckpointRecord(object map[string]any) (Record, error) {
 }
 
 func decodeAttestationRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "policyDigest", "retentionFloor", "retainedRecoveryPoints", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
-		return nil, err
-	}
 	value := AttestationRecord{}
 	var err error
 	if value.SchemaVersion, err = fieldInt(object, "schemaVersion"); err != nil {
 		return nil, err
+	}
+	switch value.SchemaVersion {
+	case 1:
+		if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "policyDigest", "retentionFloor", "retainedRecoveryPoints", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+			return nil, err
+		}
+	case 2:
+		if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "policyDigest", "retentionFloor", "retainedRecoveryPoints", "recoveryPoints", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+			return nil, err
+		}
+		if value.RecoveryPoints, err = fieldAttestationRecoveryPoints(object, "recoveryPoints"); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, &RecordDecodeError{Field: "schemaVersion", Reason: "unsupported schema version"}
 	}
 	if value.Vault, err = fieldBytes(object, "vault", 32, 32); err != nil {
 		return nil, err
@@ -420,8 +440,8 @@ func decodeAttestationRecord(object map[string]any) (Record, error) {
 	if value.Signature, err = fieldBytes(object, "signature", ed25519SignatureSize, ed25519SignatureSize); err != nil {
 		return nil, err
 	}
-	if err := versionOne(value.SchemaVersion); err != nil {
-		return nil, err
+	if value.SchemaVersion == 2 && len(value.RecoveryPoints) != int(value.RetainedRecoveryPoints) {
+		return nil, &RecordDecodeError{Field: "retainedRecoveryPoints", Reason: "count does not match recoveryPoints"}
 	}
 	return value, nil
 }
@@ -567,6 +587,46 @@ func fieldRecipients(object map[string]any, name string) ([]PolicyRecipientRecor
 		}
 	}
 	return recipients, nil
+}
+
+func fieldAttestationRecoveryPoints(object map[string]any, name string) ([]AttestationRecoveryPointRecord, error) {
+	values, ok := object[name].([]any)
+	if !ok {
+		return nil, &RecordDecodeError{Field: name, Reason: "expected array"}
+	}
+	if len(values) > int(^uint16(0)) {
+		return nil, &RecordDecodeError{Field: name, Reason: "limit exceeded"}
+	}
+	points := make([]AttestationRecoveryPointRecord, len(values))
+	for index, item := range values {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, &RecordDecodeError{Field: name, Reason: "invalid recovery point"}
+		}
+		if err := exactKeys(entry, "epoch", "snapshotCid"); err != nil {
+			return nil, err
+		}
+		epoch, err := fieldUint(entry, "epoch", MaxRecordInteger)
+		if err != nil {
+			return nil, err
+		}
+		points[index].Epoch = epoch
+		points[index].SnapshotCID, err = fieldBytes(entry, "snapshotCid", 1, vault.MaxParentBytes)
+		if err != nil {
+			return nil, err
+		}
+		if index > 0 && !attestationRecoveryPointLess(points[index-1], points[index]) {
+			return nil, &RecordDecodeError{Field: name, Reason: "duplicate or out-of-order recovery point"}
+		}
+	}
+	return points, nil
+}
+
+func attestationRecoveryPointLess(left, right AttestationRecoveryPointRecord) bool {
+	if left.Epoch != right.Epoch {
+		return left.Epoch < right.Epoch
+	}
+	return bytes.Compare(left.SnapshotCID, right.SnapshotCID) < 0
 }
 
 func fieldRevoked(object map[string]any, name string) ([]RevokedDeviceRecord, error) {
