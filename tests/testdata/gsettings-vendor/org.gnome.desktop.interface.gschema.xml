@@ -1,0 +1,44 @@
+<schemalist gettext-domain="dottie-test">
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="gtk-theme" type="s">
+      <default>'Vendor GTK'</default>
+    </key>
+    <key name="icon-theme" type="s">
+      <default>'Vendor Icons'</default>
+    </key>
+    <key name="cursor-theme" type="s">
+      <default>'Vendor Cursors'</default>
+    </key>
+    <key name="color-scheme" enum="org.gnome.desktop.GDesktopColorScheme">
+      <default>'prefer-light'</default>
+    </key>
+    <key name="accent-color" enum="org.gnome.desktop.GDesktopAccentColor">
+      <default>'orange'</default>
+    </key>
+    <key name="font-name" type="s">
+      <default>'Vendor Sans 13'</default>
+    </key>
+    <key name="document-font-name" type="s">
+      <default>'Vendor Serif 13'</default>
+    </key>
+    <key name="monospace-font-name" type="s">
+      <default>'Vendor Mono 13'</default>
+    </key>
+    <key name="text-scaling-factor" type="d">
+      <range min="0.5" max="3.0"/>
+      <default>1.1</default>
+    </key>
+    <key name="clock-format" enum="org.gnome.desktop.GDesktopClockFormat">
+      <default>'12h'</default>
+    </key>
+    <key name="clock-show-date" type="b">
+      <default>false</default>
+    </key>
+    <key name="clock-show-seconds" type="b">
+      <default>true</default>
+    </key>
+    <key name="clock-show-weekday" type="b">
+      <default>true</default>
+    </key>
+  </schema>
+</schemalist>

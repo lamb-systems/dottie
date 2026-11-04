@@ -1,0 +1,7 @@
+<schemalist gettext-domain="dottie-test">
+  <schema id="org.gnome.desktop.calendar" path="/org/gnome/desktop/calendar/">
+    <key name="show-weekdate" type="b">
+      <default>true</default>
+    </key>
+  </schema>
+</schemalist>

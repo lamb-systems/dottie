@@ -81,12 +81,23 @@ native-check:
 	@$(PKG_CONFIG) --exists gio-2.0 || { echo "native GSettings tests require gio-2.0 development files" >&2; exit 1; }
 	@$(PKG_CONFIG) --atleast-version=$(GIO_MIN_VERSION) gio-2.0 || { echo "native GSettings tests require GIO >= $(GIO_MIN_VERSION) (documentation-derived API floor)" >&2; exit 1; }
 	@command -v glib-compile-schemas >/dev/null || { echo "native GSettings tests require glib-compile-schemas" >&2; exit 1; }
-	@printf 'native prerequisites: Linux, CGO, %s, gio-2.0 %s (minimum %s), glib-compile-schemas\n' "$(CC)" "$$($(PKG_CONFIG) --modversion gio-2.0)" "$(GIO_MIN_VERSION)"
+	@command -v dbus-run-session >/dev/null || { echo "native GNOME restore gate requires dbus-run-session" >&2; exit 1; }
+	@command -v gsettings >/dev/null || { echo "native GNOME restore gate requires gsettings" >&2; exit 1; }
+	@tmpfile="$$(mktemp)"; trap 'rm -f "$$tmpfile"' EXIT; \
+	if ! GSETTINGS_BACKEND=dconf gsettings list-schemas >/dev/null 2>"$$tmpfile"; then \
+		cat "$$tmpfile" >&2; echo "native GNOME restore gate requires a loadable dconf GIO backend (install the dconf GSettings backend)" >&2; exit 1; \
+	fi; \
+	if grep -Fq "Can't find module" "$$tmpfile"; then \
+		cat "$$tmpfile" >&2; echo "native GNOME restore gate could not load the dconf GIO module" >&2; exit 1; \
+	fi
+	@printf 'native prerequisites: Linux, CGO, %s, gio-2.0 %s (minimum %s), glib-compile-schemas, dbus-run-session, loadable dconf GIO module. The probe proves loadability only; the isolated gate proves write and activation.\n' "$(CC)" "$$($(PKG_CONFIG) --modversion gio-2.0)" "$(GIO_MIN_VERSION)"
 
 test-gnome: native-check
-	$(GO) vet -tags gsettings ./internal/source/gnome
+	$(GO) vet -tags gsettings ./internal/source/gnome ./tests/local
 	$(GO) test -count=1 -tags gsettings ./internal/source/gnome
+	$(GO) test -count=1 -tags gsettings ./tests/local
 
 test-gnome-race: native-check
-	$(GO) vet -tags gsettings ./internal/source/gnome
+	$(GO) vet -tags gsettings ./internal/source/gnome ./tests/local
 	$(GO) test -race -count=1 -tags gsettings ./internal/source/gnome
+	$(GO) test -race -count=1 -tags gsettings ./tests/local

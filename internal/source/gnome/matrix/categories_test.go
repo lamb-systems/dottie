@@ -19,9 +19,10 @@ type fixtureSchema struct {
 }
 
 type fixtureKey struct {
-	Name string `xml:"name,attr"`
-	Type string `xml:"type,attr"`
-	Enum string `xml:"enum,attr"`
+	Name    string `xml:"name,attr"`
+	Type    string `xml:"type,attr"`
+	Enum    string `xml:"enum,attr"`
+	Default string `xml:"default"`
 }
 
 type fixtureSchemalist struct {
@@ -122,6 +123,52 @@ func TestCategoryMatrixMatchesFixtureSurface(t *testing.T) {
 			assert.True(t, ok, "fixture schema %q has an untracked key %q", schemaID, key.Name)
 		}
 	}
+}
+
+func TestVendorFixtureMatchesSurfaceAndChangesDefaults(t *testing.T) {
+	canonical := readFixtureSchemas(t, fixtureDirectory(t, "gsettings"))
+	vendor := readFixtureSchemas(t, fixtureDirectory(t, "gsettings-vendor"))
+	for _, schemaID := range []string{interfaceSchema, calendarSchema} {
+		canonicalSchema, ok := canonical[schemaID]
+		require.True(t, ok, "canonical fixture schema %q is required", schemaID)
+		vendorSchema, ok := vendor[schemaID]
+		require.True(t, ok, "vendor fixture schema %q is required", schemaID)
+		assert.Equal(t, canonicalSchema.Path, vendorSchema.Path)
+		assert.Len(t, vendorSchema.Keys, len(canonicalSchema.Keys))
+		for _, canonicalKey := range canonicalSchema.Keys {
+			var vendorKey *fixtureKey
+			for index := range vendorSchema.Keys {
+				if vendorSchema.Keys[index].Name == canonicalKey.Name {
+					vendorKey = &vendorSchema.Keys[index]
+					break
+				}
+			}
+			require.NotNil(t, vendorKey, "vendor fixture schema %q is missing key %q", schemaID, canonicalKey.Name)
+			canonicalType, canonicalFound := schemaKeyType(canonicalSchema, canonicalKey.Name)
+			vendorType, vendorFound := schemaKeyType(vendorSchema, canonicalKey.Name)
+			assert.True(t, canonicalFound)
+			assert.True(t, vendorFound)
+			assert.Equal(t, canonicalType, vendorType)
+			assert.NotEqual(t, canonicalKey.Default, vendorKey.Default, "vendor fixture default must differ for %s/%s", schemaID, canonicalKey.Name)
+		}
+	}
+	assert.Equal(t, "'Adwaita'", fixtureKeyDefault(t, canonical[interfaceSchema], "icon-theme"))
+	assert.Equal(t, "'Vendor Icons'", fixtureKeyDefault(t, vendor[interfaceSchema], "icon-theme"))
+	assert.Equal(t, "'default'", fixtureKeyDefault(t, canonical[interfaceSchema], "color-scheme"))
+	assert.Equal(t, "'prefer-light'", fixtureKeyDefault(t, vendor[interfaceSchema], "color-scheme"))
+	assert.Equal(t, "false", fixtureKeyDefault(t, canonical[calendarSchema], "show-weekdate"))
+	assert.Equal(t, "true", fixtureKeyDefault(t, vendor[calendarSchema], "show-weekdate"))
+}
+
+func fixtureKeyDefault(t *testing.T, schema fixtureSchema, name string) string {
+	t.Helper()
+	for _, key := range schema.Keys {
+		if key.Name == name {
+			return key.Default
+		}
+	}
+	require.FailNow(t, "fixture key is missing", "%s", name)
+	return ""
 }
 
 func TestOlderFixtureMatchesIntroductionBounds(t *testing.T) {

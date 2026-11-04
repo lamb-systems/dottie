@@ -89,6 +89,32 @@ exploration.
 
 [`tests/local/restore_gate_test.go`](tests/local/restore_gate_test.go) composes filesystem capture, reconciliation preview, journaled apply and rollback on a synthetic Neovim tree plus a custom WM root under temporary directories. It checks automatic module inclusion, combined file edits, rename planning, missing-root and unsafe-link refusals, local-only exclusions, convergence, repeatability, and preservation of a newer edit during rollback. Run it offline with `go test -v ./tests/local`. This is an internal integration proof, not a CLI workflow; it does not exercise GNOME, network services, remote publication or a real home directory.
 
+## Combined GNOME/files restore gate
+
+Run `make test-gnome` for the offline restore gate, or `make test-gnome-race` for
+its race-enabled form. It runs one combined filesystem-and-settings restore scenario
+against both the native GSettings keyfile backend and the native dconf backend. The
+dconf run uses the real `dconf-service` activated on a temporary private D-Bus; both
+runs use isolated temporary homes and XDG paths, compiled synthetic schemas with
+canonical source defaults and different vendor destination defaults, and pre-created
+selected directory skeletons with matching modes. The gate checks exact setting and
+file values, reset behavior, convergence and no-op re-apply, unrelated cross-schema
+sentinels, and journaled rollback while preserving newer file and setting edits. It
+also checks missing keys and schemas, plus a 12-key synthetic per-key older-schema
+subset (not older category compatibility).
+
+**Real versus simulated boundary:** the gate exercises the real keyfile backend and
+real dconf backend with a real dconf service on a temporary private bus, synthetic
+schemas, isolated temporary homes, prepared directory selections, and simulated
+locks. It does not use a production desktop session or profile, real user preferences,
+system-db lockdown, a VM, or CLI wiring. The locked case decorates the real backend to
+report one setting as non-writable; it does not validate real lockdown. Restore is
+proved only into prepared directory selections: applying a file preview creates files
+inside existing roots, not a missing selected root or directory hierarchy. The
+unrelated-settings check is cross-schema preservation, not key-level isolation within
+the schema being written. The 12-key older-surface case is a synthetic per-key subset,
+not evidence of support for older GNOME categories or automatic degradation.
+
 ## Continuous integration
 
 GitHub Actions runs required checks on pull requests and pushes to `main`. The default

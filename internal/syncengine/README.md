@@ -101,6 +101,7 @@ changed to `blocked / coverage-incomplete` if the local target is not in `Covera
 | M1 | missing | any | any | local `=` remote | unchanged | equal |
 | M2 | missing | D | D | file values differ, but both sides have no live file | unchanged | both-deleted |
 | M3 | missing | known-absent | entry | remote has an entry and M1/M2 did not match | download | base-missing |
+| M3a | missing | setting-reset | present setting | inbound reset exception | download | base-missing |
 | M4 | missing | entry | known-absent | local has an entry and M1/M2 did not match | upload | base-missing |
 | M5 | missing | any | any | no preceding M row matches | conflict | base-missing |
 | K1 | known or stale | any | any | local `=` remote | unchanged | equal |
@@ -121,8 +122,7 @@ The table ordering resolves the formerly overlapping case `base=A, local=tombsto
 exactly once as `delete-remote` (K4). `base=A, local=tombstone, remote=B` is a two-sided change
 and resolves to `conflict / divergence` (K7), never a deletion. When the base is missing, a local
 absence does not imply deletion: a remote entry is downloaded (M3), and a local entry is uploaded
-when remote is absent (M4). A setting reset is an explicit setting operation, not a file deletion;
-it is uploaded or downloaded by the one-sided-change rules. Stale-base divergence uses the
+when remote is absent (M4). A setting reset is an explicit setting operation, not a file deletion; it remains a value wherever a base exists. With a missing base, local `setting-reset` plus remote present setting is the narrowly scoped inbound exception and resolves to `download / base-missing`; the explicit reset stays in the decision and the local fingerprint is preserved. The other missing-base rows are unchanged: nil plus reset downloads, reset plus nil uploads, equal resets are unchanged, and present-versus-reset or divergent present values conflict. Stale-base behavior is unchanged. Stale-base divergence uses the
 separate `stale-base` reason and stale provenance never emits either deletion action.
 
 ## Equality

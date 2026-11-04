@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,6 +161,54 @@ func TestReconcileKnownAbsentSettingsDeletionRequiresCoverage(t *testing.T) {
 		require.Equal(t, ActionDeleteRemote, decision.Action, "covered setting deletion = %+v", decision)
 		require.Equal(t, ValueKnownAbsent, decision.States.Local, "covered setting deletion = %+v", decision)
 	}
+}
+
+func TestReconcileBaseMissingSettingsResetBoundaries(t *testing.T) {
+	options := settingsBinding(t)
+	absent := (*model.Entry)(nil)
+	reset := setting(model.SettingReset, "", "")
+	present := setting(model.SettingPresent, "b", "true")
+	cases := []struct {
+		name   string
+		local  *model.Entry
+		remote *model.Entry
+		action Action
+		reason Reason
+	}{
+		{name: "nil reset", local: absent, remote: &reset, action: ActionDownload, reason: ReasonBaseMissing},
+		{name: "reset nil", local: &reset, remote: absent, action: ActionUpload, reason: ReasonBaseMissing},
+		{name: "reset reset", local: &reset, remote: &reset, action: ActionUnchanged, reason: ReasonEqual},
+		{name: "reset present inbound exception", local: &reset, remote: &present, action: ActionDownload, reason: ReasonBaseMissing},
+		{name: "present reset conflict retained", local: &present, remote: &reset, action: ActionConflict, reason: ReasonBaseMissing},
+		{name: "present present conflict retained", local: &present, remote: entryPtr(setting(model.SettingPresent, "b", "false")), action: ActionConflict, reason: ReasonBaseMissing},
+	}
+	emptyPlan, err := Reconcile(BaseView{Status: BaseMissing}, LocalView{}, nil, options)
+	require.NoError(t, err)
+	assert.Empty(t, emptyPlan.Decisions, "nil/nil has no setting identity to decide")
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			decision := reconcileOne(t, BaseMissing, nil, test.local, test.remote, options)
+			assert.Equal(t, test.action, decision.Action)
+			assert.Equal(t, test.reason, decision.Reason)
+		})
+	}
+	decision := reconcileOne(t, BaseMissing, nil, &reset, &present, options)
+	assert.Equal(t, ValueSettingReset, decision.States.Local)
+	assert.Equal(t, ValuePresent, decision.States.Remote)
+	assert.Equal(t, settingFingerprintPointer(&reset), decision.Fingerprints.Local)
+	assert.Equal(t, settingFingerprintPointer(&present), decision.Fingerprints.Remote)
+
+	for _, status := range []BaseStatus{BaseKnown, BaseStale} {
+		decision := reconcileOne(t, status, &present, &reset, &present, options)
+		assert.Equal(t, ActionUpload, decision.Action, "%s reset remains an explicit change", status)
+		decision = reconcileOne(t, status, &present, &present, &reset, options)
+		assert.Equal(t, ActionDownload, decision.Action, "%s remote reset remains an explicit change", status)
+	}
+}
+
+func settingFingerprintPointer(entry *model.Entry) *Fingerprint {
+	fingerprint := fingerprintEntry(*entry)
+	return &fingerprint
 }
 
 func TestReconcileSettingsResetAndCanonicalTypedText(t *testing.T) {

@@ -321,6 +321,9 @@ func decideWithoutBase(local, remote *model.Entry, source model.SourceKind) (Act
 	if bothFileDeleted(local, remote, source) {
 		return ActionUnchanged, ReasonBothDeleted
 	}
+	if source == model.SourceGNOME && local != nil && local.Setting != nil && local.Setting.State == model.SettingReset && remote != nil && remote.Setting != nil && remote.Setting.State == model.SettingPresent {
+		return ActionDownload, ReasonBaseMissing
+	}
 	if local == nil && remote != nil {
 		return ActionDownload, ReasonBaseMissing
 	}
