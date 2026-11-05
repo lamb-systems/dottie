@@ -3,7 +3,7 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: the coordinator-backed manual workflows now include history, ciphertext export and validation-only import.**
+**Status: synthetic publication privacy and transport-failure checks plus archive-to-plaintext recovery evidence are implemented; the live publication and archive gates remain opt-in and have not been run against a provider.**
 Account authorization is available through `dottie account login`, `status` and `logout`;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
@@ -50,9 +50,11 @@ apply. Recovery floor is the oldest complete inventory; confidentiality floor is
 known material. Unknown-epoch holdings make the confidentiality floor unknown. The cap bounds retained
 epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
 preserving version-1 count-only decoding; the tagged two-machine gate exercises export/import
-against a shared synthetic MemoryPDS. These offline tests do not establish live PDS compatibility
-or production desktop behavior. P06 remains subject to acceptance review; live PDS validation is
-P07/P08, and real user data must not be used as a fixture.
+against a shared synthetic MemoryPDS. Offline publication, renderer and source-loss archive tests use
+synthetic records, canaries and temporary homes. They do not establish live provider compatibility,
+hosted-log visibility or production desktop behavior. The opt-in live publication and archive gates
+require explicit disposable-account authorization and remain unrun; a skipped gate is not provider
+evidence. Real user data must not be used as a fixture.
 
 ## Target design
 
@@ -127,6 +129,27 @@ fuzz target for 30 seconds by default; `FUZZ_TIME` overrides that bound. `make f
 runs each target for five seconds and is reserved for non-required scheduled/manual
 exploration. Fuzz seeds run as part of ordinary `go test` without time-bounded
 exploration.
+
+## Publication privacy and archive recovery gates
+
+`go test -count=1 ./tests/integration` runs the offline publication audit against a synthetic
+`MemoryPDS`: it scans repository and blob surfaces for plaintext/credential canaries, inventories
+recursive record keys, checks typed blob references and models publication failure outcomes. The
+source-loss archive test exports through the coordinator, removes the synthetic source records and
+blobs, checks that online read/restore refuses without changing local application state, validates the
+archive offline, and opens the archived current snapshot with a retained recipient key in a fresh
+temporary home. `go test -count=1 ./internal/cli` exercises the package-internal renderer privacy
+contract. These tests use synthetic data only.
+
+The live publication gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
+allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; it writes synthetic
+canary records and cannot remove provider blobs. The live archive gate also skips by default and
+requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
+`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that
+decodes to a 32-byte kit, plus explicit disposable-account authorization. It uses the existing local vault selection/checkpoint and a temporary archive path;
+export and archive validation are read-only and the gate rejects repository write endpoints. Neither
+gate has been run against a provider. A skipped gate is not provider evidence. Hosted provider logs
+and server-side storage are not observable from a client.
 
 ## Local restore gate
 

@@ -6,6 +6,10 @@ provide generic record CRUD or blob management, encrypt snapshot content, or wir
 into the CLI. `VaultReader.FetchBlob` is a read-only, size-bounded CID fetch for already-proven
 snapshot references; export composition uses it to verify ciphertext without decrypting.
 
+The repository records carry public plaintext metadata, including user-supplied device ids, epochs,
+publication and retention counts, key ids, and signing/encryption public keys. Treat device ids as
+public labels; snapshot content remains in encrypted envelope blobs.
+
 ## Vault record binding
 
 The seven `systems.lamb.dottie` Lexicon records are represented by typed Go values in `records.go`.

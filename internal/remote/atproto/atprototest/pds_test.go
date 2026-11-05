@@ -127,6 +127,94 @@ func TestMemoryPDSBlobLifecycleAndServingRefusal(t *testing.T) {
 	assert.Equal(t, 503, status)
 }
 
+func TestMemoryPDSListRecordsAndListBlobsExposeLiveProjection(t *testing.T) {
+	pds := newMemoryPDS(t)
+	ctx := context.Background()
+	orphan := uploadPDSBlob(t, pds, []byte("orphan bytes"))
+	orphanCID := orphan.Ref.CID().String()
+	live := uploadPDSBlob(t, pds, []byte("live bytes"))
+	liveCID := live.Ref.CID().String()
+	liveRecord, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": live})
+	require.NoError(t, err)
+	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "live", liveRecord)
+	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "second", []byte(`{"$type":"systems.example.blobRecord","value":"second"}`))
+
+	status, body, err := pds.Do(ctx, "GET", "com.atproto.repo.listRecords", url.Values{"repo": {memoryPDSTestDID}, "collection": {"systems.example.blobRecord"}}, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
+	var records struct {
+		Records []struct {
+			URI   string         `json:"uri"`
+			CID   string         `json:"cid"`
+			Value map[string]any `json:"value"`
+		} `json:"records"`
+	}
+	require.NoError(t, json.Unmarshal(body, &records))
+	require.Len(t, records.Records, 2)
+	assert.Equal(t, "at://"+memoryPDSTestDID+"/systems.example.blobRecord/live", records.Records[0].URI)
+	assert.Equal(t, "at://"+memoryPDSTestDID+"/systems.example.blobRecord/second", records.Records[1].URI)
+	assert.Equal(t, liveCID, records.Records[0].Value["blob"].(map[string]any)["ref"].(map[string]any)["$link"])
+
+	status, body, err = pds.Do(ctx, "GET", "com.atproto.sync.listBlobs", url.Values{"did": {memoryPDSTestDID}}, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
+	var listed struct {
+		CIDs []string `json:"cids"`
+	}
+	require.NoError(t, json.Unmarshal(body, &listed))
+	assert.Equal(t, []string{liveCID}, listed.CIDs)
+	assert.ElementsMatch(t, []string{liveCID, orphanCID}, pds.StoredBlobCIDs())
+	assert.True(t, pds.PubliclyRetrievable(liveCID))
+	assert.False(t, pds.PubliclyRetrievable(orphanCID))
+}
+
+func TestMemoryPDSFailureHooksAndPostProcessingExposure(t *testing.T) {
+	pds := newMemoryPDS(t)
+	ctx := context.Background()
+	pds.SetHooks(MemoryPDSHooks{RejectNextUploadBlobStatus: 413, RejectNextUploadBlobCode: "StorageQuotaExceeded"})
+	status, body, err := pds.Do(ctx, "POST", "com.atproto.repo.uploadBlob", nil, []byte("rejected"), "application/octet-stream")
+	require.NoError(t, err)
+	assert.Equal(t, 413, status)
+	assert.JSONEq(t, `{"error":"StorageQuotaExceeded"}`, string(body))
+	assert.Empty(t, pds.StoredBlobCIDs())
+
+	pds.SetHooks(MemoryPDSHooks{RejectNextApplyWritesStatus: 429, RejectNextApplyWritesCode: "QuotaExceeded"})
+	status, body, err = applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.preferences", "rejected", []byte(`{"$type":"systems.example.preferences","value":"no"}`))
+	require.NoError(t, err)
+	assert.Equal(t, 429, status)
+	assert.JSONEq(t, `{"error":"QuotaExceeded"}`, string(body))
+	_, exists := pds.Record("systems.example.preferences", "rejected")
+	assert.False(t, exists)
+
+	blob := uploadPDSBlob(t, pds, []byte("post-processing candidate"))
+	blobCID := blob.Ref.CID().String()
+	value, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": blob})
+	require.NoError(t, err)
+	pds.SetHooks(MemoryPDSHooks{
+		RejectNextApplyWritesAfterBlobProcessing:       true,
+		RejectNextApplyWritesAfterBlobProcessingStatus: 400,
+		RejectNextApplyWritesAfterBlobProcessingCode:   "StorageQuotaExceeded",
+	})
+	before := pds.CurrentRevision().CommitCID
+	status, body, err = applyPDSRecord(ctx, pds, before.String(), "create", "systems.example.blobRecord", "candidate", value)
+	require.NoError(t, err)
+	assert.Equal(t, 400, status)
+	assert.JSONEq(t, `{"error":"StorageQuotaExceeded"}`, string(body))
+	assert.Equal(t, before, pds.CurrentRevision().CommitCID)
+	_, exists = pds.Record("systems.example.blobRecord", "candidate")
+	assert.False(t, exists)
+	assert.Contains(t, pds.StoredBlobCIDs(), blobCID)
+	assert.False(t, pds.BlobIsLive(blobCID))
+	assert.True(t, pds.PubliclyRetrievable(blobCID))
+	streamStatus, stream, err := pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}})
+	require.NoError(t, err)
+	assert.Equal(t, 200, streamStatus)
+	served, err := io.ReadAll(stream)
+	require.NoError(t, err)
+	require.NoError(t, stream.Close())
+	assert.Equal(t, []byte("post-processing candidate"), served)
+}
+
 func TestMemoryPDSApplyWritesResponseHooksAndDelete(t *testing.T) {
 	pds := newMemoryPDS(t)
 	ctx := context.Background()

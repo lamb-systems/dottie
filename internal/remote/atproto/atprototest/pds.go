@@ -29,10 +29,17 @@ const (
 var ErrLostResponse = errors.New("synthetic PDS response lost after commit")
 
 type MemoryPDSHooks struct {
-	LoseNextApplyWritesResponse      bool
-	DuplicateNextApplyWritesResponse bool
-	RejectNextApplyWrites            bool
-	GetBlobStatus                    int
+	LoseNextApplyWritesResponse                    bool
+	DuplicateNextApplyWritesResponse               bool
+	RejectNextApplyWrites                          bool
+	RejectNextUploadBlobStatus                     int
+	RejectNextUploadBlobCode                       string
+	RejectNextApplyWritesStatus                    int
+	RejectNextApplyWritesCode                      string
+	RejectNextApplyWritesAfterBlobProcessing       bool
+	RejectNextApplyWritesAfterBlobProcessingCode   string
+	RejectNextApplyWritesAfterBlobProcessingStatus int
+	GetBlobStatus                                  int
 }
 
 type MemoryPDS struct {
@@ -42,6 +49,7 @@ type MemoryPDS struct {
 	current SignedRevision
 	records map[string]Record
 	blobs   map[string][]byte
+	exposed map[string]bool
 	hooks   MemoryPDSHooks
 	calls   []string
 }
@@ -76,7 +84,7 @@ func NewMemoryPDS(did string, signingKey *atcrypto.PrivateKeyP256) (*MemoryPDS, 
 	}
 	return &MemoryPDS{
 		did: did, key: signingKey, current: initial,
-		records: make(map[string]Record), blobs: make(map[string][]byte),
+		records: make(map[string]Record), blobs: make(map[string][]byte), exposed: make(map[string]bool),
 	}, nil
 }
 
@@ -112,6 +120,29 @@ func (p *MemoryPDS) BlobIsLive(blobCID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.isLiveBlob(blobCID)
+}
+
+func (p *MemoryPDS) StoredBlobCIDs() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]string, 0, len(p.blobs))
+	for blobCID := range p.blobs {
+		result = append(result, blobCID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (p *MemoryPDS) PubliclyRetrievable(blobCID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.hooks.GetBlobStatus != 0 {
+		return false
+	}
+	if _, exists := p.blobs[blobCID]; !exists {
+		return false
+	}
+	return p.isLiveBlob(blobCID) || p.exposed[blobCID]
 }
 
 func (p *MemoryPDS) RemoveBlob(blobCID string) {
@@ -175,6 +206,44 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 			return errorResponse(400, "InvalidRequest")
 		}
 		return jsonResponse(200, map[string]string{"cid": p.current.CommitCID.String(), "rev": RepositoryRevision})
+	case "com.atproto.repo.listRecords":
+		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), "self") {
+			return errorResponse(400, "InvalidRequest")
+		}
+		collection := query.Get("collection")
+		records := make([]map[string]any, 0)
+		for _, record := range p.records {
+			if record.Collection != collection {
+				continue
+			}
+			value, err := atdata.UnmarshalCBOR(record.Data)
+			if err != nil {
+				return errorResponse(500, "InternalServerError")
+			}
+			recordCID, err := dagCBORCID(record.Data)
+			if err != nil {
+				return errorResponse(500, "InternalServerError")
+			}
+			uri := "at://" + p.did + "/" + record.Collection + "/" + record.RKey
+			records = append(records, map[string]any{"uri": uri, "cid": recordCID.String(), "value": jsonAPIValue(value)})
+		}
+		if len(records) > 4096 {
+			return errorResponse(413, "TooManyRecords")
+		}
+		sort.Slice(records, func(i, j int) bool { return records[i]["uri"].(string) < records[j]["uri"].(string) })
+		return jsonResponse(200, map[string]any{"records": records})
+	case "com.atproto.sync.listBlobs":
+		if method != "GET" || query.Get("did") != p.did {
+			return errorResponse(400, "InvalidRequest")
+		}
+		cids := make([]string, 0)
+		for blobCID := range p.blobs {
+			if p.isLiveBlob(blobCID) {
+				cids = append(cids, blobCID)
+			}
+		}
+		sort.Strings(cids)
+		return jsonResponse(200, map[string]any{"cids": cids})
 	case "com.atproto.sync.getRecord", "com.atproto.repo.getRecord":
 		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), query.Get("rkey")) {
 			return errorResponse(400, "InvalidRequest")
@@ -197,6 +266,16 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		if method != "POST" || contentType != "application/octet-stream" || len(body) == 0 {
 			return errorResponse(400, "InvalidRequest")
 		}
+		if p.hooks.RejectNextUploadBlobStatus != 0 {
+			status := p.hooks.RejectNextUploadBlobStatus
+			code := p.hooks.RejectNextUploadBlobCode
+			p.hooks.RejectNextUploadBlobStatus = 0
+			p.hooks.RejectNextUploadBlobCode = ""
+			if code == "" {
+				code = "UploadRejected"
+			}
+			return errorResponse(status, code)
+		}
 		if len(body) > maxUploadBytes {
 			return errorResponse(413, "BlobTooLarge")
 		}
@@ -209,6 +288,16 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 	case "com.atproto.repo.applyWrites":
 		if method != "POST" || contentType != "application/json" {
 			return errorResponse(400, "InvalidRequest")
+		}
+		if p.hooks.RejectNextApplyWritesStatus != 0 {
+			status := p.hooks.RejectNextApplyWritesStatus
+			code := p.hooks.RejectNextApplyWritesCode
+			p.hooks.RejectNextApplyWritesStatus = 0
+			p.hooks.RejectNextApplyWritesCode = ""
+			if code == "" {
+				code = "ApplyWritesRejected"
+			}
+			return errorResponse(status, code)
 		}
 		if p.hooks.RejectNextApplyWrites {
 			p.hooks.RejectNextApplyWrites = false
@@ -250,7 +339,7 @@ func (p *MemoryPDS) OpenStream(ctx context.Context, endpoint string, query url.V
 		}
 		blobCID := query.Get("cid")
 		data, exists := p.blobs[blobCID]
-		if !exists || !p.isLiveBlob(blobCID) {
+		if !exists || !p.isLiveBlob(blobCID) && !p.exposed[blobCID] {
 			return 404, io.NopCloser(bytes.NewReader([]byte(`{"error":"BlobNotFound"}`))), nil
 		}
 		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(data))), nil
@@ -324,6 +413,35 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 	response := jsonBytes(map[string]any{"commit": map[string]string{"cid": revision.CommitCID.String()}})
 	if len(response) > maxJSONResponseBytes {
 		return errorResponse(500, "ResponseTooLarge")
+	}
+	if p.hooks.RejectNextApplyWritesAfterBlobProcessing {
+		p.hooks.RejectNextApplyWritesAfterBlobProcessing = false
+		for _, write := range input.Writes {
+			if write.Type != "com.atproto.repo.applyWrites#create" && write.Type != "com.atproto.repo.applyWrites#update" {
+				continue
+			}
+			value, err := atdata.UnmarshalJSON(write.Value)
+			if err != nil {
+				continue
+			}
+			for _, blob := range atdata.ExtractBlobs(value) {
+				blobCID := cid.Cid(blob.Ref).String()
+				if _, exists := p.blobs[blobCID]; exists {
+					p.exposed[blobCID] = true
+				}
+			}
+		}
+		status := p.hooks.RejectNextApplyWritesAfterBlobProcessingStatus
+		code := p.hooks.RejectNextApplyWritesAfterBlobProcessingCode
+		p.hooks.RejectNextApplyWritesAfterBlobProcessingStatus = 0
+		p.hooks.RejectNextApplyWritesAfterBlobProcessingCode = ""
+		if status == 0 {
+			status = 400
+		}
+		if code == "" {
+			code = "StorageQuotaExceeded"
+		}
+		return errorResponse(status, code)
 	}
 	p.records = nextRecords
 	p.current = revision
@@ -431,6 +549,40 @@ func cloneSignedRevision(revision SignedRevision) SignedRevision {
 		cloned.Records[index] = cloneRecord(record)
 	}
 	return cloned
+}
+
+func jsonAPIValue(value any) any {
+	switch item := value.(type) {
+	case *atdata.Bytes:
+		if item == nil {
+			return nil
+		}
+		encoded := bytes.Clone([]byte(*item))
+		if encoded == nil {
+			encoded = []byte{}
+		}
+		return atdata.Bytes(encoded)
+	case atdata.Bytes:
+		encoded := bytes.Clone([]byte(item))
+		if encoded == nil {
+			encoded = []byte{}
+		}
+		return atdata.Bytes(encoded)
+	case map[string]any:
+		result := make(map[string]any, len(item))
+		for key, nested := range item {
+			result[key] = jsonAPIValue(nested)
+		}
+		return result
+	case []any:
+		result := make([]any, len(item))
+		for index, nested := range item {
+			result[index] = jsonAPIValue(nested)
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func jsonResponse(status int, value any) (int, []byte, error) {

@@ -3,6 +3,52 @@
 What Dottie protects, what it does not, and which limits were measured rather than assumed. This page is
 for someone deciding whether to trust the tool with their configuration.
 
+## Public metadata visibility
+
+Vault records are encrypted at the snapshot-envelope layer, but their typed repository records are
+public plaintext. The recursive key inventory asserted by the synthetic tests is:
+
+| Record type | Allowed recursive keys |
+| --- | --- |
+| `vaultSnapshot` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.publicationId`, `$.epochSeq`, `$.policyDigest`, `$.parent`, `$.blob`, `$.signerDeviceId`, `$.signerKeyId`, `$.envelopeSignatureDigest`, `$.signature`, `$.blob.$type`, `$.blob.ref`, `$.blob.mimeType`, `$.blob.size`, `$.blob.ref.$link` |
+| `vaultHead` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.policyDigest`, `$.snapshotCid`, `$.blobCid`, `$.publicationCount`, `$.prevHeadCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
+| `vaultControl` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.policyDigest`, `$.headSnapshotCid`, `$.revoked`, `$.prevControlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.revoked[].deviceId`, `$.revoked[].certEpoch` |
+| `vaultPolicy` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.roles`, `$.recipients`, `$.policyRetentionFloor`, `$.retainedRecoveryPoints`, `$.maxPublications`, `$.maxEpochAge`, `$.recoveryAnchor`, `$.prevPolicyDigest`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.roles[].deviceId`, `$.roles[].role`, `$.recipients[].deviceId`, `$.recipients[].keyId`, `$.recipients[].publicKey` |
+| `vaultCertificate` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.deviceId`, `$.keyId`, `$.signingPublicKey`, `$.encryptionPublicKey`, `$.role`, `$.certEpoch`, `$.issuer`, `$.revocationRef`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
+| `vaultCheckpoint` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.snapshotCid`, `$.epochSeq`, `$.policyDigest`, `$.anchor`, `$.controlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
+| `vaultAttestation` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.deviceId`, `$.policyDigest`, `$.retentionFloor`, `$.retainedRecoveryPoints`, `$.recoveryPoints`, `$.controlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.recoveryPoints[].epoch`, `$.recoveryPoints[].snapshotCid` |
+
+These record fields disclose vault and publication identifiers, epochs and counts, policy and control
+digests, device labels, key identifiers and public keys, signatures, CIDs, recipient roles and recovery
+positions. Device ids are user-supplied labels published in plaintext and must be treated as public.
+Records carry no timestamps. Repository revision `rev` and commit identity/CID are separately visible
+repository metadata; server-side request timing is separate metadata as well. The recursive inventory
+test fails if any unlisted key is added.
+
+Dottie has no log facility. For this client, routine output is the CLI/coordinator reporting surface.
+Routine status, read, push, history, export, recovery, device and administrative output omits relative
+entry locators. Candidate preview intentionally shows each target id and relative file path or setting
+schema/path/key so a user can give informed per-file consent. Restore output shows each relative entry
+locator and status; it omits target id because `restore --target ID` is single-target and the invocation
+already fixes that target. Both consent surfaces omit file content and setting values. Retention-prune
+output may show local payload/backup references; any absolute reference is confined to the state
+directory. All these renderers must exclude file contents, setting values, kit bytes, private keys,
+session material and absolute home/config/cache/data/temp roots.
+
+A client cannot observe hosted provider logs or server-side storage; neither is covered by local
+renderer or synthetic repository tests.
+
+## Archive recovery boundary
+
+Export is a ciphertext-only archive; `import` and `ImportExportArchive` validate it without decrypting
+or changing application state. The offline source-loss proof parses the archive and opens its current
+snapshot using the policy, control, certificates and envelope from that parsed archive plus a retained
+device recipient private key. The retained recipient key is required; kit-only decryption is impossible
+by design. There is no archive-to-files restore command. This is archive-to-plaintext recovery, not
+destination restoration, and it does not establish global freshness. Archive member SHA-256 digests
+are a layered integrity check; the tamper test proves refusal of a modified archive rather than
+isolating that check.
+
 ## Present and target, stated separately
 
 | Capability | Present | Target |
@@ -16,7 +62,7 @@ for someone deciding whether to trust the tool with their configuration.
 | Device roles, revocation, epochs | yes, public-key `devices enroll`/`revoke` and `account bootstrap`; synthetic transitions only | live provider validation |
 | Recovery kit and checkpoints | yes, `account recovery`/`verify`; restore proven synthetically | live provider validation |
 | Vault export and import | yes, `export` (complete ciphertext inventory, body fetch by CID) and validation-only `import` | offline archive application is not promised |
-| Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation (P07/P08) |
+| Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
 | Retention and manual pruning | yes, per-point inventories and `prune --plan|--apply --confirm`; no automatic GC | scheduled maintenance (B09) |
 | GNOME settings capture and apply | selected-key capture, apply and the category matrix, wired to CLI targets; real desktop not validated | real desktop validation (R03) |
 
@@ -46,10 +92,8 @@ keyring items directly, which cannot authorize application data, apply or public
 
 Every end-to-end demonstration in this repository uses disposable synthetic data: an in-memory AT Protocol
 provider, temporary homes and a synthetic keyring. No live provider, real account or real desktop session has
-been exercised. Real-data use therefore remains blocked until the fresh-machine milestone is accepted
-(DOT-P08) and the live-provider validation tasks complete; the independent security gate (DOT-V08) passed
-technically on 2026-11-05 with the accepted residual risks recorded in the task graph. Do not use this build to
-back up real data.
+been exercised. Real-data use remains blocked until fresh-machine and live-provider validation are complete.
+Do not use this build to back up real data.
 
 ## Authorities
 
