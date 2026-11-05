@@ -60,7 +60,7 @@ func liveArtifactDir(t *testing.T) string {
 		require.NoError(t, os.MkdirAll(configured, 0o700))
 		return configured
 	}
-	directory, err := os.MkdirTemp("", "dottie-live-p07-")
+	directory, err := os.MkdirTemp("", "dottie-live-audit-")
 	require.NoError(t, err)
 	return directory
 }

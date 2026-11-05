@@ -38,9 +38,7 @@ control, certificates and envelope used to recover the exact published plaintext
 recipient private key in a fresh temporary home. It also checks wrong-kit, wrong-anchor, missing-blob
 (no archive file written) and tampered-member refusals.
 
-This is archive-to-plaintext recovery, not destination restoration. A retained recipient key is required;
-kit-only decryption is impossible by design. There is no archive-to-files restore command. Archive
-validation authenticates the archive but does not establish global freshness.
+`TestArchiveRecoveryAfterSourceLoss` is archive-to-plaintext recovery, not destination restoration. A retained recipient key is required; kit-only decryption is impossible by design. `internal/service/archive_restore_test.go` test `TestRestoreFromArchiveAppliesOnlyKitCheckpointThroughSharedApply` proves checkpoint-only selection and no provider calls; `tests/integration/restore_milestone_test.go` test `TestRestoreMilestoneOfflineTwoHomeAndRecovery` applies an archive into a fresh home after deleting the synthetic source repository and blobs, then rolls back while preserving a newer edit. Archive validation authenticates the archive but does not establish global freshness.
 
 ## Opt-in live gates
 
@@ -78,3 +76,27 @@ invoke genesis, so it does not depend on the publication gate's pristine-reposit
 A skipped live gate is not provider evidence. Hosted provider logs and server-side storage are not
 observable from a client. No real account, provider, desktop session or user dotfiles are used by the
 default suite.
+
+`TestLiveRestoreMilestoneTwoHome` is a separate opt-in live publication-and-restore gate. It requires
+`DOTTIE_LIVE_MILESTONE=1`, an allowlisted disposable identity in `DOTTIE_HANDLE`,
+`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world access that decodes to 32
+bytes and authenticates the selected checkpoint, an authorized live account session, an existing local
+vault selection/checkpoint and incumbent root device key in Secret Service, plus a live repository that
+already authenticates as that Dottie vault.
+The test refuses an absent/unreadable remote vault, missing local trust/key material, or a current snapshot
+containing any application entries; it never invokes genesis. It copies only trust metadata into temporary
+state, creates synthetic file and settings targets in a temporary incumbent home, publishes them, enrolls
+a restore-only newcomer, imports the public bundle into a blank temporary home, pulls/previews/restores,
+and verifies exact bytes and setting values. The test transport blocks every write endpoint except the
+intended `repo.uploadBlob` and `repo.applyWrites` calls, asserts exactly one publication and one enrollment
+batch, and audits current head/snapshot/blob linkage plus the fenced write batches. It does not delete any
+records or blobs; the uploaded ciphertext and new repository records remain, including a public enrollment
+for an ephemeral test device whose private key is not retained. Its redacted artifact contains
+only outcome, counts, position epoch, content-match status and standing limits at
+`DOTTIE_LIVE_ARTIFACT_DIR/restore-milestone.json` (or the chosen temporary artifact directory). The kit
+is an authorization input, not a decryption key; same-host kit use is not independent custody. Skipping
+this test is not evidence.
+
+`make test-gnome` also runs `TestRestoreMilestoneGNOMEKeyfileTwoHome` from `tests/local`. That tagged
+twin uses the real keyfile backend, synthetic compiled schemas and temporary homes; it demonstrates the
+checkpoint-backed incumbent/newcomer restore without network access or a desktop profile.

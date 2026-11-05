@@ -3,12 +3,12 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: synthetic publication privacy and transport-failure checks plus archive-to-plaintext recovery evidence are implemented; the live publication and archive gates remain opt-in. A prior owner-authorized publication attempt exposed the missing pristine-repository precondition; the corrected publication gate has not been rerun.**
+**Status: synthetic publication privacy, transport-failure and checkpoint-backed archive-restore evidence are implemented. The live publication, archive and two-home restore gates are opt-in. Real-data use remains prohibited until the owner accepts [`docs/acceptance.md`](docs/acceptance.md).**
 Account authorization is available through `dottie account login`, `status` and `logout`;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
 targets upgrade to pending re-approval without inferred categories. The coordinator owns
-verified reads, content-free preview, candidate-bound restore, recovery, local base recording,
+verified reads, content-free preview, candidate-bound remote and archive restore, recovery, local base recording,
 push/sync, device administration, history summaries, export and archive validation. Manual
 read/apply requires a local trust checkpoint and a signed-in account; GNOME apply requires a
 build with the `gsettings` tag and an available settings backend. `account bootstrap` requires a
@@ -33,14 +33,12 @@ has not observed prior publication heads can refuse export even when the current
 available. Version-1 count-only attestations with nonzero retained-point counts cannot be
 enumerated and refuse export; no archive is written on refusal. Export and onboarding fetch required
 snapshot bodies by CID through the verified remote reader; unavailable bodies refuse the workflow.
-`dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
+`dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID [--vault HEX] [--device-id ID] [--confirm DIGEST]` restores only the kit-signed checkpoint position through the ordinary candidate-bound journaled apply path; it does not contact a provider and the archive may not be newest. The kit authorizes/checks the checkpoint but cannot decrypt: a compatible surviving device recipient private key is required. Losing all device keys without an independent complete export is data loss; an archive also needs a compatible retained recipient key. `dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
 holding floors; `dottie prune --apply --confirm` is the explicit foreground deletion path. Apply
 without `--confirm` refuses without deletion. There is no scheduled or automatic garbage collection.
 The retained-point cap limits selected epochs, not disk growth, and staged, orphaned or unknown-epoch
 material may remain. `dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX`
-requires independent expected vault and anchor inputs plus the kit; it validates the archive in V06
-order and changes no state, configuration, target or preference. Validation does not decrypt the
-snapshot or establish global freshness.
+requires independent expected vault and anchor inputs plus the kit; it validates the archive in the defined refusal order and changes no state, configuration, target or preference. Validation does not decrypt the snapshot or establish global freshness.
 
 The command exit codes are 0 for success (including history with remote unavailable), 2 for
 usage error, 3 for refusal/conflict/rejection, and 4 for queued, starved, fence-lost,
@@ -52,14 +50,16 @@ incomplete inventory or an invalid boundary/live-head check), and 4 for partial 
 apply. Recovery floor is the oldest complete inventory; confidentiality floor is the oldest surviving
 known material. Unknown-epoch holdings make the confidentiality floor unknown. The cap bounds retained
 epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
-preserving version-1 count-only decoding; the tagged two-machine gate exercises export/import
-against a shared synthetic MemoryPDS. Offline publication, renderer and source-loss archive tests use
-synthetic records, canaries and temporary homes. They do not establish live provider compatibility,
-hosted-log visibility or production desktop behavior. The opt-in live publication and archive gates
-require explicit disposable-account authorization. The publication gate requires a pristine disposable
-repository; a used account, including one carrying ordinary `app.bsky.*` records, is an environment
-limitation, not a privacy result. The corrected publication gate and the archive gate have not been run;
-a skipped gate is not provider evidence. Real user data must not be used as a fixture.
+preserving version-1 count-only decoding. Offline publication, renderer, checkpoint-backed restore,
+source-loss archive and rollback tests use synthetic records and temporary homes; they do not establish
+provider compatibility, hosted-log visibility or production desktop behavior. The tagged keyfile twin is
+`TestRestoreMilestoneGNOMEKeyfileTwoHome` and runs under `make test-gnome`. The live two-home restore
+gate requires explicit disposable-account authorization and an already-existing readable Dottie vault; it
+never invokes genesis, refuses nonempty application content, publishes only synthetic data and does not
+delete records. Its public enrollment for the ephemeral test device remains, although that device's private
+key is not retained. The separate live publication-privacy gate still requires a pristine disposable repository
+because that gate tests genesis. A skipped gate is not provider evidence. No live restore result is claimed;
+real user data remains prohibited until the owner accepts `docs/acceptance.md`.
 
 ## Target design
 
@@ -146,18 +146,27 @@ archive offline, and opens the archived current snapshot with a retained recipie
 temporary home. `go test -count=1 ./internal/cli` exercises the package-internal renderer privacy
 contract. These tests use synthetic data only.
 
-The live publication gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
+The live publication-privacy gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
 allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; before writing the
 manifest or records, it checks `com.atproto.repo.describeRepo` and skips repositories with any collections.
-Genesis requires an empty repository. Production bootstrap checks emptiness before minting and checks again immediately before publication; a race can leave an unreferenced staged blob after a definite refusal. The live gate writes synthetic canary records and cannot remove provider blobs.
-The live archive gate also skips by default and requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
-`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that
-decodes to a 32-byte kit, plus explicit disposable-account authorization. It uses the existing local vault selection/checkpoint and a temporary archive path;
-export and archive validation are read-only and the gate rejects repository write endpoints. The archive
-gate does not invoke genesis and does not depend on the publication gate's pristine-repository precondition.
-A previous owner-authorized publication attempt stopped at genesis on a used repository; the corrected
-publication gate and archive gate have not been run against a provider. A skipped gate is not provider
-evidence. Hosted provider logs and server-side storage are not observable from a client.
+That gate tests genesis and therefore requires a pristine disposable repository. Production bootstrap checks
+emptiness before minting and again immediately before publication; a race can leave an unreferenced staged
+blob after a definite refusal. The gate writes synthetic canary records and cannot remove provider blobs.
+
+The read-only live archive gate requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
+`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that decodes
+to 32 kit bytes, plus explicit disposable-account authorization. It uses an existing local vault selection
+and checkpoint, writes its archive only under a temporary path, and blocks repository write endpoints.
+
+The live checkpoint-backed restore gate is `TestLiveRestoreMilestoneTwoHome`; it skips unless
+`DOTTIE_LIVE_MILESTONE=1`, `DOTTIE_HANDLE` is allowlisted, and `DOTTIE_RECOVERY_KIT_FILE` is supplied,
+with explicit disposable-account authorization. It requires existing local root trust and a readable Dottie
+vault already present in the repository, refuses a missing/unreadable vault and any nonempty application
+snapshot, and never invokes genesis. It publishes only synthetic file/settings content and one restore-only
+enrollment to temporary homes, audits the fenced publication batches and current head/blob linkage, and never
+deletes records or blobs. Its redacted artifact is written to `DOTTIE_LIVE_ARTIFACT_DIR` (or a temporary
+artifact directory). All live gates are opt-in; a skipped gate is not provider evidence. Hosted provider
+logs and server-side storage are not observable from a client. No live restore result is claimed here.
 
 ## Local restore gate
 
@@ -189,11 +198,15 @@ unrelated-settings check is cross-schema preservation, not key-level isolation w
 the schema being written. The 12-key older-surface case is a synthetic per-key subset,
 not evidence of support for older GNOME categories or automatic degradation.
 
-## Empty-remote two-machine gate
+## Synthetic two-machine sync and administration gate
 
-Run `go test -count=1 -tags gsettings ./tests/local` for the offline S2b2 scenario. Publisher A bootstraps and publishes through the real genesis, publication and transition compositions over one shared `atprototest.MemoryPDS`; newcomer B has an independent temporary HOME/XDG tree, state store, fake keyring and device keys. Both use the real `atproto.VaultReader`. A publishes a review-mode file target and approved GNOME appearance category, enrolls B as restore-only and exports the public onboarding bundle. B imports it with the independently supplied anchor, authenticates the successor using imported predecessor evidence, then previews and restores exact file bytes/mode and GNOME present/reset intent through the coordinator. The gate also checks no-op publication/restore, restore-only and revoked-device push refusals, wrong-kit and wrong-anchor controls, stale predecessor refusal, fingerprint-confirmed revocation and historical decryption as a positive control.
+`go test -count=1 -tags gsettings ./tests/local` runs the offline two-machine gate. Publisher A bootstraps an empty synthetic `atprototest.MemoryPDS` fixture, publishes file/settings content, enrolls newcomer B as restore-only, and emits the public onboarding bundle. B imports it with the independently supplied anchor, authenticates the successor using imported predecessor evidence, then previews and restores exact file bytes/mode and GNOME present/reset intent through the coordinator. The gate also checks no-op publication/restore, restore-only and revoked-device push refusals, wrong-kit and wrong-anchor controls, stale predecessor refusal, fingerprint-confirmed revocation and historical decryption. This test-fixture genesis is not used by the separately authorized live restore gate.
 
-**Real versus simulated boundary:** repository signatures, CAR/revision reads, vault authentication/decryption, genesis/publication/transition compositions, MemoryPDS writes, coordinator policy and the native GNOME keyfile backend are real package code. MemoryPDS and all data are synthetic; homes, XDG paths, schemas, keys and settings are temporary. Keyfile operations run in short-lived helper processes so each machine gets an independently initialized process-global GSettings backend. No live PDS, CLI binary sequence, real account, real keyring, desktop session, dconf service or user preference is used. Full CLI-binary acceptance remains deferred to post-S3.
+**Real versus simulated boundary:** repository signatures, CAR/revision reads, vault authentication/decryption, genesis/publication/transition compositions, MemoryPDS writes, coordinator policy and the native GNOME keyfile backend are real package code. MemoryPDS and all data are synthetic; homes, XDG paths, schemas, keys and settings are temporary. Keyfile operations run in short-lived helper processes so each machine gets an independently initialized process-global GSettings backend. No live PDS, real account, real keyring, desktop session, dconf service or user preference is used.
+
+## Checkpoint-backed GNOME restore milestone
+
+`make test-gnome` also runs `TestRestoreMilestoneGNOMEKeyfileTwoHome`, a focused two-home flow that publishes synthetic file and settings values, enrolls a restore-only newcomer, imports/pulls the checkpoint-backed bundle, and verifies exact file bytes and exact setting values against the real native keyfile backend with compiled synthetic schemas. Both homes, schemas, settings and state are temporary; it does not use a desktop profile or a live provider.
 
 ## Continuous integration
 

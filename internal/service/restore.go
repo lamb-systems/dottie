@@ -22,7 +22,17 @@ func (coordinator *Coordinator) Restore(ctx context.Context, request RestoreRequ
 	if err != nil {
 		return RestoreReport{}, err
 	}
+	return coordinator.applyCandidateLocked(ctx, candidate, request.Confirm)
+}
+
+func (coordinator *Coordinator) applyCandidateLocked(ctx context.Context, candidate Candidate, confirm string) (RestoreReport, error) {
 	report := RestoreReport{CandidateDigest: candidate.Digest}
+	if candidate.archive {
+		report.Source = "archive"
+		report.PositionEpoch = candidate.positionEpoch
+		report.ProviderContacted = false
+		report.ArchiveMayNotBeNewest = true
+	}
 	target, exists := candidate.configuration.Target(candidate.TargetID)
 	if !exists {
 		return report, errors.New("restore target disappeared from local configuration")
@@ -31,19 +41,21 @@ func (coordinator *Coordinator) Restore(ctx context.Context, request RestoreRequ
 	if mode == config.BackupOnly {
 		return report, fmt.Errorf("%w: target %q is backup-only", ErrApplyNotPermitted, target.ID)
 	}
-	if candidate.Currency == "unverifiable" || candidate.InspectOnly {
-		return report, ErrFreshnessUnverified
-	}
-	if candidate.Currency != "current" && candidate.Currency != "descendant" {
-		return report, ErrCheckpointNotCurrent
+	if !candidate.archive {
+		if candidate.Currency == "unverifiable" || candidate.InspectOnly {
+			return report, ErrFreshnessUnverified
+		}
+		if candidate.Currency != "current" && candidate.Currency != "descendant" {
+			return report, ErrCheckpointNotCurrent
+		}
 	}
 	if !candidate.Preview.Complete {
-		return report, errors.New("restore candidate is incomplete or contains unresolved items")
+		return report, ErrCandidateIncomplete
 	}
-	if mode == config.Review && request.Confirm != candidate.Digest {
+	if mode == config.Review && confirm != candidate.Digest {
 		return report, ErrCandidateChanged
 	}
-	if request.Confirm != "" && request.Confirm != candidate.Digest {
+	if confirm != "" && confirm != candidate.Digest {
 		return report, ErrCandidateChanged
 	}
 	applyPreview := applicablePreview(candidate.Preview)
@@ -65,7 +77,14 @@ func (coordinator *Coordinator) Restore(ctx context.Context, request RestoreRequ
 			defer closer.Close()
 		}
 		if _, err := syncengine.RecoverInterruptedWithSettings(ctx, coordinator.deps.State, filesystem, settings, coordinator.deps.Clock); err != nil {
+			return report, fmt.Errorf("%w: %w: %w", ErrPendingJournal, ErrPendingJournalRecoveryFailed, err)
+		}
+		pending, err = coordinator.deps.State.PendingJournalEntries(ctx)
+		if err != nil {
 			return report, err
+		}
+		if len(pending) != 0 {
+			return report, fmt.Errorf("%w: %w: outstanding journal entries remain", ErrPendingJournal, ErrPendingJournalRemains)
 		}
 	}
 	before, err := coordinator.deps.State.JournalEntriesAll(ctx)

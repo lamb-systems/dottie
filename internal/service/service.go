@@ -27,6 +27,11 @@ var (
 	ErrApplyNotPermitted                = errors.New("local consent does not permit apply")
 	ErrBaseRecordingFailed              = errors.New("applied-base recording failed")
 	ErrCandidateChanged                 = errors.New("restore candidate digest changed")
+	ErrUnknownTarget                    = errors.New("unknown target")
+	ErrCandidateIncomplete              = errors.New("restore candidate is incomplete or contains unresolved items")
+	ErrPendingJournal                   = errors.New("restore is blocked by a pending journal")
+	ErrPendingJournalRecoveryFailed     = errors.New("pending journal recovery failed")
+	ErrPendingJournalRemains            = errors.New("pending journal entries remain after recovery")
 	ErrGNOMEReapproval                  = errors.New("GNOME category approval requires re-approval")
 	ErrUnapprovedEntry                  = errors.New("remote or base entry is not approved by local target policy")
 	ErrAdministrativeRootRequired       = errors.New("administrative operation requires the selected root device")
@@ -189,16 +194,22 @@ type Candidate struct {
 	localEntries  []model.Entry
 	baseEntries   []model.Entry
 	remoteEntries []model.Entry
+	archive       bool
+	positionEpoch uint64
 }
 
 type RestoreReport struct {
-	CandidateDigest     string
-	Applied             []syncengine.JournalResult
-	Failed              *syncengine.JournalResult
-	Untouched           []syncengine.PreviewEntry
-	NoActions           bool
-	BaseRecordingFailed bool
-	Items               []RestoreItem
+	CandidateDigest       string
+	Source                string
+	PositionEpoch         uint64
+	ProviderContacted     bool
+	ArchiveMayNotBeNewest bool
+	Applied               []syncengine.JournalResult
+	Failed                *syncengine.JournalResult
+	Untouched             []syncengine.PreviewEntry
+	NoActions             bool
+	BaseRecordingFailed   bool
+	Items                 []RestoreItem
 }
 
 type RestoreItem struct {

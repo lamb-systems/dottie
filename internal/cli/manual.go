@@ -103,9 +103,57 @@ func newManualCommand(stdout, stderr io.Writer, exitCode *int, factory manualFac
 		}
 		return writeCommandOutput(command, renderCandidate(candidate))
 	}})
-	restore := configure(&urfave.Command{Name: "restore", Flags: append(remoteFlags(), &urfave.StringFlag{Name: "target", Usage: "selected target ID", OnlyOnce: true}, &urfave.StringFlag{Name: "confirm", Usage: "candidate digest for review-mode apply", OnlyOnce: true}), Action: func(ctx context.Context, command *urfave.Command) error {
-		if command.String("target") == "" {
-			return usageExit("restore requires --target ID")
+	restore := configure(&urfave.Command{Name: "restore", Flags: append(remoteFlags(),
+		&urfave.StringFlag{Name: "target", Usage: "selected target ID", OnlyOnce: true},
+		&urfave.StringFlag{Name: "confirm", Usage: "candidate digest for review-mode apply", OnlyOnce: true},
+		&urfave.StringFlag{Name: "archive", Usage: "ciphertext archive source file", OnlyOnce: true},
+		&urfave.StringFlag{Name: "kit-file", Usage: "private recovery kit file (mode 0600)", OnlyOnce: true},
+		&urfave.StringFlag{Name: "anchor", Usage: "independently supplied recovery anchor fingerprint", OnlyOnce: true},
+	), Action: func(ctx context.Context, command *urfave.Command) error {
+		if command.NArg() != 0 || command.String("target") == "" {
+			return usageExit("restore requires --target ID and takes no positional arguments")
+		}
+		if command.IsSet("archive") {
+			if command.String("archive") == "" || command.String("kit-file") == "" || command.String("anchor") == "" {
+				return usageExit("archive restore requires --archive FILE, --kit-file FILE and --anchor HEX")
+			}
+			if command.IsSet("did") || command.IsSet("handle") {
+				return usageExit("--archive is mutually exclusive with --did and --handle")
+			}
+			if command.IsSet("vault") && command.String("vault") == "" || command.IsSet("device-id") && command.String("device-id") == "" {
+				return usageExit("vault selector value is missing")
+			}
+			anchor, err := parseVaultFingerprint(command.String("anchor"))
+			if err != nil {
+				return usageExit("--anchor must be a 32-byte hexadecimal fingerprint")
+			}
+			kit, err := readRecoveryKitFile(command.String("kit-file"))
+			if err != nil {
+				return urfave.Exit("restore refused: recovery kit file is unavailable or invalid", 3)
+			}
+			defer clear(kit)
+			coordinator, selection, closeResources, err := factory(ctx, command, false)
+			if err != nil {
+				return refused(err)
+			}
+			defer closeResources()
+			report, err := coordinator.RestoreFromArchive(ctx, service.ArchiveRestoreRequest{
+				Selection: selection, Path: command.String("archive"), Anchor: anchor, Kit: kit,
+				TargetID: command.String("target"), Confirm: command.String("confirm"),
+			})
+			if err != nil {
+				if len(report.Applied) != 0 || report.Failed != nil {
+					if writeErr := writeCommandOutput(command, renderRestore(report)); writeErr != nil {
+						return writeErr
+					}
+					return urfave.Exit("partial restore", 4)
+				}
+				return refused(err)
+			}
+			return writeCommandOutput(command, renderRestore(report))
+		}
+		if command.IsSet("kit-file") || command.IsSet("anchor") {
+			return usageExit("--kit-file and --anchor require --archive")
 		}
 		if err := validateRemoteFlags(command); err != nil {
 			return err
@@ -458,7 +506,8 @@ func productionManualCoordinator(ctx context.Context, command *urfave.Command, n
 		closeStore()
 		return nil, service.VaultSelection{}, func() {}, err
 	}
-	if !needsRemote {
+	needsDeviceKeys := command.IsSet("archive")
+	if !needsRemote && !needsDeviceKeys {
 		return coordinator, service.VaultSelection{}, closeStore, nil
 	}
 	var selection service.VaultSelection
@@ -482,6 +531,15 @@ func productionManualCoordinator(ctx context.Context, command *urfave.Command, n
 		return nil, selection, func() {}, err
 	}
 	closeAll := func() { _ = keyring.Close(); _ = store.Close() }
+	dependencies.DeviceKeys = keyring
+	if !needsRemote {
+		coordinator, err = service.NewCoordinator(dependencies)
+		if err != nil {
+			closeAll()
+			return nil, selection, func() {}, err
+		}
+		return coordinator, selection, closeAll, nil
+	}
 	client, err := newAuthorizedAccountClient(keyring, env)
 	if err != nil {
 		closeAll()
@@ -593,6 +651,9 @@ func renderCandidate(candidate service.Candidate) string {
 
 func renderRestore(report service.RestoreReport) string {
 	var output strings.Builder
+	if report.Source == "archive" {
+		fmt.Fprintf(&output, "source: archive\nrestored position: checkpoint epoch %d\nprovider contacted: %t\narchive may not be the newest state: %t\n", report.PositionEpoch, report.ProviderContacted, report.ArchiveMayNotBeNewest)
+	}
 	fmt.Fprintf(&output, "candidate digest: %s\napplied: %d\nno actions: %t\nbase recording failed: %t\n", report.CandidateDigest, len(report.Applied), report.NoActions, report.BaseRecordingFailed)
 	for _, item := range report.Items {
 		fmt.Fprintf(&output, "%s\t%s\n", escapeField(item.Status), escapeField(previewEntryName(item.Key)))

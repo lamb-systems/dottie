@@ -47,14 +47,9 @@ observations do not establish provider compatibility.
 
 ## Archive recovery boundary
 
-Export is a ciphertext-only archive; `import` and `ImportExportArchive` validate it without decrypting
-or changing application state. The offline source-loss proof parses the archive and opens its current
-snapshot using the policy, control, certificates and envelope from that parsed archive plus a retained
-device recipient private key. The retained recipient key is required; kit-only decryption is impossible
-by design. There is no archive-to-files restore command. This is archive-to-plaintext recovery, not
-destination restoration, and it does not establish global freshness. Archive member SHA-256 digests
-are a layered integrity check; the tamper test proves refusal of a modified archive rather than
-isolating that check.
+Export produces a ciphertext-only archive. `dottie import --archive` and `ImportExportArchive` validate it without decrypting or changing application state. `dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID` uses the ordinary preview, review-mode digest confirmation, journaled apply and rollback path, but takes its candidate from the archive's kit-signed checkpoint position only. It makes no provider call. Positions above that checkpoint are lineage, not permission to restore them; the archive may not be the newest state.
+
+The checkpoint signature authenticates that position, not global freshness. The snapshot still requires a compatible surviving device recipient private key; the kit verifies/authorizes the checkpoint but cannot decrypt. The offline source-loss and archive-restore tests use synthetic archives and temporary homes. Archive member SHA-256 digests are a layered integrity check; the tamper test proves refusal of a modified archive rather than isolating that check.
 
 ## Present and target, stated separately
 
@@ -68,7 +63,7 @@ isolating that check.
 | Encryption and signatures | yes, wired into publication and restore; live provider not tested | live provider validation |
 | Device roles, revocation, epochs | yes, public-key `devices enroll`/`revoke` and `account bootstrap`; synthetic transitions only | live provider validation |
 | Recovery kit and checkpoints | yes, `account recovery`/`verify`; restore proven synthetically | live provider validation |
-| Vault export and import | yes, `export` (complete ciphertext inventory, body fetch by CID) and validation-only `import` | offline archive application is not promised |
+| Vault export, import and archive restore | yes, `export`, validation-only `import`, and checkpoint-only `restore --archive` | live archive-to-files restore is unrun |
 | Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
 | Retention and manual pruning | yes, per-point inventories and `prune --plan|--apply --confirm`; no automatic GC | scheduled maintenance (B09) |
 | GNOME settings capture and apply | selected-key capture, apply and the category matrix, wired to CLI targets; real desktop not validated | real desktop validation (R03) |
@@ -90,20 +85,13 @@ follow the existing bounded rollback-material and backup-retention policy; backu
 associated retained journal values. This library boundary does not change account authority or grant remote
 configuration access to local settings.
 
-The CLI exposes target and preset onboarding, `status`, `preview`, `pull`, `push`, `sync`, `restore`,
+The CLI exposes target and preset onboarding, `status`, `preview`, `pull`, `push`, `sync`, `restore` (including `restore --archive`),
 `recover`, `devices`, `history`, `export`, validation-only `import`, and confirmed `prune`. Account commands
 manage OAuth authorization and local device keys; they do not capture target data by themselves. All
 application-data and retention mutations route through the coordinator and its journal; the CLI does not edit
 application state or target configuration directly. `account enroll` may prepare local selection metadata and device keys; bootstrap records trusted selection/checkpoint/evidence through the coordinator's single state store. These local metadata cannot authorize application data or apply.
 
-Every end-to-end demonstration in this repository uses disposable synthetic data: an in-memory AT Protocol
-provider, temporary homes and a synthetic keyring. The live publication gate requires a pristine disposable
-repository because genesis refuses a non-empty one. A used account, including one carrying ordinary
-`app.bsky.*` records, is an environment limitation, not a privacy result. A previous owner-authorized attempt
-on a used disposable account stopped at this genesis precondition; the corrected gate has not been run. The
-separate read-only endpoint observation above does not validate provider compatibility. No real desktop
-session has been exercised. Real-data use remains blocked until fresh-machine and live-provider validation
-are complete. Do not use this build to back up real data.
+Offline end-to-end demonstrations use disposable synthetic data, in-memory AT Protocol fixtures and temporary homes. Separately authorized live gates exist for publication privacy, archive export/validation and the two-home restore milestone. The restore milestone uses an existing authenticated Dottie vault and never invokes genesis; it refuses an absent or unreadable vault and refuses a current snapshot with any application entries. It writes only synthetic content and enrollment records to an allowlisted disposable account and does not delete records or blobs. Each live gate skips by default; a skipped gate is not provider evidence. Hosted provider logs and server-side retention remain unobservable. No live result is claimed by this document. Real-data use remains prohibited until the owner accepts the evidence matrix in `docs/acceptance.md`. Do not use Dottie with real dotfiles or preferences before that acceptance.
 
 ## Authorities
 
@@ -117,8 +105,7 @@ scope enforcement, and one atomic Secret Service envelope. It grants repository 
 epoch at enrollment. Root, publisher and restore-only are distinct. Enrollment, revocation and epoch
 rotation are implemented and wired to the CLI; they are proven synthetically, not against a live provider.
 
-**Recovery authority** is material held offline, independent of the account. It can re-establish a root
-device. Bootstrap, kit-signed checkpoints and verification are implemented; live recovery is unproven.
+**Recovery authority** is the kit, held offline and independent of the account. It authorizes root recovery and signs checkpoints; it cannot decrypt content. Content requires a surviving compatible device recipient private key, or an independent complete archive together with that key. Losing all device keys without an independent export is data loss. Bootstrap, kit-signed checkpoints and verification are implemented; live recovery is unproven.
 
 ## Genesis bootstrap custody and outcomes
 
@@ -347,15 +334,15 @@ bytes does not revoke a secret someone already kept. Export and onboarding fetch
 through the verified reader, so they depend on provider availability and on the locally retained authenticated
 history for lineage rather than on ciphertext kept in evidence.
 
+## Freshness-unverified inspection policy
+
+Authenticated content and global freshness are distinct. If freshness/currency cannot be verified against a local checkpoint, restore refuses with `ErrFreshnessUnverified`; no risk flag or consent bypass grants apply authority. The operator may use the existing consent path to inspect the candidate or continue an export/verification workflow, but that path does not mutate target data, advance the checkpoint or create an apply journal. Invalid signatures, wrong keys and failed policy checks remain unconditional refusals.
+
 ## First restore
 
-A device restoring onto a machine with no prior state holds no local checkpoint, so the kit's checkpoint is
-its only anchor and everything below it is rejected. With no kit checkpoint the device stays
-freshness-unverified and is restricted to inspection and export.
+A device restoring onto a machine with no prior state has no local checkpoint, so the supplied kit-signed checkpoint is its trust anchor and state below it is rejected. Archive restore is restricted to that signed checkpoint position; it does not contact a provider or prove that no newer state exists. Applying archived plaintext still requires a compatible recipient private key held by the selected device. A recovery kit without that key authorizes but cannot decrypt.
 
-Regaining authorization is not regaining data. A kit cannot retrieve bytes the provider no longer holds;
-data recovery needs the independent complete export, and a repository CAR alone is not a complete blob
-backup.
+Regaining authorization is not regaining data. A kit cannot retrieve bytes the provider no longer holds. All-devices-lost without an independent complete export is data loss; an archive also requires a compatible surviving recipient private key. A repository CAR alone is not a complete blob backup.
 
 ## Residual risks
 

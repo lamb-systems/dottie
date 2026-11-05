@@ -1,6 +1,8 @@
-# Offline vault export archive
+# Vault export archives and recovery boundaries
 
-The vault package provides version-1 archive primitives over caller-supplied signed objects and encrypted snapshot blobs. This is not an end-to-end backup command: the repository has no local store for the current vault policy, certificate set, head chain, envelopes, retained recovery points or payload blobs. `account export` and `account import` are therefore not wired. A later task must provide that local artifact store and decide where validated imports are persisted.
+The coordinator and CLI provide ciphertext-only export, validation-only archive import, and checkpoint-backed archive restore. `dottie export` assembles an authenticated archive and writes it atomically; `dottie import --archive` validates without changing local state; `dottie restore --archive` opens and applies only the kit-signed checkpoint snapshot through the ordinary candidate, consent, journal and rollback path. Archive restore does not contact a PDS, and the archive may not contain the newest provider state.
+
+The recovery kit authorizes root recovery and signs checkpoints. It cannot decrypt content. Plaintext recovery requires a surviving compatible device recipient private key, either used with the provider or with an independent complete archive. If all device keys are lost without an independent export, the data is lost; a kit alone cannot recover it. An archive without a compatible recipient private key is also ciphertext only. A repository CAR is not a complete blob archive.
 
 ## Archive layout
 
@@ -20,26 +22,27 @@ The archive's typed manifest does not provide free-form channels for caller desc
 2. Validate canonical manifest/inventory structure, exact member lengths, per-entry SHA-256 digests, archive framing and absence of unexpected members.
 3. Bind the manifest vault ID and anchor to the caller's expected values. A foreign vault ID requires explicit move intent; the anchor must still match.
 4. Verify the kit-signed checkpoint, require its control position and nonempty checkpoint snapshot payload, walk authenticated control and policy predecessor links from current back to the checkpoint, validate supplied same-control publication-head predecessors, verify policy publication bounds and signed objects/certificate chains, and require every referenced blob under its CID.
-5. Return the complete validated in-memory archive. Persistence is deliberately left to a future local-store implementation; the reader has not written anything.
+5. Return the complete validated in-memory archive. The library reader has not written anything; the CLI `dottie import --archive` remains validation-only.
 
 The policy, control, certificate, head, checkpoint and envelope bytes are retained exactly as received. Decoding validates them but does not re-sign or rewrite signed bytes. The archive reader authenticates evidence, not global freshness; an offline archive cannot prove that a provider did not withhold later history.
 
-`WriteExportArchive` writes only to the caller's absolute destination. It requires a caller-supplied `IsCaptured` predicate, checks it before encoding and rechecks it immediately before writing, and uses one pinned directory descriptor for temporary-file creation and publication so pathname replacement cannot redirect output. The archive's manifest entries and remote-shaped data never choose a path. The library cannot prove that the predicate reflects trusted local capture selections; a callback that always returns false satisfies the type but not the safety intent. A product caller must supply trusted roots before this can be enforced internally; until then the callback is a caller obligation. `EncodeExportArchive` is the in-memory alternative.
+`WriteExportArchive` writes only to the caller's absolute destination. It requires a caller-supplied `IsCaptured` predicate, checks it before encoding and rechecks it immediately before writing, and uses one pinned directory descriptor for temporary-file creation and publication so pathname replacement cannot redirect output. The coordinator supplies the predicate from its locally selected capture roots; the library itself cannot prove that an arbitrary callback expresses trusted selections. The archive's manifest entries and remote-shaped data never choose a path. `EncodeExportArchive` is the in-memory alternative.
 
 ## Completeness limits
 
-The exporter is a pure bundle operation over its caller's inventory. It cannot retrieve or infer artifacts the caller did not supply. The manifest always records these limits:
+The archive encoder is a pure bundle operation over its caller's inventory. The coordinator fetches required snapshot bodies by CID through the verified remote reader and uses locally retained authenticated history for lineage; it refuses when required bodies or predecessors are unavailable. It cannot retrieve or infer artifacts neither the provider nor the local authenticated history supplies. The manifest always records these limits:
 
 - Anything the vault never held locally is absent.
 - The archive contains only caller-supplied objects and blobs; this format does not independently prove that the local inventory is complete.
 - **A repository CAR holds references, not payloads, and is not a complete blob backup.**
 
-Caller-known omissions are selected from a closed set of codes and listed in the manifest. A missing blob referenced by a supplied current head, checkpoint snapshot or retained recovery position causes refusal and names its CID. Publication heads in the same control position must link to their authenticated predecessor head position and blob. Import refuses when a required control or policy predecessor between current and the checkpoint is absent. A CAR-shaped input is not a valid complete archive. No network access is used by the archive APIs or their tests.
+Caller-known omissions are selected from a closed set of codes and listed in the manifest. A missing blob referenced by a supplied current head, checkpoint snapshot or retained recovery position causes refusal and names its CID. Publication heads in the same control position must link to their authenticated predecessor head position and blob. Import refuses when a required control or policy predecessor between current and the checkpoint is absent. A CAR-shaped input is not a valid complete archive. The archive library itself uses no network; coordinator export may make verified provider reads, while archive validation and archive restore do not contact a provider.
 
 ## API boundary
 
 - `EncodeExportArchive` accepts the current position, checkpoint, lineage positions, retained recovery positions, blob inventory, fixed identity values, bounded omission codes and a recovery kit; it returns archive bytes.
 - `ReadExportArchive` validates bytes with caller-supplied expected vault ID, anchor, optional explicit move intent and recovery kit; it returns the signed objects and blobs without writing them.
-- `WriteExportArchive` is an optional atomic filesystem writer guarded by the caller's capture-selection predicate.
+- `WriteExportArchive` is an atomic filesystem writer guarded by the caller's capture-selection predicate.
+- The service coordinates authenticated inventory assembly and `Export`, validation-only `ImportExportArchive`, and `RestoreFromArchive`. The CLI surfaces are `dottie export`, `dottie import --archive`, and `dottie restore --archive`.
 
-These library APIs do not connect to a PDS, read internal state, fetch CAR blocks, restore user files, or implement `account export`/`account import` commands.
+The archive library APIs do not connect to a PDS, read internal state, or restore user files. Export's service coordinator can fetch required blobs using the verified reader. Archive restore authenticates and applies only the checkpoint snapshot, requires a selected device recipient private key, and uses no provider transport. Global freshness is not established by an archive. Remote freshness-unverified state remains inspection/export-only: `--consent` cannot authorize apply.

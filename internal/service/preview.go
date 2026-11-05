@@ -14,6 +14,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func (coordinator *Coordinator) Preview(ctx context.Context, selection VaultSelection, targetID string) (Candidate, error) {
@@ -22,6 +23,20 @@ func (coordinator *Coordinator) Preview(ctx context.Context, selection VaultSele
 	}
 	defer coordinator.mu.Unlock()
 	return coordinator.previewLocked(ctx, selection, targetID)
+}
+
+type candidatePosition struct {
+	Snapshot         model.Snapshot
+	VerifiedSnapshot model.Snapshot
+	Freshness        atproto.FreshnessStatus
+	Currency         vault.CheckpointOutcome
+	InspectOnly      bool
+	Untracked        []model.EntryKey
+	Epoch            uint64
+	SnapshotCID      []byte
+	PolicyDigest     []byte
+	ControlCID       []byte
+	Archive          bool
 }
 
 func (coordinator *Coordinator) previewLocked(ctx context.Context, selection VaultSelection, targetID string) (Candidate, error) {
@@ -36,6 +51,19 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 	if err != nil {
 		return Candidate{}, err
 	}
+	var policyDigest []byte
+	if len(pulled.Read.Head.PolicyDigest) == 32 {
+		policyDigest = bytes.Clone(pulled.Read.Head.PolicyDigest)
+	}
+	return coordinator.buildCandidateLocked(ctx, selection, targetID, configuration, candidatePosition{
+		Snapshot: pulled.Snapshot, VerifiedSnapshot: pulled.VerifiedSnapshot, Freshness: pulled.Freshness,
+		Currency: pulled.Currency.Outcome, InspectOnly: pulled.InspectOnly, Untracked: pulled.Untracked,
+		Epoch: pulled.Read.EpochSeq, SnapshotCID: pulled.Read.HeadCID,
+		PolicyDigest: policyDigest, ControlCID: pulled.Read.ControlCID,
+	})
+}
+
+func (coordinator *Coordinator) buildCandidateLocked(ctx context.Context, selection VaultSelection, targetID string, configuration config.Config, position candidatePosition) (Candidate, error) {
 	var target config.Target
 	found := false
 	for _, current := range configuration.Targets {
@@ -46,7 +74,7 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 		}
 	}
 	if !found {
-		return Candidate{}, fmt.Errorf("unknown target %q", targetID)
+		return Candidate{}, fmt.Errorf("%w %q", ErrUnknownTarget, targetID)
 	}
 	if target.Source == model.SourceGNOME {
 		if target.GNOMEPolicy == nil || target.GNOMEPolicy.Approval != config.GNOMEApprovalApproved {
@@ -65,11 +93,11 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 	if err != nil {
 		return Candidate{}, err
 	}
-	untracked = append(untracked, pulled.Untracked...)
+	untracked = append(untracked, position.Untracked...)
 	untracked = append(untracked, baseUntracked...)
 	local := syncengine.LocalView{Entries: localEntries, Unknown: unknown, Untracked: untracked, Coverage: coverage}
 	remoteEntries := make([]model.Entry, 0)
-	for _, entry := range pulled.Snapshot.Entries {
+	for _, entry := range position.Snapshot.Entries {
 		if entry.TargetID == target.ID {
 			remoteEntries = append(remoteEntries, entry)
 		}
@@ -87,7 +115,7 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 	if err != nil {
 		return Candidate{}, err
 	}
-	digest, err := candidateDigest(pulled.VerifiedSnapshot, target, target.ModeOrDefault(configuration.Defaults), plan, observations, preview)
+	digest, err := candidateDigest(position.VerifiedSnapshot, target, target.ModeOrDefault(configuration.Defaults), plan, observations, preview)
 	if err != nil {
 		return Candidate{}, err
 	}
@@ -95,19 +123,23 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 	if err != nil {
 		return Candidate{}, err
 	}
-	retention, err := retentionBindingForRead(ctx, coordinator.deps.State, selected, pulled.Read)
+	retention, err := retentionBindingForPosition(ctx, coordinator.deps.State, selected, position.Epoch, position.SnapshotCID, position.PolicyDigest, position.ControlCID)
 	if err != nil {
 		return Candidate{}, err
 	}
 	return Candidate{
 		Preview: preview, Digest: digest, Actions: previewActions(preview), TargetID: target.ID,
-		Freshness: pulled.Freshness, Currency: pulled.Currency.Outcome, InspectOnly: pulled.InspectOnly,
+		Freshness: position.Freshness, Currency: position.Currency, InspectOnly: position.InspectOnly,
 		Untracked: untracked, Retention: retention, plan: plan, observations: observations, configuration: configuration,
 		localEntries: localEntries, baseEntries: baseEntries, remoteEntries: remoteEntries,
+		archive: position.Archive, positionEpoch: position.Epoch,
 	}, nil
 }
 
-func retentionBindingForRead(ctx context.Context, store *state.Store, selection VaultSelection, read atproto.ReadResult) (*state.RetentionBinding, error) {
+func retentionBindingForPosition(ctx context.Context, store *state.Store, selection VaultSelection, epoch uint64, snapshotCID []byte, policyDigest []byte, controlCID []byte) (*state.RetentionBinding, error) {
+	if len(policyDigest) != 32 {
+		return nil, nil
+	}
 	declaration, err := store.RetentionDeclaration(ctx, selection.Vault, selection.DeviceID)
 	if errors.Is(err, state.ErrRetentionDeclarationNotFound) {
 		return nil, nil
@@ -115,13 +147,13 @@ func retentionBindingForRead(ctx context.Context, store *state.Store, selection 
 	if err != nil {
 		return nil, err
 	}
-	if declaration.DigestVersion != 2 || len(read.Head.PolicyDigest) != 32 {
+	if declaration.DigestVersion != 2 {
 		return nil, nil
 	}
-	var policyDigest [32]byte
-	copy(policyDigest[:], read.Head.PolicyDigest)
+	var digest [32]byte
+	copy(digest[:], policyDigest)
 	for _, point := range declaration.RecoveryPoints {
-		if point.Epoch == read.EpochSeq && bytes.Equal(point.SnapshotCID, read.HeadCID) && point.PolicyDigest == policyDigest && bytes.Equal(point.ControlCID, read.ControlCID) {
+		if point.Epoch == epoch && bytes.Equal(point.SnapshotCID, snapshotCID) && point.PolicyDigest == digest && bytes.Equal(point.ControlCID, controlCID) {
 			return &state.RetentionBinding{
 				Vault: selection.Vault, Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID),
 				PolicyDigest: point.PolicyDigest, ControlCID: bytes.Clone(point.ControlCID),

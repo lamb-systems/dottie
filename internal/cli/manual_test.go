@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	urfave "github.com/urfave/cli/v3"
@@ -68,6 +69,32 @@ func TestManualRestoreRequiresTarget(t *testing.T) {
 	code = runManualCommandForTest(command, &code, "restore", "--did", "did:plc:example")
 	assert.Equal(t, 2, code)
 	assert.Equal(t, 0, factoryCalls)
+}
+
+func TestManualArchiveRestoreFlagsRejectRemoteSelectorsAsUsage(t *testing.T) {
+	factoryCalls := 0
+	factory := func(context.Context, *urfave.Command, bool) (*service.Coordinator, service.VaultSelection, func(), error) {
+		factoryCalls++
+		return nil, service.VaultSelection{}, func() {}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newManualCommand(&stdout, &stderr, &code, factory)
+	code = runManualCommandForTest(command, &code, "restore", "--archive", "backup.dtv", "--kit-file", "kit.txt", "--anchor", strings.Repeat("11", 32), "--target", "prefs", "--did", "did:plc:example")
+	assert.Equal(t, 2, code)
+	assert.Equal(t, 0, factoryCalls)
+	assert.Empty(t, stdout.String())
+	assert.Contains(t, stderr.String(), "mutually exclusive")
+}
+
+func TestRenderArchiveRestoreDisclosesPositionAndOfflineLimit(t *testing.T) {
+	output := renderRestore(service.RestoreReport{
+		Source: "archive", PositionEpoch: 7, ProviderContacted: false, ArchiveMayNotBeNewest: true,
+	})
+	assert.Contains(t, output, "source: archive\n")
+	assert.Contains(t, output, "restored position: checkpoint epoch 7\n")
+	assert.Contains(t, output, "provider contacted: false\n")
+	assert.Contains(t, output, "archive may not be the newest state: true\n")
 }
 
 func TestManualRecoverInvokesCoordinatorSettingsBackend(t *testing.T) {
