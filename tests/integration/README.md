@@ -47,7 +47,12 @@ collections. The live publication gate requires a pristine disposable repository
 a non-empty repository. A previous owner-authorized attempt on a used disposable account stopped at this
 genesis precondition. A used account, including one carrying ordinary `app.bsky.*` records, is an
 environment limitation, not a privacy result. The corrected gate creates synthetic canary records and
-attempts cleanup of records; uploaded blobs may remain.
+attempts cleanup of records. A successful live privacy run leaves its uploaded ciphertext blobs on the
+provider permanently because the provider exposes no blob delete; this is expected and recorded in the
+run manifest rather than cleaned. The run manifest is written atomically with mode 0600 and records each
+unique uploaded blob CID. Every live attempt writes a redacted privacy artifact, including successful
+runs; the artifact contains the run id, provider label, audit counts, `retained_set=unobservable`, and the
+standing visibility and deletion limits without CIDs or account identifiers.
 
 An owner-authorized read-only observation on a disposable identity found that
 `com.atproto.sync.listBlobs` required an authenticated request, while
