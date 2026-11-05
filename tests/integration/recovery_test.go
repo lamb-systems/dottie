@@ -275,6 +275,13 @@ func TestLiveArchiveExportAndValidation(t *testing.T) {
 	assert.Zero(t, transport.writeCalls, "archive validation attempted a repository write")
 	assert.NoError(t, os.Remove(archivePath))
 	artifactEvidence = "live archive export and validation passed; identity, paths, CIDs, and credentials redacted"
+	succeeded := writeLiveArchiveArtifact(artifactDir, liveArchiveArtifact{
+		Provider: provider, Criterion: "archive-export-validation", Outcome: "passed",
+		Positions: 1 + len(exportReport.Lineage) + len(exportReport.RecoveryPoints),
+		Blobs:     liveArchiveBlobCount(exportReport), Omissions: len(exportReport.Omissions),
+	})
+	require.NoError(t, succeeded)
+	t.Logf("live archive artifact written (archive-export.json)")
 }
 
 type archiveReadOnlyTransport struct {
@@ -401,4 +408,67 @@ func archiveRepositoryWriteCount(calls []string) int {
 		}
 	}
 	return count
+}
+
+type liveArchiveArtifact struct {
+	Provider       string   `json:"provider"`
+	Criterion      string   `json:"criterion"`
+	Outcome        string   `json:"outcome"`
+	Positions      int      `json:"positions"`
+	Blobs          int      `json:"blobs"`
+	Omissions      int      `json:"omissions"`
+	StandingLimits []string `json:"standing_limits"`
+}
+
+func writeLiveArchiveArtifact(directory string, artifact liveArchiveArtifact) error {
+	if artifact.StandingLimits == nil {
+		artifact.StandingLimits = []string{
+			"the archive holds ciphertext and signed objects only",
+			"the recovery kit is supplied separately and never archived",
+			"validation does not decrypt the snapshot or establish global freshness",
+			"archive validation performs no repository writes",
+		}
+	}
+	encoded, err := json.MarshalIndent(artifact, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "archive-export.json"), encoded, 0o600)
+}
+
+func TestLiveArchiveArtifactRecordsPassingOutcome(t *testing.T) {
+	directory := t.TempDir()
+	artifact := liveArchiveArtifact{
+		Provider: "Bluesky-hosted", Criterion: "archive-export-validation", Outcome: "passed",
+		Positions: 3, Blobs: 2, Omissions: 0,
+	}
+	require.NoError(t, writeLiveArchiveArtifact(directory, artifact))
+	path := filepath.Join(directory, "archive-export.json")
+	require.FileExists(t, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	encoded, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var persisted liveArchiveArtifact
+	require.NoError(t, json.Unmarshal(encoded, &persisted))
+	assert.Equal(t, "archive-export-validation", persisted.Criterion)
+	assert.Equal(t, "passed", persisted.Outcome)
+	assert.Equal(t, 3, persisted.Positions)
+	assert.Equal(t, 2, persisted.Blobs)
+	assert.Zero(t, persisted.Omissions)
+	assert.Contains(t, strings.Join(persisted.StandingLimits, "; "), "never archived")
+	assert.NotContains(t, string(encoded), "bafy")
+	assert.NotContains(t, string(encoded), directory)
+}
+
+func liveArchiveBlobCount(report service.ExportReport) int {
+	seen := make(map[string]bool)
+	positions := append(append([]service.ExportPositionReport{report.Current}, report.Lineage...), report.RecoveryPoints...)
+	for _, position := range positions {
+		if position.SnapshotCID != "" {
+			seen[position.SnapshotCID] = true
+		}
+	}
+	return len(seen)
 }
