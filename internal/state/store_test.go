@@ -234,7 +234,7 @@ func TestAuthenticatedPositionEvidenceRoundTripsWithDeterministicCertificates(t 
 	require.NoError(t, err)
 	evidence := AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 1, PolicyDigest: policyDigest, Policy: bytes.Clone(transition.Policy),
-		Control: bytes.Clone(transition.Control), Head: bytes.Clone(transition.Head), Snapshot: bytes.Clone(transition.Snapshot),
+		Control: bytes.Clone(transition.Control), Head: bytes.Clone(transition.Head),
 		Certificates: [][]byte{bytes.Clone(transition.Recipients[1]), bytes.Clone(transition.Recipients[0])},
 	}
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), evidence))
@@ -270,7 +270,7 @@ func TestAuthenticatedPositionEvidencePreservesOptionalCheckpointAndSurvivesRest
 	genesis, _, kit := stateGenesisFixture(t)
 	evidence := AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
-		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
 		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
 	}
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), evidence))
@@ -289,7 +289,7 @@ func TestAuthenticatedPositionEvidenceRejectsMismatchedKeysAndOversizedObjects(t
 	genesis, _, _ := stateGenesisFixture(t)
 	evidence := AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
-		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
 		Certificates: [][]byte{bytes.Clone(genesis.Certificate)},
 	}
 	wrongDigest := evidence
@@ -463,7 +463,7 @@ func TestMigrationSevenBackfillsUnknownObservedControl(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; DROP TABLE authenticated_position_history_certificates; DROP TABLE authenticated_position_history; DROP TABLE vault_selections; DROP TABLE authenticated_position_certificates; DROP TABLE authenticated_position_evidence; DROP TABLE retention_recovery_material; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
+	_, err = raw.Exec("ALTER TABLE vault_publication_observations DROP COLUMN control_cid; ALTER TABLE apply_journal DROP COLUMN vault; ALTER TABLE apply_journal DROP COLUMN epoch; ALTER TABLE apply_journal DROP COLUMN snapshot_cid; ALTER TABLE apply_journal DROP COLUMN policy_digest; ALTER TABLE apply_journal DROP COLUMN control_cid; ALTER TABLE apply_journal DROP COLUMN retention_binding_version; DROP TABLE authenticated_position_history_certificates; DROP TABLE authenticated_position_history; DROP TABLE vault_selections; DROP TABLE authenticated_position_certificates; DROP TABLE authenticated_position_evidence; DROP TABLE retention_recovery_material; DROP TABLE vault_epoch_first_seen; DROP TABLE retention_declaration_history_points; DROP TABLE retention_declaration_history; DROP TABLE retention_recovery_points; DROP TABLE retention_declarations; UPDATE schema_version SET version = 6 WHERE singleton = 1")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -743,7 +743,7 @@ func TestNewerSchemaIsRefusedWithoutChangingDatabase(t *testing.T) {
 	_, err = Open(paths)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsupportedSchema)
-	assert.Contains(t, err.Error(), "supports version 13")
+	assert.Contains(t, err.Error(), "supports version 15")
 	after, err := os.ReadFile(dbPath)
 	require.NoError(t, err)
 	afterDigest := sha256.Sum256(after)

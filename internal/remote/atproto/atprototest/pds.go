@@ -165,6 +165,11 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		return errorResponse(413, "RequestTooLarge")
 	}
 	switch endpoint {
+	case "com.atproto.server.describeServer":
+		if method != "GET" {
+			return errorResponse(400, "InvalidRequest")
+		}
+		return jsonResponse(200, map[string]int64{"blobUploadLimit": maxUploadBytes})
 	case "com.atproto.sync.getLatestCommit":
 		if method != "GET" || query.Get("did") != p.did {
 			return errorResponse(400, "InvalidRequest")

@@ -599,6 +599,58 @@ func attestationObjectFromRecord(record atproto.AttestationRecord) (vault.Attest
 	return object, nil
 }
 
+func (coordinator *Coordinator) fetchPositionEnvelope(ctx context.Context, read atproto.ReadResult, position state.AuthenticatedPositionEvidence, anchor [32]byte) ([]byte, error) {
+	head, err := vault.DecodeHead(position.Head)
+	if err != nil {
+		return nil, err
+	}
+	if position.Vault == ([32]byte{}) || head.Vault != position.Vault || head.EpochSeq != position.Epoch || head.PolicyDigest != position.PolicyDigest || !bytes.Equal(head.SnapshotCID, head.BlobCID) {
+		return nil, errors.New("position head does not bind a snapshot envelope")
+	}
+	recordBytes, snapshotRecord, err := findExportSnapshotRecord(read.Revision, head.SnapshotCID)
+	if err != nil {
+		return nil, exportRefusalCID(head.SnapshotCID, "position snapshot record is unavailable", err)
+	}
+	if snapshotRecord.EpochSeq != head.EpochSeq || !bytes.Equal(snapshotRecord.Vault, position.Vault[:]) || !bytes.Equal(snapshotRecord.PolicyDigest, position.PolicyDigest[:]) || !bytes.Equal(cid.Cid(snapshotRecord.Blob.Ref).Bytes(), head.BlobCID) {
+		return nil, errors.New("position snapshot record does not match its head")
+	}
+	fetcher, ok := coordinator.deps.Remote.(exportBlobFetcher)
+	if !ok {
+		return nil, errors.New("remote reader does not expose verified CID blob retrieval")
+	}
+	blob, err := fetcher.FetchBlob(ctx, read.Revision.DID(), head.SnapshotCID, snapshotRecord.Blob.Size)
+	if err != nil {
+		return nil, exportRefusalCID(head.SnapshotCID, "position snapshot body could not be fetched and verified", err)
+	}
+	if err := verifyExportSnapshotRecord(recordBytes, snapshotRecord, blob, position, anchor); err != nil {
+		return nil, exportRefusalCID(head.SnapshotCID, "position snapshot record failed authentication", err)
+	}
+	envelope, err := vault.DecodeEnvelope(blob)
+	if err != nil || envelope.Vault != position.Vault || envelope.EpochSeq != position.Epoch || envelope.PolicyDigest != position.PolicyDigest || !bytes.Equal(envelope.Parent, head.PrevHeadCID) || !bytes.Equal(rawVaultCID(blob), head.SnapshotCID) {
+		return nil, exportRefusalCID(head.SnapshotCID, "position snapshot envelope does not match its head", errors.Join(err, atproto.ErrReadHeadEnvelopeLinkage))
+	}
+	var snapshotSigner vault.Certificate
+	foundSigner := false
+	for _, certificateBytes := range position.Certificates {
+		certificate, decodeErr := vault.DecodeCertificate(certificateBytes)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if certificate.DeviceID == envelope.DeviceID && bytes.Equal(certificate.KeyID, envelope.KeyID) {
+			snapshotSigner = certificate
+			foundSigner = true
+			break
+		}
+	}
+	if !foundSigner {
+		return nil, errors.New("position snapshot signer is not in authenticated certificates")
+	}
+	if err := atproto.VerifySnapshotEnvelopeSignature(blob, snapshotSigner); err != nil {
+		return nil, err
+	}
+	return blob, nil
+}
+
 func (coordinator *Coordinator) exportRequiredBlobs(ctx context.Context, revision *atproto.Revision, current state.AuthenticatedPositionEvidence, lineage, recovery []state.AuthenticatedPositionEvidence, anchor [32]byte) ([]vault.ExportBlob, error) {
 	fetcher, ok := coordinator.deps.Remote.(exportBlobFetcher)
 	if !ok {
@@ -859,7 +911,7 @@ func controlRawCID(encoded []byte) []byte { return rawVaultCID(encoded) }
 
 func samePosition(left, right state.AuthenticatedPositionEvidence) bool {
 	if left.Vault != right.Vault || left.Epoch != right.Epoch || left.PolicyDigest != right.PolicyDigest ||
-		!bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || !bytes.Equal(left.Snapshot, right.Snapshot) || len(left.Certificates) != len(right.Certificates) {
+		!bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || len(left.Certificates) != len(right.Certificates) {
 		return false
 	}
 	for index := range left.Certificates {

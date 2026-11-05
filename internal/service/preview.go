@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,7 +10,9 @@ import (
 	"fmt"
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/source/files"
+	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
@@ -88,12 +91,44 @@ func (coordinator *Coordinator) previewLocked(ctx context.Context, selection Vau
 	if err != nil {
 		return Candidate{}, err
 	}
+	selected, err := coordinator.selectVault(ctx, selection)
+	if err != nil {
+		return Candidate{}, err
+	}
+	retention, err := retentionBindingForRead(ctx, coordinator.deps.State, selected, pulled.Read)
+	if err != nil {
+		return Candidate{}, err
+	}
 	return Candidate{
 		Preview: preview, Digest: digest, Actions: previewActions(preview), TargetID: target.ID,
 		Freshness: pulled.Freshness, Currency: pulled.Currency.Outcome, InspectOnly: pulled.InspectOnly,
-		Untracked: untracked, plan: plan, observations: observations, configuration: configuration,
+		Untracked: untracked, Retention: retention, plan: plan, observations: observations, configuration: configuration,
 		localEntries: localEntries, baseEntries: baseEntries, remoteEntries: remoteEntries,
 	}, nil
+}
+
+func retentionBindingForRead(ctx context.Context, store *state.Store, selection VaultSelection, read atproto.ReadResult) (*state.RetentionBinding, error) {
+	declaration, err := store.RetentionDeclaration(ctx, selection.Vault, selection.DeviceID)
+	if errors.Is(err, state.ErrRetentionDeclarationNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if declaration.DigestVersion != 2 || len(read.Head.PolicyDigest) != 32 {
+		return nil, nil
+	}
+	var policyDigest [32]byte
+	copy(policyDigest[:], read.Head.PolicyDigest)
+	for _, point := range declaration.RecoveryPoints {
+		if point.Epoch == read.EpochSeq && bytes.Equal(point.SnapshotCID, read.HeadCID) && point.PolicyDigest == policyDigest && bytes.Equal(point.ControlCID, read.ControlCID) {
+			return &state.RetentionBinding{
+				Vault: selection.Vault, Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID),
+				PolicyDigest: point.PolicyDigest, ControlCID: bytes.Clone(point.ControlCID),
+			}, nil
+		}
+	}
+	return nil, nil
 }
 
 func (coordinator *Coordinator) captureLocal(ctx context.Context, target config.Target) ([]model.Observation, []model.Entry, []model.EntryKey, []model.EntryKey, []string, error) {

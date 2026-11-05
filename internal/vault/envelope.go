@@ -376,28 +376,56 @@ func SealPrepared(prepared PreparedSeal) (Envelope, error) {
 }
 
 func preparedRecipientsMatchPolicy(recipients []PreparedRecipient, policy Policy) bool {
-	if len(recipients) != len(policy.Recipients) || len(recipients) == 0 {
+	keyIDs := make([][]byte, len(recipients))
+	for index, recipient := range recipients {
+		keyIDs[index] = recipient.KeyID
+	}
+	if !recipientKeyIDsMatchPolicy(keyIDs, policy) {
 		return false
 	}
 	authorized := make(map[string][32]byte, len(policy.Recipients))
+	for _, recipient := range policy.Recipients {
+		authorized[string(recipient.KeyID)] = recipient.PublicKey
+	}
+	for _, recipient := range recipients {
+		publicKey := authorized[string(recipient.KeyID)]
+		if !bytes.Equal(recipient.PublicKey, publicKey[:]) {
+			return false
+		}
+	}
+	return true
+}
+
+func envelopeRecipientKeyIDsMatchPolicy(recipients []EnvelopeRecipient, policy Policy) bool {
+	keyIDs := make([][]byte, len(recipients))
+	for index, recipient := range recipients {
+		keyIDs[index] = recipient.KeyID
+	}
+	return recipientKeyIDsMatchPolicy(keyIDs, policy)
+}
+
+func recipientKeyIDsMatchPolicy(keyIDs [][]byte, policy Policy) bool {
+	if len(keyIDs) != len(policy.Recipients) || len(keyIDs) == 0 {
+		return false
+	}
+	authorized := make(map[string]struct{}, len(policy.Recipients))
 	for _, recipient := range policy.Recipients {
 		keyID := string(recipient.KeyID)
 		if _, exists := authorized[keyID]; exists {
 			return false
 		}
-		authorized[keyID] = recipient.PublicKey
+		authorized[keyID] = struct{}{}
 	}
-	seen := make(map[string]struct{}, len(recipients))
-	for _, recipient := range recipients {
-		keyID := string(recipient.KeyID)
+	seen := make(map[string]struct{}, len(keyIDs))
+	for _, keyIDBytes := range keyIDs {
+		keyID := string(keyIDBytes)
+		if _, exists := authorized[keyID]; !exists {
+			return false
+		}
 		if _, exists := seen[keyID]; exists {
 			return false
 		}
 		seen[keyID] = struct{}{}
-		publicKey, exists := authorized[keyID]
-		if !exists || !bytes.Equal(recipient.PublicKey, publicKey[:]) {
-			return false
-		}
 	}
 	return len(seen) == len(authorized)
 }

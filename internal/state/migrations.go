@@ -117,7 +117,15 @@ func currentSchemaVersion(ctx context.Context, conn *sql.Conn) (int, error) {
 	return version, nil
 }
 
-func applyMigration(ctx context.Context, conn *sql.Conn, item migration, previous int) error {
+func applyMigration(ctx context.Context, conn *sql.Conn, item migration, previous int) (resultErr error) {
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("disable foreign key enforcement before migration: %w", err)
+	}
+	defer func() {
+		if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("restore foreign key enforcement: %w", err))
+		}
+	}()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -148,9 +156,6 @@ func applyMigration(ctx context.Context, conn *sql.Conn, item migration, previou
 		return err
 	}
 	committed = true
-	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		return fmt.Errorf("restore foreign key enforcement: %w", err)
-	}
 	return nil
 }
 

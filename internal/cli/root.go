@@ -20,6 +20,7 @@ Usage:
   dottie plan --from FILE [--json]
   dottie status
   dottie history [--did DID | --handle HANDLE] [--vault HEX] [--device-id ID]
+  dottie prune --plan|--apply [--confirm] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
   dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
   dottie pull (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
@@ -44,6 +45,7 @@ For push, sync and device operations, exit codes are: 0 means committed/no-op su
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success. History is local-only without --did/--handle; with an account selector it attempts a verified read and reports unavailable or auth-expired distinctly while still succeeding. History output is redacted and contains no content or absolute paths.
 Export writes a complete ciphertext-only archive atomically through the guarded writer; an existing output requires --overwrite. Export authenticates its checkpoint with a regular owner-only kit file decoding to exactly 32 bytes; the kit is cleared and never stored or archived. Export completeness requires retained authenticated history on the exporting machine; v1 count-only attestations with nonzero recovery-point counts cannot be enumerated and refuse export. Import requires independent --vault, --anchor and kit inputs and is validation-only; it changes no state or preferences. Import validates ciphertext without decrypting content or establishing global freshness.
+Prune requires exactly one of --plan or --apply; --apply also requires --confirm. It reports recovery, confidentiality and unknown holding floors plus exact candidate references and reasons. Prune is foreground-only: there is no scheduled or automatic garbage collection. The retained-point cap limits selected epochs, not disk growth; staged, orphaned and unknown material may remain. Export/onboarding fetch required snapshot bodies by CID, so a body not available from the remote refuses those workflows.
 Device enrollment/revocation require the selected root device and a 32-byte
 recovery kit in a regular, user-only-readable --kit-file (use chmod 600); the kit is never saved by Dottie. Revocation
 requires a second invocation with the fingerprint-bound --confirm printed by its verified-read transcript. Bundle
@@ -71,7 +73,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "status", "history", "preview", "pull", "restore", "recover", "export", "import":
 		return runManual(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
-	case "push", "sync", "devices":
+	case "push", "prune", "sync", "devices":
 		return runOrchestration(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	}
 	if args[0] == "plan" {

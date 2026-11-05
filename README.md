@@ -28,17 +28,27 @@ required authenticated closure and depends on the exporting machine having retai
 authenticated history needed to prove every required predecessor. An onboarding device that
 has not observed prior publication heads can refuse export even when the current snapshot is
 available. Version-1 count-only attestations with nonzero retained-point counts cannot be
-enumerated and refuse export; no archive is written on refusal. `dottie import --archive FILE
---kit-file FILE --anchor HEX --vault HEX` requires independent expected vault and anchor inputs
-plus the kit; it validates the archive in V06 order and changes no state, configuration, target
-or preference. Validation does not decrypt the snapshot or establish global freshness.
+enumerated and refuse export; no archive is written on refusal. Export and onboarding fetch required
+snapshot bodies by CID through the verified remote reader; unavailable bodies refuse the workflow.
+`dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
+holding floors; `dottie prune --apply --confirm` is the explicit foreground deletion path. Apply
+without `--confirm` refuses without deletion. There is no scheduled or automatic garbage collection.
+The retained-point cap limits selected epochs, not disk growth, and staged, orphaned or unknown-epoch
+material may remain. `dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX`
+requires independent expected vault and anchor inputs plus the kit; it validates the archive in V06
+order and changes no state, configuration, target or preference. Validation does not decrypt the
+snapshot or establish global freshness.
 
 The command exit codes are 0 for success (including history with remote unavailable), 2 for
 usage error, 3 for refusal/conflict/rejection, and 4 for queued, starved, fence-lost,
 superseded, unavailable or another partial/indeterminate push/sync/device outcome. Export
 succeeds with a complete required closure or refuses; it does not report a partial archive as
-success. Push/sync never apply downloaded files or settings; restore remains explicit.
-Signed retention attestations use schema version 2 to enumerate ordered recovery points while
+success. Push/sync never apply downloaded files or settings; restore remains explicit. Prune
+returns 0 for a plan or successful apply, 2 for usage, 3 for refusal (including missing confirmation,
+incomplete inventory or an invalid boundary/live-head check), and 4 for partial or indeterminate
+apply. Recovery floor is the oldest complete inventory; confidentiality floor is the oldest surviving
+known material. Unknown-epoch holdings make the confidentiality floor unknown. The cap bounds retained
+epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
 preserving version-1 count-only decoding; the tagged two-machine gate exercises export/import
 against a shared synthetic MemoryPDS. These offline tests do not establish live PDS compatibility
 or production desktop behavior. P06 remains subject to acceptance review; live PDS validation is
@@ -103,7 +113,7 @@ offline with `--did`; `--refresh` is explicit. Local logout removes the local se
 request was accepted. Account sessions require Secret Service and never fall back to
 files. These commands do not touch target data.
 
-Use `./bin/dottie push --did DID` to publish reconciled local changes or `./bin/dottie sync --did DID` to verify a pull and then push. Neither applies downloads; restore remains explicit. Push/sync/device command exit 0 is committed/no-op, 2 usage error, 3 refusal/conflict/rejection, and 4 queued or other partial/indeterminate non-success. `devices list`, root-only `devices enroll`/`revoke`, and newcomer `account import-bundle` transfer only public onboarding evidence. Recovery kit files must be regular files, decode to 32 bytes, and have group/world permissions removed (`chmod 600 FILE`); Dottie never stores the kit. See the CLI README for command flags and disclosures.
+Use `./bin/dottie push --did DID` to publish reconciled local changes or `./bin/dottie sync --did DID` to verify a pull and then push. Neither applies downloads; restore remains explicit. Use `./bin/dottie prune --plan --did DID` to inspect retention candidates, then `./bin/dottie prune --apply --confirm --did DID` to delete eligible payloads and aged backups. Pruning is manual and foreground-only; no automatic GC or scheduling is enabled. Push/sync/device command exit 0 is committed/no-op, 2 usage error, 3 refusal/conflict/rejection, and 4 queued or other partial/indeterminate non-success. `devices list`, root-only `devices enroll`/`revoke`, and newcomer `account import-bundle` transfer only public onboarding evidence. Recovery kit files must be regular files, decode to 32 bytes, and have group/world permissions removed (`chmod 600 FILE`); Dottie never stores the kit. See the CLI README for command flags and disclosures.
 
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
 `./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.

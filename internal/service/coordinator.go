@@ -166,6 +166,35 @@ func (coordinator *Coordinator) pullLockedWithTrust(ctx context.Context, selecti
 	} else if len(trust.Held.Policy) == 0 && trust.Checkpoint.Epoch == 0 {
 		pairs = append(pairs, [2][]byte{})
 	}
+	history, historyErr := coordinator.deps.State.AuthenticatedPositionHistory(ctx, selection.Vault)
+	if historyErr != nil {
+		return ReadOutcome{}, historyErr
+	}
+	var latestPredecessor *state.AuthenticatedPositionEvidence
+	for index := range history {
+		if history[index].Epoch <= trust.Checkpoint.Epoch {
+			continue
+		}
+		if latestPredecessor == nil || history[index].Epoch > latestPredecessor.Epoch {
+			latestPredecessor = &history[index]
+		}
+	}
+	if latestPredecessor != nil {
+		previousPolicy, previousControl, encodeErr := encodePositionRecords(latestPredecessor.Policy, latestPredecessor.Control)
+		if encodeErr != nil {
+			return ReadOutcome{}, fmt.Errorf("encode latest authenticated predecessor: %w", encodeErr)
+		}
+		duplicate := false
+		for _, pair := range pairs {
+			if bytes.Equal(pair[0], previousPolicy) && bytes.Equal(pair[1], previousControl) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			pairs = append(pairs, [2][]byte{previousPolicy, previousControl})
+		}
+	}
 	var read atproto.ReadResult
 	var readErr error
 	for _, pair := range pairs {
@@ -211,12 +240,13 @@ func (coordinator *Coordinator) pullLockedWithTrust(ctx context.Context, selecti
 	if err != nil {
 		return ReadOutcome{}, err
 	}
-	currency, err := verifyCurrency(selection.Vault, trust, read)
+	currency, err := verifyCurrency(ctx, coordinator.deps.State, selection.Vault, trust, read)
 	if err != nil {
 		return ReadOutcome{}, err
 	}
+	retention := coordinator.refreshRetention(ctx, selection, trust, read, currency)
 	return ReadOutcome{Snapshot: snapshot, VerifiedSnapshot: snapshotBeforePolicyFilter, Read: read, Currency: currency, Freshness: read.Freshness,
-		InspectOnly: currency.Outcome != vault.CheckpointCurrent && currency.Outcome != vault.CheckpointDescendant, Untracked: untracked}, nil
+		InspectOnly: currency.Outcome != vault.CheckpointCurrent && currency.Outcome != vault.CheckpointDescendant, Untracked: untracked, Retention: retention}, nil
 }
 
 func (coordinator *Coordinator) selectVault(ctx context.Context, requested VaultSelection) (VaultSelection, error) {
@@ -440,7 +470,7 @@ func approvedSettings(ctx context.Context, settings SettingsPort, target config.
 	return refs, nil
 }
 
-func verifyCurrency(vaultID [32]byte, trust TrustMaterial, read atproto.ReadResult) (vault.VerificationResult, error) {
+func verifyCurrency(ctx context.Context, store *state.Store, vaultID [32]byte, trust TrustMaterial, read atproto.ReadResult) (vault.VerificationResult, error) {
 	if trust.ImportedCheckpoint {
 		if err := verifyImportedCheckpointRead(trust, read); err != nil {
 			return vault.VerificationResult{}, err
@@ -471,7 +501,30 @@ func verifyCurrency(vaultID [32]byte, trust TrustMaterial, read atproto.ReadResu
 	if err := trusted.SetHeldCheckpoint(held); err != nil {
 		return vault.VerificationResult{}, err
 	}
-	result, err := vault.VerifyControlState(trusted, vault.VerificationRequest{Supplied: vault.ControlEvidence{Policy: policyBytes, Control: controlBytes, Certificates: certificates}})
+	supplied := vault.ControlEvidence{Policy: policyBytes, Control: controlBytes, Certificates: certificates}
+	var intermediates []vault.ControlEvidence
+	if len(held.Policy) != 0 {
+		positions, historyErr := retentionPositions(ctx, store, vaultID)
+		if historyErr != nil {
+			return vault.VerificationResult{}, historyErr
+		}
+		selectedEvidence, evidenceErr := positionEvidenceFromRead(vaultID, read)
+		selectedControl, controlErr := vault.DecodeControl(controlBytes)
+		checkpointControl, checkpointControlErr := vault.DecodeControl(held.Control)
+		checkpointPolicyDigest, digestErr := vault.ComputePolicyDigest(held.Policy)
+		if evidenceErr == nil && controlErr == nil && checkpointControlErr == nil && digestErr == nil {
+			selected := retentionPosition{
+				evidence: selectedEvidence, control: selectedControl, controlCID: rawVaultCID(controlBytes),
+			}
+			checkpointPosition := retentionPosition{control: checkpointControl, controlCID: rawVaultCID(held.Control)}
+			if len(checkpointPosition.controlCID) != 0 && checkpointPolicyDigest != ([32]byte{}) {
+				if path, ok := buildRetentionControlIntermediates(positions, selected, checkpointPosition); ok {
+					intermediates = path
+				}
+			}
+		}
+	}
+	result, err := vault.VerifyControlState(trusted, vault.VerificationRequest{Supplied: supplied, Intermediates: intermediates})
 	if err != nil {
 		return vault.VerificationResult{}, err
 	}
@@ -586,10 +639,6 @@ func positionEvidenceFromRead(vaultID [32]byte, read atproto.ReadResult) (state.
 	if err != nil {
 		return state.AuthenticatedPositionEvidence{}, err
 	}
-	snapshotBytes, err := vault.EncodeEnvelope(read.Envelope)
-	if err != nil {
-		return state.AuthenticatedPositionEvidence{}, err
-	}
 	certificates, err := certificateObjectsForPolicy(read.Revision, policyObject(read.Policy))
 	if err != nil {
 		return state.AuthenticatedPositionEvidence{}, err
@@ -600,7 +649,7 @@ func positionEvidenceFromRead(vaultID [32]byte, read atproto.ReadResult) (state.
 	}
 	return state.AuthenticatedPositionEvidence{
 		Vault: vaultID, Epoch: read.EpochSeq, PolicyDigest: digest,
-		Policy: policyBytes, Control: controlBytes, Head: headBytes, Snapshot: snapshotBytes, Certificates: certificates,
+		Policy: policyBytes, Control: controlBytes, Head: headBytes, Certificates: certificates,
 	}, nil
 }
 

@@ -171,7 +171,10 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		var state, stage, source string
 		var createdAt int64
-		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at, source FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt, &source); err != nil {
+		var retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID []byte
+		var retentionEpoch sql.NullInt64
+		var retentionBindingVersion int
+		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at, source, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt, &source, &retentionVault, &retentionEpoch, &retentionSnapshot, &retentionPolicyDigest, &retentionControlCID, &retentionBindingVersion); err != nil {
 			return err
 		}
 		if reference == "" {
@@ -181,6 +184,33 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 		aged := (state == "applied" && stage == JournalStageVerified || rolledBack) && !now.Before(time.Unix(createdAt, 0).Add(JournalBackupRetention))
 		if !rolledBack && !aged {
 			return errors.New("journal backup can only be pruned after verified rollback or seven-day expiry of a verified apply")
+		}
+		if !validRetentionJournalBinding(retentionVault, retentionEpoch, retentionSnapshot, retentionPolicyDigest, retentionControlCID, retentionBindingVersion) {
+			return nil
+		}
+		deviceID, err := selectedRetentionDeviceTx(ctx, tx, retentionVault)
+		if err != nil {
+			return err
+		}
+		if deviceID == "" {
+			return nil
+		}
+		var boundaryEpoch int64
+		if err := tx.QueryRowContext(ctx, "SELECT epoch FROM vault_checkpoints WHERE vault = ?", retentionVault).Scan(&boundaryEpoch); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if boundaryEpoch < 0 || retentionEpoch.Int64 >= boundaryEpoch {
+			return nil
+		}
+		associated, err := retentionBackupAssociationTx(ctx, tx, retentionVault, deviceID, retentionEpoch.Int64, retentionSnapshot, retentionPolicyDigest, retentionControlCID, reference)
+		if err != nil {
+			return err
+		}
+		if !associated {
+			return nil
 		}
 		var retainedReferences int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM retention_recovery_material AS material
@@ -192,6 +222,13 @@ WHERE material.backup_ref = ? OR material.payload_ref = ?`, reference, reference
 		}
 		if retainedReferences != 0 {
 			return nil
+		}
+		name, err := payloadName(reference)
+		if err != nil {
+			return err
+		}
+		if _, err := readPayload(filepath.Join(s.payloadDir, name), reference); err != nil {
+			return err
 		}
 		query := "UPDATE apply_journal SET backup_ref = '' WHERE id = ? AND state = ?"
 		if source == string(model.SourceGNOME) {

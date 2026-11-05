@@ -7,22 +7,23 @@ import (
 )
 
 func TestEvaluateRetentionDeclarationRejectsDuplicateRecoveryPoints(t *testing.T) {
-	fixture := newAttestationFixture(t)
-	point := RetentionRecoveryPoint{Epoch: 4, SnapshotCID: []byte("snapshot-four")}
+	fixture := newRetentionDeclarationFixture(t)
 	_, err := EvaluateRetentionDeclaration(RetentionDeclarationRequest{
-		VaultID: fixture.request.VaultID, TrustAnchor: fixture.request.TrustAnchor, State: fixture.request.State,
+		VaultID: fixture.base.policy.Vault, TrustAnchor: fixture.base.trustAnchor, State: fixture.state,
 		DeviceID: "device-restore", RetentionFloor: 4,
-		RecoveryPoints: []RetentionRecoveryPoint{point, point},
+		RecoveryPoints: []RetentionRecoveryPoint{fixture.point, fixture.point},
+		PointEvidence:  []RetentionRecoveryPointEvidence{fixture.pointEvidence, fixture.pointEvidence},
 	})
 	assert.ErrorContains(t, err, "duplicate retention recovery point")
 }
 
 func TestEvaluateRetentionDeclarationRejectsFloorAboveSignedRange(t *testing.T) {
-	fixture := newAttestationFixture(t)
+	fixture := newRetentionDeclarationFixture(t)
 	_, err := EvaluateRetentionDeclaration(RetentionDeclarationRequest{
-		VaultID: fixture.request.VaultID, TrustAnchor: fixture.request.TrustAnchor, State: fixture.request.State,
+		VaultID: fixture.base.policy.Vault, TrustAnchor: fixture.base.trustAnchor, State: fixture.state,
 		DeviceID: "device-restore", RetentionFloor: uint64(1) << 63,
-		RecoveryPoints: []RetentionRecoveryPoint{{Epoch: 4, SnapshotCID: []byte("snapshot-four")}},
+		RecoveryPoints: []RetentionRecoveryPoint{fixture.point},
+		PointEvidence:  []RetentionRecoveryPointEvidence{fixture.pointEvidence},
 	})
 	assert.Error(t, err)
 }

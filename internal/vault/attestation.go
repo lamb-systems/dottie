@@ -15,12 +15,14 @@ type AttestationBuildRequest struct {
 	RetentionFloor         uint64
 	RetainedRecoveryPoints uint16
 	RecoveryPoints         []RetentionRecoveryPoint
+	UnknownEpochMaterial   bool
 }
 
 type AttestationVerificationRequest struct {
-	VaultID     [32]byte
-	TrustAnchor [32]byte
-	State       ControlEvidence
+	VaultID              [32]byte
+	TrustAnchor          [32]byte
+	State                ControlEvidence
+	UnknownEpochMaterial bool
 }
 
 type AttestationStatus uint8
@@ -34,9 +36,13 @@ type AttestationJudgement struct {
 	Attestation                   Attestation
 	Status                        AttestationStatus
 	CompromisedForConfidentiality bool
+	UnknownEpochMaterial          bool
 }
 
 func BuildAttestation(request AttestationBuildRequest) ([]byte, error) {
+	if request.UnknownEpochMaterial {
+		return nil, fmt.Errorf("%w: attestation cannot encode unknown-epoch material", ErrAuthorization)
+	}
 	certificate, err := DecodeCertificate(request.SignerCertificate)
 	if err != nil {
 		return nil, fmt.Errorf("%w: attestation signer certificate", ErrAuthorization)
@@ -116,8 +122,8 @@ func VerifyAttestation(encoded []byte, request AttestationVerificationRequest) (
 	if err := Verify(contextForPurpose(PurposeAttestation), objectSignaturePreimage(prefix), attestation.Signature[:], certificate.SigningPublicKey[:]); err != nil {
 		return AttestationJudgement{}, fmt.Errorf("%w: attestation", ErrSignature)
 	}
-	judgement := AttestationJudgement{Attestation: attestation, Status: AttestationStatusMeetsPolicy}
-	if attestation.RetentionFloor < position.policy.PolicyRetentionFloor {
+	judgement := AttestationJudgement{Attestation: attestation, Status: AttestationStatusMeetsPolicy, UnknownEpochMaterial: request.UnknownEpochMaterial}
+	if request.UnknownEpochMaterial || attestation.RetentionFloor < position.policy.PolicyRetentionFloor {
 		judgement.Status = AttestationStatusBelowPolicyFloor
 		judgement.CompromisedForConfidentiality = true
 	}

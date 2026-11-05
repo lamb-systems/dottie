@@ -7,17 +7,18 @@ for someone deciding whether to trust the tool with their configuration.
 
 | Capability | Present | Target |
 | --- | --- | --- |
-| Directory selection and consent | yes | — |
-| Filesystem capture with containment | yes, library only | reachable from the CLI |
-| Bounded snapshots | yes | encrypted envelopes |
-| OAuth account authorization and local session management | yes, `account login`, `status`, `logout`; live providers not tested | account authority wired into sync |
-| Blob lifecycle and fenced publication | yes, harness and library | wired into a product command |
-| Encryption and signatures | yes, vault library (ADR 015) | wired into a sync command |
-| Device roles, revocation, epochs | yes, vault library (ADR 014); `account bootstrap`, `enroll`, `recovery`, `verify` | transitions driven end to end against a provider |
-| Recovery kit and checkpoints | yes, vault library; `account recovery` and `account verify` | restore driven end to end |
-| Vault export and import | yes, library only (`EncodeExportArchive`/`ReadExportArchive`); no command | a product export/import command |
-| Remote vault sync | no; `dottie plan` previews a local view bundle only | a sync command that publishes and reads a vault |
-| GNOME settings capture and apply | selected-key capture plus library-level settings apply adapter, opt-in cgo; no CLI/preset wiring | real desktop validation at G04 |
+| Directory selection and consent | yes, `targets` and preset onboarding | — |
+| Filesystem capture with containment | yes, `status`, `preview`, `pull`, `restore` | — |
+| Bounded snapshots | yes, encrypted envelopes | — |
+| OAuth account authorization and local session management | yes, `account login`, `status`, `logout`; live providers not tested | live provider validation |
+| Blob lifecycle and fenced publication | yes, `push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
+| Encryption and signatures | yes, wired into publication and restore; live provider not tested | live provider validation |
+| Device roles, revocation, epochs | yes, public-key `devices enroll`/`revoke` and `account bootstrap`; synthetic transitions only | live provider validation |
+| Recovery kit and checkpoints | yes, `account recovery`/`verify`; restore proven synthetically | live provider validation |
+| Vault export and import | yes, `export` (complete ciphertext inventory, body fetch by CID) and validation-only `import` | offline archive application is not promised |
+| Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation (P07/P08) |
+| Retention and manual pruning | yes, per-point inventories and `prune --plan|--apply --confirm`; no automatic GC | scheduled maintenance (B09) |
+| GNOME settings capture and apply | selected-key capture, apply and the category matrix, wired to CLI targets; real desktop not validated | real desktop validation (R03) |
 
 The opt-in GNOME boundary reads only explicitly selected keys and never copies a dconf database
 wholesale. Its library-level settings apply adapter uses the journaled schema/path/key identity, observes only
@@ -26,7 +27,8 @@ Reset before read-back. A fixed-path schema accepts only its resolved schema pat
 the explicit journaled path. This synchronization is backend completion, not filesystem `fsync`, and it does
 not prove durability across a crash. `g_settings_sync` has no deadline; a stalled backend can delay
 cancellation or recovery. Setting values remain plaintext in the local journal/backup while retained; pruning
-an eligible setting backup clears the stored value fields in the same transaction. The adapter is not wired to the CLI or presets. The default backend
+an eligible setting backup clears the stored value fields in the same transaction. Capture and apply are wired
+to CLI targets in the tagged `gsettings` build; builds without that tag expose no settings backend. The default backend
 refuses memory and any backend outside the persistent keyfile/dconf allowlist; synthetic native tests use
 temporary homes and isolated keyfile data, not real preferences.
 
@@ -35,10 +37,19 @@ follow the existing bounded rollback-material and backup-retention policy; backu
 associated retained journal values. This library boundary does not change account authority or grant remote
 configuration access to local settings.
 
-The CLI exposes target selection, `dottie plan`, and the `account` command group (`login`, `logout`, `status`,
-`bootstrap`, `enroll`, `recovery`, `verify`). The first three manage OAuth authorization only. No command
-publishes or reads a vault against a provider, and vault export and import are library functions only. Target
-capture, apply and synchronization are not wired; do not use this build to back up real data.
+The CLI exposes target and preset onboarding, `status`, `preview`, `pull`, `push`, `sync`, `restore`,
+`recover`, `devices`, `history`, `export`, validation-only `import`, and confirmed `prune`. Account commands
+manage OAuth authorization and local device keys; they do not capture target data by themselves. All
+application-data and retention mutations route through the coordinator and its journal; the CLI does not edit
+application state or target configuration directly. Account onboarding does write the local vault selection and
+keyring items directly, which cannot authorize application data, apply or publication.
+
+Every end-to-end demonstration in this repository uses disposable synthetic data: an in-memory AT Protocol
+provider, temporary homes and a synthetic keyring. No live provider, real account or real desktop session has
+been exercised. Real-data use therefore remains blocked until the fresh-machine milestone is accepted
+(DOT-P08) and the live-provider validation tasks complete; the independent security gate (DOT-V08) passed
+technically on 2026-11-05 with the accepted residual risks recorded in the task graph. Do not use this build to
+back up real data.
 
 ## Authorities
 
@@ -49,10 +60,11 @@ scope enforcement, and one atomic Secret Service envelope. It grants repository 
 `account login`, `status` and `logout` operate on that authorization; they do not capture or sync target data.
 
 **Device authority** is a root-signed certificate naming a signing key, a recipient key, a role and the
-epoch at enrollment. Root, publisher and restore-only are distinct. Not implemented.
+epoch at enrollment. Root, publisher and restore-only are distinct. Enrollment, revocation and epoch
+rotation are implemented and wired to the CLI; they are proven synthetically, not against a live provider.
 
 **Recovery authority** is material held offline, independent of the account. It can re-establish a root
-device. Not implemented.
+device. Bootstrap, kit-signed checkpoints and verification are implemented; live recovery is unproven.
 
 ## Account session lifecycle
 
@@ -211,42 +223,59 @@ real limit into a comforting sentence.
 ## Retention and deletion limits
 
 Retention declarations are stored per vault and device with the policy digest, declared floor, and retained
-recovery points. A below-policy floor is recorded and surfaced as a confidentiality-compromise signal rather
-than refused. Re-declarations preserve the previous declaration and its digest so the change remains visible.
+recovery points. Each point carries its own authenticated `(epoch, snapshot CID, policy digest, control CID)`
+position and is verified independently; the held checkpoint point is retained exactly and never replaced by a
+later same-epoch publication. Later epochs add their latest authenticated snapshot, capped by the policy's
+retained-point count; admission is refused at the cap rather than evicting material. A below-policy floor is
+recorded and surfaced as a confidentiality-compromise signal rather than refused. Re-declarations preserve the
+previous declaration and its digest so the change remains visible.
 
-No epoch-scoped ciphertext cache exists yet. Migration 10 records associations from `(vault, device, epoch,
-snapshot CID)` recovery points to local payload and journal-backup references. Recovery-material registration
-exists as a state API, but the current sync/cache path has no production producer that associates snapshot
-material with local payloads or backups. A newly declared point starts with an incomplete inventory, and
-`PlanRetentionPrune` refuses with `ErrRetentionRecoveryPointInventoryUnknown` until a caller records a complete
-inventory. The authenticated complete-inventory producer is a blocking prerequisite and does not exist until the
-sync path is wired (P06). Consequently, manual recovery-point pruning is unavailable in production by design.
-V08 is blocked on that producer rather than passing; this is an unmet in-contract prerequisite, not an accepted
-limit. Absence of a link is not treated as proof of a complete inventory.
+The coordinator is the production producer. On a verified read or successful publication read-back it caches
+the exact CID-matching envelope body for every retained point in the durable payload store (never plaintext,
+never the keys), verifies that the decoded envelope's parent equals the point's signed head predecessor, and
+records the point and its associations atomically. If any required body is missing, unavailable or fails
+verification the point stays incomplete and pruning refuses; absence is never an empty complete inventory.
+Authentication evidence in the position tables carries policy, control, head, certificates and signed
+checkpoint positions but no snapshot ciphertext. Journal rollback backups are bound to their point when they
+are created and associated in the same transaction; a new backup demotes the point to incomplete until the
+next refresh re-verifies the closure.
 
-The automatic journal age prune is separate and runs during recovery and rollback. It now checks registered
-material against currently retained recovery points before detaching a backup; a matching backup remains
-attached and its payload remains available. This automatic journal prune was the actual deletion risk because
-it ignored retained-point associations; that path is fixed, even though no production producer currently
-populates those associations.
+The automatic journal age prune runs during recovery and rollback and consults the same point associations.
+Backup eligibility is explicit on both prune paths: a backup bound to a currently retained point is protected
+at every age; one bound to an evicted point below the boundary whose association is present is eligible after
+the usual terminal/age and revalidation checks; a bound row whose association is missing, and a migrated
+legacy-unbound row, are ineligible. A backup is therefore never prunable before association.
 
 Pruning deletes a payload only when its recovery-point epoch is known and strictly below the oldest retained
 recovery-point boundary, it is not associated with any retained recovery point, and it is unreferenced by
-applied bases, outbound intents, conflicts and non-prunable journal backups. Aged backups are detached only
-after their verified age bound and the same reference/recovery-point checks. Material tied to any retained
-point is protected at every age, and material at or above the boundary is not eligible. A material candidate
-with no classifiable recovery-point epoch is reported as unclassified and preserved. The dry-run plan lists
-each candidate's epoch and the rules that made it eligible or protected it.
+applied bases, outbound intents, conflicts and non-prunable journal backups. Material tied to any retained
+point in any subject is protected at every age, and material at or above the boundary is not eligible. A
+candidate with no classifiable recovery-point epoch is reported as unclassified and preserved. Plan and apply
+re-read and re-hash every referenced file, so a stale completion marker cannot authorize deletion. The
+dry-run plan lists each candidate's epoch and the rules that made it eligible or protected.
 
-The boundary must be the oldest retained point and match a stored checkpoint's epoch and snapshot CID and the
-declaration's policy digest. The observed live head must be later than that boundary. The checkpoint pins the
-boundary but does not prove that every remote blob is present, because downloads are transient; this local
-inventory is not a claim that the snapshot is reconstructable. The live-head observation also fails closed
-when no head epoch has been observed locally.
+The boundary must be the oldest retained point and match a stored checkpoint's epoch, snapshot CID, policy
+digest and control CID. The observed live head must be later than that boundary. The checkpoint pins the
+boundary but does not prove that every remote blob is present; this local inventory is not a claim that the
+snapshot is reconstructable. The live-head observation also fails closed when no head epoch has been observed
+locally.
 
-No content-key store or epoch-scoped ciphertext cache currently exists. The local payload store is plaintext
-and rollback backups are plaintext. A device's X25519 private key can still unwrap archived wrappers for
-epochs where it was a recipient, so pruning locally held bytes does not revoke a secret someone already kept.
+Two floors are reported. The recovery floor is the oldest epoch with a complete inventory and authorizes
+pruning. The confidentiality floor is the oldest epoch with any known surviving retained material, including
+protected backups and undeleted evicted bodies. When holdings are known, the signed attestation floor is the
+confidentiality floor, never a compliant-looking recovery floor. The current wire schema cannot carry an
+unknown status, so attestation building and coordinator publication refuse unknown or incomplete inventory
+instead of signing a compliant claim. The policy count bounds selected epochs, not total disk use: storage can
+grow until a confirmed prune succeeds, and migrated legacy rows are intentionally never age-pruned.
+
+No content-key store exists. Publication content keys and nonces are caller-supplied, used, and discarded.
+Retained recovery-point payloads are the exact encrypted envelope bodies (ciphertext), while applied bases, journal
+preimages/postimages and rollback backups remain plaintext in the local state store. Local filesystem access is
+therefore equivalent to reading the plaintext material, and it can also copy the ciphertext envelopes. A device's
+X25519 private key can still unwrap archived wrappers for epochs where it was a recipient, so pruning locally held
+bytes does not revoke a secret someone already kept. Export and onboarding fetch required predecessor bodies by CID
+through the verified reader, so they depend on provider availability and on the locally retained authenticated
+history for lineage rather than on ciphertext kept in evidence.
 
 ## First restore
 

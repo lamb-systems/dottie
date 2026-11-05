@@ -151,6 +151,7 @@ func (coordinator *Coordinator) applyRequest(candidate Candidate, preview syncen
 	request := syncengine.ApplyRequest{
 		Preview: preview, Roots: make(map[string]string),
 		Settings: coordinator.settingsBackend(), FileSystem: coordinator.deps.Filesystem, Now: coordinator.deps.Clock,
+		Retention: candidate.Retention,
 	}
 	if target.Source == model.SourceFiles {
 		root, err := target.ResolvedPath(coordinator.deps.Paths)

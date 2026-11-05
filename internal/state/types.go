@@ -11,8 +11,10 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-const LatestSchemaVersion = 13
+const LatestSchemaVersion = 15
 const MaxLocalHistoryTargets = 4096
+const MaxRetentionInventoryRows = 10000
+const MaxRetentionInventoryFiles = 10000
 const PayloadRetention = "Pruning requires classified material below the oldest retained recovery-point boundary, no retained-point association, no base, intent or conflict reference, and an expired verified journal backup when pruning a backup."
 const RetentionPruneScope = "Epoch-scoped material pruning requires complete payload and backup associations for every retained recovery point; the current sync path does not yet populate those inventories."
 
@@ -27,6 +29,7 @@ var ErrAuthenticatedPositionHistoryConflict = errors.New("authenticated position
 var ErrVaultSelectionExists = errors.New("vault selection already exists")
 var ErrOnboardingStateConflict = errors.New("onboarding state conflicts with existing local vault state")
 var ErrVaultSelectionNotFound = errors.New("vault selection not found")
+var ErrVaultSelectionAmbiguous = errors.New("multiple vault selections make a retention binding ambiguous")
 var ErrVaultPublicationBackwards = errors.New("vault publication observation would move backwards")
 var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
@@ -40,6 +43,7 @@ var ErrRetentionLiveHead = errors.New("retention boundary may not include or exc
 var ErrRetentionConfirmationRequired = errors.New("retention pruning requires explicit confirmation")
 var ErrRetentionRecoveryPointInventoryUnknown = errors.New("retention recovery-point material inventory is missing or incomplete")
 var ErrRetentionBoundaryNewerThanFloor = errors.New("retention boundary is newer than the oldest retained recovery point")
+var ErrRetentionInventoryLimit = errors.New("retention inventory exceeds its bounded query limit")
 
 type TargetDescriptor struct {
 	ID            string
@@ -243,7 +247,6 @@ type AuthenticatedPositionEvidence struct {
 	Policy             []byte
 	Control            []byte
 	Head               []byte
-	Snapshot           []byte
 	Certificates       [][]byte
 	CheckpointPosition []byte
 }
@@ -261,8 +264,18 @@ type VaultPublicationObservation struct {
 }
 
 type RetentionRecoveryPoint struct {
-	Epoch       uint64
-	SnapshotCID []byte
+	Epoch        uint64
+	SnapshotCID  []byte
+	PolicyDigest [32]byte
+	ControlCID   []byte
+}
+
+type RetentionBinding struct {
+	Vault        [32]byte
+	Epoch        uint64
+	SnapshotCID  []byte
+	PolicyDigest [32]byte
+	ControlCID   []byte
 }
 
 type RetentionDeclaration struct {
@@ -271,6 +284,7 @@ type RetentionDeclaration struct {
 	PolicyDigest              [32]byte
 	RetentionFloor            uint64
 	RecoveryPoints            []RetentionRecoveryPoint
+	DigestVersion             uint8
 	DeclarationDigest         [32]byte
 	DeclaredAt                int64
 	PreviousDeclarationDigest [32]byte
@@ -280,6 +294,34 @@ type RetentionDeclaration struct {
 type RetentionDeclarationRevision struct {
 	RetentionDeclaration
 	Revision int64
+}
+
+type RetentionRecoveryPointMaterials struct {
+	Point            RetentionRecoveryPoint
+	Payloads         [][]byte
+	BackupReferences []string
+}
+
+type RetentionInventoryPoint struct {
+	RetentionRecoveryPoint
+	InventoryComplete bool
+}
+
+type RetentionRecoveryMaterial struct {
+	Epoch             uint64
+	SnapshotCID       []byte
+	PayloadReference  string
+	BackupReference   string
+	InventoryComplete bool
+}
+
+type RetentionInventory struct {
+	Vault                 [32]byte
+	DeviceID              string
+	Points                []RetentionInventoryPoint
+	Materials             []RetentionRecoveryMaterial
+	KnownMaterialEpochs   []uint64
+	UnknownHoldingReasons []string
 }
 
 type RetentionPruneRequest struct {
@@ -327,19 +369,21 @@ type RetentionPruneReport struct {
 }
 
 type JournalEntry struct {
-	ID              string
-	Operation       string
-	State           string
-	Stage           string
-	Identity        model.EntryKey
-	RootPath        string
-	DestinationPath string
-	RootDevice      int64
-	RootInode       int64
-	Preimage        Fingerprint
-	Postimage       Fingerprint
-	BackupRef       string
-	CreatedAt       int64
+	ID                      string
+	Operation               string
+	State                   string
+	Stage                   string
+	Identity                model.EntryKey
+	RootPath                string
+	DestinationPath         string
+	RootDevice              int64
+	RootInode               int64
+	Preimage                Fingerprint
+	Postimage               Fingerprint
+	BackupRef               string
+	Retention               *RetentionBinding
+	RetentionBindingVersion uint8
+	CreatedAt               int64
 }
 
 type JournalBackupHolder struct {

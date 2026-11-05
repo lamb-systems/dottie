@@ -153,11 +153,6 @@ func buildRevokeApprovalTranscript(selection VaultSelection, deviceID string, pu
 	if role == 0 {
 		return RevokeApprovalTranscript{}, errors.New("revocation target is not an active device")
 	}
-	for _, revoked := range pulled.Read.Control.Revoked {
-		if revoked.DeviceID == deviceID {
-			return RevokeApprovalTranscript{}, errors.New("revocation target is already revoked")
-		}
-	}
 	var recipient *vault.PolicyRecipient
 	for index := range policy.Recipients {
 		if policy.Recipients[index].DeviceID == deviceID {
@@ -174,13 +169,22 @@ func buildRevokeApprovalTranscript(selection VaultSelection, deviceID string, pu
 		if decodeErr != nil {
 			return RevokeApprovalTranscript{}, errors.New("verified device certificate is unavailable")
 		}
-		if decoded.DeviceID == deviceID {
-			certificate = &decoded
-			break
+		if decoded.DeviceID != deviceID || !bytes.Equal(decoded.KeyID, recipient.KeyID) || !bytes.Equal(decoded.EncryptionPublicKey[:], recipient.PublicKey[:]) {
+			continue
 		}
+		if certificate != nil {
+			return RevokeApprovalTranscript{}, errors.New("revocation target certificate identity is ambiguous")
+		}
+		copyOf := decoded
+		certificate = &copyOf
 	}
-	if certificate == nil || certificate.Vault != selection.Vault || certificate.Role != role || !bytes.Equal(certificate.KeyID, recipient.KeyID) || !bytes.Equal(certificate.EncryptionPublicKey[:], recipient.PublicKey[:]) {
+	if certificate == nil || certificate.Vault != selection.Vault || certificate.Role != role {
 		return RevokeApprovalTranscript{}, errors.New("revocation target public keys are unavailable")
+	}
+	for _, revoked := range pulled.Read.Control.Revoked {
+		if revoked.DeviceID == certificate.DeviceID && revoked.CertEpoch >= certificate.CertEpoch {
+			return RevokeApprovalTranscript{}, errors.New("revocation target is already revoked")
+		}
 	}
 	kitFingerprint, err := vault.RecoveryKitPublicKeyFingerprint(kit, selection.Vault)
 	if err != nil || kitFingerprint != policy.RecoveryAnchor {
@@ -346,8 +350,12 @@ func (coordinator *Coordinator) commitAdministrativeTransition(ctx context.Conte
 	if err != nil {
 		return AdministrativeResult{Status: StatusUnavailable, TransitionOutcome: commit.Outcome}, err
 	}
+	predecessorSnapshot, err := coordinator.fetchPositionEnvelope(ctx, pulled.Read, predecessorPosition, trust.Anchor)
+	if err != nil {
+		return AdministrativeResult{Status: StatusUnavailable, TransitionOutcome: commit.Outcome}, err
+	}
 	bundle, err := vault.NewOnboardingBundle(selected.Vault, trust.Anchor, checkpointBytes, transition.Policy, transition.Control,
-		predecessorPosition.Policy, predecessorPosition.Control, predecessorPosition.Head, predecessorPosition.Snapshot, predecessorPosition.Certificates)
+		predecessorPosition.Policy, predecessorPosition.Control, predecessorPosition.Head, predecessorSnapshot, predecessorPosition.Certificates)
 	if err != nil {
 		return AdministrativeResult{Status: StatusUnavailable, TransitionOutcome: commit.Outcome}, err
 	}
@@ -366,7 +374,10 @@ func (coordinator *Coordinator) commitAdministrativeTransition(ctx context.Conte
 	if err := coordinator.deps.State.PutVaultCheckpoint(ctx, checkpoint); err != nil {
 		return AdministrativeResult{Status: StatusUnavailable, TransitionOutcome: commit.Outcome}, err
 	}
-	return AdministrativeResult{Status: StatusCommitted, TransitionOutcome: commit.Outcome, Bundle: bundle, EncodedBundle: encodedBundle}, nil
+	retentionTrust := trust
+	retentionTrust.Checkpoint = checkpoint
+	retention := coordinator.refreshRetention(ctx, selected, retentionTrust, readBack.Read, readBack.Currency)
+	return AdministrativeResult{Status: StatusCommitted, TransitionOutcome: commit.Outcome, Bundle: bundle, EncodedBundle: encodedBundle, Retention: retention}, nil
 }
 
 func (coordinator *Coordinator) ExportOnboarding(ctx context.Context, requested VaultSelection, kit []byte) (vault.OnboardingBundle, error) {
@@ -442,8 +453,12 @@ func (coordinator *Coordinator) ExportOnboarding(ctx context.Context, requested 
 	if err != nil || result.Outcome != vault.CheckpointDescendant {
 		return vault.OnboardingBundle{}, ErrOnboardingChain
 	}
+	predecessorSnapshot, err := coordinator.fetchPositionEnvelope(ctx, readBack.Read, predecessor, trust.Anchor)
+	if err != nil {
+		return vault.OnboardingBundle{}, err
+	}
 	return vault.NewOnboardingBundle(selected.Vault, trust.Anchor, checkpointBytes, current.Policy, current.Control,
-		predecessor.Policy, predecessor.Control, predecessor.Head, predecessor.Snapshot, predecessor.Certificates)
+		predecessor.Policy, predecessor.Control, predecessor.Head, predecessorSnapshot, predecessor.Certificates)
 }
 
 func (coordinator *Coordinator) ImportOnboarding(ctx context.Context, encoded []byte, expectedVault, expectedAnchor [32]byte, deviceID string) error {
@@ -504,6 +519,9 @@ func (coordinator *Coordinator) ImportOnboarding(ctx context.Context, encoded []
 	if err := ensureNoConflictingOnboardingState(ctx, coordinator.deps.State, expectedVault); err != nil {
 		return err
 	}
+	if coordinator.deps.Session == nil || coordinator.deps.Remote == nil {
+		return errors.New("onboarding import requires a verified remote read")
+	}
 	predecessorPolicyDigest, err := vault.ComputePolicyDigest(bundle.PredecessorPolicy)
 	if err != nil {
 		return err
@@ -511,8 +529,37 @@ func (coordinator *Coordinator) ImportOnboarding(ctx context.Context, encoded []
 	position := state.AuthenticatedPositionEvidence{
 		Vault: expectedVault, Epoch: successorControl.EpochSeq - 1, PolicyDigest: predecessorPolicyDigest,
 		Policy: bytes.Clone(bundle.PredecessorPolicy), Control: bytes.Clone(bundle.PredecessorControl),
-		Head: bytes.Clone(bundle.PredecessorHead), Snapshot: bytes.Clone(bundle.PredecessorSnapshot),
+		Head:         bytes.Clone(bundle.PredecessorHead),
 		Certificates: cloneServiceByteSlices(bundle.PredecessorCertificates),
+	}
+	previousPolicyRecord, previousControlRecord, err := encodePositionRecords(bundle.PredecessorPolicy, bundle.PredecessorControl)
+	if err != nil {
+		return err
+	}
+	readRequest, err := coordinator.deps.Session.ReadRequest(ctx, VaultSelection{Vault: expectedVault, DeviceID: deviceID}, device, expectedAnchor, previousPolicyRecord, previousControlRecord)
+	if err != nil {
+		return err
+	}
+	readRequest.Vault = expectedVault
+	readRequest.TrustAnchor = expectedAnchor
+	readRequest.DeviceKeyID = bytes.Clone(device.KeyID)
+	readRequest.DeviceKey = device.Recipient
+	readRequest.PreviousPolicy = bytes.Clone(previousPolicyRecord)
+	readRequest.PreviousControl = bytes.Clone(previousControlRecord)
+	read, err := coordinator.deps.Remote.Read(ctx, readRequest)
+	if err != nil {
+		return fmt.Errorf("authenticate onboarding successor position: %w", err)
+	}
+	readPolicy, err := vault.EncodePolicy(policyObject(read.Policy))
+	if err != nil || read.EpochSeq != successorControl.EpochSeq || !bytes.Equal(readPolicy, bundle.SuccessorPolicy) || !bytes.Equal(read.ControlCID, checkpoint.ControlCID) {
+		return ErrOnboardingCheckpoint
+	}
+	predecessorSnapshot, err := coordinator.fetchPositionEnvelope(ctx, read, position, expectedAnchor)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(predecessorSnapshot, bundle.PredecessorSnapshot) {
+		return ErrOnboardingChain
 	}
 	checkpointState := state.VaultCheckpoint{
 		Vault: expectedVault, Anchor: expectedAnchor, ControlCID: bytes.Clone(checkpoint.ControlCID), ControlBytes: bytes.Clone(bundle.SuccessorControl),

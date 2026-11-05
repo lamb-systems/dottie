@@ -20,6 +20,9 @@ func TestCoordinatorExportAndImportArchiveCoverAuthenticatedClosure(t *testing.T
 	fixture := newExportFixture(t)
 	ctx := context.Background()
 	selection := VaultSelection{Vault: fixture.genesis.Vault, DeviceID: fixture.device.DeviceID}
+	published, err := fixture.coordinator.PublishRetentionAttestation(ctx, selection)
+	require.NoError(t, err)
+	require.Equal(t, StatusCommitted, published.Status)
 	first, err := fixture.coordinator.Push(ctx, selection)
 	require.NoError(t, err)
 	require.Equal(t, StatusCommitted, first.Status)
@@ -29,21 +32,6 @@ func TestCoordinatorExportAndImportArchiveCoverAuthenticatedClosure(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, StatusCommitted, second.Status)
 	require.Equal(t, uint64(2), second.PublicationCount)
-	pulled, err := fixture.coordinator.Pull(ctx, selection)
-	require.NoError(t, err)
-	predecessor, err := publicationPredecessor(pulled.Read, fixture.genesis.Anchor)
-	require.NoError(t, err)
-	attestation, err := vault.BuildAttestation(vault.AttestationBuildRequest{
-		VaultID: fixture.genesis.Vault, TrustAnchor: fixture.genesis.Anchor,
-		State:             vault.ControlEvidence{Policy: predecessor.Policy, Control: predecessor.Control, Certificates: predecessor.Certificates},
-		SignerCertificate: fixture.genesis.Certificate, SigningKey: fixture.device.Signing,
-		RetentionFloor: 0, RetainedRecoveryPoints: 1,
-		RecoveryPoints: []vault.RetentionRecoveryPoint{{Epoch: 0, SnapshotCID: bytes.Clone(fixture.genesis.SnapshotCID)}},
-	})
-	require.NoError(t, err)
-	published, err := fixture.coordinator.PublishAttestation(ctx, selection, attestation)
-	require.NoError(t, err)
-	require.Equal(t, StatusCommitted, published.Status)
 	before, err := fixture.store.AuthenticatedPositionHistory(ctx, fixture.genesis.Vault)
 	require.NoError(t, err)
 	assert.Len(t, before, 3)

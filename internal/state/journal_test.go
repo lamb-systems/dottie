@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -31,7 +30,7 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	dbPath := filepath.Join(paths.AppStateDir(), "state.db")
 	raw, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath}).String())
 	require.NoError(t, err)
-	for _, column := range []string{"root_path", "destination_path", "root_device", "root_inode", "stage"} {
+	for _, column := range []string{"root_path", "destination_path", "root_device", "root_inode", "stage", "vault", "epoch", "snapshot_cid", "policy_digest", "control_cid", "retention_binding_version"} {
 		_, err = raw.Exec("ALTER TABLE apply_journal DROP COLUMN " + column)
 		require.NoError(t, err)
 	}
@@ -63,7 +62,7 @@ func TestMigrationFiveAddsStageToExistingJournal(t *testing.T) {
 	assert.Equal(t, []byte("before"), payload)
 }
 
-func TestJournalTransitionsAndBackupPruning(t *testing.T) {
+func TestJournalTransitionsAndUnboundBackupPreservation(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
 	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
 	identity := fileIdentity("prefs.toml")
@@ -85,9 +84,10 @@ func TestJournalTransitionsAndBackupPruning(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "applied", entries[0].State)
 	assert.Equal(t, JournalStageVerified, entries[0].Stage)
-	assert.Empty(t, entries[0].BackupRef)
-	_, err = store.Payload(entry.BackupRef)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, entry.BackupRef, entries[0].BackupRef, "a version-1 journal row without a point binding is ineligible")
+	payload, err := store.Payload(entry.BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("before"), payload)
 	assert.ErrorIs(t, store.TransitionJournalEntry(context.Background(), entry.ID, "pending", "failed", JournalStageWrite), ErrInvalidJournalTransition)
 }
 
@@ -99,6 +99,7 @@ func TestJournalPruningRedactsSettingValuesAndProtectsUnresolvedRows(t *testing.
 	preimage := NewSettingFingerprint(model.SettingPresent, "b", "true")
 	postimage := NewSettingFingerprint(model.SettingReset, "", "")
 	backup := []byte("b\x00true")
+	backupReference, _ := payloadReference(backup)
 	for _, id := range []string{"eligible-setting", "protected-setting"} {
 		_, err := store.AppendJournal(context.Background(), JournalEntry{
 			ID: id, Operation: "setting-set", State: "pending", Stage: JournalStagePending,
@@ -117,11 +118,14 @@ func TestJournalPruningRedactsSettingValuesAndProtectsUnresolvedRows(t *testing.
 	for _, entry := range entries {
 		switch entry.ID {
 		case "eligible-setting":
-			assert.Empty(t, entry.BackupRef)
-			assert.Empty(t, entry.Preimage.ValueType)
-			assert.Empty(t, entry.Preimage.ValueText)
+			assert.Equal(t, backupReference, entry.BackupRef)
+			assert.Equal(t, "b", entry.Preimage.ValueType)
+			assert.Equal(t, "true", entry.Preimage.ValueText)
 			assert.Empty(t, entry.Postimage.ValueType)
 			assert.Empty(t, entry.Postimage.ValueText)
+			payload, err := store.Payload(entry.BackupRef)
+			require.NoError(t, err)
+			assert.Equal(t, backup, payload)
 		case "protected-setting":
 			assert.NotEmpty(t, entry.BackupRef)
 			assert.Equal(t, "b", entry.Preimage.ValueType)
@@ -207,8 +211,9 @@ func TestJournalPruningPreservesSharedBackupPayload(t *testing.T) {
 	assert.Equal(t, []byte("before"), payload)
 	require.NoError(t, store.TransitionJournalEntry(context.Background(), "shared-two", "pending", "applied", JournalStageVerified))
 	require.NoError(t, store.PruneJournalBackup(context.Background(), "shared-two", time.Unix(1, 0).Add(JournalBackupRetention)))
-	_, err = store.Payload(entries[1].BackupRef)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	payload, err = store.Payload(entries[1].BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("before"), payload)
 }
 
 func journalEntriesForTest(t *testing.T, store *Store) []JournalEntry {
@@ -237,15 +242,13 @@ func TestJournalExpiryPrunesOnlyVerifiedAppliedAndRolledBackMaterial(t *testing.
 	now := time.Unix(1, 0).Add(JournalBackupRetention + 24*time.Hour)
 	pruned, err := store.PruneExpiredJournalBackups(context.Background(), now)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"expired-applied"}, pruned)
+	assert.Empty(t, pruned, "automatic pruning preserves backups without an authenticated point binding")
 	entries, err := store.JournalEntries(context.Background(), "target")
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 	for _, entry := range entries {
 		switch entry.ID {
-		case "expired-applied":
-			assert.Empty(t, entry.BackupRef)
-		case "expired-failed", "expired-indeterminate":
+		case "expired-applied", "expired-failed", "expired-indeterminate":
 			assert.NotEmpty(t, entry.BackupRef)
 			payload, err := store.Payload(entry.BackupRef)
 			require.NoError(t, err)
@@ -259,13 +262,14 @@ func TestJournalExpiryPreservesBackupRegisteredToRetainedRecoveryPoint(t *testin
 	require.NoError(t, store.PutTarget(context.Background(), testDescriptor()))
 	ctx := context.Background()
 	vaultID := [32]byte{54}
-	point := RetentionRecoveryPoint{Epoch: 2, SnapshotCID: []byte("retained-snapshot")}
-	declaration := testRetentionDeclaration(vaultID, point, 2, 1_700_000_000)
+	entry := appendRetentionJournal(t, store, "retained-recovery-backup", 10)
+	body := []byte("retained recovery snapshot body")
+	point := testRetentionPoint(t, vaultID, 2, body, [32]byte{7})
+	declaration := testRetentionDeclaration(t, vaultID, point, 2, 1_700_000_000)
 	_, err := store.PutRetentionDeclaration(ctx, declaration)
 	require.NoError(t, err)
-
-	entry := appendRetentionJournal(t, store, "retained-recovery-backup", 10)
-	require.NoError(t, store.SetRetentionRecoveryPointMaterial(ctx, vaultID, declaration.DeviceID, point, nil, []string{entry.BackupRef}))
+	bodyRef := storeUnreferencedPayload(t, store, body)
+	require.NoError(t, store.SetRetentionRecoveryPointMaterial(ctx, vaultID, declaration.DeviceID, point, []string{bodyRef}, []string{entry.BackupRef}))
 
 	pruned, err := store.PruneExpiredJournalBackups(ctx, time.Unix(10, 0).Add(JournalBackupRetention))
 	require.NoError(t, err)

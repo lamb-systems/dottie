@@ -709,12 +709,12 @@ func putAuthenticatedPositionHistoryTx(ctx context.Context, tx *sql.Tx, evidence
 	if len(head.SnapshotCID) == 0 {
 		return errors.New("authenticated position history head CID is missing")
 	}
-	var policyBytes, controlBytes, headBytes, snapshotBytes, checkpointPosition []byte
-	err = tx.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+	var policyBytes, controlBytes, headBytes, checkpointPosition []byte
+	err = tx.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, checkpoint_position
 FROM authenticated_position_history WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ?`,
-		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID).Scan(&policyBytes, &controlBytes, &headBytes, &snapshotBytes, &checkpointPosition)
+		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID).Scan(&policyBytes, &controlBytes, &headBytes, &checkpointPosition)
 	if err == nil {
-		if !bytes.Equal(policyBytes, evidence.Policy) || !bytes.Equal(controlBytes, evidence.Control) || !bytes.Equal(headBytes, evidence.Head) || !bytes.Equal(snapshotBytes, evidence.Snapshot) {
+		if !bytes.Equal(policyBytes, evidence.Policy) || !bytes.Equal(controlBytes, evidence.Control) || !bytes.Equal(headBytes, evidence.Head) {
 			return ErrAuthenticatedPositionHistoryConflict
 		}
 		if len(checkpointPosition) != 0 && len(evidence.CheckpointPosition) != 0 && !bytes.Equal(checkpointPosition, evidence.CheckpointPosition) {
@@ -730,9 +730,9 @@ FROM authenticated_position_history WHERE vault = ? AND epoch = ? AND policy_dig
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_history(vault, epoch, policy_digest, head_cid, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID,
-		evidence.Policy, evidence.Control, evidence.Head, evidence.Snapshot, nullableBytes(evidence.CheckpointPosition)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_history(vault, epoch, policy_digest, head_cid, policy_bytes, control_bytes, head_bytes, checkpoint_position)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], head.SnapshotCID,
+		evidence.Policy, evidence.Control, evidence.Head, nullableBytes(evidence.CheckpointPosition)); err != nil {
 		return err
 	}
 	for index, certificate := range certificates {
@@ -776,7 +776,7 @@ func (s *Store) AuthenticatedPositionHistory(ctx context.Context, vaultID [32]by
 	positions := make([]AuthenticatedPositionEvidence, 0)
 	seen := make(map[string]struct{})
 	err := s.query(ctx, func(conn *sql.Conn) error {
-		rows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+		rows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, checkpoint_position
 FROM authenticated_position_history WHERE vault = ? ORDER BY epoch, head_cid`, vaultID[:])
 		if err != nil {
 			return err
@@ -785,7 +785,7 @@ FROM authenticated_position_history WHERE vault = ? ORDER BY epoch, head_cid`, v
 			var evidence AuthenticatedPositionEvidence
 			var digest []byte
 			evidence.Vault = vaultID
-			if err := rows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+			if err := rows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.CheckpointPosition); err != nil {
 				rows.Close()
 				return err
 			}
@@ -839,7 +839,7 @@ WHERE vault = ? AND epoch = ? AND policy_digest = ? AND head_cid = ? ORDER BY ce
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		latestRows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
+		latestRows, err := conn.QueryContext(ctx, `SELECT epoch, policy_digest, policy_bytes, control_bytes, head_bytes, checkpoint_position
 FROM authenticated_position_evidence WHERE vault = ? ORDER BY epoch`, vaultID[:])
 		if err != nil {
 			return err
@@ -849,7 +849,7 @@ FROM authenticated_position_evidence WHERE vault = ? ORDER BY epoch`, vaultID[:]
 			var evidence AuthenticatedPositionEvidence
 			var digest []byte
 			evidence.Vault = vaultID
-			if err := latestRows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+			if err := latestRows.Scan(&evidence.Epoch, &digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.CheckpointPosition); err != nil {
 				return err
 			}
 			if len(digest) != len(evidence.PolicyDigest) {
@@ -937,7 +937,7 @@ func positionHistoryIdentity(vaultID [32]byte, epoch uint64, digest [32]byte, he
 
 func sameAuthenticatedPositionContent(left, right AuthenticatedPositionEvidence) bool {
 	if left.Vault != right.Vault || left.Epoch != right.Epoch || left.PolicyDigest != right.PolicyDigest ||
-		!bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || !bytes.Equal(left.Snapshot, right.Snapshot) || len(left.Certificates) != len(right.Certificates) {
+		!bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || len(left.Certificates) != len(right.Certificates) {
 		return false
 	}
 	for index := range left.Certificates {
@@ -1000,10 +1000,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, checkpoint.Vault[:], checkpoint.Anchor[:], che
 }
 
 func putAuthenticatedPositionEvidenceTx(ctx context.Context, tx *sql.Tx, evidence AuthenticatedPositionEvidence, certificates [][]byte) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_evidence(vault, epoch, policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(vault, epoch, policy_digest) DO UPDATE SET policy_bytes=excluded.policy_bytes, control_bytes=excluded.control_bytes, head_bytes=excluded.head_bytes, snapshot_bytes=excluded.snapshot_bytes, checkpoint_position=excluded.checkpoint_position`,
-		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], evidence.Policy, evidence.Control, evidence.Head, evidence.Snapshot, nullableBytes(evidence.CheckpointPosition))
+	_, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_evidence(vault, epoch, policy_digest, policy_bytes, control_bytes, head_bytes, checkpoint_position)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(vault, epoch, policy_digest) DO UPDATE SET policy_bytes=excluded.policy_bytes, control_bytes=excluded.control_bytes, head_bytes=excluded.head_bytes, checkpoint_position=excluded.checkpoint_position`,
+		evidence.Vault[:], evidence.Epoch, evidence.PolicyDigest[:], evidence.Policy, evidence.Control, evidence.Head, nullableBytes(evidence.CheckpointPosition))
 	if err != nil {
 		return err
 	}
@@ -1055,8 +1055,8 @@ func (s *Store) AuthenticatedPositionEvidenceAtEpoch(ctx context.Context, vaultI
 			return errors.New("stored authenticated position digest is malformed")
 		}
 		copy(evidence.PolicyDigest[:], digest)
-		if err := conn.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
-FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, digest).Scan(&evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT policy_bytes, control_bytes, head_bytes, checkpoint_position
+FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, digest).Scan(&evidence.Policy, &evidence.Control, &evidence.Head, &evidence.CheckpointPosition); err != nil {
 			return err
 		}
 		rows, err = conn.QueryContext(ctx, `SELECT certificate_index, certificate_bytes
@@ -1097,8 +1097,8 @@ func (s *Store) AuthenticatedPositionEvidence(ctx context.Context, vaultID [32]b
 	evidence.PolicyDigest = policyDigest
 	err := s.query(ctx, func(conn *sql.Conn) error {
 		var digest []byte
-		if err := conn.QueryRowContext(ctx, `SELECT policy_digest, policy_bytes, control_bytes, head_bytes, snapshot_bytes, checkpoint_position
-FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, policyDigest[:]).Scan(&digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.Snapshot, &evidence.CheckpointPosition); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT policy_digest, policy_bytes, control_bytes, head_bytes, checkpoint_position
+FROM authenticated_position_evidence WHERE vault = ? AND epoch = ? AND policy_digest = ?`, vaultID[:], epoch, policyDigest[:]).Scan(&digest, &evidence.Policy, &evidence.Control, &evidence.Head, &evidence.CheckpointPosition); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrAuthenticatedPositionEvidenceNotFound
 			}
@@ -1136,7 +1136,7 @@ FROM authenticated_position_certificates WHERE vault = ? AND epoch = ? AND polic
 }
 
 func validateAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidence) ([][]byte, error) {
-	if evidence.Epoch > uint64(^uint64(0)>>1) || len(evidence.Policy) == 0 || len(evidence.Policy) > vault.MaxPolicyObjectBytes || len(evidence.Control) == 0 || len(evidence.Control) > vault.MaxPolicyObjectBytes || len(evidence.Head) == 0 || len(evidence.Head) > vault.MaxPolicyObjectBytes || len(evidence.Snapshot) == 0 || len(evidence.Snapshot) > vault.MaxEnvelopeBytes || len(evidence.CheckpointPosition) > vault.MaxPolicyObjectBytes || len(evidence.Certificates) == 0 || len(evidence.Certificates) > vault.MaxRecipients {
+	if evidence.Epoch > uint64(^uint64(0)>>1) || len(evidence.Policy) == 0 || len(evidence.Policy) > vault.MaxPolicyObjectBytes || len(evidence.Control) == 0 || len(evidence.Control) > vault.MaxPolicyObjectBytes || len(evidence.Head) == 0 || len(evidence.Head) > vault.MaxPolicyObjectBytes || len(evidence.CheckpointPosition) > vault.MaxPolicyObjectBytes || len(evidence.Certificates) == 0 || len(evidence.Certificates) > vault.MaxRecipients {
 		return nil, errors.New("authenticated position evidence exceeds its bounds")
 	}
 	policy, err := vault.DecodePolicy(evidence.Policy)
@@ -1155,13 +1155,8 @@ func validateAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidenc
 	if err != nil || head.Vault != evidence.Vault || head.EpochSeq != evidence.Epoch || head.PolicyDigest != evidence.PolicyDigest {
 		return nil, errors.New("authenticated position head does not match its key")
 	}
-	envelope, err := vault.DecodeEnvelope(evidence.Snapshot)
-	if err != nil || envelope.Purpose != vault.PurposeSnapshot || envelope.Vault != evidence.Vault || envelope.EpochSeq != evidence.Epoch || envelope.PolicyDigest != evidence.PolicyDigest {
-		return nil, errors.New("authenticated position snapshot does not match its key")
-	}
-	snapshotCID := authenticatedPositionRawCID(evidence.Snapshot)
-	if len(snapshotCID) == 0 || !bytes.Equal(head.SnapshotCID, snapshotCID) || !bytes.Equal(head.BlobCID, snapshotCID) || !bytes.Equal(envelope.Parent, head.PrevHeadCID) || head.PublicationCount == 0 && !bytes.Equal(control.HeadSnapshotCID, head.SnapshotCID) {
-		return nil, errors.New("authenticated position head and snapshot do not match")
+	if len(head.SnapshotCID) == 0 || !bytes.Equal(head.SnapshotCID, head.BlobCID) || head.PublicationCount == 0 && !bytes.Equal(control.HeadSnapshotCID, head.SnapshotCID) {
+		return nil, errors.New("authenticated position head and control do not match")
 	}
 	if len(evidence.CheckpointPosition) != 0 {
 		checkpoint, err := vault.DecodeCheckpoint(evidence.CheckpointPosition)
@@ -1228,7 +1223,6 @@ func cloneAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidence) 
 	evidence.Policy = bytes.Clone(evidence.Policy)
 	evidence.Control = bytes.Clone(evidence.Control)
 	evidence.Head = bytes.Clone(evidence.Head)
-	evidence.Snapshot = bytes.Clone(evidence.Snapshot)
 	evidence.CheckpointPosition = bytes.Clone(evidence.CheckpointPosition)
 	evidence.Certificates = make([][]byte, len(certificates))
 	for index := range certificates {
@@ -1471,17 +1465,133 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 		return JournalEntry{}, err
 	}
 	entry.BackupRef = ref
+	var retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID any
+	var retentionEpoch any
+	entry.RetentionBindingVersion = 1
+	if entry.Retention != nil {
+		binding := entry.Retention
+		if binding.Vault == ([32]byte{}) || binding.Epoch > uint64(^uint64(0)>>1) || len(binding.SnapshotCID) == 0 || len(binding.SnapshotCID) > 128 || binding.PolicyDigest == ([32]byte{}) || len(binding.ControlCID) == 0 || len(binding.ControlCID) > 128 {
+			return JournalEntry{}, errors.New("invalid journal retention binding")
+		}
+		retentionVault, retentionEpoch = binding.Vault[:], binding.Epoch
+		retentionSnapshot, retentionPolicyDigest, retentionControlCID = binding.SnapshotCID, binding.PolicyDigest[:], binding.ControlCID
+	}
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var selectedDevice string
+		if entry.Retention != nil {
+			rows, err := tx.QueryContext(ctx, "SELECT device_id FROM vault_selections WHERE vault = ? ORDER BY device_id LIMIT 2", entry.Retention.Vault[:])
+			if err != nil {
+				return err
+			}
+			if !rows.Next() {
+				_ = rows.Close()
+				return ErrVaultSelectionNotFound
+			}
+			if err := rows.Scan(&selectedDevice); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if rows.Next() {
+				_ = rows.Close()
+				return ErrVaultSelectionAmbiguous
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			declaration, err := retentionDeclarationTx(ctx, tx, entry.Retention.Vault, selectedDevice)
+			if err != nil {
+				return err
+			}
+			if declaration.DigestVersion != 2 {
+				return ErrRetentionBoundaryNotVerified
+			}
+			pointFound := false
+			for _, point := range declaration.RecoveryPoints {
+				if point.Epoch == entry.Retention.Epoch && bytes.Equal(point.SnapshotCID, entry.Retention.SnapshotCID) && point.PolicyDigest == entry.Retention.PolicyDigest && bytes.Equal(point.ControlCID, entry.Retention.ControlCID) {
+					pointFound = true
+					break
+				}
+			}
+			if !pointFound {
+				return ErrRetentionBoundaryNotVerified
+			}
+			var markerCount int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND payload_ref = '' AND backup_ref = ''`, entry.Retention.Vault[:], selectedDevice, entry.Retention.Epoch, entry.Retention.SnapshotCID).Scan(&markerCount); err != nil {
+				return err
+			}
+			if markerCount != 1 {
+				return ErrRetentionRecoveryPointInventoryUnknown
+			}
+			rows, err = tx.QueryContext(ctx, `SELECT payload_ref FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND payload_ref <> '' AND backup_ref = ''`, entry.Retention.Vault[:], selectedDevice, entry.Retention.Epoch, entry.Retention.SnapshotCID)
+			if err != nil {
+				return err
+			}
+			var bodyReferences []string
+			for rows.Next() {
+				var reference string
+				if err := rows.Scan(&reference); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				bodyReferences = append(bodyReferences, reference)
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			var bodyReference string
+			bodyCount := 0
+			for _, reference := range bodyReferences {
+				if payloadReferenceMatchesSnapshot(reference, entry.Retention.SnapshotCID) {
+					bodyReference = reference
+					bodyCount++
+				}
+			}
+			if bodyCount != 1 {
+				return ErrRetentionRecoveryPointInventoryUnknown
+			}
+			name, err := payloadName(bodyReference)
+			if err != nil {
+				return err
+			}
+			body, err := readPayload(filepath.Join(s.payloadDir, name), bodyReference)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(authenticatedPositionRawCID(body), entry.Retention.SnapshotCID) {
+				return ErrRetentionRecoveryPointInventoryUnknown
+			}
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO apply_journal(id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
-postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			entry.ID, entry.Operation, entry.State, entry.Stage, entry.Identity.TargetID, entry.Identity.Source, entry.Identity.FilePath, entry.Identity.SchemaID, entry.Identity.SettingsPath, entry.Identity.SettingKey,
 			entry.RootPath, entry.DestinationPath, entry.RootDevice, entry.RootInode,
 			entry.Preimage.State, entry.Preimage.Kind, entry.Preimage.Mode, entry.Preimage.LinkTarget, entry.Preimage.ValueType, entry.Preimage.ValueText, entry.Preimage.Size, entry.Preimage.Digest,
-			entry.Postimage.State, entry.Postimage.Kind, entry.Postimage.Mode, entry.Postimage.LinkTarget, entry.Postimage.ValueType, entry.Postimage.ValueText, entry.Postimage.Size, entry.Postimage.Digest, entry.BackupRef, entry.CreatedAt)
-		return err
+			entry.Postimage.State, entry.Postimage.Kind, entry.Postimage.Mode, entry.Postimage.LinkTarget, entry.Postimage.ValueType, entry.Postimage.ValueText, entry.Postimage.Size, entry.Postimage.Digest, entry.BackupRef,
+			retentionVault, retentionEpoch, retentionSnapshot, retentionPolicyDigest, retentionControlCID, entry.RetentionBindingVersion, entry.CreatedAt)
+		if err != nil {
+			return err
+		}
+		if entry.Retention != nil {
+			binding := entry.Retention
+			if _, err := tx.ExecContext(ctx, `UPDATE retention_recovery_material SET inventory_complete = 0
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND payload_ref = '' AND backup_ref = ''`, binding.Vault[:], selectedDevice, binding.Epoch, binding.SnapshotCID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, '', ?, 1) ON CONFLICT(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref) DO NOTHING`, binding.Vault[:], selectedDevice, binding.Epoch, binding.SnapshotCID, entry.BackupRef); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return entry, err
 }
@@ -1490,7 +1600,7 @@ func (s *Store) JournalEntries(ctx context.Context, targetID string) ([]JournalE
 	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
-postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version, created_at
 FROM apply_journal WHERE target_id = ? ORDER BY rowid`, targetID)
 }
 
@@ -1498,7 +1608,7 @@ func (s *Store) JournalEntriesAll(ctx context.Context) ([]JournalEntry, error) {
 	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
-postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version, created_at
 FROM apply_journal ORDER BY rowid`)
 }
 
@@ -1506,7 +1616,7 @@ func (s *Store) PendingJournalEntries(ctx context.Context) ([]JournalEntry, erro
 	return s.readJournalEntries(ctx, `SELECT id, operation, state, stage, target_id, source, file_path, schema_id, settings_path, setting_key,
 root_path, destination_path, root_device, root_inode,
 preimage_state, preimage_kind, preimage_mode, preimage_link_target, preimage_value_type, preimage_value_text, preimage_size, preimage_digest,
-postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, created_at
+postimage_state, postimage_kind, postimage_mode, postimage_link_target, postimage_value_type, postimage_value_text, postimage_size, postimage_digest, backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version, created_at
 FROM apply_journal WHERE state = 'pending' ORDER BY rowid`)
 }
 
@@ -1522,10 +1632,13 @@ func (s *Store) readJournalEntries(ctx context.Context, query string, args ...an
 			var value JournalEntry
 			var source, preKind, postKind string
 			var preMode, postMode uint32
+			var retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID []byte
+			var retentionEpoch sql.NullInt64
 			if err := rows.Scan(&value.ID, &value.Operation, &value.State, &value.Stage, &value.Identity.TargetID, &source, &value.Identity.FilePath, &value.Identity.SchemaID, &value.Identity.SettingsPath, &value.Identity.SettingKey,
 				&value.RootPath, &value.DestinationPath, &value.RootDevice, &value.RootInode,
 				&value.Preimage.State, &preKind, &preMode, &value.Preimage.LinkTarget, &value.Preimage.ValueType, &value.Preimage.ValueText, &value.Preimage.Size, &value.Preimage.Digest,
-				&value.Postimage.State, &postKind, &postMode, &value.Postimage.LinkTarget, &value.Postimage.ValueType, &value.Postimage.ValueText, &value.Postimage.Size, &value.Postimage.Digest, &value.BackupRef, &value.CreatedAt); err != nil {
+				&value.Postimage.State, &postKind, &postMode, &value.Postimage.LinkTarget, &value.Postimage.ValueType, &value.Postimage.ValueText, &value.Postimage.Size, &value.Postimage.Digest, &value.BackupRef,
+				&retentionVault, &retentionEpoch, &retentionSnapshot, &retentionPolicyDigest, &retentionControlCID, &value.RetentionBindingVersion, &value.CreatedAt); err != nil {
 				return err
 			}
 			value.Identity.Source = model.SourceKind(source)
@@ -1533,6 +1646,15 @@ func (s *Store) readJournalEntries(ctx context.Context, query string, args ...an
 			value.Preimage.Mode = preMode
 			value.Postimage.Kind = model.FileKind(postKind)
 			value.Postimage.Mode = postMode
+			if len(retentionVault) != 0 || retentionEpoch.Valid || len(retentionSnapshot) != 0 || len(retentionPolicyDigest) != 0 || len(retentionControlCID) != 0 {
+				if len(retentionVault) != 32 || !retentionEpoch.Valid || retentionEpoch.Int64 < 0 || len(retentionSnapshot) == 0 || len(retentionSnapshot) > 128 || len(retentionPolicyDigest) != 32 || len(retentionControlCID) == 0 || len(retentionControlCID) > 128 {
+					return errors.New("stored journal retention binding is malformed")
+				}
+				binding := &RetentionBinding{Epoch: uint64(retentionEpoch.Int64), SnapshotCID: bytes.Clone(retentionSnapshot), ControlCID: bytes.Clone(retentionControlCID)}
+				copy(binding.Vault[:], retentionVault)
+				copy(binding.PolicyDigest[:], retentionPolicyDigest)
+				value.Retention = binding
+			}
 			values = append(values, value)
 		}
 		return rows.Err()

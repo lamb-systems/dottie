@@ -158,6 +158,7 @@ type ReadOutcome struct {
 	Freshness        atproto.FreshnessStatus
 	InspectOnly      bool
 	Untracked        []model.EntryKey
+	Retention        RetentionReport
 }
 
 type Candidate struct {
@@ -169,6 +170,7 @@ type Candidate struct {
 	Currency      vault.CheckpointOutcome
 	InspectOnly   bool
 	Untracked     []model.EntryKey
+	Retention     *state.RetentionBinding
 	plan          syncengine.Plan
 	observations  []model.Observation
 	configuration config.Config
@@ -230,4 +232,5 @@ type AdministrativeResult struct {
 	TransitionOutcome atproto.TransitionOutcome
 	Bundle            vault.OnboardingBundle
 	EncodedBundle     []byte
+	Retention         RetentionReport
 }

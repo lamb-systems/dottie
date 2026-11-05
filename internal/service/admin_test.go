@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"io"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -56,7 +57,6 @@ func TestCoordinatorEnrollRestoreOnlyImportsBundleAndReadsSuccessor(t *testing.T
 	assert.Equal(t, exported.PredecessorPolicy, predecessorPosition.Policy)
 	assert.Equal(t, exported.PredecessorControl, predecessorPosition.Control)
 	assert.Equal(t, exported.PredecessorHead, predecessorPosition.Head)
-	assert.Equal(t, exported.PredecessorSnapshot, predecessorPosition.Snapshot)
 	assert.Equal(t, exported.PredecessorCertificates, predecessorPosition.Certificates)
 	_, err = newStore.AuthenticatedPositionEvidence(ctx, fixture.genesis.Vault, 1, checkpoint.PolicyDigest)
 	require.ErrorIs(t, err, state.ErrAuthenticatedPositionEvidenceNotFound, "the bundle import stores exactly the predecessor position")
@@ -96,6 +96,67 @@ func TestCoordinatorEnrollRestoreOnlyImportsBundleAndReadsSuccessor(t *testing.T
 	successorPosition, err := newStore.AuthenticatedPositionEvidence(ctx, fixture.genesis.Vault, 1, digest)
 	require.NoError(t, err)
 	assert.Equal(t, readBack.Read.EpochSeq, successorPosition.Epoch)
+}
+
+func TestCoordinatorReenrollsRevokedDeviceWithFreshKeysAndRevokesAgain(t *testing.T) {
+	fixture := newPushFixture(t)
+	selection := VaultSelection{Vault: fixture.genesis.Vault, DeviceID: fixture.device.DeviceID}
+	firstKeys, firstPublic := newAdminNewcomer(t, "reenrolled-device")
+	firstEnrollment := enrollWithFixture(t, fixture, firstKeys, firstPublic)
+	require.Equal(t, StatusCommitted, firstEnrollment.Status)
+
+	firstApproval, err := fixture.coordinator.RevokeApproval(context.Background(), selection, firstKeys.DeviceID, fixture.kit)
+	require.NoError(t, err)
+	firstRevocation, err := fixture.coordinator.Revoke(context.Background(), RevokeRequest{
+		Selection: selection, DeviceID: firstKeys.DeviceID, Kit: fixture.kit,
+		ApprovalFingerprint: firstApproval.ApprovalFingerprint,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StatusCommitted, firstRevocation.Status)
+
+	secondKeys, secondPublic := newAdminNewcomer(t, firstKeys.DeviceID)
+	assert.NotEqual(t, firstKeys.KeyID, secondKeys.KeyID)
+	assert.NotEqual(t, firstKeys.Signing.Public(), secondKeys.Signing.Public())
+	reenrollment := enrollWithFixture(t, fixture, secondKeys, secondPublic)
+	require.Equal(t, StatusCommitted, reenrollment.Status)
+
+	require.NoError(t, os.WriteFile(fixture.file, []byte("theme = 'reenrolled-publish'\n"), 0o600))
+	published, err := fixture.coordinator.Push(context.Background(), selection)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCommitted, published.Status)
+	assert.Equal(t, atproto.PublicationCommitted, published.PublicationStatus)
+	assert.False(t, published.NoOp)
+
+	secondApproval, err := fixture.coordinator.RevokeApproval(context.Background(), selection, secondKeys.DeviceID, fixture.kit)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstApproval.ApprovalFingerprint, secondApproval.ApprovalFingerprint)
+	secondRevocation, err := fixture.coordinator.Revoke(context.Background(), RevokeRequest{
+		Selection: selection, DeviceID: secondKeys.DeviceID, Kit: fixture.kit,
+		ApprovalFingerprint: secondApproval.ApprovalFingerprint,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, StatusCommitted, secondRevocation.Status)
+
+	finalRead, err := fixture.coordinator.Pull(context.Background(), selection)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(4), finalRead.Read.EpochSeq)
+	for _, binding := range finalRead.Read.Policy.Roles {
+		assert.NotEqual(t, secondKeys.DeviceID, binding.DeviceID)
+	}
+	for _, recipient := range finalRead.Read.Policy.Recipients {
+		assert.NotEqual(t, secondKeys.DeviceID, recipient.DeviceID)
+	}
+	assert.Equal(t, 2, countDeviceRevocations(finalRead.Read.Control.Revoked, secondKeys.DeviceID))
+}
+
+func countDeviceRevocations(revoked []atproto.RevokedDeviceRecord, deviceID string) int {
+	count := 0
+	for _, entry := range revoked {
+		if entry.DeviceID == deviceID {
+			count++
+		}
+	}
+	return count
 }
 
 func TestCoordinatorRevokeExcludesSuccessorRecipientButKeepsHistoricalDecryption(t *testing.T) {

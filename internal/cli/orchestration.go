@@ -31,6 +31,8 @@ type orchestrationCoordinator interface {
 	ResolveSelection(context.Context, service.VaultSelection) (service.VaultSelection, error)
 	Pull(context.Context, service.VaultSelection) (service.ReadOutcome, error)
 	Push(context.Context, service.VaultSelection) (service.PushResult, error)
+	PlanPrune(context.Context, service.VaultSelection) (service.RetentionPruneResult, error)
+	ApplyPrune(context.Context, service.VaultSelection, bool) (service.RetentionPruneResult, error)
 	Enroll(context.Context, service.EnrollRequest) (service.AdministrativeResult, error)
 	RevokeApproval(context.Context, service.VaultSelection, string, []byte) (service.RevokeApprovalTranscript, error)
 	Revoke(context.Context, service.RevokeRequest) (service.AdministrativeResult, error)
@@ -102,6 +104,55 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 			return err
 		}
 		return pushExit(status)
+	}})
+	prune := configure(&urfave.Command{Name: "prune", Flags: append(selectorFlags(),
+		&urfave.BoolFlag{Name: "plan", Usage: "inspect retention pruning candidates", OnlyOnce: true},
+		&urfave.BoolFlag{Name: "apply", Usage: "prune eligible retention material", OnlyOnce: true},
+		&urfave.BoolFlag{Name: "confirm", Usage: "confirm destructive pruning", OnlyOnce: true},
+	), Action: func(ctx context.Context, command *urfave.Command) error {
+		if command.NArg() != 0 {
+			return usageExit("prune takes no positional arguments")
+		}
+		if command.Bool("plan") == command.Bool("apply") {
+			return usageExit("prune requires exactly one of --plan or --apply")
+		}
+		if command.Bool("confirm") && !command.Bool("apply") {
+			return usageExit("--confirm is only valid with --apply")
+		}
+		if err := validateOrchestrationRemoteFlags(command); err != nil {
+			return err
+		}
+		coordinator, selection, closeResources, err := factory(ctx, command, true)
+		if err != nil {
+			if writeErr := writeCommandOutput(command, "prune: refused\n"); writeErr != nil {
+				return writeErr
+			}
+			return urfave.Exit("prune refused: account, local selection or coordinator unavailable", 3)
+		}
+		defer closeResources()
+		var result service.RetentionPruneResult
+		if command.Bool("plan") {
+			result, err = coordinator.PlanPrune(ctx, selection)
+		} else {
+			result, err = coordinator.ApplyPrune(ctx, selection, command.Bool("confirm"))
+		}
+		if writeErr := writeCommandOutput(command, renderRetentionPrune(result)); writeErr != nil {
+			return writeErr
+		}
+		if err != nil {
+			if result.Status == service.RetentionPruneUnavailable {
+				return urfave.Exit("prune is partial or indeterminate", 4)
+			}
+			return urfave.Exit("prune refused", 3)
+		}
+		switch result.Status {
+		case service.RetentionPrunePlanned, service.RetentionPruneApplied:
+			return nil
+		case service.RetentionPruneUnavailable:
+			return urfave.Exit("prune is partial or indeterminate", 4)
+		default:
+			return urfave.Exit("prune refused", 3)
+		}
 	}})
 	syncCommand := configure(&urfave.Command{Name: "sync", Flags: selectorFlags(), Action: func(ctx context.Context, command *urfave.Command) error {
 		if command.NArg() != 0 {
@@ -321,7 +372,7 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 	devices := configure(&urfave.Command{Name: "devices", Commands: []*urfave.Command{list, enroll, revoke}, Action: func(_ context.Context, _ *urfave.Command) error {
 		return usageExit("expected list, enroll or revoke")
 	}})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push, syncCommand, devices}, Writer: stdout, ErrWriter: stderr})
+	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push, prune, syncCommand, devices}, Writer: stdout, ErrWriter: stderr})
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
 		var exitError urfave.ExitCoder
@@ -429,14 +480,22 @@ type sessionPublicationPort struct {
 	transport atproto.Transport
 }
 
-func (port sessionPublicationPort) PublicationIO(_ context.Context, _ service.VaultSelection, _ service.TrustMaterial, _ service.ReadOutcome) (atproto.ATProtoPublicationIO, error) {
+func (port sessionPublicationPort) PublicationIO(ctx context.Context, _ service.VaultSelection, _ service.TrustMaterial, _ service.ReadOutcome) (atproto.ATProtoPublicationIO, error) {
 	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil {
 		return atproto.ATProtoPublicationIO{}, errors.New("publication session evidence is unavailable")
+	}
+	advertisedLimit, err := atproto.DescribeBlobUploadLimit(ctx, port.transport)
+	if err != nil {
+		return atproto.ATProtoPublicationIO{}, err
+	}
+	blobUploadLimit := advertisedLimit
+	if blobUploadLimit > int64(vault.MaxEnvelopeBytes) {
+		blobUploadLimit = int64(vault.MaxEnvelopeBytes)
 	}
 	return atproto.ATProtoPublicationIO{
 		Reader: atproto.RevisionReader{Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
 			VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...)},
-		Transport: port.transport, BlobUploadLimit: vault.MaxEnvelopeBytes, DID: port.identity.DID,
+		Transport: port.transport, BlobUploadLimit: blobUploadLimit, DID: port.identity.DID,
 	}, nil
 }
 
@@ -499,6 +558,75 @@ func classifyPushResult(result service.PushResult, err error) service.StatusStat
 
 func renderPush(status service.StatusState) string {
 	return "push: " + escapeField(string(status)) + "\n"
+}
+
+func renderRetentionPrune(result service.RetentionPruneResult) string {
+	var output strings.Builder
+	fmt.Fprintf(&output, "prune: %s\n", escapeField(string(result.Status)))
+	if result.Reason != "" {
+		fmt.Fprintf(&output, "reason: %s\n", escapeField(string(result.Reason)))
+	}
+	renderRetentionFloor(&output, result.Floors)
+	if result.Plan.EpochScope != "" {
+		fmt.Fprintf(&output, "scope: %s\n", escapeField(result.Plan.EpochScope))
+	}
+	if result.Plan.Boundary.SnapshotCID != nil {
+		point := result.Plan.Boundary
+		fmt.Fprintf(&output, "boundary: epoch=%d snapshot-cid=%x policy-digest=%x control-cid=%x\n", point.Epoch, point.SnapshotCID, point.PolicyDigest, point.ControlCID)
+	}
+	for _, point := range result.Plan.RecoveryPoints {
+		fmt.Fprintf(&output, "retained point: epoch=%d snapshot-cid=%x policy-digest=%x control-cid=%x\n", point.Epoch, point.SnapshotCID, point.PolicyDigest, point.ControlCID)
+	}
+	for _, candidate := range result.Plan.Candidates {
+		epochs := "unknown"
+		if candidate.RecoveryPointEpochKnown {
+			values := make([]string, len(candidate.RecoveryPointEpochs))
+			for index, epoch := range candidate.RecoveryPointEpochs {
+				values[index] = fmt.Sprintf("%d", epoch)
+			}
+			epochs = strings.Join(values, ",")
+		}
+		fmt.Fprintf(&output, "candidate: kind=%s reference=%s epochs=%s eligible=%t reasons=%s\n",
+			escapeField(string(candidate.Kind)), escapeField(candidate.Reference), escapeField(epochs), candidate.Eligible,
+			escapeField(strings.Join(candidate.Reasons, "; ")))
+	}
+	if result.Status == service.RetentionPruneApplied || len(result.Report.DeletedPayloads) != 0 || len(result.Report.PrunedBackupIDs) != 0 {
+		output.WriteString("deleted payload references:\n")
+		for _, reference := range result.Report.DeletedPayloads {
+			fmt.Fprintf(&output, "  %s\n", escapeField(reference))
+		}
+		output.WriteString("pruned backup references:\n")
+		for _, id := range result.Report.PrunedBackupIDs {
+			for _, candidate := range result.Plan.Candidates {
+				if candidate.Kind == state.RetentionPruneCandidateBackup && candidate.JournalID == id {
+					fmt.Fprintf(&output, "  %s\n", escapeField(candidate.Reference))
+					break
+				}
+			}
+		}
+	}
+	return output.String()
+}
+
+func renderRetentionFloor(output *strings.Builder, floors service.RetentionFloorReport) {
+	if floors.HasRecoveryFloor {
+		fmt.Fprintf(output, "recovery floor: epoch=%d\n", floors.RecoveryFloor)
+	} else {
+		output.WriteString("recovery floor: unknown\n")
+	}
+	if floors.HasConfidentialityFloor {
+		fmt.Fprintf(output, "confidentiality floor: epoch=%d\n", floors.ConfidentialityFloor)
+	} else {
+		output.WriteString("confidentiality floor: unknown\n")
+	}
+	fmt.Fprintf(output, "policy floor: epoch=%d\nfloor status: %s\n", floors.PolicyFloor, escapeField(string(floors.Status)))
+	if len(floors.UnknownHoldingReasons) == 0 {
+		output.WriteString("unknown holdings: none\n")
+		return
+	}
+	for _, reason := range floors.UnknownHoldingReasons {
+		fmt.Fprintf(output, "unknown holding: %s\n", escapeField(reason))
+	}
 }
 
 func pushExit(status service.StatusState) error {

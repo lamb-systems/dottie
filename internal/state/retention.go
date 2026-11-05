@@ -14,7 +14,178 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
+
+func (s *Store) PutRetentionMaterialPayload(ctx context.Context, payload []byte) (string, error) {
+	if len(payload) == 0 || len(payload) > vault.MaxEnvelopeBytes {
+		return "", errors.New("retention material payload exceeds its bounds")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	reference, _ := payloadReference(payload)
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
+	if err := s.storePayload(reference, payload); err != nil {
+		return "", err
+	}
+	return reference, nil
+}
+
+func (s *Store) ReplaceRetentionDeclarationWithMaterials(ctx context.Context, declaration RetentionDeclaration, materials []RetentionRecoveryPointMaterials) (RetentionDeclaration, error) {
+	declaration, err := normalizeRetentionDeclaration(declaration)
+	if err != nil {
+		return RetentionDeclaration{}, err
+	}
+	if declaration.DigestVersion != 2 || len(materials) != len(declaration.RecoveryPoints) {
+		return RetentionDeclaration{}, errors.New("complete bound retention materials are required")
+	}
+	if err := validateRetentionSubject(declaration.DeviceID); err != nil {
+		return RetentionDeclaration{}, err
+	}
+	byPoint := make(map[string]RetentionRecoveryPointMaterials, len(materials))
+	for _, item := range materials {
+		key := retentionPointIdentity(item.Point)
+		if _, exists := byPoint[key]; exists {
+			return RetentionDeclaration{}, errors.New("duplicate retention point materials")
+		}
+		byPoint[key] = item
+	}
+	staged := make(map[string][][]byte, len(materials))
+	for _, point := range declaration.RecoveryPoints {
+		item, exists := byPoint[retentionPointIdentity(point)]
+		if !exists || item.Point.PolicyDigest != point.PolicyDigest || !bytes.Equal(item.Point.ControlCID, point.ControlCID) {
+			return RetentionDeclaration{}, ErrRetentionBoundaryNotVerified
+		}
+		bodyCount := 0
+		seen := make(map[string]bool)
+		for _, payload := range item.Payloads {
+			if len(payload) == 0 || len(payload) > vault.MaxEnvelopeBytes {
+				return RetentionDeclaration{}, errors.New("retention material payload exceeds its bounds")
+			}
+			if bytes.Equal(authenticatedPositionRawCID(payload), point.SnapshotCID) {
+				bodyCount++
+			}
+			reference, _ := payloadReference(payload)
+			if seen[reference] {
+				return RetentionDeclaration{}, errors.New("duplicate retention material payload")
+			}
+			seen[reference] = true
+			staged[reference] = append(staged[reference], bytes.Clone(payload))
+		}
+		if bodyCount != 1 {
+			return RetentionDeclaration{}, errors.New("retention point must have exactly one snapshot body")
+		}
+		seenBackups := make(map[string]bool)
+		for _, reference := range item.BackupReferences {
+			if _, err := payloadName(reference); err != nil {
+				return RetentionDeclaration{}, err
+			}
+			if seenBackups[reference] {
+				return RetentionDeclaration{}, errors.New("duplicate retention recovery material reference")
+			}
+			seenBackups[reference] = true
+		}
+	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
+	for reference, payloads := range staged {
+		for _, payload := range payloads {
+			if err := s.storePayload(reference, payload); err != nil {
+				return RetentionDeclaration{}, err
+			}
+		}
+	}
+	for _, item := range materials {
+		for _, reference := range item.BackupReferences {
+			name, err := payloadName(reference)
+			if err != nil {
+				return RetentionDeclaration{}, err
+			}
+			if _, err := readPayload(filepath.Join(s.payloadDir, name), reference); err != nil {
+				return RetentionDeclaration{}, err
+			}
+		}
+	}
+	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		previous, previousErr := retentionDeclarationTx(ctx, tx, declaration.Vault, declaration.DeviceID)
+		if previousErr != nil && !errors.Is(previousErr, ErrRetentionDeclarationNotFound) {
+			return previousErr
+		}
+		if errors.Is(previousErr, ErrRetentionDeclarationNotFound) {
+			declaration.PreviousDeclaredAt = -1
+			if err := insertRetentionDeclarationTx(ctx, tx, declaration); err != nil {
+				return err
+			}
+		} else {
+			revision, err := nextRetentionRevision(ctx, tx, declaration.Vault, declaration.DeviceID)
+			if err != nil {
+				return err
+			}
+			if err := insertRetentionHistoryTx(ctx, tx, revision, previous); err != nil {
+				return err
+			}
+			if err := insertRetentionHistoryPointsTx(ctx, tx, revision, previous); err != nil {
+				return err
+			}
+			declaration.PreviousDeclarationDigest = previous.DeclarationDigest
+			declaration.PreviousDeclaredAt = previous.DeclaredAt
+			if _, err := tx.ExecContext(ctx, `UPDATE retention_declarations SET policy_digest = ?, retention_floor = ?, declaration_digest = ?, declared_at = ?, previous_declaration_digest = ?, previous_declared_at = ?, digest_version = ? WHERE vault = ? AND device_id = ?`,
+				declaration.PolicyDigest[:], declaration.RetentionFloor, declaration.DeclarationDigest[:], declaration.DeclaredAt,
+				declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt, declaration.DigestVersion, declaration.Vault[:], declaration.DeviceID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM retention_recovery_points WHERE vault = ? AND device_id = ?", declaration.Vault[:], declaration.DeviceID); err != nil {
+			return err
+		}
+		for _, point := range declaration.RecoveryPoints {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ?`, declaration.Vault[:], declaration.DeviceID, point.Epoch, point.SnapshotCID); err != nil {
+				return err
+			}
+		}
+		if err := insertRetentionPointsTx(ctx, tx, declaration.Vault, declaration.DeviceID, declaration.RecoveryPoints); err != nil {
+			return err
+		}
+		for _, point := range declaration.RecoveryPoints {
+			item := byPoint[retentionPointIdentity(point)]
+			if _, err := tx.ExecContext(ctx, `UPDATE retention_recovery_material SET inventory_complete = 1
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND payload_ref = '' AND backup_ref = ''`, declaration.Vault[:], declaration.DeviceID, point.Epoch, point.SnapshotCID); err != nil {
+				return err
+			}
+			for _, payload := range item.Payloads {
+				reference, _ := payloadReference(payload)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, ?, '', 1)`, declaration.Vault[:], declaration.DeviceID, point.Epoch, point.SnapshotCID, reference); err != nil {
+					return err
+				}
+			}
+			for _, reference := range item.BackupReferences {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
+VALUES (?, ?, ?, ?, '', ?, 1)`, declaration.Vault[:], declaration.DeviceID, point.Epoch, point.SnapshotCID, reference); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return RetentionDeclaration{}, err
+	}
+	return cloneRetentionDeclaration(declaration), nil
+}
+
+func retentionPointIdentity(point RetentionRecoveryPoint) string {
+	buffer := bytes.NewBuffer(nil)
+	writeRetentionUint64(buffer, point.Epoch)
+	writeRetentionBytes(buffer, point.SnapshotCID)
+	buffer.Write(point.PolicyDigest[:])
+	writeRetentionBytes(buffer, point.ControlCID)
+	return buffer.String()
+}
 
 func (s *Store) PutRetentionDeclaration(ctx context.Context, declaration RetentionDeclaration) (RetentionDeclaration, error) {
 	declaration, err := normalizeRetentionDeclaration(declaration)
@@ -50,9 +221,9 @@ func (s *Store) PutRetentionDeclaration(ctx context.Context, declaration Retenti
 		}
 		declaration.PreviousDeclarationDigest = previous.DeclarationDigest
 		declaration.PreviousDeclaredAt = previous.DeclaredAt
-		if _, err := tx.ExecContext(ctx, `UPDATE retention_declarations SET policy_digest = ?, retention_floor = ?, declaration_digest = ?, declared_at = ?, previous_declaration_digest = ?, previous_declared_at = ? WHERE vault = ? AND device_id = ?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE retention_declarations SET policy_digest = ?, retention_floor = ?, declaration_digest = ?, declared_at = ?, previous_declaration_digest = ?, previous_declared_at = ?, digest_version = ? WHERE vault = ? AND device_id = ?`,
 			declaration.PolicyDigest[:], declaration.RetentionFloor, declaration.DeclarationDigest[:], declaration.DeclaredAt,
-			declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt, declaration.Vault[:], declaration.DeviceID); err != nil {
+			declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt, declaration.DigestVersion, declaration.Vault[:], declaration.DeviceID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM retention_recovery_points WHERE vault = ? AND device_id = ?", declaration.Vault[:], declaration.DeviceID); err != nil {
@@ -85,7 +256,7 @@ func (s *Store) RetentionDeclarationHistory(ctx context.Context, vault [32]byte,
 	}
 	var history []RetentionDeclarationRevision
 	err := s.query(ctx, func(conn *sql.Conn) error {
-		rows, err := conn.QueryContext(ctx, `SELECT revision, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at
+		rows, err := conn.QueryContext(ctx, `SELECT revision, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at, digest_version
 FROM retention_declaration_history WHERE vault = ? AND device_id = ? ORDER BY revision`, vault[:], deviceID)
 		if err != nil {
 			return err
@@ -95,7 +266,8 @@ FROM retention_declaration_history WHERE vault = ? AND device_id = ? ORDER BY re
 			var revision RetentionDeclarationRevision
 			var policyDigest, digest, previousDigest []byte
 			var floor int64
-			if err := rows.Scan(&revision.Revision, &policyDigest, &floor, &digest, &revision.DeclaredAt, &previousDigest, &revision.PreviousDeclaredAt); err != nil {
+			var digestVersion int
+			if err := rows.Scan(&revision.Revision, &policyDigest, &floor, &digest, &revision.DeclaredAt, &previousDigest, &revision.PreviousDeclaredAt, &digestVersion); err != nil {
 				return err
 			}
 			revision.Vault = vault
@@ -107,6 +279,10 @@ FROM retention_declaration_history WHERE vault = ? AND device_id = ? ORDER BY re
 				return errors.New("stored retention floor is malformed")
 			}
 			revision.RetentionFloor = uint64(floor)
+			if digestVersion != 1 && digestVersion != 2 {
+				return errors.New("stored retention declaration digest version is malformed")
+			}
+			revision.DigestVersion = uint8(digestVersion)
 			history = append(history, revision)
 		}
 		if err := rows.Err(); err != nil {
@@ -138,11 +314,25 @@ func normalizeRetentionDeclaration(declaration RetentionDeclaration) (RetentionD
 		return RetentionDeclaration{}, errors.New("invalid retention declaration")
 	}
 	points := make([]RetentionRecoveryPoint, len(declaration.RecoveryPoints))
+	legacyPoints := 0
+	boundPoints := 0
 	for index, point := range declaration.RecoveryPoints {
 		if point.Epoch > uint64(^uint64(0)>>1) || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > 128 {
 			return RetentionDeclaration{}, errors.New("invalid retention recovery point")
 		}
-		points[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+		if point.PolicyDigest == ([32]byte{}) && len(point.ControlCID) == 0 {
+			legacyPoints++
+			point.PolicyDigest = declaration.PolicyDigest
+		} else if point.PolicyDigest != ([32]byte{}) && len(point.ControlCID) != 0 && len(point.ControlCID) <= 128 {
+			boundPoints++
+		} else {
+			return RetentionDeclaration{}, errors.New("incomplete retention recovery point binding")
+		}
+		controlCID := bytes.Clone(point.ControlCID)
+		points[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID), PolicyDigest: point.PolicyDigest, ControlCID: controlCID}
+	}
+	if legacyPoints != 0 && boundPoints != 0 {
+		return RetentionDeclaration{}, errors.New("retention declaration mixes legacy and bound points")
 	}
 	sort.Slice(points, func(i, j int) bool {
 		if points[i].Epoch != points[j].Epoch {
@@ -156,6 +346,10 @@ func normalizeRetentionDeclaration(declaration RetentionDeclaration) (RetentionD
 		}
 	}
 	declaration.RecoveryPoints = points
+	declaration.DigestVersion = 2
+	if legacyPoints != 0 {
+		declaration.DigestVersion = 1
+	}
 	declaration.DeclarationDigest = retentionDeclarationDigest(declaration)
 	declaration.PreviousDeclarationDigest = [32]byte{}
 	declaration.PreviousDeclaredAt = -1
@@ -163,7 +357,15 @@ func normalizeRetentionDeclaration(declaration RetentionDeclaration) (RetentionD
 }
 
 func retentionDeclarationDigest(declaration RetentionDeclaration) [32]byte {
-	buffer := bytes.NewBufferString("dottie/v1/retention-declaration\x00")
+	version := declaration.DigestVersion
+	if version == 0 {
+		version = 2
+	}
+	domain := "dottie/v1/retention-declaration\x00"
+	if version == 2 {
+		domain = "dottie/v2/retention-declaration\x00"
+	}
+	buffer := bytes.NewBufferString(domain)
 	buffer.Write(declaration.Vault[:])
 	writeRetentionBytes(buffer, []byte(declaration.DeviceID))
 	buffer.Write(declaration.PolicyDigest[:])
@@ -173,6 +375,10 @@ func retentionDeclarationDigest(declaration RetentionDeclaration) [32]byte {
 	for _, point := range declaration.RecoveryPoints {
 		writeRetentionUint64(buffer, point.Epoch)
 		writeRetentionBytes(buffer, point.SnapshotCID)
+		if version == 2 {
+			buffer.Write(point.PolicyDigest[:])
+			writeRetentionBytes(buffer, point.ControlCID)
+		}
 	}
 	return sha256.Sum256(buffer.Bytes())
 }
@@ -196,15 +402,19 @@ func validateRetentionSubject(deviceID string) error {
 }
 
 func insertRetentionDeclarationTx(ctx context.Context, tx *sql.Tx, declaration RetentionDeclaration) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO retention_declarations(vault, device_id, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, declaration.Vault[:], declaration.DeviceID, declaration.PolicyDigest[:], declaration.RetentionFloor,
-		declaration.DeclarationDigest[:], declaration.DeclaredAt, declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt)
+	_, err := tx.ExecContext(ctx, `INSERT INTO retention_declarations(vault, device_id, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at, digest_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, declaration.Vault[:], declaration.DeviceID, declaration.PolicyDigest[:], declaration.RetentionFloor,
+		declaration.DeclarationDigest[:], declaration.DeclaredAt, declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt, declaration.DigestVersion)
 	return err
 }
 
 func insertRetentionPointsTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string, points []RetentionRecoveryPoint) error {
 	for ordinal, point := range points {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO retention_recovery_points(vault, device_id, ordinal, epoch, snapshot_cid) VALUES (?, ?, ?, ?, ?)", vault[:], deviceID, ordinal, point.Epoch, point.SnapshotCID); err != nil {
+		controlCID := point.ControlCID
+		if controlCID == nil {
+			controlCID = []byte{}
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO retention_recovery_points(vault, device_id, ordinal, epoch, snapshot_cid, policy_digest, control_cid) VALUES (?, ?, ?, ?, ?, ?, ?)", vault[:], deviceID, ordinal, point.Epoch, point.SnapshotCID, point.PolicyDigest[:], controlCID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
@@ -224,15 +434,19 @@ func nextRetentionRevision(ctx context.Context, tx *sql.Tx, vault [32]byte, devi
 }
 
 func insertRetentionHistoryTx(ctx context.Context, tx *sql.Tx, revision int64, declaration RetentionDeclaration) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO retention_declaration_history(vault, device_id, revision, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, declaration.Vault[:], declaration.DeviceID, revision, declaration.PolicyDigest[:], declaration.RetentionFloor,
-		declaration.DeclarationDigest[:], declaration.DeclaredAt, declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt)
+	_, err := tx.ExecContext(ctx, `INSERT INTO retention_declaration_history(vault, device_id, revision, policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at, digest_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, declaration.Vault[:], declaration.DeviceID, revision, declaration.PolicyDigest[:], declaration.RetentionFloor,
+		declaration.DeclarationDigest[:], declaration.DeclaredAt, declaration.PreviousDeclarationDigest[:], declaration.PreviousDeclaredAt, declaration.DigestVersion)
 	return err
 }
 
 func insertRetentionHistoryPointsTx(ctx context.Context, tx *sql.Tx, revision int64, declaration RetentionDeclaration) error {
 	for ordinal, point := range declaration.RecoveryPoints {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO retention_declaration_history_points(vault, device_id, revision, ordinal, epoch, snapshot_cid) VALUES (?, ?, ?, ?, ?, ?)", declaration.Vault[:], declaration.DeviceID, revision, ordinal, point.Epoch, point.SnapshotCID); err != nil {
+		controlCID := point.ControlCID
+		if controlCID == nil {
+			controlCID = []byte{}
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO retention_declaration_history_points(vault, device_id, revision, ordinal, epoch, snapshot_cid, policy_digest, control_cid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", declaration.Vault[:], declaration.DeviceID, revision, ordinal, point.Epoch, point.SnapshotCID, point.PolicyDigest[:], controlCID); err != nil {
 			return err
 		}
 	}
@@ -243,8 +457,9 @@ func retentionDeclarationTx(ctx context.Context, tx *sql.Tx, vault [32]byte, dev
 	var declaration RetentionDeclaration
 	var policyDigest, digest, previousDigest []byte
 	var floor int64
-	err := tx.QueryRowContext(ctx, `SELECT policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at
-FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], deviceID).Scan(&policyDigest, &floor, &digest, &declaration.DeclaredAt, &previousDigest, &declaration.PreviousDeclaredAt)
+	var digestVersion int
+	err := tx.QueryRowContext(ctx, `SELECT policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at, digest_version
+FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], deviceID).Scan(&policyDigest, &floor, &digest, &declaration.DeclaredAt, &previousDigest, &declaration.PreviousDeclaredAt, &digestVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RetentionDeclaration{}, ErrRetentionDeclarationNotFound
 	}
@@ -257,6 +472,10 @@ FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], device
 		return RetentionDeclaration{}, errors.New("stored retention floor is malformed")
 	}
 	declaration.RetentionFloor = uint64(floor)
+	if digestVersion != 1 && digestVersion != 2 {
+		return RetentionDeclaration{}, errors.New("stored retention declaration digest version is malformed")
+	}
+	declaration.DigestVersion = uint8(digestVersion)
 	if err := copyRetentionDeclarationBytes(&declaration, policyDigest, digest, previousDigest); err != nil {
 		return RetentionDeclaration{}, err
 	}
@@ -274,8 +493,9 @@ func retentionDeclarationConn(ctx context.Context, conn *sql.Conn, vault [32]byt
 	var declaration RetentionDeclaration
 	var policyDigest, digest, previousDigest []byte
 	var floor int64
-	err := conn.QueryRowContext(ctx, `SELECT policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at
-FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], deviceID).Scan(&policyDigest, &floor, &digest, &declaration.DeclaredAt, &previousDigest, &declaration.PreviousDeclaredAt)
+	var digestVersion int
+	err := conn.QueryRowContext(ctx, `SELECT policy_digest, retention_floor, declaration_digest, declared_at, previous_declaration_digest, previous_declared_at, digest_version
+FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], deviceID).Scan(&policyDigest, &floor, &digest, &declaration.DeclaredAt, &previousDigest, &declaration.PreviousDeclaredAt, &digestVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RetentionDeclaration{}, ErrRetentionDeclarationNotFound
 	}
@@ -288,6 +508,10 @@ FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], device
 		return RetentionDeclaration{}, errors.New("stored retention floor is malformed")
 	}
 	declaration.RetentionFloor = uint64(floor)
+	if digestVersion != 1 && digestVersion != 2 {
+		return RetentionDeclaration{}, errors.New("stored retention declaration digest version is malformed")
+	}
+	declaration.DigestVersion = uint8(digestVersion)
 	if err := copyRetentionDeclarationBytes(&declaration, policyDigest, digest, previousDigest); err != nil {
 		return RetentionDeclaration{}, err
 	}
@@ -302,6 +526,9 @@ FROM retention_declarations WHERE vault = ? AND device_id = ?`, vault[:], device
 }
 
 func validateStoredRetentionDeclaration(declaration RetentionDeclaration) error {
+	if declaration.DigestVersion != 1 && declaration.DigestVersion != 2 {
+		return errors.New("stored retention declaration digest version is malformed")
+	}
 	if retentionDeclarationDigest(declaration) != declaration.DeclarationDigest {
 		return errors.New("stored retention declaration digest does not match its fields")
 	}
@@ -319,7 +546,7 @@ func copyRetentionDeclarationBytes(declaration *RetentionDeclaration, policyDige
 }
 
 func retentionPointsTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string) ([]RetentionRecoveryPoint, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT epoch, snapshot_cid FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordinal", vault[:], deviceID)
+	rows, err := tx.QueryContext(ctx, "SELECT epoch, snapshot_cid, policy_digest, control_cid FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordinal", vault[:], deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +555,7 @@ func retentionPointsTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID
 }
 
 func retentionPointsConn(ctx context.Context, conn *sql.Conn, vault [32]byte, deviceID string) ([]RetentionRecoveryPoint, error) {
-	rows, err := conn.QueryContext(ctx, "SELECT epoch, snapshot_cid FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordinal", vault[:], deviceID)
+	rows, err := conn.QueryContext(ctx, "SELECT epoch, snapshot_cid, policy_digest, control_cid FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordinal", vault[:], deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +564,7 @@ func retentionPointsConn(ctx context.Context, conn *sql.Conn, vault [32]byte, de
 }
 
 func retentionHistoryPointsConn(ctx context.Context, conn *sql.Conn, vault [32]byte, deviceID string, revision int64) ([]RetentionRecoveryPoint, error) {
-	rows, err := conn.QueryContext(ctx, "SELECT epoch, snapshot_cid FROM retention_declaration_history_points WHERE vault = ? AND device_id = ? AND revision = ? ORDER BY ordinal", vault[:], deviceID, revision)
+	rows, err := conn.QueryContext(ctx, "SELECT epoch, snapshot_cid, policy_digest, control_cid FROM retention_declaration_history_points WHERE vault = ? AND device_id = ? AND revision = ? ORDER BY ordinal", vault[:], deviceID, revision)
 	if err != nil {
 		return nil, err
 	}
@@ -349,15 +576,24 @@ func scanRetentionPoints(rows *sql.Rows) ([]RetentionRecoveryPoint, error) {
 	var points []RetentionRecoveryPoint
 	for rows.Next() {
 		var epoch int64
+		var digest []byte
 		var point RetentionRecoveryPoint
-		if err := rows.Scan(&epoch, &point.SnapshotCID); err != nil {
+		if err := rows.Scan(&epoch, &point.SnapshotCID, &digest, &point.ControlCID); err != nil {
 			return nil, err
 		}
 		if epoch < 0 || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > 128 {
 			return nil, errors.New("stored retention recovery point is malformed")
 		}
+		if len(digest) != len(point.PolicyDigest) {
+			return nil, errors.New("stored retention point policy digest is malformed")
+		}
 		point.Epoch = uint64(epoch)
+		copy(point.PolicyDigest[:], digest)
 		point.SnapshotCID = bytes.Clone(point.SnapshotCID)
+		point.ControlCID = bytes.Clone(point.ControlCID)
+		if point.ControlCID == nil {
+			point.ControlCID = []byte{}
+		}
 		points = append(points, point)
 	}
 	return points, rows.Err()
@@ -367,7 +603,7 @@ func cloneRetentionDeclaration(declaration RetentionDeclaration) RetentionDeclar
 	cloned := declaration
 	cloned.RecoveryPoints = make([]RetentionRecoveryPoint, len(declaration.RecoveryPoints))
 	for index, point := range declaration.RecoveryPoints {
-		cloned.RecoveryPoints[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+		cloned.RecoveryPoints[index] = RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID), PolicyDigest: point.PolicyDigest, ControlCID: bytes.Clone(point.ControlCID)}
 	}
 	return cloned
 }
@@ -398,27 +634,48 @@ func (s *Store) SetRetentionRecoveryPointMaterial(ctx context.Context, vault [32
 		if err != nil {
 			return err
 		}
-		declared := false
-		for _, candidate := range declaration.RecoveryPoints {
+		var declaredPoint *RetentionRecoveryPoint
+		for index := range declaration.RecoveryPoints {
+			candidate := &declaration.RecoveryPoints[index]
 			if candidate.Epoch == point.Epoch && bytes.Equal(candidate.SnapshotCID, point.SnapshotCID) {
-				declared = true
+				declaredPoint = candidate
 				break
 			}
 		}
-		if !declared {
+		if declaredPoint == nil || declaration.DigestVersion == 2 && (declaredPoint.PolicyDigest != point.PolicyDigest || !bytes.Equal(declaredPoint.ControlCID, point.ControlCID)) {
 			return ErrRetentionBoundaryNotVerified
 		}
+		bodyCount := 0
+		payloadRefSet := make(map[string]bool, len(payloadReferences))
+		for _, reference := range payloadReferences {
+			payloadRefSet[reference] = true
+		}
 		for _, reference := range append(append([]string(nil), payloadReferences...), backupReferences...) {
-			if err := s.requirePayloadFile(reference); err != nil {
+			name, err := payloadName(reference)
+			if err != nil {
 				return err
 			}
+			payload, err := readPayload(filepath.Join(s.payloadDir, name), reference)
+			if err != nil {
+				return err
+			}
+			if payloadRefSet[reference] && bytes.Equal(authenticatedPositionRawCID(payload), point.SnapshotCID) {
+				bodyCount++
+			}
+		}
+		if declaration.DigestVersion == 2 && bodyCount != 1 {
+			return errors.New("retention point must have exactly one snapshot body")
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM retention_recovery_material
 WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND (payload_ref <> '' OR backup_ref <> '')`, vault[:], deviceID, point.Epoch, point.SnapshotCID); err != nil {
 			return err
 		}
+		complete := 1
+		if declaration.DigestVersion == 1 {
+			complete = 0
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO retention_recovery_material(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete)
-VALUES (?, ?, ?, ?, '', '', 1) ON CONFLICT(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref) DO UPDATE SET inventory_complete = 1`, vault[:], deviceID, point.Epoch, point.SnapshotCID); err != nil {
+VALUES (?, ?, ?, ?, '', '', ?) ON CONFLICT(vault, device_id, epoch, snapshot_cid, payload_ref, backup_ref) DO UPDATE SET inventory_complete = excluded.inventory_complete`, vault[:], deviceID, point.Epoch, point.SnapshotCID, complete); err != nil {
 			return err
 		}
 		for _, reference := range payloadReferences {
@@ -441,6 +698,8 @@ func (s *Store) PlanRetentionPrune(ctx context.Context, request RetentionPruneRe
 	if err := validateRetentionPruneRequest(request); err != nil {
 		return RetentionPrunePlan{}, err
 	}
+	s.payloadMu.Lock()
+	defer s.payloadMu.Unlock()
 	var plan RetentionPrunePlan
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -513,19 +772,71 @@ func validateRetentionPruneRequest(request RetentionPruneRequest) error {
 	if err := validateRetentionSubject(request.DeviceID); err != nil {
 		return err
 	}
-	if request.Boundary.Epoch > uint64(^uint64(0)>>1) || len(request.Boundary.SnapshotCID) == 0 || len(request.Boundary.SnapshotCID) > 128 || request.Now.IsZero() {
+	if request.Boundary.Epoch > uint64(^uint64(0)>>1) || len(request.Boundary.SnapshotCID) == 0 || len(request.Boundary.SnapshotCID) > 128 || request.Boundary.PolicyDigest == ([32]byte{}) || len(request.Boundary.ControlCID) == 0 || len(request.Boundary.ControlCID) > 128 || request.Now.IsZero() {
 		return errors.New("invalid retention prune request")
 	}
 	return nil
 }
 
 type retentionJournalBackup struct {
-	id        string
-	reference string
-	createdAt int64
-	terminal  bool
-	aged      bool
-	eligible  bool
+	id             string
+	reference      string
+	createdAt      int64
+	terminal       bool
+	aged           bool
+	bound          bool
+	associated     bool
+	legacy         bool
+	bindingVault   []byte
+	bindingEpoch   sql.NullInt64
+	bindingCID     []byte
+	bindingDigest  []byte
+	bindingControl []byte
+	bindingVersion int
+	eligible       bool
+}
+
+func validRetentionJournalBinding(vault []byte, epoch sql.NullInt64, snapshotCID, policyDigest, controlCID []byte, version int) bool {
+	return version == 1 && len(vault) == 32 && epoch.Valid && epoch.Int64 >= 0 &&
+		len(snapshotCID) > 0 && len(snapshotCID) <= 128 && len(policyDigest) == 32 &&
+		len(controlCID) > 0 && len(controlCID) <= 128
+}
+
+func retentionBackupAssociationTx(ctx context.Context, tx *sql.Tx, vault []byte, deviceID string, epoch int64, snapshotCID, policyDigest, controlCID []byte, reference string) (bool, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM retention_recovery_material AS material
+WHERE material.vault = ? AND material.device_id = ? AND material.epoch = ? AND material.snapshot_cid = ? AND material.backup_ref = ?
+AND (
+ EXISTS (SELECT 1 FROM retention_recovery_points AS point
+  WHERE point.vault = material.vault AND point.device_id = material.device_id AND point.epoch = material.epoch AND point.snapshot_cid = material.snapshot_cid
+    AND point.policy_digest = ? AND point.control_cid = ?)
+ OR EXISTS (SELECT 1 FROM retention_declaration_history_points AS point
+  WHERE point.vault = material.vault AND point.device_id = material.device_id AND point.epoch = material.epoch AND point.snapshot_cid = material.snapshot_cid
+    AND point.policy_digest = ? AND point.control_cid = ?)
+)`, vault, deviceID, epoch, snapshotCID, reference, policyDigest, controlCID, policyDigest, controlCID).Scan(&count)
+	return count == 1, err
+}
+
+func selectedRetentionDeviceTx(ctx context.Context, tx *sql.Tx, vault []byte) (string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT device_id FROM vault_selections WHERE vault = ? ORDER BY device_id LIMIT 2", vault)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var deviceID string
+	if !rows.Next() {
+		return "", rows.Err()
+	}
+	if err := rows.Scan(&deviceID); err != nil {
+		return "", err
+	}
+	if rows.Next() {
+		return "", nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return deviceID, nil
 }
 
 func retainedRecoveryMaterialTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string, points []RetentionRecoveryPoint) (map[string]bool, map[string]bool, error) {
@@ -571,6 +882,61 @@ WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ?`, vault[:],
 	return payloadReferences, backupReferences, nil
 }
 
+func (s *Store) revalidateRetentionMaterialDigestsTx(ctx context.Context, tx *sql.Tx, vaultID [32]byte, deviceID string, points []RetentionRecoveryPoint) error {
+	for _, point := range points {
+		rows, err := tx.QueryContext(ctx, `SELECT payload_ref, backup_ref FROM retention_recovery_material
+WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ?`, vaultID[:], deviceID, point.Epoch, point.SnapshotCID)
+		if err != nil {
+			return err
+		}
+		bodyCount := 0
+		for rows.Next() {
+			var payloadRef, backupRef string
+			if err := rows.Scan(&payloadRef, &backupRef); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if payloadRef != "" {
+				name, err := payloadName(payloadRef)
+				if err != nil {
+					_ = rows.Close()
+					return err
+				}
+				payload, err := readPayload(filepath.Join(s.payloadDir, name), payloadRef)
+				if err != nil {
+					_ = rows.Close()
+					return err
+				}
+				if bytes.Equal(authenticatedPositionRawCID(payload), point.SnapshotCID) {
+					bodyCount++
+				}
+			}
+			if backupRef != "" {
+				name, err := payloadName(backupRef)
+				if err != nil {
+					_ = rows.Close()
+					return err
+				}
+				if _, err := readPayload(filepath.Join(s.payloadDir, name), backupRef); err != nil {
+					_ = rows.Close()
+					return err
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if bodyCount != 1 {
+			return errors.New("retention recovery point must have exactly one CID-matching body")
+		}
+	}
+	return nil
+}
+
 func (s *Store) requireRetentionPointMaterialFilesTx(ctx context.Context, tx *sql.Tx, vault [32]byte, deviceID string, points []RetentionRecoveryPoint) error {
 	for _, point := range points {
 		rows, err := tx.QueryContext(ctx, `SELECT payload_ref, backup_ref FROM retention_recovery_material
@@ -586,7 +952,12 @@ WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND (payloa
 			}
 			for _, reference := range []string{payloadRef, backupRef} {
 				if reference != "" {
-					if err := s.requirePayloadFile(reference); err != nil {
+					name, err := payloadName(reference)
+					if err != nil {
+						_ = rows.Close()
+						return err
+					}
+					if _, err := readPayload(filepath.Join(s.payloadDir, name), reference); err != nil {
 						_ = rows.Close()
 						return err
 					}
@@ -600,21 +971,6 @@ WHERE vault = ? AND device_id = ? AND epoch = ? AND snapshot_cid = ? AND (payloa
 		if err := rows.Close(); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (s *Store) requirePayloadFile(reference string) error {
-	name, err := payloadName(reference)
-	if err != nil {
-		return err
-	}
-	info, err := os.Lstat(filepath.Join(s.payloadDir, name))
-	if err != nil {
-		return fmt.Errorf("retention recovery material %s: %w", reference, err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("retention recovery material %s is not a regular payload", reference)
 	}
 	return nil
 }
@@ -721,13 +1077,19 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 	if err != nil {
 		return RetentionPrunePlan{}, err
 	}
+	if declaration.DigestVersion != 2 {
+		return RetentionPrunePlan{}, ErrRetentionRecoveryPointInventoryUnknown
+	}
 	pointFound := false
 	oldestEpoch := uint64(^uint64(0))
+	var oldestPoint RetentionRecoveryPoint
 	for _, point := range declaration.RecoveryPoints {
 		if point.Epoch < oldestEpoch {
 			oldestEpoch = point.Epoch
+			oldestPoint = point
 		}
-		if point.Epoch == request.Boundary.Epoch && bytes.Equal(point.SnapshotCID, request.Boundary.SnapshotCID) {
+		if point.Epoch == request.Boundary.Epoch && bytes.Equal(point.SnapshotCID, request.Boundary.SnapshotCID) &&
+			point.PolicyDigest == request.Boundary.PolicyDigest && bytes.Equal(point.ControlCID, request.Boundary.ControlCID) {
 			pointFound = true
 		}
 	}
@@ -737,9 +1099,13 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 	if request.Boundary.Epoch > oldestEpoch {
 		return RetentionPrunePlan{}, ErrRetentionBoundaryNewerThanFloor
 	}
+	if request.Boundary.Epoch == oldestEpoch && (!bytes.Equal(oldestPoint.SnapshotCID, request.Boundary.SnapshotCID) ||
+		oldestPoint.PolicyDigest != request.Boundary.PolicyDigest || !bytes.Equal(oldestPoint.ControlCID, request.Boundary.ControlCID)) {
+		return RetentionPrunePlan{}, ErrRetentionBoundaryNotVerified
+	}
 	var checkpointEpoch int64
-	var checkpointSnapshotCID, checkpointPolicyDigest []byte
-	err = tx.QueryRowContext(ctx, "SELECT epoch, snapshot_cid, policy_digest FROM vault_checkpoints WHERE vault = ?", request.Vault[:]).Scan(&checkpointEpoch, &checkpointSnapshotCID, &checkpointPolicyDigest)
+	var checkpointSnapshotCID, checkpointPolicyDigest, checkpointControlCID []byte
+	err = tx.QueryRowContext(ctx, "SELECT epoch, snapshot_cid, policy_digest, control_cid FROM vault_checkpoints WHERE vault = ?", request.Vault[:]).Scan(&checkpointEpoch, &checkpointSnapshotCID, &checkpointPolicyDigest, &checkpointControlCID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RetentionPrunePlan{}, ErrRetentionBoundaryNotVerified
 	}
@@ -747,7 +1113,8 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 		return RetentionPrunePlan{}, err
 	}
 	if checkpointEpoch < 0 || uint64(checkpointEpoch) != request.Boundary.Epoch ||
-		!bytes.Equal(checkpointSnapshotCID, request.Boundary.SnapshotCID) || !bytes.Equal(checkpointPolicyDigest, declaration.PolicyDigest[:]) {
+		!bytes.Equal(checkpointSnapshotCID, request.Boundary.SnapshotCID) || !bytes.Equal(checkpointPolicyDigest, request.Boundary.PolicyDigest[:]) ||
+		!bytes.Equal(checkpointControlCID, request.Boundary.ControlCID) {
 		return RetentionPrunePlan{}, ErrRetentionBoundaryNotVerified
 	}
 	var liveEpoch int64
@@ -764,6 +1131,9 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 	if _, _, err := retainedRecoveryMaterialTx(ctx, tx, request.Vault, request.DeviceID, declaration.RecoveryPoints); err != nil {
 		return RetentionPrunePlan{}, err
 	}
+	if err := s.revalidateRetentionMaterialDigestsTx(ctx, tx, request.Vault, request.DeviceID, declaration.RecoveryPoints); err != nil {
+		return RetentionPrunePlan{}, err
+	}
 	retainedReferences, err := globallyRetainedRecoveryReferencesTx(ctx, tx)
 	if err != nil {
 		return RetentionPrunePlan{}, err
@@ -773,7 +1143,7 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 		return RetentionPrunePlan{}, err
 	}
 	plan := RetentionPrunePlan{
-		Vault: request.Vault, DeviceID: request.DeviceID, Boundary: RetentionRecoveryPoint{Epoch: request.Boundary.Epoch, SnapshotCID: bytes.Clone(request.Boundary.SnapshotCID)},
+		Vault: request.Vault, DeviceID: request.DeviceID, Boundary: RetentionRecoveryPoint{Epoch: request.Boundary.Epoch, SnapshotCID: bytes.Clone(request.Boundary.SnapshotCID), PolicyDigest: request.Boundary.PolicyDigest, ControlCID: bytes.Clone(request.Boundary.ControlCID)},
 		PolicyDigest: declaration.PolicyDigest, RetentionFloor: declaration.RetentionFloor,
 		RecoveryPoints: cloneRetentionDeclaration(declaration).RecoveryPoints, EpochScope: RetentionPruneScope,
 	}
@@ -807,7 +1177,7 @@ func (s *Store) planRetentionPruneTx(ctx context.Context, tx *sql.Tx, request Re
 			return RetentionPrunePlan{}, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, backup_ref, created_at, state, stage FROM apply_journal
+	rows, err := tx.QueryContext(ctx, `SELECT id, backup_ref, created_at, state, stage, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version FROM apply_journal
 WHERE backup_ref <> '' ORDER BY id`)
 	if err != nil {
 		return RetentionPrunePlan{}, err
@@ -816,12 +1186,23 @@ WHERE backup_ref <> '' ORDER BY id`)
 	for rows.Next() {
 		var backup retentionJournalBackup
 		var stateValue, stage string
-		if err := rows.Scan(&backup.id, &backup.reference, &backup.createdAt, &stateValue, &stage); err != nil {
+		var retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID []byte
+		var retentionEpoch sql.NullInt64
+		var retentionBindingVersion int
+		if err := rows.Scan(&backup.id, &backup.reference, &backup.createdAt, &stateValue, &stage, &retentionVault, &retentionEpoch, &retentionSnapshot, &retentionPolicyDigest, &retentionControlCID, &retentionBindingVersion); err != nil {
 			_ = rows.Close()
 			return RetentionPrunePlan{}, err
 		}
 		backup.terminal = (stateValue == "applied" && stage == JournalStageVerified) || (stateValue == "rolled-back" && stage == JournalStageRolledBack)
 		backup.aged = !request.Now.Before(time.Unix(backup.createdAt, 0).Add(JournalBackupRetention))
+		backup.legacy = retentionBindingVersion == 0
+		backup.bound = len(retentionVault) != 0 || retentionEpoch.Valid || len(retentionSnapshot) != 0 || len(retentionPolicyDigest) != 0 || len(retentionControlCID) != 0
+		backup.bindingVault = bytes.Clone(retentionVault)
+		backup.bindingEpoch = retentionEpoch
+		backup.bindingCID = bytes.Clone(retentionSnapshot)
+		backup.bindingDigest = bytes.Clone(retentionPolicyDigest)
+		backup.bindingControl = bytes.Clone(retentionControlCID)
+		backup.bindingVersion = retentionBindingVersion
 		backups = append(backups, backup)
 	}
 	if err := rows.Err(); err != nil {
@@ -833,9 +1214,33 @@ WHERE backup_ref <> '' ORDER BY id`)
 	}
 	for index := range backups {
 		backup := &backups[index]
+		if backup.bound && validRetentionJournalBinding(backup.bindingVault, backup.bindingEpoch, backup.bindingCID, backup.bindingDigest, backup.bindingControl, backup.bindingVersion) && bytes.Equal(backup.bindingVault, request.Vault[:]) {
+			associated, err := retentionBackupAssociationTx(ctx, tx, request.Vault[:], request.DeviceID, backup.bindingEpoch.Int64, backup.bindingCID, backup.bindingDigest, backup.bindingControl, backup.reference)
+			if err != nil {
+				return RetentionPrunePlan{}, err
+			}
+			backup.associated = associated
+			if backup.associated {
+				if epochs := materialEpochs[backup.reference]; epochs == nil {
+					materialEpochs[backup.reference] = map[uint64]bool{uint64(backup.bindingEpoch.Int64): true}
+				} else {
+					epochs[uint64(backup.bindingEpoch.Int64)] = true
+				}
+			}
+		}
+		if backup.reference != "" {
+			name, err := payloadName(backup.reference)
+			if err != nil {
+				return RetentionPrunePlan{}, err
+			}
+			if _, err := readPayload(filepath.Join(s.payloadDir, name), backup.reference); err != nil {
+				return RetentionPrunePlan{}, err
+			}
+		}
 		epochs := sortedMaterialEpochs(materialEpochs[backup.reference])
 		recoveryEligible := recoveryPointAllowsPruning(epochs, request.Boundary.Epoch, retainedReferences[backup.reference])
-		backup.eligible = backup.terminal && backup.aged && recoveryEligible &&
+		bindingKnown := backup.bindingVersion == 1 && backup.bound && backup.associated
+		backup.eligible = backup.terminal && backup.aged && recoveryEligible && bindingKnown && !backup.legacy &&
 			!refsByClass["applied base"][backup.reference] && !refsByClass["outbound intent"][backup.reference] && !refsByClass["conflict"][backup.reference]
 	}
 	for index := range backups {
@@ -851,6 +1256,15 @@ WHERE backup_ref <> '' ORDER BY id`)
 		epochs := sortedMaterialEpochs(materialEpochs[backup.reference])
 		classifiedBeforeBoundary := len(epochs) > 0 && allEpochsBefore(epochs, request.Boundary.Epoch)
 		reasons := []string{}
+		if backup.legacy {
+			reasons = append(reasons, "legacy journal row has no retention-binding version")
+		} else if backup.bound && backup.associated {
+			reasons = append(reasons, "journal backup has an authenticated binding and recovery-material association")
+		} else if backup.bound {
+			reasons = append(reasons, "journal backup has an authenticated binding without a recovery-material association")
+		} else {
+			reasons = append(reasons, "journal backup has no retention binding")
+		}
 		if backup.terminal {
 			reasons = append(reasons, "verified applied or rolled-back journal entry")
 		} else {
@@ -922,6 +1336,9 @@ WHERE backup_ref <> '' ORDER BY id`)
 			continue
 		}
 		reference := "sha256:" + name
+		if _, err := readPayload(filepath.Join(s.payloadDir, name), reference); err != nil {
+			return RetentionPrunePlan{}, err
+		}
 		epochs := sortedMaterialEpochs(materialEpochs[reference])
 		classifiedBeforeBoundary := len(epochs) > 0 && allEpochsBefore(epochs, request.Boundary.Epoch)
 		eligible := recoveryPointAllowsPruning(epochs, request.Boundary.Epoch, retainedReferences[reference])

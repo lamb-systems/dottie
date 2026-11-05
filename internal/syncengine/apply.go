@@ -110,6 +110,7 @@ type ApplyRequest struct {
 	Content           []Postimage
 	Settings          SettingsBackend
 	SettingPostimages []SettingPostimage
+	Retention         *state.RetentionBinding
 	FileSystem        files.ApplyFileSystem
 	Now               func() time.Time
 }
@@ -212,6 +213,7 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 			RootInode:       operation.rootInode,
 			Preimage:        fingerprintForObservation(current),
 			Postimage:       operation.post,
+			Retention:       request.Retention,
 			CreatedAt:       request.Now().Unix(),
 		}
 		if _, err := store.AppendJournal(ctx, entry, current.Data); err != nil {
@@ -558,6 +560,7 @@ func applySettingOperation(ctx context.Context, store *state.Store, request Appl
 		Identity:  key,
 		Preimage:  operation.pre,
 		Postimage: operation.post,
+		Retention: request.Retention,
 		CreatedAt: request.Now().Unix(),
 	}
 	if _, err := store.AppendJournal(ctx, entry, backup); err != nil {

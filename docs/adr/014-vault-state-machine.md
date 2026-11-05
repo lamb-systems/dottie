@@ -25,10 +25,10 @@ Every section below is normative. Terms and object schemas come first because th
 - `cert_epoch` — the `epoch_seq` at which a certificate was issued.
 - `checkpoint` — a signed object naming a snapshot CID, `epoch_seq`, policy digest and signer, used for
   rollback detection.
-- `retention floor` — the oldest `epoch_seq` for which a device still holds content keys.
-- `policy retention floor` — the minimum `retention floor` the current policy requires of every device.
-- `retention points` — the recovery points a device has chosen to keep, each pinning a snapshot CID and
-  the `epoch_seq` needed to decrypt it.
+- `confidentiality floor` — the oldest known `epoch_seq` with any surviving retained material, including protected rollback backups; it is not a count of content keys.
+- `recovery floor` — the oldest epoch with a complete authenticated material inventory; it governs pruning eligibility.
+- `policy retention floor` — the minimum signed `confidentiality floor` the current policy requires of every device.
+- `retention points` — recovery positions identified by `(epoch_seq, snapshot_cid, policy_digest, control_cid)` and independently authenticated control evidence.
 
 ## Signed objects
 
@@ -199,13 +199,9 @@ counter in control. A restore-only device hands its signed attestation to a publ
 channel, and the publisher publishes those bytes unchanged. Relaying is a transport detail, not an
 authority.
 
-A declared floor below the `policy retention floor` is surfaced to the user and the device is treated as
-compromised for confidentiality purposes. Nothing here revokes anything: a revoked or offline device that
-never deletes keeps its access, and a device that retains its X25519 private key can unwrap archived
-wrappers indefinitely.
+The signed attestation floor is the `confidentiality floor`, not the `recovery floor`. An unknown-epoch holding means the confidentiality floor is unknown; it must not be reported as a positive or policy-compliant floor. A declared floor below the `policy retention floor` is surfaced to the user and the device is treated as compromised for confidentiality purposes. Nothing here revokes anything: a revoked or offline device that never deletes keeps its access, and a device that retains its X25519 private key can unwrap archived wrappers indefinitely.
 
-Pruning requires a complete snapshot at the retention boundary with a verified checkpoint, and never
-prunes the epoch of the live head.
+Each retained point requires its exact CID-verified envelope body. Its authenticated control must be current or a descendant of the held checkpoint; the boundary point matches the checkpoint's epoch, snapshot CID, policy digest and control CID exactly. A later same-epoch publication cannot replace that boundary. Ordinary-publication points require their signed head and an envelope parent equal to the head's `prev_head_cid`. Pruning requires complete inventories, revalidated payload hashes, the exact checkpoint boundary and a live head strictly later than the boundary.
 
 ## Checkpoints and rollback
 

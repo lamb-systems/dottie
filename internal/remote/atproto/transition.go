@@ -890,15 +890,17 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		if !ok {
 			return vault.Predecessor{}, fmt.Errorf("%w: certificate collection contains another record type", ErrRecord)
 		}
-		if _, exists := certificateRecords[certificate.DeviceID]; exists {
-			return vault.Predecessor{}, fmt.Errorf("%w: duplicate certificate device", ErrRecord)
+		identity := certificateIdentity(certificate.DeviceID, certificate.KeyID)
+		if _, exists := certificateRecords[identity]; exists {
+			return vault.Predecessor{}, fmt.Errorf("%w: duplicate certificate identity", ErrRecord)
 		}
-		certificateRecords[certificate.DeviceID] = certificate
-		certificateData[certificate.DeviceID] = proven.Data
+		certificateRecords[identity] = certificate
+		certificateData[identity] = proven.Data
 	}
 	certificates := make([][]byte, 0, len(policyObject.Recipients))
 	for _, recipient := range policyObject.Recipients {
-		record, exists := certificateRecords[recipient.DeviceID]
+		identity := certificateIdentity(recipient.DeviceID, recipient.KeyID)
+		record, exists := certificateRecords[identity]
 		if !exists {
 			return vault.Predecessor{}, fmt.Errorf("%w: active recipient certificate is absent", ErrUnprovenMembership)
 		}
@@ -907,7 +909,7 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		if err != nil {
 			return vault.Predecessor{}, err
 		}
-		if err := VerifyRecordBinding(certificateData[recipient.DeviceID], encoded); err != nil {
+		if err := VerifyRecordBinding(certificateData[identity], encoded); err != nil {
 			return vault.Predecessor{}, err
 		}
 		certificates = append(certificates, encoded)
@@ -982,7 +984,7 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		if err := VerifySnapshotRecordSignature(snapshotRecord, ed25519.PublicKey(snapshotSigner.SigningPublicKey[:])); err != nil {
 			return vault.Predecessor{}, err
 		}
-		if err := VerifyRecordContext(currentSnapshot, RecordContext{Policy: policyProven.Data, Certificate: certificateData[snapshotRecord.SignerDeviceID]}); err != nil {
+		if err := VerifyRecordContext(currentSnapshot, RecordContext{Policy: policyProven.Data, Certificate: certificateData[certificateIdentity(snapshotRecord.SignerDeviceID, snapshotRecord.SignerKeyID)]}); err != nil {
 			return vault.Predecessor{}, err
 		}
 		headCID = bytes.Clone(headObject.SnapshotCID)
@@ -1001,7 +1003,8 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 	} else if err := VerifyRecordContext(controlProven.Data, RecordContext{Policy: policyProven.Data, Snapshot: []byte{}}); err != nil {
 		return vault.Predecessor{}, err
 	}
-	rootRecord, exists := certificateRecords[policyRecord.SignerDeviceID]
+	rootIdentity := certificateIdentity(policyRecord.SignerDeviceID, policyRecord.SignerKeyID)
+	_, exists := certificateRecords[rootIdentity]
 	if !exists {
 		return vault.Predecessor{}, fmt.Errorf("%w: policy signer certificate is absent", vault.ErrAuthorization)
 	}
@@ -1015,8 +1018,9 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		if decodeErr != nil {
 			return vault.Predecessor{}, decodeErr
 		}
-		storedCertificates[certificateIdentity(certificate.DeviceID, certificate.KeyID)] = storedCertificate{
-			recordBytes: bytes.Clone(certificateData[certificate.DeviceID]), objectBytes: bytes.Clone(encoded), object: certificate,
+		identity := certificateIdentity(certificate.DeviceID, certificate.KeyID)
+		storedCertificates[identity] = storedCertificate{
+			recordBytes: bytes.Clone(certificateData[identity]), objectBytes: bytes.Clone(encoded), object: certificate,
 		}
 	}
 	policySigner, exists := storedCertificates[certificateIdentity(policyObject.Signer.DeviceID, policyObject.Signer.KeyID)]
@@ -1037,7 +1041,7 @@ func predecessorFromRevision(revision *Revision, trustAnchor [32]byte, previousP
 		}
 	}
 	if err := VerifyRecordContext(policyProven.Data, RecordContext{
-		Certificate: certificateData[rootRecord.DeviceID], PreviousPolicy: previousPolicy, TrustAnchor: trustAnchor,
+		Certificate: certificateData[rootIdentity], PreviousPolicy: previousPolicy, TrustAnchor: trustAnchor,
 	}); err != nil {
 		return vault.Predecessor{}, err
 	}

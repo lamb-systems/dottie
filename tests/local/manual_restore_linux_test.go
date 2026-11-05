@@ -192,7 +192,7 @@ func TestManualRestoreCoordinatorGate(t *testing.T) {
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), state.AuthenticatedPositionEvidence{
 		Vault: repository.vault, Epoch: 0, PolicyDigest: repository.genesis.PolicyDigest,
 		Policy: bytes.Clone(repository.genesis.Policy), Control: bytes.Clone(repository.genesis.Control),
-		Head: bytes.Clone(repository.genesis.Head), Snapshot: bytes.Clone(repository.genesis.Snapshot),
+		Head:         bytes.Clone(repository.genesis.Head),
 		Certificates: [][]byte{bytes.Clone(repository.genesis.Certificate)}, CheckpointPosition: bytes.Clone(repository.genesis.Checkpoint),
 	}))
 
@@ -560,7 +560,7 @@ func TestManualRestoreRefusesStaleCheckpointRelation(t *testing.T) {
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), state.AuthenticatedPositionEvidence{
 		Vault: repository.vault, Epoch: 0, PolicyDigest: repository.genesis.PolicyDigest,
 		Policy: bytes.Clone(repository.genesis.Policy), Control: bytes.Clone(repository.genesis.Control),
-		Head: bytes.Clone(repository.genesis.Head), Snapshot: bytes.Clone(repository.genesis.Snapshot),
+		Head:         bytes.Clone(repository.genesis.Head),
 		Certificates: [][]byte{bytes.Clone(repository.genesis.Certificate)}, CheckpointPosition: bytes.Clone(repository.genesis.Checkpoint),
 	}))
 	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{

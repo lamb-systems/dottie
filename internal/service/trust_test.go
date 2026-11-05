@@ -58,7 +58,7 @@ func seedGenesisTrust(t *testing.T, store *state.Store) (vault.Genesis, vault.De
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(context.Background(), state.AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest,
 		Policy: bytes.Clone(genesis.Policy), Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
-		Snapshot: bytes.Clone(genesis.Snapshot), Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
+		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
 	}))
 	return genesis, device
 }
@@ -163,7 +163,7 @@ func TestStateTrustSourceRefusesMissingEpochPredecessorEvidence(t *testing.T) {
 	}))
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(ctx, state.AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 1, PolicyDigest: policyDigest, Policy: bytes.Clone(transition.Policy),
-		Control: bytes.Clone(transition.Control), Head: bytes.Clone(transition.Head), Snapshot: bytes.Clone(transition.Snapshot),
+		Control: bytes.Clone(transition.Control), Head: bytes.Clone(transition.Head),
 		Certificates: [][]byte{bytes.Clone(transition.Recipients[0]), bytes.Clone(transition.Recipients[1])},
 	}))
 	require.NoError(t, store.Close())

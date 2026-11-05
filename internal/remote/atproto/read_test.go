@@ -491,6 +491,7 @@ func TestVaultReaderAuthenticatesAndDecryptsPinnedSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, FreshnessUnverified, result.Freshness)
 	require.Equal(t, []byte("synthetic snapshot payload"), result.Plaintext)
+	require.Equal(t, fixture.transport.blob, result.Ciphertext)
 	require.Equal(t, uint64(1), result.PublicationCount)
 	require.Equal(t, uint64(0), result.PublicationCountBaseline)
 	require.Equal(t, result.Head.SnapshotCID, result.HeadCID)
@@ -694,8 +695,9 @@ func TestVaultReaderDistinguishesBlobFailures(t *testing.T) {
 		t.Run(check.name, func(t *testing.T) {
 			fixture := newReadFixture(t)
 			check.mutate(&fixture)
-			_, err := fixture.reader().Read(context.Background(), fixture.request)
+			result, err := fixture.reader().Read(context.Background(), fixture.request)
 			require.ErrorIs(t, err, check.want)
+			assert.Empty(t, result.Ciphertext)
 		})
 	}
 }

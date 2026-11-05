@@ -20,6 +20,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
+	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/multiformats/go-multihash"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,10 @@ type fakeOrchestrationCoordinator struct {
 	pullErr               error
 	pushResult            service.PushResult
 	pushErr               error
+	prunePlanResult       service.RetentionPruneResult
+	pruneApplyResult      service.RetentionPruneResult
+	pruneErr              error
+	pruneConfirmations    []bool
 	enrollResult          service.AdministrativeResult
 	enrollErr             error
 	revokeResult          service.AdministrativeResult
@@ -69,6 +74,17 @@ func (fake *fakeOrchestrationCoordinator) Pull(context.Context, service.VaultSel
 func (fake *fakeOrchestrationCoordinator) Push(context.Context, service.VaultSelection) (service.PushResult, error) {
 	fake.calls = append(fake.calls, "push")
 	return fake.pushResult, fake.pushErr
+}
+
+func (fake *fakeOrchestrationCoordinator) PlanPrune(context.Context, service.VaultSelection) (service.RetentionPruneResult, error) {
+	fake.calls = append(fake.calls, "prune-plan")
+	return fake.prunePlanResult, fake.pruneErr
+}
+
+func (fake *fakeOrchestrationCoordinator) ApplyPrune(_ context.Context, _ service.VaultSelection, confirmed bool) (service.RetentionPruneResult, error) {
+	fake.calls = append(fake.calls, "prune-apply")
+	fake.pruneConfirmations = append(fake.pruneConfirmations, confirmed)
+	return fake.pruneApplyResult, fake.pruneErr
 }
 
 func (fake *fakeOrchestrationCoordinator) Enroll(_ context.Context, request service.EnrollRequest) (service.AdministrativeResult, error) {
@@ -206,6 +222,114 @@ func TestPushFactoryRefusalHasRedactedStatus(t *testing.T) {
 	assert.Equal(t, "push: rejected\n", stdout.String())
 	assert.NotContains(t, stderr.String(), "/home/private")
 	assert.NotContains(t, stderr.String(), "secret")
+}
+
+func TestPrunePlanReportsFloorsCandidatesAndEscapesFields(t *testing.T) {
+	reference := "sha256:" + strings.Repeat("a", 64)
+	fake := &fakeOrchestrationCoordinator{prunePlanResult: service.RetentionPruneResult{
+		Status: service.RetentionPrunePlanned,
+		Plan: state.RetentionPrunePlan{
+			EpochScope:     "below-boundary",
+			Boundary:       state.RetentionRecoveryPoint{Epoch: 1, SnapshotCID: []byte{0x01, 0x02}, PolicyDigest: bytesTo32(0x10), ControlCID: []byte{0x03, 0x04}},
+			RecoveryPoints: []state.RetentionRecoveryPoint{{Epoch: 1, SnapshotCID: []byte{0x05}, PolicyDigest: bytesTo32(0x11), ControlCID: []byte{0x06}}},
+			Candidates: []state.RetentionPruneCandidate{
+				{Kind: state.RetentionPruneCandidatePayload, Reference: reference, RecoveryPointEpochs: []uint64{0, 1}, RecoveryPointEpochKnown: true, Eligible: true, Reasons: []string{"identified\n\x1b"}},
+				{Kind: state.RetentionPruneCandidateBackup, Reference: "sha256:" + strings.Repeat("b", 64), JournalID: "/home/private\nsecret", RecoveryPointEpochs: []uint64{0}, RecoveryPointEpochKnown: true, Eligible: false, Reasons: []string{"protected"}},
+			},
+		},
+		Floors: service.RetentionFloorReport{RecoveryFloor: 1, HasRecoveryFloor: true, ConfidentialityFloor: 0, HasConfidentialityFloor: true, PolicyFloor: 1, Status: service.RetentionFloorUnknown, UnknownHoldingReasons: []string{"unknown\n\x1b"}},
+	}}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
+	code = runOrchestrationForTest(command, &code, "prune", "--plan", "--did", "did:plc:example")
+	require.Equal(t, 0, code)
+	assert.Empty(t, stderr.String())
+	assert.Contains(t, stdout.String(), "recovery floor: epoch=1")
+	assert.Contains(t, stdout.String(), "confidentiality floor: epoch=0")
+	assert.Contains(t, stdout.String(), "unknown holding: unknown\\x0A\\x1B")
+	assert.Contains(t, stdout.String(), "candidate: kind=payload reference="+reference+" epochs=0,1 eligible=true reasons=identified\\x0A\\x1B")
+	assert.Contains(t, stdout.String(), "candidate: kind=backup reference=sha256:"+strings.Repeat("b", 64)+" epochs=0 eligible=false")
+	assert.NotContains(t, stdout.String(), "/home/private")
+	assert.NotContains(t, stdout.String(), "secret")
+	assert.NotContains(t, stdout.String(), "\x1b")
+	assert.NotContains(t, stdout.String(), "\nsecret")
+	assert.Equal(t, []string{"prune-plan"}, fake.calls)
+}
+
+func TestPruneApplyRequiresConfirmationAndReportsDeletedReferences(t *testing.T) {
+	payloadReference := "sha256:" + strings.Repeat("c", 64)
+	backupReference := "sha256:" + strings.Repeat("d", 64)
+	fake := &fakeOrchestrationCoordinator{
+		pruneApplyResult: service.RetentionPruneResult{
+			Status: service.RetentionPruneConfirmationRequired,
+			Plan:   state.RetentionPrunePlan{Candidates: []state.RetentionPruneCandidate{{Kind: state.RetentionPruneCandidatePayload, Reference: payloadReference, Eligible: true}}},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
+	code = runOrchestrationForTest(command, &code, "prune", "--apply", "--did", "did:plc:example")
+	require.Equal(t, 3, code)
+	assert.Contains(t, stdout.String(), "prune: confirmation-required")
+	assert.NotContains(t, stdout.String(), "deleted payload references:")
+	assert.Equal(t, []bool{false}, fake.pruneConfirmations)
+
+	fake = &fakeOrchestrationCoordinator{pruneApplyResult: service.RetentionPruneResult{
+		Status: service.RetentionPruneApplied,
+		Plan:   state.RetentionPrunePlan{Candidates: []state.RetentionPruneCandidate{{Kind: state.RetentionPruneCandidateBackup, Reference: backupReference, JournalID: "private-id"}}},
+		Report: state.RetentionPruneReport{DeletedPayloads: []string{payloadReference}, PrunedBackupIDs: []string{"private-id"}},
+	}}
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
+	code = runOrchestrationForTest(command, &code, "prune", "--apply", "--confirm", "--did", "did:plc:example")
+	require.Equal(t, 0, code)
+	assert.Empty(t, stderr.String())
+	assert.Contains(t, stdout.String(), "deleted payload references:\n  "+payloadReference)
+	assert.Contains(t, stdout.String(), "pruned backup references:\n  "+backupReference)
+	assert.NotContains(t, stdout.String(), "private-id")
+	assert.Equal(t, []bool{true}, fake.pruneConfirmations)
+}
+
+func TestPruneUsageAndRefusalExitCodes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		code int
+		want string
+	}{
+		{name: "mode required", args: []string{"prune", "--did", "did:plc:example"}, code: 2, want: "exactly one of --plan or --apply"},
+		{name: "modes exclusive", args: []string{"prune", "--plan", "--apply", "--did", "did:plc:example"}, code: 2, want: "exactly one of --plan or --apply"},
+		{name: "confirmation only for apply", args: []string{"prune", "--plan", "--confirm", "--did", "did:plc:example"}, code: 2, want: "only valid with --apply"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			var stdout, stderr bytes.Buffer
+			code := 0
+			command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(nil, service.VaultSelection{}, nil, &calls))
+			code = runOrchestrationForTest(command, &code, test.args...)
+			require.Equal(t, test.code, code)
+			assert.Zero(t, calls)
+			assert.Contains(t, stderr.String(), test.want)
+		})
+	}
+	for _, test := range []struct {
+		status service.RetentionPruneStatus
+		code   int
+	}{
+		{status: service.RetentionPruneRefused, code: 3},
+		{status: service.RetentionPruneUnavailable, code: 4},
+	} {
+		fake := &fakeOrchestrationCoordinator{prunePlanResult: service.RetentionPruneResult{Status: test.status}}
+		var stdout, stderr bytes.Buffer
+		code := 0
+		command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
+		code = runOrchestrationForTest(command, &code, "prune", "--plan", "--did", "did:plc:example")
+		require.Equal(t, test.code, code)
+		assert.Contains(t, stdout.String(), "prune: "+string(test.status))
+	}
 }
 
 func TestPushCoordinatorErrorsMapToDistinctOutcomes(t *testing.T) {

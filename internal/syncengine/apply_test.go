@@ -780,7 +780,7 @@ func TestApplySettingsRequiresExactPostimages(t *testing.T) {
 	assert.Empty(t, rows)
 }
 
-func TestApplySettingsCanonicalReadbackAndRollbackPrunesBackup(t *testing.T) {
+func TestApplySettingsCanonicalReadbackAndRollbackPreservesUnboundBackup(t *testing.T) {
 	store := applyTestStore(t)
 	key := settingTestKey("settings")
 	backend := newFakeSettingsBackend()
@@ -806,11 +806,14 @@ func TestApplySettingsCanonicalReadbackAndRollbackPrunesBackup(t *testing.T) {
 	rows, err = store.JournalEntries(context.Background(), key.TargetID)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Empty(t, rows[0].BackupRef)
-	assert.Empty(t, rows[0].Preimage.ValueType)
-	assert.Empty(t, rows[0].Preimage.ValueText)
-	assert.Empty(t, rows[0].Postimage.ValueType)
-	assert.Empty(t, rows[0].Postimage.ValueText)
+	assert.NotEmpty(t, rows[0].BackupRef, "a version-1 journal row without a point binding is ineligible for automatic age pruning")
+	assert.Equal(t, "s", rows[0].Preimage.ValueType)
+	assert.Equal(t, "before", rows[0].Preimage.ValueText)
+	assert.Equal(t, "s", rows[0].Postimage.ValueType)
+	assert.Equal(t, "after", rows[0].Postimage.ValueText)
+	backup, err = store.Payload(rows[0].BackupRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("s\x00before"), backup)
 }
 
 func TestApplySettingsCanonicalizesAndReportsMixedPartialFailure(t *testing.T) {

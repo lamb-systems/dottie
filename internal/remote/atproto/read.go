@@ -116,6 +116,7 @@ type ReadResult struct {
 	ControlCID               []byte
 	EpochSeq                 uint64
 	Plaintext                []byte
+	Ciphertext               []byte
 	Freshness                FreshnessStatus
 }
 
@@ -363,7 +364,7 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 		Policy: policy, Control: control, Head: head, Snapshot: snapshot,
 		Envelope: envelope, EnvelopeCID: cid.Cid(snapshot.Blob.Ref).String(), Freshness: FreshnessUnverified,
 		PublicationCount: head.PublicationCount, PublicationCountBaseline: 0, HeadCID: bytes.Clone(head.SnapshotCID),
-		ControlCID: bytes.Clone(controlCID), EpochSeq: head.EpochSeq,
+		ControlCID: bytes.Clone(controlCID), EpochSeq: head.EpochSeq, Ciphertext: bytes.Clone(blob),
 	}
 	if request.DeviceKey != nil {
 		policyRecordObject, decodeErr := vault.DecodePolicy(policyObject)
@@ -915,6 +916,17 @@ func roleForDevice(roles []vault.RoleBinding, deviceID string) vault.Role {
 		found = true
 	}
 	return result
+}
+
+func VerifySnapshotEnvelopeSignature(encoded []byte, certificate vault.Certificate) error {
+	envelope, err := vault.DecodeEnvelope(encoded)
+	if err != nil {
+		return err
+	}
+	if envelope.Purpose != vault.PurposeSnapshot || envelope.DeviceID != certificate.DeviceID || !bytes.Equal(envelope.KeyID, certificate.KeyID) {
+		return ErrReadVaultAuthentication
+	}
+	return verifyEnvelopeSignature(encoded, envelope, certificate.SigningPublicKey[:])
 }
 
 func verifyEnvelopeSignature(encoded []byte, envelope vault.Envelope, publicKey ed25519.PublicKey) error {

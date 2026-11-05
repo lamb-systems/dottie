@@ -154,6 +154,31 @@ func candidateUploadResponse(t *testing.T, data []byte) []byte {
 	return response
 }
 
+func TestPredecessorFromRevisionRejectsAmbiguousExactCertificateIdentity(t *testing.T) {
+	fixture := newGenesisFixture(t)
+	policy, err := vault.DecodePolicy(fixture.genesis.Policy)
+	require.NoError(t, err)
+	control, err := vault.DecodeControl(fixture.genesis.Control)
+	require.NoError(t, err)
+	certificate, err := vault.DecodeCertificate(fixture.genesis.Certificate)
+	require.NoError(t, err)
+	policyRecord, err := EncodeRecord(toPolicyRecord(policy))
+	require.NoError(t, err)
+	controlRecord, err := EncodeRecord(toControlRecord(control))
+	require.NoError(t, err)
+	certificateRecord, err := EncodeRecord(toCertificateRecord(certificate))
+	require.NoError(t, err)
+	revision := &Revision{records: map[RecordKey]ProvenRecord{
+		{Collection: VaultPolicyNSID, RKey: "self"}:        {Data: policyRecord},
+		{Collection: VaultControlNSID, RKey: "self"}:       {Data: controlRecord},
+		{Collection: VaultCertificateNSID, RKey: "root-1"}: {Data: certificateRecord},
+		{Collection: VaultCertificateNSID, RKey: "root-2"}: {Data: certificateRecord},
+	}}
+	_, err = predecessorFromRevision(revision, fixture.genesis.Anchor, nil, nil)
+	require.ErrorIs(t, err, ErrRecord)
+	assert.Contains(t, err.Error(), "duplicate certificate identity")
+}
+
 func TestATProtoTransitionStageCandidateRequiresEnvelopeContextBeforeNetwork(t *testing.T) {
 	_, _, predecessor, publication := newAtprotoPublicationFixture(t)
 	policy, err := vault.DecodePolicy(predecessor.Policy)

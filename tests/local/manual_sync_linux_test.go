@@ -229,6 +229,23 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, genesisRead.Read.PublicationCount)
 	assert.Empty(t, genesisRead.Snapshot.Entries)
+	genesisInventory, err := publisher.store.RetentionInventory(ctx, genesis.Vault, rootDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, genesisInventory.Points, 1)
+	assert.True(t, genesisInventory.Points[0].InventoryComplete)
+	assert.Empty(t, genesisInventory.UnknownHoldingReasons)
+	initialAttestation, err := publisherCoordinator.PublishRetentionAttestation(ctx, service.VaultSelection{Vault: genesis.Vault, DeviceID: rootDevice.DeviceID})
+	require.NoError(t, err)
+	assert.Equal(t, service.StatusCommitted, initialAttestation.Status)
+	initialAttestationRecord, exists := pds.Record(atproto.VaultAttestationNSID, initialAttestation.RKey)
+	require.True(t, exists)
+	decodedInitialAttestation, err := atproto.DecodeRecord(initialAttestationRecord.Data)
+	require.NoError(t, err)
+	initialAttestationObject, ok := decodedInitialAttestation.(atproto.AttestationRecord)
+	require.True(t, ok)
+	assert.Equal(t, int64(2), initialAttestationObject.SchemaVersion)
+	assert.Len(t, initialAttestationObject.RecoveryPoints, 1)
+	assert.Equal(t, genesis.SnapshotCID, initialAttestationObject.RecoveryPoints[0].SnapshotCID)
 
 	initialRevision := pds.CurrentRevision().CommitCID.String()
 	wrongKit := bytes.Clone(kit)
@@ -261,6 +278,11 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 	assert.Equal(t, service.StatusCommitted, firstPush.Status)
 	assert.False(t, firstPush.NoOp)
 	assert.Equal(t, uint64(1), firstPush.PublicationCount)
+	postPushInventory, err := publisher.store.RetentionInventory(ctx, genesis.Vault, rootDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, postPushInventory.Points, 1)
+	assert.True(t, postPushInventory.Points[0].InventoryComplete)
+	assert.Contains(t, postPushInventory.UnknownHoldingReasons, "unclassified-associated-payload")
 	assert.NotEqual(t, initialRevision, pds.CurrentRevision().CommitCID.String())
 	assert.Equal(t, uint64(1), manualSyncHead(t, pds).PublicationCount)
 	assert.Equal(t, manualSyncHead(t, pds).SnapshotCID, firstPush.HeadCID)
@@ -268,6 +290,9 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 	readAfterPush, err := publisherCoordinator.Pull(ctx, service.VaultSelection{Vault: genesis.Vault, DeviceID: rootDevice.DeviceID})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), readAfterPush.Read.PublicationCount)
+	assert.Equal(t, service.RetentionFloorUnknown, readAfterPush.Retention.Floors.Status)
+	assert.Contains(t, readAfterPush.Retention.Floors.UnknownHoldingReasons, "unclassified-associated-payload")
+	assert.True(t, postPushInventory.Points[0].InventoryComplete)
 	assert.Equal(t, publisherFileBytes, manualSyncFileEntry(t, readAfterPush.Snapshot, fileTarget.ID, "prefs.ini").Content)
 	assert.Equal(t, publisherFileBytes, manualSyncReadFile(t, publisherFile))
 	assert.NotEmpty(t, manualSyncBasesForTarget(t, publisher.store, fileTarget.ID))
@@ -617,6 +642,13 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rootCertificate)
+	currentInventory, err := publisher.store.RetentionInventory(ctx, genesis.Vault, rootDevice.DeviceID)
+	require.NoError(t, err)
+	require.Len(t, currentInventory.Points, 1)
+	assert.True(t, currentInventory.Points[0].InventoryComplete)
+	assert.Contains(t, currentInventory.UnknownHoldingReasons, "unclassified-associated-payload")
+	assert.Equal(t, service.RetentionFloorUnknown, current.Retention.Floors.Status)
+	assert.Contains(t, current.Retention.Floors.UnknownHoldingReasons, "unclassified-associated-payload")
 	attestation, err := vault.BuildAttestation(vault.AttestationBuildRequest{
 		VaultID: genesis.Vault, TrustAnchor: genesis.Anchor,
 		State:             vault.ControlEvidence{Policy: historyPosition.Policy, Control: historyPosition.Control, Certificates: historyPosition.Certificates},
@@ -624,17 +656,11 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 		RetentionFloor: currentPolicy.PolicyRetentionFloor, RetainedRecoveryPoints: currentPolicy.RetainedRecoveryPoints, RecoveryPoints: recoveryPoints,
 	})
 	require.NoError(t, err)
+	beforeUnknownInventoryAttestation := pds.CurrentRevision().CommitCID.String()
 	attestationPublication, err := publisherCoordinator.PublishAttestation(ctx, rootSelection, attestation)
-	require.NoError(t, err)
-	assert.Equal(t, service.StatusCommitted, attestationPublication.Status)
-	attestationRecord, exists := pds.Record(atproto.VaultAttestationNSID, attestationPublication.RKey)
-	require.True(t, exists)
-	decodedAttestation, err := atproto.DecodeRecord(attestationRecord.Data)
-	require.NoError(t, err)
-	attestationValue, ok := decodedAttestation.(atproto.AttestationRecord)
-	require.True(t, ok)
-	assert.Equal(t, int64(2), attestationValue.SchemaVersion)
-	assert.Len(t, attestationValue.RecoveryPoints, retainedCount)
+	assert.ErrorIs(t, err, service.ErrAttestationInventoryIncomplete)
+	assert.Equal(t, service.AttestationPublicationResult{}, attestationPublication)
+	assert.Equal(t, beforeUnknownInventoryAttestation, pds.CurrentRevision().CommitCID.String(), "unknown local holdings must refuse before publishing an attestation")
 
 	archivePath := filepath.Join(publisher.cache, "complete.dtv")
 	exportReport, err := publisherCoordinator.Export(ctx, service.ExportRequest{
@@ -642,7 +668,13 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(positions), 3)
-	assert.GreaterOrEqual(t, len(exportReport.Lineage)+len(exportReport.RecoveryPoints), 2)
+	assert.Len(t, exportReport.RecoveryPoints, 1, "the complete pre-push attestation still supplies its authenticated genesis recovery point")
+	assert.Equal(t, uint64(0), exportReport.RecoveryPoints[0].Epoch)
+	genesisSnapshotCID, err := cid.Cast(genesis.SnapshotCID)
+	require.NoError(t, err)
+	assert.Equal(t, genesisSnapshotCID.String(), exportReport.RecoveryPoints[0].SnapshotCID)
+	assert.Equal(t, uint64(2), exportReport.CurrentEpoch)
+	assert.NotEmpty(t, exportReport.Current.SnapshotCID)
 	assert.Empty(t, exportReport.Omissions)
 	beforeArchiveImportCheckpoint := manualSyncCheckpoint(t, publisher.store, genesis.Vault)
 	beforeArchiveImportBases := manualSyncBases(t, publisher.store)
@@ -657,7 +689,7 @@ func TestManualSyncEmptyRemoteTwoMachineGate(t *testing.T) {
 	assert.Equal(t, genesis.Anchor, importReport.Anchor)
 	assert.Equal(t, exportReport.CurrentEpoch, importReport.CurrentEpoch)
 	assert.Len(t, importReport.Lineage, len(exportReport.Lineage))
-	assert.Len(t, importReport.RecoveryPoints, retainedCount)
+	assert.Len(t, importReport.RecoveryPoints, len(exportReport.RecoveryPoints))
 	importWrongKit := bytes.Clone(kit)
 	importWrongKit[0] ^= 0x80
 	_, err = publisherCoordinator.ImportExportArchive(ctx, service.ImportExportRequest{
@@ -834,7 +866,7 @@ func manualSyncSeedGenesisTrust(t *testing.T, machine manualSyncMachine, genesis
 	}))
 	require.NoError(t, machine.store.PutAuthenticatedPositionEvidence(ctx, state.AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
-		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
 		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
 	}))
 }

@@ -56,6 +56,16 @@ func TestAttestationRefusesRevokedSigner(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAuthorization)
 }
 
+func TestBuildAttestationRefusesUnknownEpochMaterialEvenAtZeroFloor(t *testing.T) {
+	fixture := newAttestationFixture(t)
+	fixture.request.RetentionFloor = 0
+	fixture.request.UnknownEpochMaterial = true
+
+	encoded, err := BuildAttestation(fixture.request)
+	assert.ErrorIs(t, err, ErrAuthorization)
+	assert.Nil(t, encoded)
+}
+
 func TestBuildAttestationRequiresCertificateSigningKey(t *testing.T) {
 	fixture := newAttestationFixture(t)
 	fixture.request.SigningKey = fixedSigningKey(99)

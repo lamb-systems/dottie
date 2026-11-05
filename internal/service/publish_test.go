@@ -57,7 +57,7 @@ func seedPushTrust(t *testing.T, store *state.Store) ([]byte, vault.Genesis, vau
 	}))
 	require.NoError(t, store.PutAuthenticatedPositionEvidence(ctx, state.AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
-		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head), Snapshot: bytes.Clone(genesis.Snapshot),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
 		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
 	}))
 	return kit, genesis, device
@@ -515,17 +515,24 @@ func (fixture *pushFixture) publishRemoteFileDirect(t *testing.T, data []byte) {
 
 func (fixture *pushFixture) publishRemoteFile(t *testing.T, data []byte) {
 	t.Helper()
+	fixture.publishRemoteSnapshot(t, func(snapshot *model.Snapshot) {
+		for index := range snapshot.Entries {
+			if snapshot.Entries[index].File != nil && snapshot.Entries[index].File.Path == "prefs.toml" {
+				snapshot.Entries[index].File.Content = bytes.Clone(data)
+			}
+		}
+	})
+}
+
+func (fixture *pushFixture) publishRemoteSnapshot(t *testing.T, mutate func(*model.Snapshot)) {
+	t.Helper()
 	ctx := context.Background()
 	trust, err := fixture.coordinator.deps.Trust.Resolve(ctx, VaultSelection{Vault: fixture.genesis.Vault, DeviceID: fixture.device.DeviceID})
 	require.NoError(t, err)
 	read, err := fixture.coordinator.Pull(ctx, VaultSelection{Vault: fixture.genesis.Vault, DeviceID: fixture.device.DeviceID})
 	require.NoError(t, err)
 	candidate := read.VerifiedSnapshot
-	for index := range candidate.Entries {
-		if candidate.Entries[index].File != nil && candidate.Entries[index].File.Path == "prefs.toml" {
-			candidate.Entries[index].File.Content = bytes.Clone(data)
-		}
-	}
+	mutate(&candidate)
 	packed, err := vault.Pack(candidate)
 	require.NoError(t, err)
 	predecessor, err := publicationPredecessor(read.Read, trust.Anchor)
@@ -538,7 +545,7 @@ func (fixture *pushFixture) publishRemoteFile(t *testing.T, data []byte) {
 		var private [32]byte
 		var wrapNonce [24]byte
 		copy(private[:], bytes.Repeat([]byte{byte(index + 42)}, 32))
-		copy(wrapNonce[:], bytes.Repeat([]byte{byte(index + 43)}, 24))
+		copy(wrapNonce[:], bytes.Repeat([]byte{byte(index + 43)}, 32))
 		wraps = append(wraps, vault.RecipientWrapInput{KeyID: bytes.Clone(recipient.KeyID), EphemeralPrivate: private, WrapNonce: wrapNonce})
 	}
 	var publicationID [16]byte

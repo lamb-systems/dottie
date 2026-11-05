@@ -35,6 +35,7 @@ type PushResult struct {
 	BaseRecordingFailed bool
 	PublicationCount    uint64
 	HeadCID             []byte
+	Retention           RetentionReport
 }
 
 type pushTargetPlan struct {
@@ -195,6 +196,7 @@ func (coordinator *Coordinator) pushLocked(ctx context.Context, requested VaultS
 	}
 	result.PublicationCount = readBack.Read.PublicationCount
 	result.HeadCID = bytes.Clone(readBack.Read.HeadCID)
+	result.Retention = readBack.Retention
 	if !bytes.Equal(readBack.Read.HeadCID, publication.SnapshotCID) || !snapshotsEqual(candidate, readBack.VerifiedSnapshot) {
 		result.Status = StatusSuperseded
 		return result, atproto.ErrPublicationSuperseded
