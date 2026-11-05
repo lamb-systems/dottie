@@ -193,7 +193,7 @@ func TestLiveArchiveExportAndValidation(t *testing.T) {
 		t.Skip("set DOTTIE_LIVE_ARCHIVE=1, an allowlisted DOTTIE_HANDLE, and DOTTIE_RECOVERY_KIT_FILE to run the read-only live archive gate")
 	}
 	provider := pdsProviderName(handle)
-	artifactDir := t.TempDir()
+	artifactDir := liveArtifactDir(t)
 	artifact := pdsFailureArtifact{Provider: provider, IntendedPDS: "redacted", Criterion: "archive-export-validation", DecisionDOTF07: "Owner review required; no production release claim.", CloudReleaseHold: true}
 	artifactEvidence := "live archive gate failed before classification; details redacted"
 	defer func() {
@@ -339,7 +339,7 @@ func readArchiveRecoveryKit(path string) ([]byte, error) {
 
 func destroyPublicationSource(t *testing.T, fixture *publicationFixture) {
 	t.Helper()
-	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
+	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
 	require.Empty(t, surface.incomplete)
 	for _, pages := range surface.recordPages {
 		for _, body := range pages {

@@ -472,7 +472,7 @@ func isPDSBlobListed(ctx context.Context, authenticated *atclient.APIClient, did
 	var lastStatus int
 	var total time.Duration
 	for pages < 1000 {
-		query := url.Values{"did": {did}, "limit": {"1000"}}
+		query := url.Values{"did": {did}, "limit": {"100"}}
 		if cursor != "" {
 			query.Set("cursor", cursor)
 		}

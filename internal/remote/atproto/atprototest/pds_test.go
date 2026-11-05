@@ -139,9 +139,16 @@ func TestMemoryPDSListRecordsAndListBlobsExposeLiveProjection(t *testing.T) {
 	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "live", liveRecord)
 	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "second", []byte(`{"$type":"systems.example.blobRecord","value":"second"}`))
 
-	status, body, err := pds.Do(ctx, "GET", "com.atproto.repo.listRecords", url.Values{"repo": {memoryPDSTestDID}, "collection": {"systems.example.blobRecord"}}, nil, "")
+	recordsQuery := url.Values{"repo": {memoryPDSTestDID}, "collection": {"systems.example.blobRecord"}, "limit": {"100"}}
+	status, body, err := pds.Do(ctx, "GET", "com.atproto.repo.listRecords", recordsQuery, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
+	validRecordsBody := bytes.Clone(body)
+	recordsQuery.Set("limit", "101")
+	status, body, err = pds.Do(ctx, "GET", "com.atproto.repo.listRecords", recordsQuery, nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, 400, status)
+	assert.JSONEq(t, `{"error":"InvalidRequest"}`, string(body))
 	var records struct {
 		Records []struct {
 			URI   string         `json:"uri"`
@@ -149,13 +156,14 @@ func TestMemoryPDSListRecordsAndListBlobsExposeLiveProjection(t *testing.T) {
 			Value map[string]any `json:"value"`
 		} `json:"records"`
 	}
-	require.NoError(t, json.Unmarshal(body, &records))
+	require.NoError(t, json.Unmarshal(validRecordsBody, &records))
 	require.Len(t, records.Records, 2)
 	assert.Equal(t, "at://"+memoryPDSTestDID+"/systems.example.blobRecord/live", records.Records[0].URI)
 	assert.Equal(t, "at://"+memoryPDSTestDID+"/systems.example.blobRecord/second", records.Records[1].URI)
 	assert.Equal(t, liveCID, records.Records[0].Value["blob"].(map[string]any)["ref"].(map[string]any)["$link"])
 
-	status, body, err = pds.Do(ctx, "GET", "com.atproto.sync.listBlobs", url.Values{"did": {memoryPDSTestDID}}, nil, "")
+	blobsQuery := url.Values{"did": {memoryPDSTestDID}, "limit": {"100"}}
+	status, body, err = pds.Do(ctx, "GET", "com.atproto.sync.listBlobs", blobsQuery, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	var listed struct {
@@ -163,6 +171,11 @@ func TestMemoryPDSListRecordsAndListBlobsExposeLiveProjection(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(body, &listed))
 	assert.Equal(t, []string{liveCID}, listed.CIDs)
+	blobsQuery.Set("limit", "101")
+	status, body, err = pds.Do(ctx, "GET", "com.atproto.sync.listBlobs", blobsQuery, nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, 400, status)
+	assert.JSONEq(t, `{"error":"InvalidRequest"}`, string(body))
 	assert.ElementsMatch(t, []string{liveCID, orphanCID}, pds.StoredBlobCIDs())
 	assert.True(t, pds.PubliclyRetrievable(liveCID))
 	assert.False(t, pds.PubliclyRetrievable(orphanCID))

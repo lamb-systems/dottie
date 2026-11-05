@@ -3,7 +3,7 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: synthetic publication privacy and transport-failure checks plus archive-to-plaintext recovery evidence are implemented; the live publication and archive gates remain opt-in and have not been run against a provider.**
+**Status: synthetic publication privacy and transport-failure checks plus archive-to-plaintext recovery evidence are implemented; the live publication and archive gates remain opt-in. A prior owner-authorized publication attempt exposed the missing pristine-repository precondition; the corrected publication gate has not been rerun.**
 Account authorization is available through `dottie account login`, `status` and `logout`;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
@@ -53,8 +53,10 @@ preserving version-1 count-only decoding; the tagged two-machine gate exercises 
 against a shared synthetic MemoryPDS. Offline publication, renderer and source-loss archive tests use
 synthetic records, canaries and temporary homes. They do not establish live provider compatibility,
 hosted-log visibility or production desktop behavior. The opt-in live publication and archive gates
-require explicit disposable-account authorization and remain unrun; a skipped gate is not provider
-evidence. Real user data must not be used as a fixture.
+require explicit disposable-account authorization. The publication gate requires a pristine disposable
+repository; a used account, including one carrying ordinary `app.bsky.*` records, is an environment
+limitation, not a privacy result. The corrected publication gate and the archive gate have not been run;
+a skipped gate is not provider evidence. Real user data must not be used as a fixture.
 
 ## Target design
 
@@ -142,14 +144,17 @@ temporary home. `go test -count=1 ./internal/cli` exercises the package-internal
 contract. These tests use synthetic data only.
 
 The live publication gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
-allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; it writes synthetic
-canary records and cannot remove provider blobs. The live archive gate also skips by default and
-requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
+allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; before writing the
+manifest or records, it checks `com.atproto.repo.describeRepo` and skips repositories with any collections.
+Genesis requires an empty repository. It writes synthetic canary records and cannot remove provider blobs.
+The live archive gate also skips by default and requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
 `DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that
 decodes to a 32-byte kit, plus explicit disposable-account authorization. It uses the existing local vault selection/checkpoint and a temporary archive path;
-export and archive validation are read-only and the gate rejects repository write endpoints. Neither
-gate has been run against a provider. A skipped gate is not provider evidence. Hosted provider logs
-and server-side storage are not observable from a client.
+export and archive validation are read-only and the gate rejects repository write endpoints. The archive
+gate does not invoke genesis and does not depend on the publication gate's pristine-repository precondition.
+A previous owner-authorized publication attempt stopped at genesis on a used repository; the corrected
+publication gate and archive gate have not been run against a provider. A skipped gate is not provider
+evidence. Hosted provider logs and server-side storage are not observable from a client.
 
 ## Local restore gate
 

@@ -53,6 +53,18 @@ var publicationAuditCollections = []string{
 	atproto.VaultAttestationNSID,
 }
 
+func liveArtifactDir(t *testing.T) string {
+	t.Helper()
+	if configured := os.Getenv("DOTTIE_LIVE_ARTIFACT_DIR"); configured != "" {
+		require.True(t, filepath.IsAbs(configured), "DOTTIE_LIVE_ARTIFACT_DIR must be an absolute path")
+		require.NoError(t, os.MkdirAll(configured, 0o700))
+		return configured
+	}
+	directory, err := os.MkdirTemp("", "dottie-live-p07-")
+	require.NoError(t, err)
+	return directory
+}
+
 type publicationAuditClass string
 
 const (
@@ -404,9 +416,9 @@ type publicationAuditSurface struct {
 	incomplete  []string
 }
 
-func collectPublicationAudit(ctx context.Context, transport atproto.Transport, did string, uploaded []string) publicationAuditSurface {
+func collectPublicationAudit(ctx context.Context, publicTransport, authoredTransport atproto.Transport, did string, uploaded []string) publicationAuditSurface {
 	surface := publicationAuditSurface{blocks: make(map[string][]byte), records: make(map[string][]byte), recordPages: make(map[string][][]byte), blobs: make(map[string][]byte), reachables: make(map[string]bool)}
-	status, stream, err := transport.OpenStream(ctx, "com.atproto.sync.getRepo", url.Values{"did": {did}})
+	status, stream, err := publicTransport.OpenStream(ctx, "com.atproto.sync.getRepo", url.Values{"did": {did}})
 	if err != nil || status != 200 || stream == nil {
 		surface.incomplete = append(surface.incomplete, "getRepo")
 	} else {
@@ -438,11 +450,11 @@ func collectPublicationAudit(ctx context.Context, transport atproto.Transport, d
 		cursor := ""
 		seenCursors := make(map[string]bool)
 		for page := 0; page < 1000; page++ {
-			query := url.Values{"repo": {did}, "collection": {collection}, "limit": {"1000"}}
+			query := url.Values{"repo": {did}, "collection": {collection}, "limit": {"100"}}
 			if cursor != "" {
 				query.Set("cursor", cursor)
 			}
-			status, body, err := transport.Do(ctx, "GET", "com.atproto.repo.listRecords", query, nil, "")
+			status, body, err := publicTransport.Do(ctx, "GET", "com.atproto.repo.listRecords", query, nil, "")
 			if err != nil || status != 200 {
 				surface.incomplete = append(surface.incomplete, fmt.Sprintf("listRecords %s status=%d error=%v", collection, status, err))
 				break
@@ -475,11 +487,11 @@ func collectPublicationAudit(ctx context.Context, transport atproto.Transport, d
 	seenCursors := make(map[string]bool)
 	listed := make(map[string]bool)
 	for page := 0; page < 1000; page++ {
-		query := url.Values{"did": {did}, "limit": {"1000"}}
+		query := url.Values{"did": {did}, "limit": {"100"}}
 		if cursor != "" {
 			query.Set("cursor", cursor)
 		}
-		status, body, err := transport.Do(ctx, "GET", "com.atproto.sync.listBlobs", query, nil, "")
+		status, body, err := authoredTransport.Do(ctx, "GET", "com.atproto.sync.listBlobs", query, nil, "")
 		if err != nil || status != 200 {
 			surface.incomplete = append(surface.incomplete, fmt.Sprintf("listBlobs status=%d error=%v", status, err))
 			break
@@ -526,7 +538,7 @@ func collectPublicationAudit(ctx context.Context, transport atproto.Transport, d
 	}
 	for blobCID := range toFetch {
 		surface.reachables[blobCID] = false
-		status, stream, err := transport.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {did}, "cid": {blobCID}})
+		status, stream, err := publicTransport.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {did}, "cid": {blobCID}})
 		if err != nil || stream == nil {
 			surface.incomplete = append(surface.incomplete, "getBlob "+blobCID)
 			continue
@@ -665,7 +677,7 @@ func publicationAuditFindings(surface publicationAuditSurface, registry publicat
 	return findings
 }
 
-func auditBlobReferences(surface publicationAuditSurface, retained []string, public func(string) bool) (referenced, live, retrievable map[string]bool, findings []string) {
+func auditBlobReferences(surface publicationAuditSurface, referenceIntegrityCIDs []string, public func(string) bool) (referenced, live, retrievable map[string]bool, findings []string) {
 	referenced = make(map[string]bool)
 	live = make(map[string]bool)
 	retrievable = make(map[string]bool)
@@ -684,7 +696,7 @@ func auditBlobReferences(surface publicationAuditSurface, retained []string, pub
 			retrievable[blobCID] = true
 		}
 	}
-	for _, blobCID := range retained {
+	for _, blobCID := range referenceIntegrityCIDs {
 		if !referenced[blobCID] {
 			findings = append(findings, "retained orphan "+blobCID)
 		}

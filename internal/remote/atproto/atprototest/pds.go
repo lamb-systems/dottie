@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,7 +25,16 @@ const (
 	maxRecordBytes       = 1 << 20
 	maxUploadBytes       = 16 << 20
 	maxWriteCount        = 128
+	maxListPageSize      = 100
 )
+
+func validListLimit(value string) bool {
+	if value == "" {
+		return true
+	}
+	limit, err := strconv.Atoi(value)
+	return err == nil && limit > 0 && limit <= maxListPageSize
+}
 
 var ErrLostResponse = errors.New("synthetic PDS response lost after commit")
 
@@ -207,7 +217,7 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		}
 		return jsonResponse(200, map[string]string{"cid": p.current.CommitCID.String(), "rev": RepositoryRevision})
 	case "com.atproto.repo.listRecords":
-		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), "self") {
+		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), "self") || !validListLimit(query.Get("limit")) {
 			return errorResponse(400, "InvalidRequest")
 		}
 		collection := query.Get("collection")
@@ -233,7 +243,7 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		sort.Slice(records, func(i, j int) bool { return records[i]["uri"].(string) < records[j]["uri"].(string) })
 		return jsonResponse(200, map[string]any{"records": records})
 	case "com.atproto.sync.listBlobs":
-		if method != "GET" || query.Get("did") != p.did {
+		if method != "GET" || query.Get("did") != p.did || !validListLimit(query.Get("limit")) {
 			return errorResponse(400, "InvalidRequest")
 		}
 		cids := make([]string, 0)

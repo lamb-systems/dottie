@@ -13,9 +13,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +37,7 @@ import (
 func TestPublicationPrivacyEndToEnd(t *testing.T) {
 	fixture := newPublicationFixture(t)
 	uploaded := fixture.pds.StoredBlobCIDs()
-	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.did, uploaded)
+	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.transport, fixture.did, uploaded)
 	require.Empty(t, surface.incomplete)
 	findings := publicationAuditFindings(surface, fixture.canaries)
 	assert.Empty(t, findings, "%v", findings)
@@ -84,9 +86,30 @@ func TestPublicationPrivacyEndToEnd(t *testing.T) {
 	}
 }
 
+func TestPublicationAuditTransportSplit(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	public := &publicationAuditRecordingTransport{base: fixture.transport}
+	authored := &publicationAuditRecordingTransport{base: fixture.transport}
+	uploaded := fixture.pds.StoredBlobCIDs()
+	surface := collectPublicationAudit(context.Background(), public, authored, fixture.did, uploaded)
+	require.Empty(t, surface.incomplete)
+	assert.NotSame(t, public, authored)
+
+	publicEndpoints := publicationAuditRecordedEndpoints(public)
+	assert.Contains(t, publicEndpoints, "com.atproto.sync.getRepo")
+	assert.Contains(t, publicEndpoints, "com.atproto.repo.listRecords")
+	assert.Contains(t, publicEndpoints, "com.atproto.sync.getBlob")
+	assert.NotContains(t, publicEndpoints, "com.atproto.sync.listBlobs")
+	assert.Equal(t, []string{"com.atproto.sync.listBlobs"}, publicationAuditRecordedEndpoints(authored))
+	for _, blobCID := range uploaded {
+		assert.Contains(t, public.blobCIDs, blobCID, "reachability probe for uploaded CID must use the public transport")
+		assert.True(t, surface.reachables[blobCID])
+	}
+}
+
 func TestPublicationMetadataDisclosure(t *testing.T) {
 	fixture := newPublicationFixture(t)
-	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
+	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
 	require.Empty(t, surface.incomplete)
 	require.NoError(t, auditRecordKeyInventory(surface))
 	assert.Contains(t, string(surface.repoBytes), publicationAuditDeviceID)
@@ -155,7 +178,7 @@ func TestPublicationMetadataDisclosure(t *testing.T) {
 
 func TestPublicationReferenceIntegrity(t *testing.T) {
 	fixture := newPublicationFixture(t)
-	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
+	surface := collectPublicationAudit(context.Background(), fixture.transport, fixture.transport, fixture.did, fixture.pds.StoredBlobCIDs())
 	require.Empty(t, surface.incomplete)
 	referenced, live, retrievable, findings := auditBlobReferences(surface, fixture.pds.StoredBlobCIDs(), fixture.pds.PubliclyRetrievable)
 	require.NotEmpty(t, referenced)
@@ -172,7 +195,7 @@ func TestPublicationReferenceIntegrity(t *testing.T) {
 	orphanPDS := newPublicationTestPDS(t)
 	orphanBlob := publicationAuditUploadBlob(t, orphanPDS, []byte("retained orphan control"))
 	orphanCID := orphanBlob.Ref.CID().String()
-	orphanSurface := collectPublicationAudit(context.Background(), orphanPDS, publicationAuditDID, []string{orphanCID})
+	orphanSurface := collectPublicationAudit(context.Background(), orphanPDS, orphanPDS, publicationAuditDID, []string{orphanCID})
 	_, _, _, orphanFindings := auditBlobReferences(orphanSurface, orphanPDS.StoredBlobCIDs(), orphanPDS.PubliclyRetrievable)
 	assert.Contains(t, strings.Join(orphanFindings, "\n"), "retained orphan "+orphanCID)
 	assert.False(t, orphanPDS.PubliclyRetrievable(orphanCID))
@@ -193,7 +216,7 @@ func TestPublicationReferenceIntegrity(t *testing.T) {
 	assert.JSONEq(t, `{"error":"StorageQuotaExceeded"}`, string(body))
 	assert.True(t, exposedPDS.PubliclyRetrievable(exposedCID))
 	assert.False(t, exposedPDS.BlobIsLive(exposedCID))
-	exposedSurface := collectPublicationAudit(context.Background(), exposedPDS, publicationAuditDID, []string{exposedCID})
+	exposedSurface := collectPublicationAudit(context.Background(), exposedPDS, exposedPDS, publicationAuditDID, []string{exposedCID})
 	_, _, _, exposedFindings := auditBlobReferences(exposedSurface, exposedPDS.StoredBlobCIDs(), exposedPDS.PubliclyRetrievable)
 	assert.Contains(t, strings.Join(exposedFindings, "\n"), "publicly exposed orphan "+exposedCID)
 	assert.Contains(t, strings.Join(exposedFindings, "\n"), "retrievable orphan "+exposedCID)
@@ -601,7 +624,7 @@ func TestPublicationAuditDetectsSeededLeaks(t *testing.T) {
 	_, _, err = publicationAuditApplyRecord(context.Background(), testPDS, testPDS.CurrentRevision().CommitCID.String(), "create", publicationAuditCollection, "encoded-record-control", encodedRecord)
 	require.NoError(t, err)
 	encodedCID := seedBlobReferenceRecord(t, testPDS, "encoded-blob-control", []byte(encodedForm))
-	surface := collectPublicationAudit(context.Background(), testPDS, publicationAuditDID, []string{orphanCID, exposedCID})
+	surface := collectPublicationAudit(context.Background(), testPDS, testPDS, publicationAuditDID, []string{orphanCID, exposedCID})
 	require.Empty(t, surface.incomplete)
 	findings := publicationAuditFindings(surface, registry)
 	assert.Contains(t, findings, "seeded-record")
@@ -635,6 +658,95 @@ func TestPublicationAuditDetectsSeededLeaks(t *testing.T) {
 	assert.ErrorContains(t, err, "unexpected record key $.addedField")
 }
 
+func TestCleanupPublicationLiveRecordsAcceptsRecordNotFound(t *testing.T) {
+	t.Run("record was never created", func(t *testing.T) {
+		transport := &publicationCleanupTransport{
+			getStatuses: []int{http.StatusBadRequest},
+			getBodies:   [][]byte{[]byte(`{"error":"RecordNotFound"}`)},
+		}
+		cleanupPublicationLiveRecords(t, transport, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", []string{"systems.lamb.dottie.vaultHead/self"})
+		assert.Equal(t, []string{"GET com.atproto.repo.getRecord"}, transport.calls)
+	})
+
+	t.Run("deletion is verified with RecordNotFound", func(t *testing.T) {
+		transport := &publicationCleanupTransport{
+			getStatuses: []int{http.StatusOK, http.StatusBadRequest},
+			getBodies:   [][]byte{[]byte(`{"value":{}}`), []byte(`{"error":"RecordNotFound"}`)},
+		}
+		cleanupPublicationLiveRecords(t, transport, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", []string{"systems.lamb.dottie.vaultHead/self"})
+		assert.Equal(t, []string{
+			"GET com.atproto.repo.getRecord",
+			"POST com.atproto.repo.deleteRecord",
+			"GET com.atproto.repo.getRecord",
+		}, transport.calls)
+	})
+}
+
+type publicationCleanupTransport struct {
+	getStatuses []int
+	getBodies   [][]byte
+	getCalls    int
+	calls       []string
+}
+
+func (transport *publicationCleanupTransport) Do(_ context.Context, method, endpoint string, _ url.Values, _ []byte, _ string) (int, []byte, error) {
+	transport.calls = append(transport.calls, method+" "+endpoint)
+	if endpoint == "com.atproto.repo.getRecord" {
+		index := transport.getCalls
+		transport.getCalls++
+		return transport.getStatuses[index], bytes.Clone(transport.getBodies[index]), nil
+	}
+	if endpoint == "com.atproto.repo.deleteRecord" {
+		return http.StatusOK, nil, nil
+	}
+	return 0, nil, fmt.Errorf("unexpected endpoint")
+}
+
+func (transport *publicationCleanupTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
+	return 0, nil, fmt.Errorf("synthetic stream unavailable")
+}
+
+func TestLivePublicationRepositoryPrecondition(t *testing.T) {
+	did := "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+	transport := &liveRepositoryDescriptionTransport{
+		status: http.StatusOK,
+		body:   []byte(`{"did":"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa","collections":["app.bsky.graph.follow","app.bsky.actor.profile"]}`),
+	}
+	skipReason, err := livePublicationRepositoryPrecondition(context.Background(), transport, did)
+	require.NoError(t, err)
+	assert.Equal(t, "repository is not empty; collections: app.bsky.actor.profile, app.bsky.graph.follow; genesis requires an empty repository; a skipped gate is not provider evidence", skipReason)
+	assert.Equal(t, http.MethodGet, transport.method)
+	assert.Equal(t, "com.atproto.repo.describeRepo", transport.endpoint)
+	assert.Equal(t, did, transport.query.Get("repo"))
+
+	transport = &liveRepositoryDescriptionTransport{
+		status: http.StatusOK,
+		body:   []byte(`{"did":"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa","collections":[]}`),
+	}
+	skipReason, err = livePublicationRepositoryPrecondition(context.Background(), transport, did)
+	require.NoError(t, err)
+	assert.Empty(t, skipReason)
+}
+
+type liveRepositoryDescriptionTransport struct {
+	status   int
+	body     []byte
+	method   string
+	endpoint string
+	query    url.Values
+}
+
+func (transport *liveRepositoryDescriptionTransport) Do(_ context.Context, method, endpoint string, query url.Values, _ []byte, _ string) (int, []byte, error) {
+	transport.method = method
+	transport.endpoint = endpoint
+	transport.query = query
+	return transport.status, bytes.Clone(transport.body), nil
+}
+
+func (transport *liveRepositoryDescriptionTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
+	return 0, nil, fmt.Errorf("synthetic stream unavailable")
+}
+
 func TestLivePublicationPrivacy(t *testing.T) {
 	if os.Getenv("DOTTIE_LIVE_PUBLICATION_PRIVACY") != "1" {
 		t.Skip("set DOTTIE_LIVE_PUBLICATION_PRIVACY=1 with explicit disposable-account authorization to run the live publication privacy audit")
@@ -645,7 +757,7 @@ func TestLivePublicationPrivacy(t *testing.T) {
 	}
 	provider := pdsProviderName(handle)
 	runID := hex.EncodeToString(publicationAuditRandom(t, 16))
-	manifestDir := t.TempDir()
+	manifestDir := liveArtifactDir(t)
 	manifest := struct {
 		RunID         string   `json:"run_id"`
 		Provider      string   `json:"provider"`
@@ -653,10 +765,7 @@ func TestLivePublicationPrivacy(t *testing.T) {
 		Collections   []string `json:"collections"`
 		RecordTargets []string `json:"record_targets,omitempty"`
 	}{RunID: runID, Provider: provider, Handle: handle, Collections: append([]string(nil), publicationAuditCollections...)}
-	manifestBytes, err := json.Marshal(manifest)
-	require.NoError(t, err)
 	manifestPath := filepath.Join(manifestDir, "run-manifest.json")
-	require.NoError(t, os.WriteFile(manifestPath, manifestBytes, 0o600))
 	artifact := pdsFailureArtifact{Provider: provider, IntendedPDS: "redacted", Criterion: "publication-privacy", DecisionDOTF07: "Owner review required; no production release claim.", CloudReleaseHold: true}
 	defer func() {
 		if t.Failed() {
@@ -692,8 +801,16 @@ func TestLivePublicationPrivacy(t *testing.T) {
 	authenticated := atproto.NewATClientTransport(authenticatedAPI)
 	tracked := &publicationCIDTracker{base: authenticated}
 	anonymous := atproto.NewATClientTransport(anonymousAPI)
+	skipReason, err := livePublicationRepositoryPrecondition(ctx, anonymous, identity.DID)
+	require.NoError(t, err)
+	if skipReason != "" {
+		t.Skip(skipReason)
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(manifestPath, manifestBytes, 0o600))
 	reader := atproto.RevisionReader{Transport: tracked, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID, VerificationMethods: identity.VerificationMethods}
-	baseline := collectPublicationAudit(ctx, anonymous, identity.DID, nil)
+	baseline := collectPublicationAudit(ctx, anonymous, authenticated, identity.DID, nil)
 	require.Empty(t, baseline.incomplete)
 	for collection, pages := range baseline.recordPages {
 		for _, body := range pages {
@@ -750,16 +867,22 @@ func TestLivePublicationPrivacy(t *testing.T) {
 		return os.WriteFile(manifestPath, updated, 0o600)
 	}
 	fixture := newPublicationFixtureWithTransport(t, tracked, reader, identity.DID, limit, nil, nil, beforeGenesisWrite)
-	surface := collectPublicationAudit(ctx, anonymous, identity.DID, tracked.uploaded)
+	surface := collectPublicationAudit(ctx, anonymous, authenticated, identity.DID, tracked.uploaded)
 	require.Empty(t, surface.incomplete)
 	assert.Empty(t, publicationAuditFindings(surface, fixture.canaries))
-	_, _, _, refsFindings := auditBlobReferences(surface, surface.listBlobs, nil)
+	referenceIntegrityCIDs := append([]string(nil), surface.listBlobs...)
+	for _, blobCID := range tracked.uploaded {
+		if !containsString(referenceIntegrityCIDs, blobCID) {
+			referenceIntegrityCIDs = append(referenceIntegrityCIDs, blobCID)
+		}
+	}
+	_, _, _, refsFindings := auditBlobReferences(surface, referenceIntegrityCIDs, nil)
 	assert.Empty(t, refsFindings)
 	assert.Contains(t, string(surface.repoBytes), fixture.root.DeviceID)
 	assert.True(t, bytes.Contains(surface.repoBytes, fixture.genesis.Vault[:]))
 	assert.FileExists(t, manifestPath)
 	artifact.Criterion = "live publication privacy audited"
-	artifact.RedactedEvidence = fmt.Sprintf("run_id=%s records=%d blobs=%d", runID, len(surface.records), len(surface.blobs))
+	artifact.RedactedEvidence = fmt.Sprintf("run_id=%s records=%d enumerated_live_cids=%d uploaded_cids=%d retained_set=unobservable", runID, len(surface.records), len(surface.listBlobs), len(tracked.uploaded))
 }
 
 func cleanupPublicationLiveRecords(t *testing.T, transport atproto.Transport, did string, targets []string) {
@@ -772,12 +895,12 @@ func cleanupPublicationLiveRecords(t *testing.T, transport atproto.Transport, di
 		}
 		collection, rkey := parts[0], parts[1]
 		query := url.Values{"repo": {did}, "collection": {collection}, "rkey": {rkey}}
-		status, _, err := transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
+		status, responseBody, err := transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
 		if err != nil {
 			assert.Fail(t, "live record cleanup lookup failed")
 			continue
 		}
-		if status == 404 {
+		if isPDSRecordAbsent(status, responseBody) {
 			continue
 		}
 		if status != 200 {
@@ -791,9 +914,57 @@ func cleanupPublicationLiveRecords(t *testing.T, transport atproto.Transport, di
 		}
 		status, _, err = transport.Do(context.Background(), "POST", "com.atproto.repo.deleteRecord", nil, body, "application/json")
 		assert.True(t, err == nil && status >= 200 && status < 300, "live record cleanup request did not commit")
-		status, _, err = transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
-		assert.True(t, err == nil && status == 404, "live record cleanup was not verified")
+		status, responseBody, err = transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
+		assert.True(t, err == nil && isPDSRecordAbsent(status, responseBody), "live record cleanup was not verified")
 	}
+}
+
+func livePublicationRepositoryPrecondition(ctx context.Context, transport atproto.Transport, did string) (string, error) {
+	status, body, err := transport.Do(ctx, "GET", "com.atproto.repo.describeRepo", url.Values{"repo": {did}}, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("live repository description failed")
+	}
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("live repository description returned status %d", status)
+	}
+	var description struct {
+		Collections *[]string `json:"collections"`
+	}
+	if err := json.Unmarshal(body, &description); err != nil {
+		return "", fmt.Errorf("live repository description was invalid")
+	}
+	if description.Collections == nil {
+		return "", fmt.Errorf("live repository description omitted collections")
+	}
+	if len(*description.Collections) == 0 {
+		return "", nil
+	}
+	collections := append([]string(nil), (*description.Collections)...)
+	sort.Strings(collections)
+	return "repository is not empty; collections: " + strings.Join(collections, ", ") + "; genesis requires an empty repository; a skipped gate is not provider evidence", nil
+}
+
+type publicationAuditRecordingTransport struct {
+	base     atproto.Transport
+	calls    []string
+	blobCIDs []string
+}
+
+func (transport *publicationAuditRecordingTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+	transport.calls = append(transport.calls, endpoint)
+	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
+}
+
+func (transport *publicationAuditRecordingTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+	transport.calls = append(transport.calls, endpoint)
+	if endpoint == "com.atproto.sync.getBlob" {
+		transport.blobCIDs = append(transport.blobCIDs, query.Get("cid"))
+	}
+	return transport.base.OpenStream(ctx, endpoint, query)
+}
+
+func publicationAuditRecordedEndpoints(transport *publicationAuditRecordingTransport) []string {
+	return append([]string(nil), transport.calls...)
 }
 
 type publicationCIDTracker struct {

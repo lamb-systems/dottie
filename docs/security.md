@@ -38,6 +38,13 @@ session material and absolute home/config/cache/data/temp roots.
 A client cannot observe hosted provider logs or server-side storage; neither is covered by local
 renderer or synthetic repository tests.
 
+An owner-authorized read-only observation on a disposable identity found that
+`com.atproto.sync.listBlobs` required an authenticated request, while
+`com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were public. This is an observation on
+that disposable identity, not a protocol guarantee. The observed provider enumerated only live blobs,
+so the live retained set is unobservable; enumeration must not be presented as retained bytes. These
+observations do not establish provider compatibility.
+
 ## Archive recovery boundary
 
 Export is a ciphertext-only archive; `import` and `ImportExportArchive` validate it without decrypting
@@ -91,9 +98,13 @@ application state or target configuration directly. Account onboarding does writ
 keyring items directly, which cannot authorize application data, apply or publication.
 
 Every end-to-end demonstration in this repository uses disposable synthetic data: an in-memory AT Protocol
-provider, temporary homes and a synthetic keyring. No live provider, real account or real desktop session has
-been exercised. Real-data use remains blocked until fresh-machine and live-provider validation are complete.
-Do not use this build to back up real data.
+provider, temporary homes and a synthetic keyring. The live publication gate requires a pristine disposable
+repository because genesis refuses a non-empty one. A used account, including one carrying ordinary
+`app.bsky.*` records, is an environment limitation, not a privacy result. A previous owner-authorized attempt
+on a used disposable account stopped at this genesis precondition; the corrected gate has not been run. The
+separate read-only endpoint observation above does not validate provider compatibility. No real desktop
+session has been exercised. Real-data use remains blocked until fresh-machine and live-provider validation
+are complete. Do not use this build to back up real data.
 
 ## Authorities
 

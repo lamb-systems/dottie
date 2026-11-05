@@ -41,8 +41,19 @@ validation authenticates the archive but does not establish global freshness.
 ## Opt-in live gates
 
 `TestLivePublicationPrivacy` skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
-allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization. It creates synthetic
-canary records and attempts cleanup of records; uploaded blobs may remain.
+allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization. Before writing its
+manifest or any record, it calls `com.atproto.repo.describeRepo` and skips if the repository has any
+collections. The live publication gate requires a pristine disposable repository because genesis refuses
+a non-empty repository. A previous owner-authorized attempt on a used disposable account stopped at this
+genesis precondition. A used account, including one carrying ordinary `app.bsky.*` records, is an
+environment limitation, not a privacy result. The corrected gate creates synthetic canary records and
+attempts cleanup of records; uploaded blobs may remain.
+
+An owner-authorized read-only observation on a disposable identity found that
+`com.atproto.sync.listBlobs` required an authenticated request, while
+`com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were public. This is an observation on
+that disposable identity, not a protocol guarantee. The observed provider enumerated only live blobs,
+so the live retained set is unobservable. These observations do not establish provider compatibility.
 
 `TestLiveArchiveExportAndValidation` skips by default. It requires `DOTTIE_LIVE_ARCHIVE=1`, an
 allowlisted disposable identity in `DOTTIE_HANDLE`, and `DOTTIE_RECOVERY_KIT_FILE` naming a regular
@@ -53,6 +64,8 @@ validates it through the coordinator,
 and blocks/asserts all repository write endpoints. A named-CID export refusal is recorded redacted and
 is not counted as provider evidence.
 
+The archive gate is read-only and uses an existing local vault selection and checkpoint; it does not
+invoke genesis, so it does not depend on the publication gate's pristine-repository precondition.
 A skipped live gate is not provider evidence. Hosted provider logs and server-side storage are not
 observable from a client. No real account, provider, desktop session or user dotfiles are used by the
 default suite.
