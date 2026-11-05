@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
@@ -39,6 +40,10 @@ type KeyringBackend interface {
 
 type Keyring struct {
 	backend KeyringBackend
+}
+
+type keyringItemLister interface {
+	ListItems(context.Context, string) ([]string, error)
 }
 
 func keyringErrorClass(err error) string {
@@ -126,6 +131,40 @@ func (k *Keyring) DeleteDeviceKeys(ctx context.Context, vaultID [32]byte, device
 		return ErrKeyringUnavailable
 	}
 	return k.Delete(ctx, deviceKeyringItemName(vaultID, deviceID))
+}
+
+func (k *Keyring) LoadDeviceKeysForVault(ctx context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+	if k == nil || k.backend == nil || vaultID == ([32]byte{}) {
+		return nil, ErrKeyringUnavailable
+	}
+	lister, ok := k.backend.(keyringItemLister)
+	if !ok {
+		return nil, ErrKeyringUnavailable
+	}
+	prefix := "dottie:device:" + hex.EncodeToString(vaultID[:]) + ":"
+	names, err := lister.ListItems(ctx, prefix)
+	if err != nil {
+		return nil, classifyKeyringError(err)
+	}
+	materials := make([]vault.DeviceMaterial, 0, len(names))
+	for _, name := range names {
+		if !strings.HasPrefix(name, prefix) {
+			return nil, ErrKeyringUnavailable
+		}
+		deviceID := strings.TrimPrefix(name, prefix)
+		if deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+			return nil, ErrKeyringUnavailable
+		}
+		material, err := k.LoadDeviceKeys(ctx, vaultID, deviceID)
+		if err != nil {
+			return nil, err
+		}
+		materials = append(materials, material)
+	}
+	if len(materials) == 0 {
+		return nil, ErrKeyringItemNotFound
+	}
+	return materials, nil
 }
 
 func deviceKeyringItemName(vaultID [32]byte, deviceID string) string {
@@ -270,6 +309,39 @@ func (b *secretServiceBackend) search(ctx context.Context, collection dbus.Objec
 		}
 	}
 	return matches, nil
+}
+
+func (b *secretServiceBackend) ListItems(ctx context.Context, prefix string) ([]string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	collection, err := b.collection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var property dbus.Variant
+	if err := b.connection.Object(secretServiceName, collection).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Items").Store(&property); err != nil {
+		return nil, ErrKeyringUnavailable
+	}
+	items, ok := property.Value().([]dbus.ObjectPath)
+	if !ok {
+		return nil, ErrKeyringUnavailable
+	}
+	names := make([]string, 0)
+	for _, item := range items {
+		var attributes dbus.Variant
+		if err := b.connection.Object(secretServiceName, item).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Attributes").Store(&attributes); err != nil {
+			return nil, ErrKeyringUnavailable
+		}
+		values, ok := attributes.Value().(map[string]string)
+		if !ok {
+			return nil, ErrKeyringUnavailable
+		}
+		name := values["name"]
+		if values["application"] == "dottie" && strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func (b *secretServiceBackend) Save(ctx context.Context, itemName string, payload []byte) error {

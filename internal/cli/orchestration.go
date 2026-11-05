@@ -475,6 +475,115 @@ func productionOrchestrationFactory(openKeyring accountKeyringFactory, env func(
 	}
 }
 
+func productionBootstrapFactory(openKeyring accountKeyringFactory, env func(string) string) bootstrapFactory {
+	return func(ctx context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
+		paths, err := platform.Resolve(env)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		store, err := state.Open(paths)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		keyring, err := openKeyring()
+		if err != nil {
+			_ = store.Close()
+			return nil, func() {}, err
+		}
+		closeResources := func() { _ = keyring.Close(); _ = store.Close() }
+		client, err := newAuthorizedAccountClient(keyring, env)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		var identity atproto.Identity
+		if command.IsSet("handle") {
+			identity, err = client.Discover(ctx, command.String("handle"))
+		} else {
+			var session *atproto.Session
+			session, err = client.LoadSession(ctx, command.String("did"))
+			if err == nil {
+				identity, err = client.Discover(ctx, session.Handle)
+				if err == nil && identity.DID != command.String("did") {
+					err = errors.New("discovered identity differs from requested DID")
+				}
+			}
+		}
+		if err != nil || identity.DID == "" {
+			closeResources()
+			if err == nil {
+				err = errors.New("account identity is unavailable")
+			}
+			return nil, func() {}, err
+		}
+		session, err := client.LoadSession(ctx, identity.DID)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		transport := atproto.NewATClientTransport(api)
+		port := sessionGenesisPort{identity: identity, transport: transport, observations: store}
+		coordinator, err := service.NewCoordinator(service.Dependencies{
+			State: store, DeviceKeys: keyring, Genesis: port,
+			Trust:   service.StateTrustSource{State: store, Keyring: keyring},
+			Session: manualReadSession{identity: identity},
+			Remote:  service.VaultReader{Reader: atproto.VaultReader{Transport: transport, ObservationStore: store, Budgets: atproto.DefaultBudgets(), Clock: time.Now}},
+			Clock:   time.Now,
+		})
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		return coordinator, closeResources, nil
+	}
+}
+
+type sessionGenesisPort struct {
+	identity     atproto.Identity
+	transport    atproto.Transport
+	observations atproto.PublicationObservationStore
+}
+
+func (port sessionGenesisPort) Preflight(ctx context.Context) error {
+	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil {
+		return errors.New("authenticated genesis provider wiring is unavailable")
+	}
+	return atproto.CheckGenesisRepositoryEmpty(ctx, atproto.RevisionReader{
+		Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
+		VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
+	}, port.transport, port.identity.DID)
+}
+
+func (port sessionGenesisPort) BlobUploadLimit(ctx context.Context) (int64, error) {
+	limit, err := atproto.DescribeBlobUploadLimit(ctx, port.transport)
+	if err != nil {
+		return 0, err
+	}
+	if limit > int64(vault.MaxEnvelopeBytes) {
+		limit = int64(vault.MaxEnvelopeBytes)
+	}
+	return limit, nil
+}
+
+func (port sessionGenesisPort) CommitGenesis(ctx context.Context, blobLimit int64, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
+	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil || port.observations == nil {
+		return atproto.GenesisCommitResult{}, errors.New("authenticated genesis provider wiring is unavailable")
+	}
+	return atproto.CommitGenesis(ctx, atproto.GenesisIO{
+		Reader: atproto.RevisionReader{
+			Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
+			VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
+		},
+		Transport: port.transport, BlobUploadLimit: blobLimit, DID: port.identity.DID,
+		ObservationStore: port.observations, Clock: time.Now,
+	}, kit, root, genesis)
+}
+
 type sessionPublicationPort struct {
 	identity  atproto.Identity
 	transport atproto.Transport

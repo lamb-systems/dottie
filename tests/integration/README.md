@@ -4,6 +4,10 @@ The default integration suite is offline and hermetic. It uses synthetic fixture
 synthetic device keys and an in-memory AT Protocol `MemoryPDS`; it does not use a network, real home,
 keyring service, GNOME session or real account.
 
+## Genesis bootstrap
+
+`bootstrap_test.go` drives `Coordinator.InitializeVault` through the real genesis composition and `atproto.CommitGenesis` over an empty synthetic `MemoryPDS`. It asserts custody-before-publication ordering, then explicitly checks `history`, `pull`, ciphertext-only `Export` and no-op `Push` against the finalized trust state. The account CLI path is tested separately with an injected authenticated provider; it prints the kit once and verifies the kit is absent from state and keyring. A repeated bootstrap is refused by the verified empty-repository preflight before minting: keyring contents, state database bytes and the first remote revision remain unchanged. The state interruption test fails one local position-history write and proves selection, checkpoint and evidence all roll back together. No live PDS, real keyring, network, GNOME session or real home is used.
+
 ## Publication privacy and failure coverage
 
 `pds_audit_harness_test.go` and `pds_publication_test.go` build a real coordinator-backed synthetic

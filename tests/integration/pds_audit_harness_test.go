@@ -125,10 +125,40 @@ type publicationKeyring struct {
 
 func (keyring *publicationKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
 	device, ok := keyring.devices[deviceID]
-	if vaultID == ([32]byte{}) || !ok {
+	if vaultID == ([32]byte{}) {
 		return vault.DeviceMaterial{}, errors.New("synthetic device key is unavailable")
 	}
+	if !ok {
+		return vault.DeviceMaterial{}, platform.ErrKeyringItemNotFound
+	}
 	return device, nil
+}
+
+func (keyring *publicationKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, device vault.DeviceMaterial) error {
+	if vaultID == ([32]byte{}) || device.DeviceID == "" {
+		return errors.New("invalid synthetic device keys")
+	}
+	if _, exists := keyring.devices[device.DeviceID]; exists {
+		return errors.New("synthetic device keys already exist")
+	}
+	keyring.devices[device.DeviceID] = device
+	return nil
+}
+
+func (keyring *publicationKeyring) LoadDeviceKeysForVault(_ context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+	if vaultID == ([32]byte{}) || len(keyring.devices) == 0 {
+		return nil, platform.ErrKeyringItemNotFound
+	}
+	materials := make([]vault.DeviceMaterial, 0, len(keyring.devices))
+	for _, device := range keyring.devices {
+		materials = append(materials, device)
+	}
+	return materials, nil
+}
+
+func (keyring *publicationKeyring) DeleteDeviceKeys(_ context.Context, _ [32]byte, deviceID string) error {
+	delete(keyring.devices, deviceID)
+	return nil
 }
 
 type publicationSettings struct {

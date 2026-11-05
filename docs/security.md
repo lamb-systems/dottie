@@ -94,8 +94,7 @@ The CLI exposes target and preset onboarding, `status`, `preview`, `pull`, `push
 `recover`, `devices`, `history`, `export`, validation-only `import`, and confirmed `prune`. Account commands
 manage OAuth authorization and local device keys; they do not capture target data by themselves. All
 application-data and retention mutations route through the coordinator and its journal; the CLI does not edit
-application state or target configuration directly. Account onboarding does write the local vault selection and
-keyring items directly, which cannot authorize application data, apply or publication.
+application state or target configuration directly. `account enroll` may prepare local selection metadata and device keys; bootstrap records trusted selection/checkpoint/evidence through the coordinator's single state store. These local metadata cannot authorize application data or apply.
 
 Every end-to-end demonstration in this repository uses disposable synthetic data: an in-memory AT Protocol
 provider, temporary homes and a synthetic keyring. The live publication gate requires a pristine disposable
@@ -120,6 +119,16 @@ rotation are implemented and wired to the CLI; they are proven synthetically, no
 
 **Recovery authority** is material held offline, independent of the account. It can re-establish a root
 device. Bootstrap, kit-signed checkpoints and verification are implemented; live recovery is unproven.
+
+## Genesis bootstrap custody and outcomes
+
+`account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)` requires a signed-in account. Before minting a kit, device keys or local state, it authenticates a repository revision and refuses a non-empty repository with exit 3. Genesis checks the empty predecessor again immediately before publication, so a competing write remains a possible race. This is a hard product boundary: one account can hold one published Dottie vault because genesis requires an empty repository. Multi-vault selection means only locally recorded vaults, not multiple published vaults on one account.
+
+After preflight, bootstrap stores root device keys in Secret Service, writes the recovery kit once to stdout and flushes any buffered writer, then resolves the advertised blob limit and composes/submits genesis. A failed or short kit write/flush aborts before publication and pending keys are deleted best-effort. The kit is never written to state, keyring, manifest, logs or artifacts. A concurrent-write refusal after delivery means the printed kit belongs to no published vault. A rejected fenced batch may leave an unreferenced encrypted blob on the provider; no local trust or referenced genesis batch is created.
+
+A verified commit is followed by one transaction in the coordinator's existing state store for the local selection, epoch-zero kit-signed checkpoint and complete authenticated position evidence, including the genesis checkpoint position. The genesis reader reuses that store for observations; bootstrap does not open a second state database. Trust is never promoted from record membership alone.
+
+Bootstrap reports four publication outcomes. A verified commit plus successful local trust transaction exits 0. A definite pre-commit failure exits 3 and deletes pending keys best-effort. Verified absence after submission also exits 3 and deletes pending keys best-effort. A submitted result that cannot be resolved exits 4, retains keys and prints the six record targets with inspection instructions; if membership verified but final vault read-back failed, that phase is preserved and still reported unresolved. Up to three bounded verified re-reads with short backoff precede an unresolved result. A local trust-finalization error after a verified remote commit is non-success (exit 4); the single transaction leaves either the full trust set or none, and keys are retained for recovery. The account bootstrap command has hermetic MemoryPDS coverage; live bootstrap and provider compatibility remain separately authorized validation.
 
 ## Account session lifecycle
 
@@ -294,6 +303,12 @@ Authentication evidence in the position tables carries policy, control, head, ce
 checkpoint positions but no snapshot ciphertext. Journal rollback backups are bound to their point when they
 are created and associated in the same transaction; a new backup demotes the point to incomplete until the
 next refresh re-verifies the closure.
+
+A position is recorded once its record, envelope and blob authenticate, which happens before the snapshot
+payload is unpacked. A validly signed snapshot whose payload cannot be unpacked therefore leaves authenticated
+position evidence and lineage history while applying nothing locally, and it stays unusable until a later
+publication supersedes it. Validating the payload first would instead leave no evidence for an authenticated
+remote position, which would weaken export lineage, so the current ordering is deliberate.
 
 The automatic journal age prune runs during recovery and rollback and consults the same point associations.
 Backup eligibility is explicit on both prune paths: a backup bound to a currently retained point is protected

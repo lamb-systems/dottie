@@ -300,6 +300,44 @@ func TestAuthenticatedPositionEvidenceRejectsMismatchedKeysAndOversizedObjects(t
 	assert.Error(t, store.PutAuthenticatedPositionEvidence(context.Background(), oversized))
 }
 
+func TestInitializeVaultTrustRollsBackAllRowsWhenPositionHistoryWriteFails(t *testing.T) {
+	store := openTestStore(t, testPaths(t))
+	genesis, device, _ := stateGenesisFixture(t)
+	ctx := context.Background()
+	selection := VaultSelection{Vault: genesis.Vault, DeviceID: device.DeviceID, RecordedAt: 123}
+	checkpoint := VaultCheckpoint{
+		Vault: genesis.Vault, Anchor: genesis.Anchor, ControlCID: bytes.Clone(genesis.ControlCID),
+		ControlBytes: bytes.Clone(genesis.Control), SnapshotCID: bytes.Clone(genesis.SnapshotCID),
+		Epoch: 0, PolicyDigest: genesis.PolicyDigest, RecordedAt: 123,
+	}
+	evidence := AuthenticatedPositionEvidence{
+		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
+		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
+		Certificates: [][]byte{bytes.Clone(genesis.Certificate)}, CheckpointPosition: bytes.Clone(genesis.Checkpoint),
+	}
+	_, err := store.conn.ExecContext(ctx, `CREATE TRIGGER fail_genesis_position_history BEFORE INSERT ON authenticated_position_history BEGIN SELECT RAISE(FAIL, 'interrupted write'); END`)
+	require.NoError(t, err)
+	err = store.InitializeVaultTrust(ctx, selection, checkpoint, evidence)
+	require.Error(t, err)
+	selections, err := store.VaultSelections(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, selections)
+	_, err = store.VaultCheckpoint(ctx, genesis.Vault)
+	assert.ErrorIs(t, err, ErrVaultCheckpointNotFound)
+	_, err = store.AuthenticatedPositionEvidenceAtEpoch(ctx, genesis.Vault, 0)
+	assert.ErrorIs(t, err, ErrAuthenticatedPositionEvidenceNotFound)
+	_, err = store.conn.ExecContext(ctx, `DROP TRIGGER fail_genesis_position_history`)
+	require.NoError(t, err)
+	require.NoError(t, store.InitializeVaultTrust(ctx, selection, checkpoint, evidence))
+	selections, err = store.VaultSelections(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []VaultSelection{selection}, selections)
+	_, err = store.VaultCheckpoint(ctx, genesis.Vault)
+	require.NoError(t, err)
+	_, err = store.AuthenticatedPositionEvidenceAtEpoch(ctx, genesis.Vault, 0)
+	require.NoError(t, err)
+}
+
 func stateGenesisFixture(t *testing.T) (vault.Genesis, vault.DeviceMaterial, []byte) {
 	t.Helper()
 	kit := bytes.Repeat([]byte{17}, 32)

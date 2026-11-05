@@ -46,6 +46,7 @@ type FencedSnapshotPublication struct {
 
 type PublishResult struct {
 	CommitCID string
+	Submitted bool
 }
 
 type PublicationCommitResult struct {
@@ -178,22 +179,23 @@ func publishFenced(ctx context.Context, transport Transport, revision *Revision,
 		return PublishResult{}, fmt.Errorf("%w: could not encode applyWrites batch", ErrBatchRejected)
 	}
 	status, response, err := transport.Do(ctx, "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+	submitted := true
 	if err != nil {
 		if status >= 400 && status < 500 {
-			return PublishResult{}, applyWritesStatusError(status, response)
+			return PublishResult{Submitted: submitted}, applyWritesStatusError(status, response)
 		}
-		return PublishResult{}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown: %w", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, safeTransportCause(err))
+		return PublishResult{Submitted: submitted}, fmt.Errorf("%w: %w: applyWrites request outcome is unknown: %w", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed, safeTransportCause(err))
 	}
 	if status < 200 || status >= 300 {
-		return PublishResult{}, applyWritesStatusError(status, response)
+		return PublishResult{Submitted: submitted}, applyWritesStatusError(status, response)
 	}
 	var output applyWritesOutput
 	if len(response) != 0 {
 		if json.Unmarshal(response, &output) != nil {
-			return PublishResult{}, fmt.Errorf("%w: %w: applyWrites response is malformed after submission", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
+			return PublishResult{Submitted: submitted}, fmt.Errorf("%w: %w: applyWrites response is malformed after submission", ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)
 		}
 	}
-	return PublishResult{CommitCID: output.Commit.CID}, nil
+	return PublishResult{CommitCID: output.Commit.CID, Submitted: submitted}, nil
 }
 
 type publicationIO interface {

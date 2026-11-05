@@ -35,7 +35,8 @@ Usage:
   dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
   dottie account status (--did DID | --handle HANDLE) [--refresh]
   dottie account logout (--did DID | --handle HANDLE) [--remote]
-  dottie account bootstrap --vault-name NAME --device-id ID
+  dottie account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)
+  dottie account finalize --vault HEX (--did DID | --handle HANDLE)
   dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX] [--request FILE]
   dottie account import-bundle --bundle FILE --anchor HEX [--vault HEX]
 

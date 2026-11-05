@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,7 +38,24 @@ type GenesisIO struct {
 	Clock            func() time.Time
 }
 
+type GenesisPhase string
+
+const (
+	GenesisNotSubmitted       GenesisPhase = "not-submitted"
+	GenesisSubmitted          GenesisPhase = "submitted"
+	GenesisMembershipVerified GenesisPhase = "membership-verified"
+	GenesisVerified           GenesisPhase = "verified"
+)
+
+type GenesisRecordTarget struct {
+	Collection string
+	RKey       string
+	CID        string
+}
+
 type GenesisCommitResult struct {
+	Phase         GenesisPhase
+	RecordTargets []GenesisRecordTarget
 	Revision      *Revision
 	ReadResult    ReadResult
 	CommitCID     string
@@ -50,76 +68,148 @@ type genesisExpectedRecord struct {
 	object []byte
 }
 
+func CheckGenesisRepositoryEmpty(ctx context.Context, reader RevisionReader, transport Transport, did string) error {
+	if transport == nil || did == "" || !validDID(did) || reader.DIDDocumentID != did {
+		return fmt.Errorf("%w: authenticated revision reader and DID are required", ErrBatchRejected)
+	}
+	reader.Transport = transport
+	revision, err := reader.Read(ctx, did)
+	if err != nil {
+		return fmt.Errorf("%w: cannot verify empty genesis repository: %w", ErrGenesisUnavailable, err)
+	}
+	if len(revision.Membership()) != 0 {
+		return ErrGenesisRepositoryNotEmpty
+	}
+	return nil
+}
+
 func CommitGenesis(ctx context.Context, io GenesisIO, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (GenesisCommitResult, error) {
+	result := GenesisCommitResult{Phase: GenesisNotSubmitted}
 	if io.Transport == nil || io.DID == "" || io.BlobUploadLimit <= 0 || io.ObservationStore == nil || root.Recipient == nil || len(root.Signing) != ed25519.PrivateKeySize {
-		return GenesisCommitResult{}, fmt.Errorf("%w: genesis transport, DID, blob limit, observation store and root device are required", ErrBatchRejected)
+		return result, fmt.Errorf("%w: genesis transport, DID, blob limit, observation store and root device are required", ErrBatchRejected)
 	}
 	if err := vault.ValidateGenesis(genesis, kit); err != nil {
-		return GenesisCommitResult{}, fmt.Errorf("%w: %w", ErrBatchRejected, err)
+		return result, fmt.Errorf("%w: %w", ErrBatchRejected, err)
 	}
 	certificate, err := vault.DecodeCertificate(genesis.Certificate)
 	if err != nil || certificate.DeviceID != root.DeviceID || !bytes.Equal(certificate.KeyID, root.KeyID) || !bytes.Equal(certificate.SigningPublicKey[:], root.Signing.Public().(ed25519.PublicKey)) || !bytes.Equal(certificate.EncryptionPublicKey[:], root.Recipient.PublicKey().Bytes()) {
-		return GenesisCommitResult{}, fmt.Errorf("%w: root device does not match genesis certificate", ErrBatchRejected)
+		return result, fmt.Errorf("%w: root device does not match genesis certificate", ErrBatchRejected)
 	}
 	reader := io.Reader
 	reader.Transport = io.Transport
 	if reader.DIDDocumentID != io.DID || !validDID(io.DID) {
-		return GenesisCommitResult{}, fmt.Errorf("%w: revision reader DID binding is invalid", ErrBatchRejected)
+		return result, fmt.Errorf("%w: revision reader DID binding is invalid", ErrBatchRejected)
 	}
 	initial, err := reader.Read(ctx, io.DID)
 	if err != nil {
-		return GenesisCommitResult{}, fmt.Errorf("%w: cannot verify empty genesis predecessor: %w", ErrGenesisUnavailable, err)
+		return result, fmt.Errorf("%w: cannot verify empty genesis predecessor: %w", ErrGenesisUnavailable, err)
 	}
 	if len(initial.Membership()) != 0 {
-		return GenesisCommitResult{}, ErrGenesisRepositoryNotEmpty
+		return result, ErrGenesisRepositoryNotEmpty
 	}
 	policy, err := vault.DecodePolicy(genesis.Policy)
 	if err != nil {
-		return GenesisCommitResult{}, fmt.Errorf("%w: genesis policy is invalid", ErrBatchRejected)
+		return result, fmt.Errorf("%w: genesis policy is invalid", ErrBatchRejected)
 	}
 	blobReference, uploadedCID, err := (ATProtoTransitionIO{Transport: io.Transport, BlobUploadLimit: io.BlobUploadLimit}).StageCandidate(ctx, genesis.Snapshot, policy, [][]byte{genesis.Certificate})
 	if err != nil {
-		return GenesisCommitResult{}, fmt.Errorf("%w: %w", ErrGenesisCandidateStage, err)
+		return result, fmt.Errorf("%w: %w", ErrGenesisCandidateStage, err)
 	}
 	if uploadedCID != cid.NewCidV1(cid.Raw, mustTransitionMultihash(genesis.Snapshot)).String() {
-		return GenesisCommitResult{}, fmt.Errorf("%w: uploaded genesis snapshot CID differs from the sealed snapshot", ErrBatchRejected)
+		return result, fmt.Errorf("%w: uploaded genesis snapshot CID differs from the sealed snapshot", ErrBatchRejected)
 	}
 	publication, expected, err := genesisPublication(genesis, root.Signing, blobReference, initial)
 	if err != nil {
-		return GenesisCommitResult{}, err
+		return result, err
 	}
-	_, _ = publishFenced(ctx, io.Transport, initial, publication)
-	verified, err := reader.Read(ctx, io.DID)
-	if err != nil {
-		return GenesisCommitResult{}, fmt.Errorf("%w: verified genesis read-back failed: %w", ErrGenesisUnavailable, err)
+	result.RecordTargets = genesisTargets(expected)
+	fencedResult, publishErr := publishFenced(ctx, io.Transport, initial, publication)
+	if fencedResult.Submitted {
+		result.Phase = GenesisSubmitted
 	}
-	if err := verifyGenesisRevision(verified, expected, genesis, kit); err != nil {
-		return GenesisCommitResult{}, err
+	if publishErr != nil && errors.Is(publishErr, ErrBatchRejected) {
+		return result, publishErr
 	}
-	readResult, err := (VaultReader{
-		Transport: io.Transport, ObservationStore: io.ObservationStore,
-		Budgets: reader.Budgets, Clock: io.Clock,
-	}).Read(ctx, ReadRequest{
-		DID: io.DID, DIDDocumentID: reader.DIDDocumentID, VerificationMethods: reader.VerificationMethods,
-		Vault: genesis.Vault, TrustAnchor: genesis.Anchor, DeviceKeyID: bytes.Clone(root.KeyID), DeviceKey: root.Recipient,
-	})
-	if err != nil {
-		if errors.Is(err, ErrAmbiguousTransport) || errors.Is(err, ErrRevisionMoving) {
-			return GenesisCommitResult{}, fmt.Errorf("%w: real vault read-back failed: %w", ErrGenesisUnavailable, err)
+	var verified *Revision
+	var readErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		verified, readErr = reader.Read(ctx, io.DID)
+		if readErr == nil {
+			break
 		}
-		return GenesisCommitResult{}, fmt.Errorf("%w: real vault read-back failed: %w", ErrGenesisReadbackRejected, err)
+		if attempt < 2 {
+			if err := waitGenesisRead(ctx, time.Duration(attempt+1)*10*time.Millisecond); err != nil {
+				return result, fmt.Errorf("%w: verified genesis read-back failed: %w", ErrGenesisUnavailable, err)
+			}
+		}
 	}
-	if err := verifyGenesisRevision(readResult.Revision, expected, genesis, kit); err != nil {
-		return GenesisCommitResult{}, err
+	if readErr != nil {
+		return result, fmt.Errorf("%w: verified genesis read-back failed after retries: %w", ErrGenesisUnavailable, readErr)
 	}
-	packed, err := vault.Pack(model.Snapshot{Version: model.SnapshotVersion})
-	if err != nil || !bytes.Equal(readResult.Plaintext, packed.Payload) {
-		return GenesisCommitResult{}, fmt.Errorf("%w: decrypted genesis snapshot is not the canonical empty snapshot", ErrGenesisReadbackRejected)
+	result.Revision = verified
+	if err := verifyGenesisRevision(verified, expected, genesis, kit); err != nil {
+		return result, err
 	}
-	return GenesisCommitResult{
-		Revision: readResult.Revision, ReadResult: readResult, CommitCID: readResult.Revision.CommitCID(),
-		CheckpointCID: expectedRecordCID(expected, RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}),
-	}, nil
+	result.Phase = GenesisMembershipVerified
+	for attempt := 0; attempt < 3; attempt++ {
+		readResult, readErr := (VaultReader{
+			Transport: io.Transport, ObservationStore: io.ObservationStore,
+			Budgets: reader.Budgets, Clock: io.Clock,
+		}).Read(ctx, ReadRequest{
+			DID: io.DID, DIDDocumentID: reader.DIDDocumentID, VerificationMethods: reader.VerificationMethods,
+			Vault: genesis.Vault, TrustAnchor: genesis.Anchor, DeviceKeyID: bytes.Clone(root.KeyID), DeviceKey: root.Recipient,
+		})
+		if readErr == nil {
+			if verifyErr := verifyGenesisRevision(readResult.Revision, expected, genesis, kit); verifyErr != nil {
+				return result, verifyErr
+			}
+			packed, packErr := vault.Pack(model.Snapshot{Version: model.SnapshotVersion})
+			if packErr != nil || !bytes.Equal(readResult.Plaintext, packed.Payload) {
+				return result, fmt.Errorf("%w: decrypted genesis snapshot is not the canonical empty snapshot", ErrGenesisReadbackRejected)
+			}
+			result.ReadResult = readResult
+			result.Revision = readResult.Revision
+			result.CommitCID = readResult.Revision.CommitCID()
+			result.CheckpointCID = expectedRecordCID(expected, RecordKey{Collection: VaultCheckpointNSID, RKey: "self"})
+			result.Phase = GenesisVerified
+			return result, nil
+		}
+		if attempt == 2 {
+			if errors.Is(readErr, ErrAmbiguousTransport) || errors.Is(readErr, ErrRevisionMoving) {
+				return result, fmt.Errorf("%w: real vault read-back failed after retries: %w", ErrGenesisUnavailable, readErr)
+			}
+			return result, fmt.Errorf("%w: real vault read-back failed after retries: %w", ErrGenesisReadbackRejected, readErr)
+		}
+		if err := waitGenesisRead(ctx, time.Duration(attempt+1)*10*time.Millisecond); err != nil {
+			return result, fmt.Errorf("%w: real vault read-back failed: %w", ErrGenesisUnavailable, err)
+		}
+	}
+	return result, ErrGenesisUnavailable
+}
+
+func waitGenesisRead(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func genesisTargets(expected map[RecordKey]genesisExpectedRecord) []GenesisRecordTarget {
+	targets := make([]GenesisRecordTarget, 0, len(expected))
+	for key, record := range expected {
+		targets = append(targets, GenesisRecordTarget{Collection: key.Collection, RKey: key.RKey, CID: record.cid})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Collection != targets[j].Collection {
+			return targets[i].Collection < targets[j].Collection
+		}
+		return targets[i].RKey < targets[j].RKey
+	})
+	return targets
 }
 
 func genesisPublication(genesis vault.Genesis, signer ed25519.PrivateKey, blobReference []byte, revision *Revision) (FencedPublication, map[RecordKey]genesisExpectedRecord, error) {

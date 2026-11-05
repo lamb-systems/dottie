@@ -999,6 +999,59 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, checkpoint.Vault[:], checkpoint.Anchor[:], che
 	})
 }
 
+func (s *Store) InitializeVaultTrust(ctx context.Context, selection VaultSelection, checkpoint VaultCheckpoint, evidence AuthenticatedPositionEvidence) error {
+	if selection.Vault == ([32]byte{}) || selection.RecordedAt < 0 || validateID(selection.DeviceID, "device id") != nil || len(selection.DeviceID) > vault.MaxDeviceIDBytes {
+		return errors.New("invalid genesis vault selection")
+	}
+	if checkpoint.Vault != selection.Vault || checkpoint.Epoch != 0 || checkpoint.RecordedAt < 0 || len(checkpoint.ControlCID) == 0 || len(checkpoint.ControlBytes) == 0 || len(checkpoint.SnapshotCID) == 0 {
+		return errors.New("invalid genesis checkpoint")
+	}
+	if err := validateVaultCheckpointObject(checkpoint); err != nil {
+		return err
+	}
+	certificates, err := validateAuthenticatedPositionEvidence(evidence)
+	if err != nil {
+		return err
+	}
+	if evidence.Vault != selection.Vault || evidence.Epoch != 0 || evidence.PolicyDigest != checkpoint.PolicyDigest ||
+		!bytes.Equal(evidence.Control, checkpoint.ControlBytes) || len(evidence.CheckpointPosition) == 0 ||
+		!bytes.Equal(authenticatedPositionRawCID(evidence.Control), checkpoint.ControlCID) {
+		return errors.New("genesis trust positions do not match")
+	}
+	head, err := vault.DecodeHead(evidence.Head)
+	if err != nil || !bytes.Equal(head.SnapshotCID, checkpoint.SnapshotCID) || checkpoint.Anchor == ([32]byte{}) {
+		return errors.New("genesis checkpoint does not match authenticated position evidence")
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var exists int
+		err := tx.QueryRowContext(ctx, "SELECT 1 FROM vault_selections WHERE vault = ?", selection.Vault[:]).Scan(&exists)
+		if err == nil {
+			return ErrVaultSelectionExists
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		err = tx.QueryRowContext(ctx, "SELECT 1 FROM vault_checkpoints WHERE vault = ?", checkpoint.Vault[:]).Scan(&exists)
+		if err == nil {
+			return ErrVaultSelectionExists
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO vault_selections(vault, device_id, recorded_at) VALUES (?, ?, ?)", selection.Vault[:], selection.DeviceID, selection.RecordedAt); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO vault_checkpoints(vault, anchor, control_cid, control_bytes, snapshot_cid, epoch, policy_digest, recorded_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, checkpoint.Vault[:], checkpoint.Anchor[:], checkpoint.ControlCID, checkpoint.ControlBytes, checkpoint.SnapshotCID, checkpoint.Epoch, checkpoint.PolicyDigest[:], checkpoint.RecordedAt); err != nil {
+			return err
+		}
+		if err := putAuthenticatedPositionEvidenceTx(ctx, tx, evidence, certificates); err != nil {
+			return err
+		}
+		return putAuthenticatedPositionHistoryTx(ctx, tx, evidence, certificates)
+	})
+}
+
 func putAuthenticatedPositionEvidenceTx(ctx context.Context, tx *sql.Tx, evidence AuthenticatedPositionEvidence, certificates [][]byte) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO authenticated_position_evidence(vault, epoch, policy_digest, policy_bytes, control_bytes, head_bytes, checkpoint_position)
 VALUES (?, ?, ?, ?, ?, ?, ?)

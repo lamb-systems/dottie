@@ -16,28 +16,33 @@ import (
 )
 
 var (
-	ErrNoVaultSelection           = errors.New("no local vault selection")
-	ErrAmbiguousVaultSelection    = errors.New("multiple local vault selections require an explicit vault")
-	ErrNoCheckpoint               = errors.New("no local trust checkpoint is recorded")
-	ErrMissingPredecessorEvidence = errors.New("authenticated predecessor evidence is missing")
-	ErrDeviceKeyMissing           = errors.New("device keyring item is missing")
-	ErrTrustEvidenceInvalid       = errors.New("local trust evidence is invalid")
-	ErrCheckpointNotCurrent       = errors.New("remote checkpoint is not current or a verified descendant")
-	ErrFreshnessUnverified        = errors.New("freshness is unverifiable; inspection/export-only continuation requires --consent; no data is applied")
-	ErrApplyNotPermitted          = errors.New("local consent does not permit apply")
-	ErrBaseRecordingFailed        = errors.New("applied-base recording failed")
-	ErrCandidateChanged           = errors.New("restore candidate digest changed")
-	ErrGNOMEReapproval            = errors.New("GNOME category approval requires re-approval")
-	ErrUnapprovedEntry            = errors.New("remote or base entry is not approved by local target policy")
-	ErrAdministrativeRootRequired = errors.New("administrative operation requires the selected root device")
-	ErrRecoveryKitMismatch        = errors.New("recovery kit does not match the vault recovery anchor")
-	ErrOnboardingAnchorMismatch   = errors.New("onboarding anchor does not match the supplied root fingerprint")
-	ErrOnboardingVaultMismatch    = errors.New("onboarding bundle does not match the selected vault")
-	ErrOnboardingDeviceMismatch   = errors.New("onboarding bundle does not contain the selected device recipient")
-	ErrOnboardingCheckpoint       = errors.New("onboarding checkpoint does not match authenticated state")
-	ErrOnboardingChain            = errors.New("onboarding evidence does not form an authenticated successor chain")
-	ErrOnboardingStateConflict    = errors.New("onboarding conflicts with existing local vault state")
-	ErrRevokeApprovalMismatch     = errors.New("revocation approval fingerprint does not match the current verified device")
+	ErrNoVaultSelection                 = errors.New("no local vault selection")
+	ErrAmbiguousVaultSelection          = errors.New("multiple local vault selections require an explicit vault")
+	ErrNoCheckpoint                     = errors.New("no local trust checkpoint is recorded")
+	ErrMissingPredecessorEvidence       = errors.New("authenticated predecessor evidence is missing")
+	ErrDeviceKeyMissing                 = errors.New("device keyring item is missing")
+	ErrTrustEvidenceInvalid             = errors.New("local trust evidence is invalid")
+	ErrCheckpointNotCurrent             = errors.New("remote checkpoint is not current or a verified descendant")
+	ErrFreshnessUnverified              = errors.New("freshness is unverifiable; inspection/export-only continuation requires --consent; no data is applied")
+	ErrApplyNotPermitted                = errors.New("local consent does not permit apply")
+	ErrBaseRecordingFailed              = errors.New("applied-base recording failed")
+	ErrCandidateChanged                 = errors.New("restore candidate digest changed")
+	ErrGNOMEReapproval                  = errors.New("GNOME category approval requires re-approval")
+	ErrUnapprovedEntry                  = errors.New("remote or base entry is not approved by local target policy")
+	ErrAdministrativeRootRequired       = errors.New("administrative operation requires the selected root device")
+	ErrRecoveryKitMismatch              = errors.New("recovery kit does not match the vault recovery anchor")
+	ErrOnboardingAnchorMismatch         = errors.New("onboarding anchor does not match the supplied root fingerprint")
+	ErrOnboardingVaultMismatch          = errors.New("onboarding bundle does not match the selected vault")
+	ErrOnboardingDeviceMismatch         = errors.New("onboarding bundle does not contain the selected device recipient")
+	ErrOnboardingCheckpoint             = errors.New("onboarding checkpoint does not match authenticated state")
+	ErrOnboardingChain                  = errors.New("onboarding evidence does not form an authenticated successor chain")
+	ErrOnboardingStateConflict          = errors.New("onboarding conflicts with existing local vault state")
+	ErrRevokeApprovalMismatch           = errors.New("revocation approval fingerprint does not match the current verified device")
+	ErrFinalizeKeysMissing              = errors.New("device keys for this vault are missing from Secret Service")
+	ErrFinalizeStateConflict            = errors.New("local vault trust exists but does not match the verified remote position")
+	ErrFinalizeStateIncomplete          = errors.New("local vault trust is incomplete")
+	ErrBootstrapKitDeliveryFailed       = errors.New("recovery kit delivery failed before publication")
+	ErrBootstrapTrustFinalizationFailed = errors.New("verified genesis local trust finalization failed")
 )
 
 type ConfigPort interface {
@@ -65,6 +70,12 @@ type RemoteReadPort interface {
 
 type PublicationIOPort interface {
 	PublicationIO(context.Context, VaultSelection, TrustMaterial, ReadOutcome) (atproto.ATProtoPublicationIO, error)
+}
+
+type GenesisPort interface {
+	Preflight(context.Context) error
+	BlobUploadLimit(context.Context) (int64, error)
+	CommitGenesis(context.Context, int64, []byte, vault.DeviceMaterial, vault.Genesis) (atproto.GenesisCommitResult, error)
 }
 
 type TrustSource interface {
@@ -108,6 +119,7 @@ type Dependencies struct {
 	Session    SessionPort
 	Remote     RemoteReadPort
 	Publisher  PublicationIOPort
+	Genesis    GenesisPort
 	Clock      func() time.Time
 	Filesystem files.ApplyFileSystem
 	Paths      platform.Paths

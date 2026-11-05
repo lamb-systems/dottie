@@ -11,9 +11,12 @@ targets upgrade to pending re-approval without inferred categories. The coordina
 verified reads, content-free preview, candidate-bound restore, recovery, local base recording,
 push/sync, device administration, history summaries, export and archive validation. Manual
 read/apply requires a local trust checkpoint and a signed-in account; GNOME apply requires a
-build with the `gsettings` tag and an available settings backend. Bootstrap generates a new
-recovery kit and vault every time and is not idempotent. Explicit multi-vault selection is
-supported by these local commands, not promised as a complete multi-vault product feature.
+build with the `gsettings` tag and an available settings backend. `account bootstrap` requires a
+verified empty repository and a signed-in account. It checks repository emptiness before minting
+keys or a kit, stores device keys in Secret Service, prints and flushes the recovery kit before
+publication, then records trust atomically after verified publication. An account can hold only
+one published Dottie vault because genesis requires an empty repository. Multi-vault selection
+refers only to locally recorded vaults, not multiple published vaults on one account.
 
 `dottie history` reports local journal/applied-base summaries and checkpoint metadata without
 content, settings values, absolute paths or secrets. Without `--did`/`--handle` it works
@@ -146,7 +149,7 @@ contract. These tests use synthetic data only.
 The live publication gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
 allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; before writing the
 manifest or records, it checks `com.atproto.repo.describeRepo` and skips repositories with any collections.
-Genesis requires an empty repository. It writes synthetic canary records and cannot remove provider blobs.
+Genesis requires an empty repository. Production bootstrap checks emptiness before minting and checks again immediately before publication; a race can leave an unreferenced staged blob after a definite refusal. The live gate writes synthetic canary records and cannot remove provider blobs.
 The live archive gate also skips by default and requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
 `DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that
 decodes to a 32-byte kit, plus explicit disposable-account authorization. It uses the existing local vault selection/checkpoint and a temporary archive path;

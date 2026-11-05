@@ -24,17 +24,20 @@ import (
 const genesisTestDID = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
 
 type genesisMemoryTransport struct {
-	mu                 sync.Mutex
-	current            atprototest.SignedRevision
-	repositoryKey      *atcrypto.PrivateKeyP256
-	blobs              map[string][]byte
-	events             []string
-	applyCalls         int
-	loseBeforeApply    bool
-	loseAfterApply     bool
-	omitCheckpoint     bool
-	mismatchCheckpoint bool
-	writeActions       []string
+	mu                   sync.Mutex
+	current              atprototest.SignedRevision
+	repositoryKey        *atcrypto.PrivateKeyP256
+	blobs                map[string][]byte
+	events               []string
+	applyCalls           int
+	loseBeforeApply      bool
+	loseAfterApply       bool
+	failLatestAfterApply int
+	failGenesisBlobs     bool
+	blobReadCalls        int
+	omitCheckpoint       bool
+	mismatchCheckpoint   bool
+	writeActions         []string
 }
 
 func TestCommitGenesisPublishesAllCreatesAndVerifiesRealVaultRead(t *testing.T) {
@@ -54,6 +57,8 @@ func TestCommitGenesisPublishesAllCreatesAndVerifiesRealVaultRead(t *testing.T) 
 		assert.Equal(t, "com.atproto.repo.applyWrites#create", action)
 	}
 	assert.NotEmpty(t, result.CheckpointCID)
+	assert.Equal(t, GenesisVerified, result.Phase)
+	assert.Len(t, result.RecordTargets, 6)
 	assert.True(t, result.Revision.HasRecord(RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}))
 }
 
@@ -63,6 +68,7 @@ func TestCommitGenesisResolvesLostApplyResponseByVerifiedRead(t *testing.T) {
 	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	assert.Equal(t, 1, fixture.transport.applyCalls)
+	assert.Equal(t, GenesisVerified, result.Phase)
 	assert.True(t, result.Revision.HasRecord(RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}))
 	assert.GreaterOrEqual(t, countGenesisEvent(fixture.transport.events, "latest"), 4)
 }
@@ -70,18 +76,41 @@ func TestCommitGenesisResolvesLostApplyResponseByVerifiedRead(t *testing.T) {
 func TestCommitGenesisRequiresVerifiedAbsenceBeforeAnotherAttempt(t *testing.T) {
 	fixture := newGenesisFixture(t)
 	fixture.transport.loseBeforeApply = true
-	_, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
 	require.ErrorIs(t, err, ErrGenesisNotLanded)
+	assert.Equal(t, GenesisSubmitted, result.Phase)
+	assert.Len(t, result.RecordTargets, 6)
 	assert.Equal(t, 1, fixture.transport.applyCalls)
 	beforeSecond := len(fixture.transport.events)
 
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err = CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fixture.transport.applyCalls)
 	assert.True(t, result.Revision.HasRecord(RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}))
 	secondApply := eventIndex(fixture.transport.events, "applyWrites", 2)
 	require.GreaterOrEqual(t, secondApply, beforeSecond+4)
 	assert.Equal(t, []string{"latest", "repo", "latest", "uploadBlob"}, fixture.transport.events[secondApply-4:secondApply])
+}
+
+func TestCommitGenesisRetriesBoundedReadbackFailures(t *testing.T) {
+	fixture := newGenesisFixture(t)
+	fixture.transport.failLatestAfterApply = 2
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	require.NoError(t, err)
+	assert.Equal(t, GenesisVerified, result.Phase)
+	assert.Equal(t, 0, fixture.transport.failLatestAfterApply)
+	assert.GreaterOrEqual(t, countGenesisEvent(fixture.transport.events, "latest"), 6)
+}
+
+func TestCommitGenesisPreservesVerifiedMembershipWhenFinalReadbackFails(t *testing.T) {
+	fixture := newGenesisFixture(t)
+	fixture.transport.failGenesisBlobs = true
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	require.ErrorIs(t, err, ErrGenesisReadbackRejected)
+	assert.Equal(t, GenesisMembershipVerified, result.Phase)
+	assert.Len(t, result.RecordTargets, 6)
+	assert.Equal(t, 3, fixture.transport.blobReadCalls)
+	assert.ErrorIs(t, err, ErrGenesisReadbackRejected)
 }
 
 func TestCommitGenesisRejectsOmittedOrMismatchedCheckpoint(t *testing.T) {
@@ -95,8 +124,9 @@ func TestCommitGenesisRejectsOmittedOrMismatchedCheckpoint(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newGenesisFixture(t)
 			test.set(fixture.transport)
-			_, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+			result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
 			require.ErrorIs(t, err, ErrGenesisCheckpointMismatch)
+			assert.Equal(t, GenesisSubmitted, result.Phase)
 			assert.Equal(t, 1, fixture.transport.applyCalls)
 		})
 	}
@@ -151,6 +181,10 @@ func (transport *genesisMemoryTransport) Do(_ context.Context, method, endpoint 
 	transport.events = append(transport.events, eventForEndpoint(endpoint))
 	switch endpoint {
 	case "com.atproto.sync.getLatestCommit":
+		if transport.applyCalls > 0 && transport.failLatestAfterApply > 0 {
+			transport.failLatestAfterApply--
+			return 503, nil, nil
+		}
 		return 200, jsonBytes(map[string]any{"cid": transport.current.CommitCID.String(), "rev": atprototest.RepositoryRevision}), nil
 	case "com.atproto.repo.uploadBlob":
 		if contentType != "application/octet-stream" {
@@ -243,6 +277,10 @@ func (transport *genesisMemoryTransport) OpenStream(_ context.Context, endpoint 
 	case "com.atproto.sync.getRepo":
 		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(transport.current.CAR))), nil
 	case "com.atproto.sync.getBlob":
+		transport.blobReadCalls++
+		if transport.failGenesisBlobs {
+			return 503, nil, nil
+		}
 		data, exists := transport.blobs[query.Get("cid")]
 		if !exists {
 			return 404, nil, nil
