@@ -1,7 +1,7 @@
 # Vault lexicons
 
-These seven Lexicon 1 record schemas define the publishable address forms of the V02 signed
-objects. They are all under `systems.lamb.dottie`:
+The seven Lexicon 1 record schemas define publishable address forms for the V02 signed
+objects. All use the `systems.lamb.dottie` namespace:
 
 - `systems.lamb.dottie.vaultHead`
 - `systems.lamb.dottie.vaultControl`
@@ -27,11 +27,11 @@ every represented signed-object field, including the object's signature. A misma
 error naming the field. The head publication count must equal the signed head's count; whether it is
 zero at enrollment or predecessor count plus one is a transition rule, not a binding rule.
 
-`VerifyRecordContext` handles the relationships that need neighboring records or a trust anchor.
+`VerifyRecordContext` checks relationships that require neighboring records or a trust anchor.
 Its context's `Policy`, `Control`, `Certificate`, `Snapshot` and `PreviousPolicy` values are
 DAG-CBOR records; `Snapshot` supplies the referenced snapshot record bytes so the verifier can
 compute its CID and compare its blob reference (an explicitly non-nil empty value represents the
-genesis empty-head marker). Required entries are not skipped when absent. Checkpoint trust-anchor
+genesis empty-head marker). Absent required entries are not skipped. Checkpoint trust-anchor
 context is required when the checkpoint anchor is nonzero.
 
 | Record | Required context | Context checks |
@@ -58,11 +58,11 @@ identifiers are different namespaces and must never be compared. The policy does
 Ed25519 signing public keys: policy role authorizes the device, the certificate chain binds that
 device to its Ed25519 key, and the certificate record binds both keys to its signed certificate
 object. Context checks match the policy-authorized role and recipient X25519 key; certificate-chain
-verification authenticates the Ed25519 signing key. These checks are complementary, not substitutes.
+verification authenticates the Ed25519 signing key. Neither check substitutes for the other.
 
 ## Atomic write sets
 
-The transition table is the complete set of record types written together by each state transition.
+The transition table lists the complete set of record types written together by each state transition.
 The snapshot blob reference is part of the snapshot record write, except the transition table's
 snapshot-blob notation describes the bytes uploaded before the fenced commit.
 
@@ -93,9 +93,8 @@ V02 uint64 values that appear in records use Lexicon `integer` fields bounded by
 truncating them. CIDs, parent values, and CID references use raw CID bytes, at most 128 bytes
 inclusive. Device identifiers and key identifiers are at most 255 UTF-8/byte units as applicable;
 policy recipients are capped at 64. Every administrative V02 object is at most 65536 bytes
-inclusive. These byte and aggregate object limits are documented here because Lexicon field
-constraints alone cannot express all V02 decoder bounds; `internal/remote/atproto` also enforces
-them. Snapshot envelopes are subject to the V02 envelope and ciphertext caps.
+inclusive. Lexicon field constraints alone cannot express all V02 decoder bounds, so these byte
+and aggregate object limits are recorded here; `internal/remote/atproto` also enforces them. Snapshot envelopes are subject to the V02 envelope and ciphertext caps.
 
 The snapshot signature covers the record as encoded: the Ed25519ctx preimage is the context label
 followed by canonical DAG-CBOR with only `signature` removed. `$type` and `schemaVersion` are
@@ -104,6 +103,6 @@ the signature preimage and is a signature-compatibility break even when the DTE 
 not change.
 
 The schema and scope tests load every lexicon document directly. The OAuth metadata's repo scope
-set is required to equal these seven record NSIDs, with the blob scope for the snapshot payload and
+set must equal these seven record NSIDs, with the blob scope for the snapshot payload and
 the `atproto` base scope. `docs/client-metadata.json` is served byte-for-byte, and its own public
 URL remains equal to `client_id`.

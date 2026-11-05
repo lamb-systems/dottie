@@ -4,21 +4,21 @@ Status: accepted, 2026-10-31.
 
 ## Context
 
-AT Protocol Spaces is the protocol-native answer to permissioned data, and it overlaps directly with what
-this project builds by hand. It has to be assessed on evidence.
+AT Protocol Spaces provides protocol-native permissioned data and overlaps directly with what this
+project builds itself. Its assessment must rest on evidence.
 
-The assessment below is dated 2026-10-31 and based on the primary source: the AT Protocol announcement
-"Atproto Spaces Alpha is Live", published 2026-08-20, plus the protocol proposal it links (proposals
+The assessment is dated 2026-10-31. It uses the primary source, the AT Protocol announcement
+"Atproto Spaces Alpha is Live", published 2026-08-20, and the protocol proposal it links (proposals
 `0016-permissioned-data`).
 
 As of that date:
 
 - Spaces are in **alpha**, released with running code, SDKs, a sample app and a hosted development PDS.
-  The announcement states plainly that there will be breaking changes and that production code must not
-  run against it.
+  The announcement warns that there will be breaking changes and that production code must not run
+  against it.
 - "Spaces give you access control not confidentiality. The data in a space is readable by any user or
-  application with access to that space, it's not encrypted." This is the sentence that matters most
-  here.
+  application with access to that space, it's not encrypted." This is the assessment's most relevant
+  statement.
 - The code has not undergone careful security review, no backups are taken, destructive migrations are
   possible, and the hosted alpha PDS is deleted at the end of the alpha.
 - The protocol design, SDKs and database schema are not final, with launch targeted for later in 2026.
@@ -29,27 +29,26 @@ As of that date:
 
 ## Decision
 
-Spaces is not implemented in this scope and no code may depend on it.
+This scope does not implement Spaces. No code may depend on it.
 
-Two constraints hold regardless of how mature Spaces becomes:
+Two constraints apply regardless of Spaces maturity:
 
-- End-to-end encryption is still required. The announcement is explicit that Spaces provide access
-  control, not confidentiality, so access control cannot replace encryption and does not cure a
-  malicious provider holding the epoch key.
+- End-to-end encryption remains required. The announcement explicitly states that Spaces provide
+  access control, not confidentiality. Access control cannot replace encryption or address a malicious
+  provider holding the epoch key.
 - A private Spaces vault must never silently fall back to public storage. If private storage is
-  unavailable, the answer is a stop, not a downgrade.
+  unavailable, stop rather than downgrade.
 
-Reopening criteria, all of which matter together: a stable release, a completed security review,
-provider support with evidence behind it, addressing and proof differences from public repositories,
-publication semantics, and the cost of migrating an existing synthetic vault.
+Reopening requires all of these criteria together: a stable release, a completed security review,
+evidence of provider support, addressing and proof differences from public repositories, publication
+semantics, and the cost of migrating an existing synthetic vault.
 
 ## Consequences
 
-We carry our own epoch and encryption design, with the costs recorded in ADR 005.
+We retain our own epoch and encryption design and the costs recorded in ADR 005.
 
 If Spaces later provides per-record access control mature enough to remove the staging-disclosure
-problem, the staging design should be re-evaluated. Defending it against newer evidence would be the
-wrong response.
+problem, re-evaluate the staging design rather than defend it against newer evidence.
 
 ## Alternatives
 

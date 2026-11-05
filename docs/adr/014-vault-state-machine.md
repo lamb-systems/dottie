@@ -6,18 +6,18 @@ than cited, so a public reader is not sent to a document they cannot open.
 
 ## Context
 
-A fence protects promotion, not transmission. `uploadBlob` happens before the `applyWrites` the fence
-guards, and the fence work and the contention measurements measured that a candidate rejected after blob processing stays anonymously
-retrievable. An earlier draft claimed epoch equality made "never stage under an epoch a revoked device
-holds" a checkable predicate. It does not; the ordering section states what is available instead.
+A fence protects promotion, not transmission. `uploadBlob` precedes the fenced `applyWrites`. The
+fence work and contention measurements showed that a candidate rejected after blob processing stays
+anonymously retrievable. An earlier draft claimed epoch equality made "never stage under an epoch a revoked device
+holds" a checkable predicate. It does not. The ordering section states the available guarantee.
 
-A certificate binding only a signing key leaves the encryption key substitutable, because wrapping needs a
-recipient key and nothing authenticated it. An earlier draft also used "the floor" for four unrelated
-things; each now has its own name.
+A certificate that binds only a signing key leaves the encryption key open to substitution: wrapping
+needs a recipient key, and nothing authenticated that key. An earlier draft also called four unrelated
+things "the floor"; each now has a distinct name.
 
 ## Decision
 
-Every section below is normative. Terms and object schemas come first because the rest depends on them.
+Every section below is normative. Terms and object schemas precede the sections that depend on them.
 
 ## Terms
 
@@ -32,7 +32,8 @@ Every section below is normative. Terms and object schemas come first because th
 
 ## Signed objects
 
-Four objects are signed. Fields are normative; encodings are in the envelope specification.
+Four objects carry signatures. The fields are normative; the envelope specification defines their
+encodings.
 
 | Object | Fields |
 | --- | --- |
@@ -40,32 +41,32 @@ Four objects are signed. Fields are normative; encodings are in the envelope spe
 | **Control** | `v`, `vault`, `epoch_seq`, `policy_digest`, `head_snapshot_cid`, `revoked[]` (`device_id`, `cert_epoch`), `prev_control_cid`, `signer` |
 | **Head** | `v`, `vault`, `epoch_seq`, `policy_digest`, `snapshot_cid`, `blob_cid`, `publication_count`, `prev_head_cid`, `signer` |
 
-`control.head_snapshot_cid` names the snapshot the epoch **began** with, at the last administrative
-transition — not the live head. At genesis the control and count-zero head name the same canonical empty
-snapshot. An ordinary publication advances the head within the epoch and writes no control record, so the
-two differ by design after the first publication. A reader requires the head's
-`epoch_seq` and `policy_digest` to equal the control's, and must **not** require the snapshot identifiers
-to match: an earlier draft did, which made the first publication render the vault unreadable and block
-every later transition.
+`control.head_snapshot_cid` names the snapshot the epoch **began** with at the last administrative
+transition. It does not name the live head. At genesis the control and count-zero head name the same
+canonical empty snapshot. An ordinary publication advances the head within the epoch without writing
+a control record, so the two intentionally differ after the first publication. A reader requires the
+head's `epoch_seq` and `policy_digest` to equal the control's and must **not** require matching snapshot
+identifiers. An earlier draft required that match, making the vault unreadable after the first
+publication and blocking every later transition.
 | **Certificate** | `v`, `vault`, `device_id`, `key_id`, Ed25519 public key, X25519 public key, role, `cert_epoch`, `issuer` (`device_id` of the signing root, or the bootstrap anchor), `revocation_ref` |
 | **Checkpoint** | `v`, `vault`, `snapshot_cid`, `epoch_seq`, `policy_digest`, `anchor` (root signing-key fingerprint the kit vouches for), `control_cid`, `signer` |
 
-Every object carries `prev_*` where shown, so an ancestry check is a chain of authenticated digests rather
-than a trusted counter. A verifier rejects a control record whose `prev_control_cid` is not the control it
-observed, except at bootstrap.
+Each object carries `prev_*` where shown. An ancestry check follows authenticated digests rather than
+trusting a counter. Except at bootstrap, a verifier rejects a control record whose `prev_control_cid`
+is not the control it observed.
 
 The recovery kit vouches for an anchor; it does not issue certificates. A device root certificate is
-self-signed, and the kit-signed checkpoint pins its signing-key fingerprint, which is what a verifier is
-given as `TrustAnchor`. An earlier draft had the kit sign the root certificate itself, which no verifier
-can accept: chain resolution terminates at a self-signed certificate, so a kit-issued root would have no
-verifiable issuer.
+self-signed. The kit-signed checkpoint pins its signing-key fingerprint, which the verifier receives
+as `TrustAnchor`. An earlier draft had the kit sign the root certificate itself. No verifier can
+accept that: chain resolution terminates at a self-signed certificate, leaving a kit-issued root
+without a verifiable issuer.
 
-Root succession is represented as **two signatures on one control record**: the retiring root signs
+Root succession requires **two signatures on one control record**: the retiring root signs
 `"dottie/v1/root-retire"` and the kit signs `"dottie/v1/root-appoint"`, both over the same successor
-certificate digest. A control record changing the root is accepted only when both are present and both
-verify against the predecessor state. A single new root certificate is never sufficient, which is what
-stops a stolen kit from silently appointing itself without the retiring root, and what stops a stolen root
-device from retiring the kit anchor.
+certificate digest. A control record that changes the root is accepted only when both signatures are
+present and verify against the predecessor state. A new root certificate alone is never sufficient.
+This prevents a stolen kit from silently appointing itself without the retiring root and prevents a
+stolen root device from retiring the kit anchor.
 
 ## Authorization predicate
 
@@ -73,9 +74,9 @@ A device may perform an action when all of these hold: its certificate chains to
 this vault, is not listed in the control record's `revoked` set, satisfies `epoch_seq >= cert_epoch`, and
 the policy **at the predecessor state** assigns the required role to its `device_id`.
 
-Administrative authority is checked against the predecessor, then the successor is validated. Checking the
-successor's own policy would let a transition authorize itself. Role disagreement between certificate and
-policy is a validation failure, never a precedence question.
+Check administrative authority against the predecessor before validating the successor. Checking the
+successor's own policy would let a transition authorize itself. If certificate and policy disagree on
+a role, validation fails; neither takes precedence.
 
 ## Ordering
 
@@ -85,8 +86,8 @@ Three linearization points, and no fourth:
 2. **Transmit** — the candidate blob is uploaded under E. These bytes cannot be withdrawn.
 3. **Commit** — a fenced `applyWrites` against the observed revision either commits or loses.
 
-The guarantee is: *a candidate is promoted only if its epoch and policy digest equal those in the control
-record it commits against.*
+Promotion has one guarantee: *a candidate is promoted only if its epoch and policy digest equal those
+in the control record it commits against.*
 
 Three intervals, distinct:
 
@@ -96,15 +97,15 @@ Three intervals, distinct:
   outcome is decided; after transmission the bytes are out regardless.
 - **Decryption capability** — indefinite for anyone holding epoch E or an unwrap capability for E.
 
-Rotation bounds the first interval in practice, by making a prepared candidate stale sooner. It does not
-bound the second, and it cannot bound the third: rotation limits future authorized key use, not the
-lifetime of a ciphertext already disclosed.
+Rotation bounds the first interval in practice by making prepared candidates stale sooner. It does
+not bound the second and cannot bound the third. Rotation limits future authorized key use, not the
+lifetime of already-disclosed ciphertext.
 
 ## Transitions
 
-Every row names its authority, the predecessor it must be checked against, the complete write set, and the
-outcome of a lost race. A losing transition re-reads and re-derives; it never reuses a prepared candidate
-after a policy or epoch change.
+Each row names the authority, the predecessor against which it must be checked, the complete write
+set, and the outcome of a lost race. A losing transition re-reads and re-derives. It never reuses a
+prepared candidate after a policy or epoch change.
 
 | Transition | Authority | Predecessor | Successor state | Atomic write set | Lost race |
 | --- | --- | --- | --- | --- | --- |
@@ -118,11 +119,10 @@ after a policy or epoch change.
 | **Reissue kit** | root only | control C, epoch E | replacement kit anchor in the control record, accepted only above the current checkpoint; `epoch_seq` unchanged and the head is untouched | control, checkpoint | retry after re-read |
 | **Recover** | kit, plus a surviving root device for anything that rewrites the head | control C, or the kit checkpoint when control is unavailable | new root certificate at `epoch_seq+1`; head rewritten **only** when a device that can decrypt the current head is present | certificate, control, policy; snapshot blob ref and head when a decrypting device participates | kit-only: authorization restored, freshness-unverified, inspection and export only |
 
-Every administrative transition advances the epoch, which means the live head is re-encrypted under the
-successor key and written as a new first blob reference. There is no transition that changes the epoch
-without rewriting the head.
+Every administrative transition advances the epoch, re-encrypts the live head under the successor key
+and writes it as a new first blob reference. No transition changes the epoch without rewriting the head.
 
-`epoch_seq` assignment is serialized by the fence. Two root devices cannot both mint `N+1`; the second
+The fence serializes `epoch_seq` assignment. Two root devices cannot both mint `N+1`; the second
 loses on `InvalidSwap` and must re-read.
 
 Administrative transitions prepare successor state in this order: authorize against the predecessor,
@@ -132,9 +132,9 @@ current epoch and changes only head and count.
 
 ## Bootstrap anchor
 
-The kit's public anchor must be pinned independently of the provider: printed with the kit, recorded in the
-checkpoint the user keeps, and never read back from the account. A bootstrap that resolves its own root
-from the PDS is circular and is rejected.
+Pin the kit's public anchor independently of the provider: print it with the kit, record it in the
+checkpoint the user keeps, and never read it back from the account. Reject a bootstrap that resolves
+its own root from the PDS; that trust is circular.
 
 ## Unknown outcomes
 
@@ -146,23 +146,22 @@ decision.
 
 ## Rotation
 
-An epoch rotates on every administrative transition, and after either `max_publications` publications or
-`max_epoch_age`, whichever comes first. Both thresholds are policy fields, so an implementation reads them
-rather than inventing them.
+An epoch rotates on every administrative transition and after either `max_publications` publications
+or `max_epoch_age`, whichever comes first. Implementations must read both thresholds from policy
+fields, not invent them.
 
-`publication_count` lives in the **head** record, not the control record. It is initialised to zero at
-bootstrap and resets to zero at each epoch change, and it is incremented by the same fenced write that
-advances the head, so it remains authenticated state rather than a local guess.
+`publication_count` lives in the **head** record, not the control record. It starts at zero at
+bootstrap and resets to zero at each epoch change. The fenced write that advances the head also
+increments the count, keeping it authenticated rather than locally estimated.
 
-It sits in the head because ordinary publication is publisher-authorized and the control record is
-root-authorized. Keeping the counter in control would mean a publisher could not publish at all, which an
-earlier draft of this record required without noticing. `max_publications` is a `uint32` in the range 1 to 100000; `max_epoch_age`
-is a `uint32` count of seconds in the range 3600 to 31536000.
+The counter belongs in the head because ordinary publication is publisher-authorized, while the
+control record is root-authorized. Keeping it in control would prevent publishers from publishing,
+an unintended requirement of an earlier draft. `max_publications` is a `uint32` in the range 1 to 100000;
+`max_epoch_age` is a `uint32` count of seconds in the range 3600 to 31536000.
 
-The count comparison happens before preparing a publication, and a device at or above the threshold does not
-prepare one at all. First-seen time for the current epoch is persisted in local state, so a restart does not
-reset it; if local state is lost, the device treats the age trigger as met rather than restarting the clock,
-because restarting it would postpone rotation indefinitely.
+A device compares the count before preparing a publication and prepares nothing at or above the
+threshold. Local state persists the current epoch's first-seen time across restarts. If that state is
+lost, the device treats the age trigger as met; restarting the clock would postpone rotation indefinitely.
 
 Rotation is not authorization. It moves no device into or out of a role, so it does not conflict with ADR
 006's rule that wall-clock time never authorizes a vault action. Age is evaluated against a locally
@@ -187,17 +186,17 @@ and the deletion of that retained material. An earlier draft stated the obligati
 presupposed a key store the implementation deliberately does not have; deleting nothing is a stronger
 property than deleting on schedule, and this record says so rather than implying a store that does not exist.
 
-Compliance is attested, not verified. The attestation is a separately **device-signed** object, not a field
-the publisher may author: it names its subject `device_id`, the vault, the policy digest, the declared
-retention floor, the recovery points still held, and the control CID it was made against. The device's own
-signature is what makes it an attestation; a publisher relaying it cannot alter it without invalidating it.
+Compliance is attested, not verified. The attestation is a separate **device-signed** object, not a
+field the publisher may author. It names its subject `device_id`, the vault, the policy digest, the
+declared retention floor, the recovery points still held, and the control CID it was made against.
+The device's signature makes it an attestation; a publisher cannot alter it during relay without
+invalidating it.
 
-Attestations are published as their own record (ADR 015's attestation object), never inside the control
-record. An earlier draft had publishers append attestations to ordinary control updates, which quietly
-required publisher authority to write a root-authorized record — the same defect that kept the publication
-counter in control. A restore-only device hands its signed attestation to a publisher over the local IPC
-channel, and the publisher publishes those bytes unchanged. Relaying is a transport detail, not an
-authority.
+Attestations have their own record (ADR 015's attestation object); they never appear inside the control
+record. An earlier draft had publishers append attestations to ordinary control updates. That required
+publisher authority to write a root-authorized record, the same defect as keeping the publication
+counter in control. A restore-only device sends its signed attestation to a publisher over the local
+IPC channel. The publisher publishes those bytes unchanged. Relay supplies transport, not authority.
 
 The signed attestation floor is the `confidentiality floor`, not the `recovery floor`. An unknown-epoch holding means the confidentiality floor is unknown; it must not be reported as a positive or policy-compliant floor. A declared floor below the `policy retention floor` is surfaced to the user and the device is treated as compromised for confidentiality purposes. Nothing here revokes anything: a revoked or offline device that never deletes keeps its access, and a device that retains its X25519 private key can unwrap archived wrappers indefinitely.
 
@@ -209,14 +208,14 @@ A checkpoint names a snapshot CID, `epoch_seq`, policy digest, control CID and s
 supplied state against its held checkpoint and accepts **equality or a verified descendant**, following the
 `prev_control_cid` chain.
 
-Two distinct outcomes follow. A state below the checkpoint, or one whose ancestry does not reach it, is
-**rejected**. A state that is a genuine descendant is accepted even when the device has not seen the
-intervening history, so a provider that withholds newer records is not detectable by this check alone;
-that is an availability and equivocation limit, not a rollback.
+A state below the checkpoint, or whose ancestry does not reach it, is **rejected**. A genuine
+descendant is accepted even if the device has not seen the intervening history. This check alone
+cannot detect a provider withholding newer records; that is an availability and equivocation limit,
+not a rollback.
 
-First restore has no local checkpoint. The kit's checkpoint is then the only anchor, and everything below it
-is rejected. With no kit checkpoint at all, the device enters the freshness-unverified state and is
-restricted to inspection and export.
+First restore has no local checkpoint, so the kit's checkpoint is the only anchor. Everything below
+it is rejected. Without a kit checkpoint, the device enters the freshness-unverified state, restricted
+to inspection and export.
 
 ## Recovery kit
 
@@ -225,31 +224,31 @@ fingerprint. Derived with distinct HKDF labels: a **recovery signing key** that 
 certificate, a bootstrap transition, a checkpoint, and a kit reissue; and a **checkpoint seed**. It derives
 no content key, so a stolen kit does not decrypt stored snapshots.
 
-A stolen kit can mint a new root certificate and administer the vault. That is the cost of an anchor
-independent of the provider, and it is recorded rather than softened. A kit-signed root replacement is
-accepted only above the last kit-announced checkpoint, so a retired kit cannot re-root history; reissuing a
-kit therefore records a new anchor and retires the old one at that checkpoint.
+A stolen kit can mint a new root certificate and administer the vault. An anchor independent of the
+provider carries that cost without qualification. A kit-signed root replacement is accepted only
+above the last kit-announced checkpoint, so a retired kit cannot re-root history. Reissuing a kit
+records a new anchor and retires the old one at that checkpoint.
 
 Losing the kit is recoverable while a **root-capable** device remains, which signs a reissue and rotates
 the root. A publisher or restore-only device cannot re-root.
 
-The kit does not recover data the provider no longer holds, and it derives no content key, so a kit alone
-cannot rewrite the head: every epoch-changing transition re-encrypts the live head, and encrypting requires
-the current plaintext. Three artifacts are therefore required for full recovery, and the specification names
-them because "recovery" without them is a promise the design cannot keep:
+The kit cannot recover data the provider no longer holds and derives no content key. A kit alone
+therefore cannot rewrite the head: every epoch-changing transition re-encrypts the live head, which
+requires the current plaintext. Full recovery requires three artifacts; without them, the design
+cannot promise "recovery":
 
 1. the kit, for authorization;
 2. the independent complete export, which carries the snapshot payloads; and
 3. a secret that can decrypt that export, since the export is encrypted under an epoch key the kit does not
    hold.
 
-Without all three, recovery stops at authorization plus inspection and export, and the specification says
-so rather than implying the head can always be rebuilt.
+Without all three, recovery stops at authorization plus inspection and export. The specification
+cannot promise to rebuild the head in every case.
 
 ## Consequences
 
-Recovery from a concurrent revocation does not include bytes already transmitted. The exposure window is
-narrowed by successor-epoch staging and rotation; it is not closed.
+Recovery from a concurrent revocation does not include bytes already transmitted. Successor-epoch
+staging and rotation narrow the exposure window; they do not close it.
 
 Revocation means "cannot publish after this point", not "cannot read anything ever again".
 

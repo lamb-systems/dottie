@@ -194,7 +194,7 @@ func TestLiveArchiveExportAndValidation(t *testing.T) {
 	}
 	provider := pdsProviderName(handle)
 	artifactDir := liveArtifactDir(t)
-	artifact := pdsFailureArtifact{Provider: provider, IntendedPDS: "redacted", Criterion: "archive-export-validation", DecisionDOTF07: "Owner review required; no production release claim.", CloudReleaseHold: true}
+	artifact := pdsFailureArtifact{Provider: provider, IntendedPDS: "redacted", Criterion: "archive-export-validation", DecisionOwnerReview: "Owner review required; no production release claim.", CloudReleaseHold: true}
 	artifactEvidence := "live archive gate failed before classification; details redacted"
 	defer func() {
 		if t.Failed() {

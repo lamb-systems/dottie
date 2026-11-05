@@ -4,11 +4,10 @@ Status: accepted, 2026-10-31. Amends a claim made in ADR 002.
 
 ## Context
 
-An earlier draft of this decision argued that confidentiality was enforced twice: by staging under a
-new epoch only, and by encryption. Three reviewers independently showed that argument was wrong.
+An earlier draft claimed two mechanisms enforced confidentiality: staging only under a new epoch, and
+encryption. Three reviewers independently showed that claim was wrong.
 
-Those mechanisms address different threats. The threats are listed below, and no row has a defense that
-exists in the code today.
+Those mechanisms address different threats. None of the defenses listed below exists in the code today.
 
 | Threat | What it obtains | Defense | Status |
 | --- | --- | --- | --- |
@@ -17,31 +16,31 @@ exists in the code today.
 | Provider without the epoch key | ciphertext only | encryption before upload | not implemented |
 | Colluding provider holding the epoch key | plaintext | none available | recorded as accepted risk |
 
-Staging under a new epoch is a key-selection rule. It decides which epoch encrypts a candidate, and it
-does not cause a rejected candidate to be non-promoted. Non-promotion is precisely the condition under
-which the contention measurements measured disclosure, so the rule cannot be a defense against that disclosure.
+Staging under a new epoch selects the epoch that encrypts a candidate; it does not cause a rejected
+candidate to be non-promoted. The contention measurements measured disclosure under non-promotion, so
+this key-selection rule cannot defend against that disclosure.
 
-Independent checkpoints are not on this table. They address authenticated history and rollback
-detection, which is a different property. A checkpoint cannot stop a provider from handing out bytes it
-already stores, and it cannot stop a key holder from decrypting them.
+Independent checkpoints address a different property: authenticated history and rollback detection.
+They therefore do not appear in the table. A checkpoint cannot stop a provider from handing out bytes
+it already stores or stop a key holder from decrypting them.
 
-Encrypting after the fact does not help. A CID already obtained stays readable by whoever holds that
-epoch key, and rotating the epoch does not un-disclose an old ciphertext.
+Encrypting after disclosure does not help. A CID already obtained stays readable by whoever holds
+that epoch key. Rotating the epoch cannot undo disclosure of an old ciphertext.
 
 ## Decision
 
-A candidate is encrypted before it is uploaded, under the currently authorized epoch. Staging must
-never use an epoch that a revoked device holds.
+The client encrypts a candidate under the currently authorized epoch before upload. Staging must never
+use an epoch that a revoked device holds.
 
 A candidate staged before an epoch or policy change, or staged without an envelope, is discarded and
 never promoted. Promotion after a rejected or ambiguous attempt requires revalidation against the exact
 current policy and epoch.
 
-Epoch granularity is now decided in **ADR 014**, which supersedes this paragraph: an epoch is one
-administrative transition plus a bounded publication count or age. This record keeps only the achievable constraint on top of it:
-no candidate is promoted under a stale epoch, and a candidate transmitted during a concurrent revocation is
-disclosed to the pre-revocation recipient set. ADR 014 states the three linearization points and why
-transmission cannot be undone.
+Epoch granularity is now defined in **ADR 014**, which supersedes this paragraph: an epoch is one
+administrative transition plus a bounded publication count or age. This record retains the achievable
+constraint: no candidate is promoted under a stale epoch, and a candidate transmitted during a concurrent
+revocation is disclosed to the pre-revocation recipient set. ADR 014 states the three linearization
+points and explains why transmission cannot be undone.
 
 Epoch keys are pruned once superseded. **ADR 014 supersedes the retention rule here**: a device keeps the
 epochs its retained recovery points need and deletes the rest, so the tunable is a recovery-point count
@@ -50,18 +49,18 @@ applies, and ADR 014 states it more precisely. Pruning costs restore depth: with
 reaches back N epochs and no further. Without pruning, a device compromised in a year would expose every
 candidate from every epoch it ever held, and accepting disclosed ciphertext would not be defensible.
 
-`ErrCandidateMayBeDisclosed` stays attached to every post-submission failure except a lost fence. The
-implementation already does this: `publish.go` joins it with `ErrAmbiguousTransport` on a transport
-failure and on any 5xx, so a caller cannot mistake an unknown outcome for a clean one.
+`ErrCandidateMayBeDisclosed` remains attached to every post-submission failure except a lost fence.
+The implementation already enforces this: `publish.go` joins it with `ErrAmbiguousTransport` on a
+transport failure and on any 5xx, so callers cannot mistake an unknown outcome for a clean one.
 
 ## Consequences
 
-Nothing is protected today. `internal/vault` has neither encryption nor signing, and the contention measurements measured
-exact staged bytes, with no envelope.
+Nothing is protected today. `internal/vault` has neither encryption nor signing. The contention
+measurements measured exact staged bytes, with no envelope.
 
-Real data and cloud release are held against the complete checklist in ADR 013. This record is not the
-gate by itself. Synthetic use of the transport requires explicit disposable-account authorization, which is how
-the account-authorization work to the native settings boundary were run.
+Real data and cloud release remain held against the complete checklist in ADR 013; this record alone
+is not the gate. Synthetic use of the transport requires explicit disposable-account authorization.
+The work from account authorization to the native settings boundary ran under that authorization.
 
 ## Risk ledger
 
@@ -80,5 +79,5 @@ end-to-end encryption, and a colluding provider can reference a blob it stored.
 Encrypting once under a long-lived key was rejected: a single leaked key would expose every snapshot the
 user ever staged, and revocation would mean nothing.
 
-Staging plaintext during development was not rejected outright, because that is what synthetic fixtures
-do. It is also why real data is held.
+Staging plaintext during development was not rejected outright because synthetic fixtures do that.
+For the same reason, real data remains held.

@@ -1,12 +1,16 @@
 # Secure manual restore acceptance
 
-**Decision: pending owner acceptance. Real-data use remains prohibited until the owner explicitly accepts this document and its evidence matrix.** A passing synthetic test or a skipped live test does not lift that prohibition.
+**Decision: accepted by the owner on 2026-11-05.** The owner reviewed this evidence matrix, including
+its distinction between synthetic and live rows, and accepted the milestone with the residual
+limits below. Real-data use of this build is permitted under those limits. Acceptance does not
+remove the limits. A future change that invalidates a row must not assume
+this acceptance still applies.
 
 ## Requirement evidence matrix
 
-Live evidence was produced on 2026-11-05 against the owner-authorized disposable identity, and the P07
-publication audit artifact is retained alongside it. Rows whose evidence kind says synthetic were not
-exercised live, and say so.
+Live evidence comes from the 2026-11-05 runs against the owner-authorized disposable identity. The P07
+publication audit artifact is retained alongside that evidence. Rows marked synthetic were not
+exercised live; the matrix identifies them as such.
 
 | Requirement | Evidence kind | Exact command or test name | Artifact | Residual limit |
 | --- | --- | --- | --- | --- |
@@ -19,7 +23,7 @@ exercised live, and say so.
 | Metadata disclosure | synthetic and live | `TestPublicationMetadataDisclosure`; `TestLivePublicationPrivacy` | Test output; live `publication-privacy.json` | Inspects repository and blob surfaces the client can fetch; provider logs and server-side retention remain unobservable, and provider blobs cannot be deleted |
 | Security gate V08 | synthetic | `make known-defects` | Command output | Frozen known-defect inventories do not replace independent security review |
 
-The `DOTTIE_LIVE_MILESTONE=1` gate has now been run once, with outcome `passed`, `content_matched`
+The `DOTTIE_LIVE_MILESTONE=1` gate has run once, with outcome `passed`, `content_matched`
 true, position epoch 1, and exactly two `applyWrites` and two `uploadBlob` calls (one publication and
 one enrollment). It requires an allowlisted `DOTTIE_HANDLE`, a private regular
 `DOTTIE_RECOVERY_KIT_FILE`, an existing local vault selection with checkpoint and authenticated
@@ -37,6 +41,6 @@ content. A skipped gate would not have been evidence.
 - An independent archive plus that compatible recipient key can recover the archive's checkpoint snapshot without contacting the provider. The archive may not contain the newest provider state. A kit alone, or an archive without a compatible recipient key, cannot recover plaintext.
 - Losing every device key without an independent complete export is data loss. A repository CAR is not a complete blob archive.
 - Freshness-unverified remote state is refused for apply. The existing consent path permits inspection/export continuation only; it never grants apply authority.
-- The live milestone's same-host kit file is an explicitly limited disposable demonstration, not evidence of independent/offline kit custody or machine-loss recovery.
+- The live milestone's same-host kit file provides only a limited disposable demonstration, not evidence of independent/offline kit custody or machine-loss recovery.
 
 The owner must record explicit acceptance of these boundaries, every matrix result, and the residual limits before real user data is used. Until that acceptance is recorded, do not use Dottie with real dotfiles or preferences.

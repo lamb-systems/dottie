@@ -633,7 +633,7 @@ func buildManualRepository(t *testing.T, plaintext []byte) manualRepository {
 	ephemeral, err := ecdh.X25519().GenerateKey(bytes.NewReader(bytes.Repeat([]byte{0x2a}, 64)))
 	require.NoError(t, err)
 	genesis, err := vault.ComposeGenesis(vault.GenesisIntent{
-		Kit: kit, VaultName: "manual S1b synthetic fixture", RootDevice: root,
+		Kit: kit, VaultName: "manual sync synthetic fixture", RootDevice: root,
 		ContentKey:    bytes.Repeat([]byte{0x31}, 32),
 		Wraps:         []vault.RecipientWrapInput{{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(ephemeral.Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{0x41}, 24))}},
 		PublicationID: [16]byte(bytes.Repeat([]byte{0x51}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{0x61}, 24)),

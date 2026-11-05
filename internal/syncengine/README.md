@@ -1,6 +1,6 @@
 # Three-way reconciliation
 
-`Reconcile` is a pure, deterministic decision function. It consumes an explicit `BaseView`, a
+`Reconcile` is a pure, deterministic decision function. It takes an explicit `BaseView`, a
 `LocalView`, remote entries, and caller-supplied validated target bindings. It performs no I/O,
 uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan. The
 separate journaled `Apply` consumer accepts supported file operations and library-level GNOME
@@ -24,7 +24,7 @@ each side that had an entry, and copied entries. Fingerprints contain the valida
 kind, mode, link target or typed value, size and digest; downstream code must use those values and
 must not reconstruct target authority or entry digests.
 
-The caller boundary must supply canonical GVariant `Type` and `Text` for settings. This model does
+The caller must supply canonical GVariant `Type` and `Text` for settings. This model does
 not parse or canonicalize GVariant text. Reconciliation compares setting state, `Type`, and `Text`
 exactly; differently represented text is not equal even if another layer might interpret it as an
 equivalent value.
@@ -53,15 +53,15 @@ unknown or unmatched entry remains, and `unresolved_entries` gives the count. Th
 then a lower bound over resolved entries, not a constructed candidate snapshot or a promise about
 the remote.
 
-An explicit GNOME reset is represented as an `ObservationPresent` carrying a `SettingReset` entry,
-while present file observations retain their existing validation. `BuildPreview` treats present and
+An `ObservationPresent` carrying a `SettingReset` entry represents an explicit GNOME reset.
+Present file observations retain their existing validation. `BuildPreview` treats present and
 reset settings as transferable candidates and can represent reset-to-present or present-to-reset
 upload/download changes without retaining a setting value in the preview. The journaled apply consumer
 accepts supported file operations and library-level GNOME setting set/reset when the caller supplies a
 settings backend; CLI/preset activation remains later work. Unsupported file kinds are rejected during model validation before a reconciliation
 decision exists, so unsupported is not a preview outcome here. This pure layer does not inspect
 target roots, so it cannot infer a disappeared-root risk from supplied decisions. The CLI's JSON
-bundle is only a caller-supplied seam; it does not make capture or synchronization operational.
+bundle supplies input only; it does not make capture or synchronization operational.
 
 ## State classification and precedence
 
@@ -137,7 +137,7 @@ and each key receives one decision. Repeated calls with identical inputs produce
 
 ## Structural consistency
 
-After the per-key decisions, each file target is checked on both resulting sides. If a parent is
+After making per-key decisions, the reconciler checks each file target on both resulting sides. If a parent is
 changed to a non-directory while a descendant survives, or a parent is deleted while a descendant
 survives, the parent and affected descendant decisions become `conflict / structural`. Existing
 blocked decisions remain blocked. This prevents a plan from asking a consumer to publish or apply
@@ -158,10 +158,10 @@ not independently establish that those bytes are the right candidate for the rec
 
 ## Precedence, as implemented
 
-The prose list above is ordered for reading; the code applies them in this sequence: blocking
+The prose above presents precedence in reading order; the code applies the checks in this sequence: blocking
 (unknown/untracked/coverage), then the base-missing, equality, one-sided-change, divergence and
 deletion rows, and **only then** the structural promotion pass over the resulting decisions. A
-structural conflict can therefore override a per-key decision that was already resolved.
+structural conflict can override an already-resolved per-key decision.
 
 ## Coverage is per target, and the caller carries the obligation
 
@@ -195,8 +195,8 @@ also receives the expected preimage and re-hashes/re-checks its mode immediately
 remove. A mismatch returns `ErrPreconditionChanged` and leaves the destination and staged replacement
 untouched. For replacement, this moves the check past temporary-file writing and fsync, shrinking the
 race window from that whole interval to the final stat-to-rename instant; deletion has the equivalent
-stat-to-remove interval. These are check-then-mutate operations, not atomic conditional writes: a
-concurrent edit in that final syscall window is still possible and cannot be guaranteed impossible.
+stat-to-remove interval. These are check-then-mutate operations, not atomic conditional writes: they cannot prevent a
+concurrent edit in the final syscall window.
 Each file operation records a pending state row and an immutable backup before touching the
 destination. The journal stores the resolved destination directory and its device/inode identity, so
 recovery does not re-resolve a target from changed configuration. Replacements use same-directory
@@ -229,5 +229,5 @@ the backup rather than deleting it on a judgment call.
 
 Apply and rollback are per-entry operations, not a transaction. A failing entry stops the apply
 sequence; earlier entries may already be applied and later entries are not. A rollback may restore
-some entries and skip or fail others, and its report states the result for each. The apply path
+some entries and skip or fail others, and its report states the result for each. Apply
 never infers deletion from absence and never deletes directories or files absent from the preview.

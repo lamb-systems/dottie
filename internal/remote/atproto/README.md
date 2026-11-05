@@ -12,7 +12,7 @@ public labels; snapshot content remains in encrypted envelope blobs.
 
 ## Vault record binding
 
-The seven `systems.lamb.dottie` Lexicon records are represented by typed Go values in `records.go`.
+Typed Go values in `records.go` represent the seven `systems.lamb.dottie` Lexicon records.
 `DecodeRecord` and `EncodeRecord` use AT Protocol DAG-CBOR and reject unknown or missing fields;
 `VerifyRecordBinding(record, envelopeOrObject)` is pure comparison code with no transport or I/O.
 It checks every field duplicated between a record and its V02 signed envelope/object, including
@@ -25,8 +25,8 @@ slice denotes the bootstrap empty head. Missing required context fails with a ty
 `SnapshotRecordSigningPreimage`, `SignSnapshotRecord`
 and `VerifySnapshotRecordSignature` define the independent Ed25519ctx record signature as
 `dottie/v1/recordsig` followed by canonical DAG-CBOR of all snapshot record fields except
-`signature`; `$type`, `schemaVersion` and the typed blob reference are included. A future field
-addition changes every signature preimage, so it is a signature-compatibility break even if the DTE
+`signature`; `$type`, `schemaVersion` and the typed blob reference are included. Adding a field
+changes every signature preimage and breaks signature compatibility even if the DTE
 wire version stays the same. V02 uint64 record values use Lexicon integers capped at 9007199254740991;
 `EncodeRecord` refuses larger values rather than truncating them. Resolving the record and envelope
 signatures to the same trusted device key requires the caller's certificate chain, which these
@@ -48,7 +48,7 @@ relay must verify the original subject-device signature and relays the bytes unc
 
 ## Discovery and identity binding
 
-Discovery is four ordered hops: handle to DID using HTTPS `/.well-known/atproto-did` with
+Discovery follows four ordered hops: handle to DID using HTTPS `/.well-known/atproto-did` with
 `_atproto.<handle>` TXT fallback; DID to the DID document (`plc.directory` for `did:plc`, HTTPS
 DID web document for `did:web`); DID document to the `#atproto_pds` service; then PDS to
 `/.well-known/oauth-protected-resource`, its advertised authorization server and that server's
@@ -62,8 +62,8 @@ credential-bearing requests do not follow redirects.
 
 Authorization uses PAR, a retained verifier-derived PKCE S256 challenge, independently generated
 state, and the actual loopback listener address `http://127.0.0.1:<port>/callback` in both PAR and
-the token exchange. Callback state is compared in constant time; callback issuer and token subject
-are checked against discovery before code exchange and session storage respectively. Grants are
+the token exchange. Authorization compares callback state in constant time and checks callback issuer and token subject
+against discovery before code exchange and session storage respectively. Grants are
 parsed as `atproto`, `repo:<nsid>` and `blob:<mime>` scopes. `VaultScopes()` is the canonical sorted
 set: `atproto`, all seven `repo:systems.lamb.dottie.*` collections, and `blob:application/octet-stream`.
 The metadata scope-set test compares it with `docs/client-metadata.json`. Any unrequested grant or missing
@@ -92,9 +92,9 @@ a fresh proof. This path never refreshes credentials.
 non-replayable error. A repeated challenge also returns a typed error; the resource request never
 exceeds two attempts.
 
-Refresh and transport failures are returned as `*AuthMethodError` values with an error kind usable
-through `errors.Is`. Ordinary non-challenge HTTP responses are returned unchanged for the API caller
-to inspect.
+Refresh and transport failures return `*AuthMethodError` values with an error kind usable
+through `errors.Is`. The API caller receives ordinary non-challenge HTTP responses unchanged
+for inspection.
 
 A single keyring item contains one version-1 session envelope with DID, optional handle, issuer, validated
 token endpoint, granted scopes, refresh token and DPoP private key. Missing/empty state means `usable` for
@@ -155,11 +155,11 @@ round tripper backed by a synthetic TLS server.
 
 ## Bounded repository proofs and fenced publication
 
-Verification is not hand-rolled: bounded CAR/MST/signature checking uses Indigo's
+Bounded CAR/MST/signature verification uses Indigo's
 `atproto/repo`, `atproto/repo/mst` and `atproto/atcrypto` plus `go-car`, which grows `go.sum`
-from 118 to 360 lines and the module graph to 264 modules. That footprint is the price of not
-writing our own MST and signature verification, and it must be revisited if the dependency set
-ever becomes a release concern.
+from 118 to 360 lines and the module graph to 264 modules. Those dependencies avoid
+custom MST and signature verification. Revisit their footprint if the dependency set
+becomes a release concern.
 
 A revision read has at most three attempts. Each attempt obtains `getLatestCommit`, streams a full
 `getRepo` response without `since`, then obtains `getLatestCommit` again. The CAR root must equal
@@ -174,7 +174,7 @@ network currently publishes secp256k1 `Multikey` entries, so a P-256-only rule b
 adding no security; the binding that matters is the DID-scoped `#atproto` method plus a verified
 commit signature. Other curves are rejected. No `getRecord` call contributes to proof membership.
 
-The CAR is capped while its response stream is read, before `LoadRepoFromCAR` can materialise it.
+The reader caps the CAR response stream before `LoadRepoFromCAR` can materialise it.
 `DefaultBudgets()` uses 8 MiB total CAR bytes, 8192 blocks, 1 MiB per block, 4096 membership
 records and MST depth 32. The bounded pre-pass rejects malformed roots, duplicate blocks and
 oversized blocks. After loading, a partial MST is rejected; every membership key is unique, its
@@ -202,7 +202,7 @@ requires a real verified empty repository revision, stages the sealed canonical 
 snapshot, and sends policy, control, certificate, checkpoint, snapshot reference and
 count-zero head as one all-creates `applyWrites` batch fenced to that empty revision. It
 never routes through `PreparePublication` or `commitPublication`. Every transmitted batch
-is resolved with a fresh signed revision; success additionally requires exact six-record
+is resolved with a fresh signed revision; success also requires exact six-record
 membership, exact checkpoint record binding plus kit authentication, a successful real
 `VaultReader` result and the canonical empty plaintext snapshot. A reread that proves the
 records absent returns `ErrGenesisNotLanded`; a failed or moving reread returns
@@ -217,7 +217,7 @@ The live fence harness uses provisional test-only records: `systems.lamb.dottie.
 `probe-<base32>` with `{$type, probe, blob, createdAt}`; `systems.lamb.dottie.vaultHead` at
 `self` with `{$type, snapshotRkey, snapshotCid, updatedAt}`; and `systems.lamb.dottie.vaultControl`
 at `self` with `{$type, devices:[{did,role}], policyEpoch, updatedAt}`. These fixtures are not
-the record schemas schemas and must not be used as production vault records. They are confined to integration
+the record schemas and must not be used as production vault records. They are confined to integration
 tests and are deleted and verified by deferred cleanup.
 
 The error categories are `ErrFenceLost` for structured `InvalidSwap`, `ErrRevisionMoving` after
@@ -228,7 +228,7 @@ record preparation or definitive non-fence rejection, and `ErrAmbiguousTransport
 transport outcomes and server failures.
 
 The only current revision claim is membership at a PDS-asserted commit, not global freshness.
-Rollback and equivocation defence require independent checkpoints in checkpoints and recovery. A fence prevents
+Rollback and equivocation defence require independent checkpoints in the checkpoints and recovery work. A fence prevents
 exposure through our writes under an honest-but-racing provider; a malicious PDS colluding with a
 revoked keyholder can still reference temporary blobs outside our writes. Device authorship and
 role enforcement remain device enrollment/V04.
@@ -238,11 +238,10 @@ role enforcement remain device enrollment/V04.
 `tests/integration/contention_harness_test.go` is a test-only measurement harness.
 `TestLiveContention` skips unless `DOTTIE_LIVE_CONTENTION=1`, and uses only the F03/F04
 disposable identity allowlist. It must not be run without explicit disposable-account
-authorization. The separately budgeted long referenceability run additionally requires
+authorization. The separately budgeted long referenceability run also requires
 `DOTTIE_LIVE_EXPIRY=1`; it has its own context and timeout. Before opening credentials or sending
 requests, the test requires at least 30 minutes remaining for the short schedule, or 110 minutes
-when short and long schedules are selected together. No live F05 result has been measured by this
-implementation.
+when short and long schedules are selected together. This implementation has measured no live F05 result.
 
 Authorized invocations, only after explicit disposable-account approval, are:
 
@@ -302,7 +301,7 @@ sample (the fresh revision plus outcome resolution). A typed budget stop prints 
 and its caveat rather than failing the test. Success and error samples are separate. Percentiles use nearest rank: sorted ascending, rank
 `ceil(p*n)`, one-indexed. The decision-grade minimum is 200 observations per provider; below it the
 record reports the measured percentiles next to the literal
-`insufficient sample - not decision-grade`. Thus the default 50-sample profile is exploratory, not
+`insufficient sample - not decision-grade`. The default 50-sample profile is exploratory, not
 decision-grade.
 
 The enforced per-provider short-run budget has a 120-call logical applyWrites cap and a separate
@@ -348,7 +347,7 @@ duration.
 Every applyWrites target is tracked and printed with a run identifier before its first send. If
 cleanup cannot verify or delete, output includes the complete run-id tracked pair set and instructs
 reconciliation against a fresh verified revision without deleting unrelated records. An aborted run
-can therefore be reconciled from output alone. The test refuses to overwrite a pre-existing
+can be reconciled from output alone. The test refuses to overwrite a pre-existing
 head/control `self`; this is an intentional restart hazard because those records may belong to a
 prior aborted run. These are integration-test mechanisms only; the live harness records eligibility
 and does not invoke the library retry API. `PublishWithRetry` is not wired into the CLI or `syncengine`.
@@ -468,7 +467,7 @@ timing. The checked-in matrix is intentionally unmeasured until its owner runs t
 
 A failed criterion writes a mode-0600 `failure.json` into a printed temporary directory. Its fields
 are `provider`, `intended_pds`, `criterion`, `redacted_evidence`, `decision_required_at_DOT_F07` and
-`cloud_release_hold: true`. The the feasibility gate decision is provider-specific; cloud release is held for
+`cloud_release_hold: true`. The feasibility gate decision is provider-specific; cloud release is held for
 the failing provider. This task does not implement local-only fallback and never silently switches
 providers.
 
@@ -480,7 +479,7 @@ create, rename or relabel a collection: `CreateCollection` with a custom alias f
  gnome-keyring with `Only the 'default' alias is supported`, and relabelling the user's login
 keyring would be an unacceptable side effect. If no default collection exists or it is locked,
 opening the keyring fails with a typed error and the flow pauses; there is no file fallback.
-Underlying D-Bus errors are preserved in the message so an operator can diagnose the session
+Messages preserve underlying D-Bus errors so an operator can diagnose the session
 without guessing.
 
 ## Scope notes from the live provider
@@ -491,7 +490,7 @@ scope**, not an alternative to the granular `repo:`/`blob:` scopes. The client r
 `atproto` plus its granular collections, and the token response's granted scope is recorded so
 the effective width of the grant can be verified rather than assumed.
 
-The authorization server's own `scopes_supported` is treated as informational: it currently
+The client treats the authorization server's own `scopes_supported` as informational: it currently
 advertises `atproto` and the `transition:*` family only, and a client that validated that list
 with its own grammar would refuse to start.
 
@@ -518,8 +517,8 @@ Consequences encoded in this package:
 ## Fenced vault publication and transitions
 
 `CommitPublication` accepts a publisher- or root-authorized `vault.Publication`, a signing key, a
-concrete `ATProtoPublicationIO` value and a durable attempt store. Requiring this concrete adapter
-is intentional: callers cannot supply an outside I/O implementation or override its concrete verified
+concrete `ATProtoPublicationIO` value and a durable attempt store. This concrete adapter
+prevents callers from supplying an outside I/O implementation or overriding its concrete verified
 reader and fenced-write path. It uploads the already-sealed current-epoch snapshot with
 `application/octet-stream`, after the sink independently decodes its envelope and checks the expected
 vault, epoch and policy digest. It then invokes the unexported fenced sink with exactly two writes:
@@ -544,8 +543,8 @@ checked against an initial verified predecessor before staging and a second veri
 after staging and immediately before the fenced write. A policy digest mismatch is a typed
 `ErrPreparedPolicyMismatch`; no stale bundle is reused.
 
-The local attempt row is committed before the blob upload request for both ordinary publication and
-transitions. It stores the unique snapshot marker, expected DAG-CBOR record CID, candidate blob CID,
+Both ordinary publication and transitions commit the local attempt row before the blob
+upload request. It stores the unique snapshot marker, expected DAG-CBOR record CID, candidate blob CID,
 epoch, policy digest, outcome and resolution evidence, but no snapshot bytes or key material.
 Ordinary publication evidence also stores a versioned retry disposition (`ambiguous`, `rejected`,
 `quota`, `rate-limited`, `upload-too-large`, `batch-too-large` or `fence-lost`) before its outcome
@@ -618,7 +617,7 @@ existing block, MST-depth and per-block limits. Blob reads are capped before all
 smaller of the configured maximum and the V02 envelope limit; the signed snapshot record's declared
 size must also match exactly. The response is streamed through that cap, then its raw CID is
 verified. The current reader does not consume a held checkpoint, so every successful result carries
-`freshness-unverified`. This is a statement that membership was proven at a PDS-asserted revision,
+`freshness-unverified`. That status means membership was proven at a PDS-asserted revision,
 not that the revision is globally current or rollback-resistant.
 
 A non-genesis policy overwrites the `literal:self` policy record, so its predecessor cannot be read
@@ -626,7 +625,7 @@ from the same current revision. `ReadRequest.PreviousPolicy` accepts the caller-
 record only for this case; its signed-object digest must equal the current policy's
 `prevPolicyDigest`, and its root must authorize the current policy signer. The field is required for
 a nonzero predecessor digest and rejected at genesis when supplied. Missing or mismatched context
-fails closed. In particular, without a predecessor policy the reader cannot authenticate a rotated
+fails closed. Without a predecessor policy the reader cannot authenticate a rotated
 root and does not guess.
 
 The reader is read-only. Supplying no device key returns authenticated ciphertext metadata and no
@@ -638,8 +637,8 @@ vault authorization and decryption. `ErrRevisionMoving`, `ErrUntrustedCar` and
 `ErrUnprovenMembership` remain the repository-proof failures. Tests use synthetic signed fixtures
 and a fake transport only; they make no live or network requests.
 
-The Linux `gsettings` S2b2 gate in `tests/local/manual_sync_linux_test.go` drives one shared
+The Linux `gsettings` two-machine gate in `tests/local/manual_sync_linux_test.go` drives one shared
 `atprototest.MemoryPDS` through real genesis, ordinary publication, enrollment and revocation
 compositions, with the real `VaultReader` reading each signed revision. It proves coordinator-level
 two-machine behavior only; it is not a provider-compatibility result and does not execute the CLI
-binary sequence. Full CLI-binary acceptance remains deferred to post-S3.
+binary sequence. Full CLI-binary acceptance remains deferred to a later CLI acceptance.

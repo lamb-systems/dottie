@@ -562,7 +562,7 @@ func runPDSScopeWidening(t *testing.T, ctx context.Context, provider string, ide
 		Type      string `json:"$type"`
 		Text      string `json:"text"`
 		CreatedAt string `json:"createdAt"`
-	}{Type: "app.bsky.feed.post", Text: "Dottie DOT-F03 disposable authorization-scope probe", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	}{Type: "app.bsky.feed.post", Text: "Dottie disposable authorization-scope probe", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	recordBytes, _ := json.Marshal(post)
 	input := struct {
 		Repo       string          `json:"repo"`
@@ -852,12 +852,12 @@ func pdsEvidence(status int, class string, body []byte, err error) string {
 }
 
 type pdsFailureArtifact struct {
-	Provider         string `json:"provider"`
-	IntendedPDS      string `json:"intended_pds"`
-	Criterion        string `json:"criterion"`
-	RedactedEvidence string `json:"redacted_evidence"`
-	DecisionDOTF07   string `json:"decision_required_at_DOT_F07"`
-	CloudReleaseHold bool   `json:"cloud_release_hold"`
+	Provider            string `json:"provider"`
+	IntendedPDS         string `json:"intended_pds"`
+	Criterion           string `json:"criterion"`
+	RedactedEvidence    string `json:"redacted_evidence"`
+	DecisionOwnerReview string `json:"decision_required"`
+	CloudReleaseHold    bool   `json:"cloud_release_hold"`
 }
 
 func writePDSFailureArtifact(parent string, artifact pdsFailureArtifact) (string, error) {
@@ -880,12 +880,12 @@ func writePDSFailureArtifact(parent string, artifact pdsFailureArtifact) (string
 func pdsRecordFailure(t *testing.T, provider, intendedPDS, criterion, evidence string) {
 	t.Helper()
 	artifact := pdsFailureArtifact{
-		Provider:         provider,
-		IntendedPDS:      intendedPDS,
-		Criterion:        criterion,
-		RedactedEvidence: evidence,
-		DecisionDOTF07:   "Owner must decide provider-specific handling before DOT-F07; local-only fallback is not implemented.",
-		CloudReleaseHold: true,
+		Provider:            provider,
+		IntendedPDS:         intendedPDS,
+		Criterion:           criterion,
+		RedactedEvidence:    evidence,
+		DecisionOwnerReview: "Owner must decide provider-specific handling; local-only fallback is not implemented.",
+		CloudReleaseHold:    true,
 	}
 	path, err := writePDSFailureArtifact("", artifact)
 	if err != nil {
@@ -917,12 +917,12 @@ func TestPDSHandleAllowlist(t *testing.T) {
 
 func TestPDSFailureArtifactIsRedactedAndHoldsCloudRelease(t *testing.T) {
 	path, err := writePDSFailureArtifact(t.TempDir(), pdsFailureArtifact{
-		Provider:         "Bluesky-hosted",
-		IntendedPDS:      "https://pds.example",
-		Criterion:        "D2-positive-control",
-		RedactedEvidence: `email=private@example.invalid eyJhbGciOiJub25lIn0.eyJ0b2tlbiI6InNpdGUtcmVhbGx5LXNlY3JldCJ9.signature12345678`,
-		DecisionDOTF07:   "owner review required",
-		CloudReleaseHold: true,
+		Provider:            "Bluesky-hosted",
+		IntendedPDS:         "https://pds.example",
+		Criterion:           "D2-positive-control",
+		RedactedEvidence:    `email=private@example.invalid eyJhbGciOiJub25lIn0.eyJ0b2tlbiI6InNpdGUtcmVhbGx5LXNlY3JldCJ9.signature12345678`,
+		DecisionOwnerReview: "owner review required",
+		CloudReleaseHold:    true,
 	})
 	if err != nil {
 		require.NoError(t, err)

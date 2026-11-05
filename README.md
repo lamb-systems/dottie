@@ -3,8 +3,13 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: synthetic publication privacy, transport-failure and checkpoint-backed archive-restore evidence are implemented. The live publication, archive and two-home restore gates are opt-in. Real-data use remains prohibited until the owner accepts [`docs/acceptance.md`](docs/acceptance.md).**
-Account authorization is available through `dottie account login`, `status` and `logout`;
+**Status: publication privacy, transport-failure, checkpoint-backed archive-restore and two-home
+restore evidence are implemented; the live publication, archive and two-home restore gates have run
+against a disposable account and the owner accepted [`docs/acceptance.md`](docs/acceptance.md) on
+2026-11-05. Real-data use is permitted under the residual limits recorded there: kit custody, no
+global freshness, one published vault per account, and provider-held records and ciphertext that
+cannot be deleted.**
+Use `dottie account login`, `status` and `logout` for account authorization;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
 targets upgrade to pending re-approval without inferred categories. The coordinator owns
@@ -19,26 +24,26 @@ one published Dottie vault because genesis requires an empty repository. Multi-v
 refers only to locally recorded vaults, not multiple published vaults on one account.
 
 `dottie history` reports local journal/applied-base summaries and checkpoint metadata without
-content, settings values, absolute paths or secrets. Without `--did`/`--handle` it works
-offline; with one account selector it attempts a verified read and reports `unavailable` or
-`auth-expired` distinctly while retaining exit 0. `dottie export --out FILE --kit-file FILE
+content, settings values, absolute paths or secrets. Without `--did`/`--handle` it runs
+offline. With one account selector, it attempts a verified read, distinguishes `unavailable` from
+`auth-expired`, and still exits 0. `dottie export --out FILE --kit-file FILE
 (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]` writes a complete
-ciphertext-only archive through the coordinator's guarded atomic writer (0600). Existing
-outputs are refused unless `--overwrite` is explicit. Export authenticates its checkpoint
+ciphertext-only archive through the coordinator's guarded atomic writer (0600). Export refuses existing
+outputs unless `--overwrite` is explicit. Export authenticates its checkpoint
 with the supplied regular kit file, which must have no group/world access and decode to exactly
 32 bytes; the kit is cleared and never stored or archived. Export is complete only for its
-required authenticated closure and depends on the exporting machine having retained the
+required authenticated closure. The exporting machine must have retained the
 authenticated history needed to prove every required predecessor. An onboarding device that
 has not observed prior publication heads can refuse export even when the current snapshot is
 available. Version-1 count-only attestations with nonzero retained-point counts cannot be
 enumerated and refuse export; no archive is written on refusal. Export and onboarding fetch required
 snapshot bodies by CID through the verified remote reader; unavailable bodies refuse the workflow.
-`dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID [--vault HEX] [--device-id ID] [--confirm DIGEST]` restores only the kit-signed checkpoint position through the ordinary candidate-bound journaled apply path; it does not contact a provider and the archive may not be newest. The kit authorizes/checks the checkpoint but cannot decrypt: a compatible surviving device recipient private key is required. Losing all device keys without an independent complete export is data loss; an archive also needs a compatible retained recipient key. `dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
+`dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID [--vault HEX] [--device-id ID] [--confirm DIGEST]` restores only the kit-signed checkpoint position through the ordinary candidate-bound journaled apply path; it does not contact a provider and the archive may not be newest. The kit authorizes/checks the checkpoint but cannot decrypt. Decryption requires a compatible surviving device recipient private key. Losing all device keys without an independent complete export is data loss; an archive also needs a compatible retained recipient key. `dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
 holding floors; `dottie prune --apply --confirm` is the explicit foreground deletion path. Apply
 without `--confirm` refuses without deletion. There is no scheduled or automatic garbage collection.
 The retained-point cap limits selected epochs, not disk growth, and staged, orphaned or unknown-epoch
 material may remain. `dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX`
-requires independent expected vault and anchor inputs plus the kit; it validates the archive in the defined refusal order and changes no state, configuration, target or preference. Validation does not decrypt the snapshot or establish global freshness.
+requires independent expected vault and anchor inputs plus the kit. It validates the archive in the defined refusal order without changing any state, configuration, target or preference. Validation does not decrypt the snapshot or establish global freshness.
 
 The command exit codes are 0 for success (including history with remote unavailable), 2 for
 usage error, 3 for refusal/conflict/rejection, and 4 for queued, starved, fence-lost,
@@ -47,19 +52,19 @@ succeeds with a complete required closure or refuses; it does not report a parti
 success. Push/sync never apply downloaded files or settings; restore remains explicit. Prune
 returns 0 for a plan or successful apply, 2 for usage, 3 for refusal (including missing confirmation,
 incomplete inventory or an invalid boundary/live-head check), and 4 for partial or indeterminate
-apply. Recovery floor is the oldest complete inventory; confidentiality floor is the oldest surviving
+apply. The recovery floor is the oldest complete inventory; the confidentiality floor is the oldest surviving
 known material. Unknown-epoch holdings make the confidentiality floor unknown. The cap bounds retained
 epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
 preserving version-1 count-only decoding. Offline publication, renderer, checkpoint-backed restore,
-source-loss archive and rollback tests use synthetic records and temporary homes; they do not establish
+source-loss archive and rollback tests use synthetic records and temporary homes. They do not establish
 provider compatibility, hosted-log visibility or production desktop behavior. The tagged keyfile twin is
 `TestRestoreMilestoneGNOMEKeyfileTwoHome` and runs under `make test-gnome`. The live two-home restore
 gate requires explicit disposable-account authorization and an already-existing readable Dottie vault; it
 never invokes genesis, refuses nonempty application content, publishes only synthetic data and does not
-delete records. Its public enrollment for the ephemeral test device remains, although that device's private
+delete records. The ephemeral test device's public enrollment remains, but its private
 key is not retained. The separate live publication-privacy gate still requires a pristine disposable repository
 because that gate tests genesis. A skipped gate is not provider evidence. No live restore result is claimed;
-real user data remains prohibited until the owner accepts `docs/acceptance.md`.
+real user data is permitted only under the residual limits in `docs/acceptance.md`, which the owner accepted on 2026-11-05.
 
 ## Target design
 
@@ -83,13 +88,13 @@ outside that scope.
 
 ## Compatibility targets
 
-Dottie aims to work across GNOME-based Linux distributions without distribution-
+Dottie targets GNOME-based Linux distributions without distribution-
 or CPU-specific synchronization logic. The initial validation target is openSUSE
 Tumbleweed with GNOME 50 on x86_64 (`linux/amd64`). Other GNOME versions,
 distributions and CPU architectures are not yet validated.
 
 The native GSettings feasibility boundary has a documentation-derived 2.40 GIO
-API floor, set by the newest minimum version among the symbols used; runtime
+API floor: the highest minimum version among the symbols used. Runtime
 observation is limited to GIO/GLib 2.88.4. This does not validate older libraries,
 GNOME 50 or another architecture. Native dependencies and packaging must be checked
 per platform. Filesystem targets are not inherently GNOME-specific. OAuth account
@@ -99,7 +104,7 @@ Bluesky-hosted PDS accounts remain unimplemented and unverified.
 
 ## Develop
 
-Requires Go 1.27+ and Git; Make is convenient. The CLI uses Go dependencies declared
+Development requires Go 1.27+ and Git; Make is convenient. The CLI uses Go dependencies declared
 in `go.mod` and recorded in `go.sum`; CI verifies that metadata.
 
 ```sh
@@ -111,12 +116,12 @@ make verify
 ./bin/dottie version
 ```
 
-Account authorization can be managed with `./bin/dottie account login --handle HANDLE`,
+Manage account authorization with `./bin/dottie account login --handle HANDLE`,
 `./bin/dottie account status --did DID` (or `--handle HANDLE`), and
 `./bin/dottie account logout --did DID`. Login prints the authorization URL; `--no-browser`
-keeps browser opening manual and `--timeout` accepts 1s–15m (default 5m). Status is
+leaves browser opening to the user and `--timeout` accepts 1s–15m (default 5m). Status is
 offline with `--did`; `--refresh` is explicit. Local logout removes the local session;
-`--remote` additionally requests refresh-token revocation and reports only that the
+`--remote` also requests refresh-token revocation and reports only that the
 request was accepted. Account sessions require Secret Service and never fall back to
 files. These commands do not touch target data.
 
@@ -124,7 +129,7 @@ Use `./bin/dottie push --did DID` to publish reconciled local changes or `./bin/
 
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
 `./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.
-`make build` writes to ignored `bin/`. Make defaults to `GOTOOLCHAIN=local`, avoiding
+`make build` writes to ignored `bin/`. Make defaults to `GOTOOLCHAIN=local` to avoid
 implicit toolchain downloads.
 The isolated native GSettings proof is separately opt-in with `make test-gnome` or
 `make test-gnome-race` and requires Linux, cgo, a C compiler, GIO development files,
@@ -164,7 +169,7 @@ with explicit disposable-account authorization. It requires existing local root 
 vault already present in the repository, refuses a missing/unreadable vault and any nonempty application
 snapshot, and never invokes genesis. It publishes only synthetic file/settings content and one restore-only
 enrollment to temporary homes, audits the fenced publication batches and current head/blob linkage, and never
-deletes records or blobs. Its redacted artifact is written to `DOTTIE_LIVE_ARTIFACT_DIR` (or a temporary
+deletes records or blobs. It writes its redacted artifact to `DOTTIE_LIVE_ARTIFACT_DIR` (or a temporary
 artifact directory). All live gates are opt-in; a skipped gate is not provider evidence. Hosted provider
 logs and server-side storage are not observable from a client. No live restore result is claimed here.
 
@@ -191,10 +196,10 @@ real dconf backend with a real dconf service on a temporary private bus, synthet
 schemas, isolated temporary homes, prepared directory selections, and simulated
 locks. It does not use a production desktop session or profile, real user preferences,
 system-db lockdown, a VM, or CLI wiring. The locked case decorates the real backend to
-report one setting as non-writable; it does not validate real lockdown. Restore is
-proved only into prepared directory selections: applying a file preview creates files
+report one setting as non-writable; it does not validate real lockdown. The gate
+proves restore only into prepared directory selections: applying a file preview creates files
 inside existing roots, not a missing selected root or directory hierarchy. The
-unrelated-settings check is cross-schema preservation, not key-level isolation within
+unrelated-settings check covers cross-schema preservation, not key-level isolation within
 the schema being written. The 12-key older-surface case is a synthetic per-key subset,
 not evidence of support for older GNOME categories or automatic degradation.
 
@@ -213,8 +218,8 @@ not evidence of support for older GNOME categories or automatic degradation.
 GitHub Actions runs required checks on pull requests and pushes to `main`. The default
 job verifies Go module integrity and tidiness, formatting, vet, ordinary and race test
 suites, the fuzz seed corpora, the CLI build, and cgo-disabled tests/builds. Its JSON
-skip checks count only records with a non-empty test name and `Action == "skip"`; a
-package-level `no test files` record is not treated as a skipped test. The job also
+skip checks count only records with a non-empty test name and `Action == "skip"`; the job does not count
+a package-level `no test files` record as a skipped test. The job also
 cross-builds for Linux amd64 and arm64 with cgo disabled and runs version/help smoke
 checks on the amd64 binary only. A separate native GSettings job checks the isolated
 boundary and race tests, with the same test-level skip detection.

@@ -496,7 +496,7 @@ func fenceRecordCID(record []byte) (string, error) {
 func createNeverUploadedCID(t *testing.T) string {
 	t.Helper()
 	prefix := cid.NewPrefixV1(cid.Raw, multihash.SHA2_256)
-	computed, err := prefix.Sum([]byte("never-uploaded DOT-F04 fixture"))
+	computed, err := prefix.Sum([]byte("never-uploaded fence fixture"))
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -770,19 +770,19 @@ func fencePDSEvidence(status int, class string, body []byte, err error) string {
 }
 
 type fencePDSFailureArtifact struct {
-	Provider         string `json:"provider"`
-	IntendedPDS      string `json:"intended_pds"`
-	Criterion        string `json:"criterion"`
-	RedactedEvidence string `json:"redacted_evidence"`
-	DecisionDOTF07   string `json:"decision_required_at_DOT_F07"`
-	CloudReleaseHold bool   `json:"cloud_release_hold"`
+	Provider            string `json:"provider"`
+	IntendedPDS         string `json:"intended_pds"`
+	Criterion           string `json:"criterion"`
+	RedactedEvidence    string `json:"redacted_evidence"`
+	DecisionOwnerReview string `json:"decision_required"`
+	CloudReleaseHold    bool   `json:"cloud_release_hold"`
 }
 
 func fencePDSRecordFailure(t *testing.T, provider, intendedPDS, criterion, evidence string) {
 	t.Helper()
 	artifact := fencePDSFailureArtifact{
 		Provider: provider, IntendedPDS: intendedPDS, Criterion: criterion,
-		RedactedEvidence: evidence, DecisionDOTF07: "Owner must decide provider-specific handling before DOT-F07; local-only fallback is not implemented.",
+		RedactedEvidence: evidence, DecisionOwnerReview: "Owner must decide provider-specific handling; local-only fallback is not implemented.",
 		CloudReleaseHold: true,
 	}
 	artifact.RedactedEvidence = fenceRedactText(artifact.RedactedEvidence)

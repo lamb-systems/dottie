@@ -5,12 +5,12 @@ byte-level places, each marked: the format identifier, the genesis parent, and t
 
 ## Context
 
-Naming a suite is not a specification. "XChaCha20-Poly1305 and Ed25519" leaves out nonce sizes, key
-derivation, associated data, canonical encoding, key commitment, signer selection and how a wrap binds its
-recipient. Two implementations of that sentence disagree.
+A suite name is not a specification. "XChaCha20-Poly1305 and Ed25519" omits nonce sizes, key derivation,
+associated data, canonical encoding, key commitment, signer selection and how a wrap binds its
+recipient. Two implementations based on that sentence disagree.
 
-An earlier draft bound the associated data to the snapshot record CID, but that record contains the blob
-reference, so its CID depends on the ciphertext, which would have depended on the CID.
+An earlier draft bound the associated data to the snapshot record CID. The record contains the blob
+reference, creating a cycle: the CID depends on the ciphertext, which would depend on the CID.
 
 XChaCha20-Poly1305 is not key-committing, and this design wraps one content key per recipient. A malicious
 publisher could otherwise emit a single ciphertext that authenticates under two different keys and shows
@@ -18,11 +18,11 @@ different plaintext to different recipients.
 
 ## Decision
 
-Every section below is normative. The primitive list comes first because the envelope depends on it.
+Every section below is normative. The primitive list precedes the envelope that depends on it.
 
 ## Primitives
 
-A closed list. Anything outside it needs its own decision record.
+This list is closed. Any other primitive requires its own decision record.
 
 | Purpose | Construction |
 | --- | --- |
@@ -33,18 +33,18 @@ A closed list. Anything outside it needs its own decision record.
 | Key derivation | `crypto/hkdf` with SHA-256, distinct `info` per purpose |
 | Randomness | `crypto/rand` only |
 
-Two API facts matter, and an earlier draft got them backwards. The standard library **does** support a
-signature context: `ed25519.Options.Context` selects Ed25519ctx, so domain separation uses the library
-rather than a hand-built prefix. And `crypto/ecdh` **does** reject low-order X25519 inputs, returning an
-error rather than a zero secret; the deprecated `ScalarMult` helper is what does not, so it is not used and
-its error path is not something an implementation has to add.
+An earlier draft reversed two API facts. The standard library **does** support a signature context:
+`ed25519.Options.Context` selects Ed25519ctx, so domain separation uses the library rather than a
+hand-built prefix. `crypto/ecdh` **does** reject low-order X25519 inputs with an error instead of a zero
+secret. The deprecated `ScalarMult` helper does not; it is not used, so an implementation does not
+have to add its error path.
 
-No custom construction, no additional mode, no hand-rolled KDF. Compression is absent; a future decoder
-owes a streaming byte cap.
+Custom constructions, additional modes and hand-rolled KDFs are prohibited. Compression is absent;
+a future decoder must enforce a streaming byte cap.
 
 ## Envelope
 
-Fields in this order. Unknown fields are rejected.
+Fields must appear in this order. Reject unknown fields.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -64,9 +64,9 @@ Fields in this order. Unknown fields are rejected.
 | `ciphertext`, `tag` | bytes | content encryption output |
 | `signature` | 64 bytes | Ed25519 over the preimages below |
 
-`publication_id` is what breaks the cycle: it exists before encryption, so nothing authenticated depends on
-the ciphertext. `signer` is present because a verifier cannot otherwise decide which certificate to check;
-`recipients[].key_id` names recipients, not the author.
+`publication_id` breaks the cycle by existing before encryption, so nothing authenticated depends on
+the ciphertext. The verifier uses `signer` to select the certificate to check; `recipients[].key_id`
+names recipients, not the author.
 
 ## Encodings
 
@@ -91,59 +91,59 @@ Four distinct preimages, none of which includes its own output:
 - **Wrap associated data**: `"dottie/v1/wrapad"` ‖ `vault` ‖ `key_id` ‖ `epoch_seq` ‖ `purpose` ‖
   recipient public key ‖ ephemeral public key.
 
-Names are ASCII without a terminator; each preimage begins with its own label, so a signature over one
-context cannot be replayed in another even if the encodings collide.
+Names use ASCII without a terminator. Each preimage starts with its own label, preventing a signature
+over one context from being replayed in another even if the encodings collide.
 
 ## Key commitment
 
-`commit` appears inside the content associated data. A recipient whose unwrapped key does not hash to the
-committed value fails authentication instead of accepting a plaintext chosen for someone else. One SHA-256
-per envelope.
+`commit` appears inside the content associated data. If a recipient's unwrapped key does not hash to
+the committed value, authentication fails rather than accepting plaintext chosen for someone else.
+The cost is one SHA-256 per envelope.
 
 ## Wrapping
 
-Per recipient and per epoch, an ephemeral X25519 key pair is generated for that recipient alone. The shared
-secret is rejected on error, including a low-order input, and the content key is wrapped with a key from
-HKDF-SHA256 with `info` = `"dottie/v1/wrap" ‖ vault ‖ key_id ‖ epoch_seq ‖ purpose` and a zero salt.
+For each recipient in each epoch, generate an ephemeral X25519 key pair for that recipient alone.
+Reject the shared secret on error, including a low-order input. Wrap the content key with a key derived
+by HKDF-SHA256 with `info` = `"dottie/v1/wrap" ‖ vault ‖ key_id ‖ epoch_seq ‖ purpose` and a zero salt.
 
-The wrap AEAD binds the associated data above, so a wrap cannot be moved between recipients, vaults, epochs
-or purposes, and cannot be re-pointed at a different ephemeral key.
+The wrap AEAD binds the associated data above. A wrap cannot move between recipients, vaults, epochs
+or purposes, or be re-pointed at a different ephemeral key.
 
-The recipient's X25519 public key comes from the root-signed certificate. A key read from a provider record
-is never used, which is what ADR 003 means when it says an uploaded key is not approval.
+The recipient's X25519 public key comes from the root-signed certificate, never from a provider
+record. This is the constraint in ADR 003: an uploaded key is not approval.
 
 ## Snapshot record and record-to-blob binding
 
-The envelope is sealed before the record exists, so the binding runs the other way: the record names the
-blob, and the record is signed.
+The envelope is sealed before the record exists. Binding therefore runs from the signed record to
+the blob it names.
 
 The snapshot record carries `v`, `vault`, `publication_id`, `epoch_seq`, `policy_digest`, `parent`,
 `blob_cid`, `blob_bytes`, `signer` and the envelope's `signature` digest. Its own signature is Ed25519ctx
 over `"dottie/v1/recordsig"` ‖ that field list, using the same device key as the envelope.
 
-Verification is: the record is present in a verified revision, its signature checks against the certificate
-for its `signer`, `publication_id`, `epoch_seq` and `policy_digest` match the envelope, and `blob_cid`
-resolves to bytes whose envelope signature verifies. The two signatures together bind author, content and
-location; neither alone does.
+Verification requires the record to be present in a verified revision and its signature to verify
+against the certificate for its `signer`. Its `publication_id`, `epoch_seq` and `policy_digest` must
+match the envelope, and `blob_cid` must resolve to bytes whose envelope signature verifies. Together,
+the two signatures bind author, content and location; neither does so alone.
 
 ## What is inside the ciphertext
 
-Everything describing the user's configuration: paths, values, hashes, entry counts and the plaintext
-digest the existing snapshot payload carries. No plaintext-derived value appears in public metadata. The
-only provider-visible fields are those in the envelope table above, each of which is structural or already
-public.
+The ciphertext contains everything describing the user's configuration: paths, values, hashes, entry
+counts and the plaintext digest carried by the existing snapshot payload. No plaintext-derived value
+appears in public metadata. The provider sees only the fields in the envelope table above, each
+structural or already public.
 
 ## Byte-level contract, deferred to the envelope implementation
 
-The field order, the four preimages and their exclusions are normative here. The byte-level details are
-not, and this record says so instead of pretending otherwise: exact widths for `device_id` and `key_id`,
-the concrete Ed25519ctx `Context` strings, the wrap AEAD choice with its key, output and tag lengths,
-nonce generation and entropy-failure behaviour, and the deterministic encoding of the policy object.
+The field order, the four preimages and their exclusions are normative here. These byte-level details
+are not: exact widths for `device_id` and `key_id`, the concrete Ed25519ctx `Context` strings, the wrap
+AEAD choice with its key, output and tag lengths, nonce generation and entropy-failure behaviour, and
+the deterministic encoding of the policy object.
 
-Those belong with the code that implements them, because prose cannot validate them. The envelope implementation delivers the
-encodings **together with test vectors** for every signed object and every digest, and review of that
-task checks the vectors rather than the sentences. A specification that pins bytes without vectors is a
-claim nobody can check.
+Those details belong with their implementation; prose cannot validate them. The envelope
+implementation delivers the encodings **together with test vectors** for every signed object and
+every digest. Review checks the vectors, not the sentences. Byte specifications without vectors
+leave claims that nobody can check.
 
 CIDs for Dottie vault objects—envelopes, policies, controls, certificates, checkpoints, attestations
 and heads—are full CIDv1 values using the raw codec and a SHA-256 multihash over the canonical encoded
@@ -155,7 +155,7 @@ field in this envelope is a bare 32-byte digest except the ones that are digests
 
 ## Bounds
 
-Each limit is separate because they fail for different reasons.
+The limits remain separate because each fails for a different reason.
 
 | Limit | Value | Enforcement |
 | --- | --- | --- |
@@ -169,10 +169,10 @@ Each limit is separate because they fail for different reasons.
 | Envelope header | 64 KiB | before allocation |
 | Decompressed bytes | n/a until compression exists | streaming cap when it does |
 
-Repository proofs are a separate budget and are often confused with this one. A repository CAR carries
-records and blob references, not blob payloads, so an envelope that exceeds the 8 MiB CAR or 4096-record
-membership budget is not made unverifiable by its own size; it is the record and membership counts that
-matter there, and those are defaults for the read path to revisit.
+Repository proofs have a separate, often-confused budget. A repository CAR carries records and blob
+references, not blob payloads. An envelope exceeding the 8 MiB CAR or 4096-record membership budget is
+not unverifiable because of its own size; record and membership counts matter there. Those defaults
+remain for the read path to revisit.
 
 ## Attestation body schema versioning amendment (2026-11-06)
 
@@ -195,11 +195,11 @@ other DTE encoding.
 
 An unknown DTE `v` is rejected. A downgrade test replays a v0 envelope under a v1 label and expects refusal.
 
-Random 192-bit nonces make reuse vanishingly unlikely, which is a probability rather than an impossibility;
-the specification states the probability.
+Random 192-bit nonces make reuse vanishingly unlikely, not impossible. The specification states the
+probability.
 
-Key material lives in memory or in the Secret Service envelope. Error paths must not render keys, and
-zeroization is best-effort because the garbage collector may copy.
+Key material stays in memory or the Secret Service envelope. Error paths must not render keys.
+Zeroization is best-effort because the garbage collector may copy.
 
 ## Alternatives
 
@@ -209,7 +209,7 @@ primitive list to standard-library parts, while a less common construction would
 Binding ciphertext to the future record CID was rejected: the record contains the blob, so the CID cannot
 exist before the ciphertext.
 
-Sharing one recipient private key across devices was rejected: removing a device would then require
-re-encrypting existing content, and no wrap would bind to a specific device. The content key itself is
-shared by design and wrapped separately for each recipient, which is what limits re-encryption to the
-head rather than to history.
+Sharing one recipient private key across devices was rejected. Removing a device would require
+re-encrypting existing content, and no wrap would bind to a specific device. The content key is
+intentionally shared but wrapped separately for each recipient, limiting re-encryption to the head
+rather than history.

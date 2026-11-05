@@ -8,12 +8,12 @@ mirrors the canonical GNOME matrix's schema, key and type surface with intention
 different defaults, includes the enum definitions and override required for strict
 compilation, and carries the unrelated `org.dottie.Test` sentinel schema. The GNOME
 restore gate compiles it with `glib-compile-schemas --strict`; a default-suite matrix
-test checks surface and default drift. These fixtures are synthetic and are not
-representations of installed distribution schemas.
+test checks surface and default drift. These synthetic fixtures do not
+represent installed distribution schemas.
 
 Tests compile fixtures in temporary directories and never modify installed or user
-schema locations. No real user preferences, application captures or credentials are
-present.
+schema locations. The fixtures contain no real user preferences, application captures or
+credentials.
 
-No live application or PDS fixtures are present. Tests use temporary homes and
+There are no live application or PDS fixtures. Tests use temporary homes and
 synthetic data rather than developer configuration or secrets.

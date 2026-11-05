@@ -15,7 +15,7 @@ relative symlink targets that lexically escape the selected root. `Unpack` retur
 in-memory snapshot; this package has no extraction API and performs no symlink containment
 check. The journaled apply path owns re-containment and fresh external-link consent at apply time.
 
-Default bounds are aligned with filesystem capture where applicable:
+Default bounds match filesystem capture where applicable:
 
 | Bound | Default |
 | --- | ---: |
@@ -33,7 +33,7 @@ header declarations before allocating a body, reads each body through a size-lim
 and counts bytes actually read.
 
 Per-entry SHA-256 values and the whole-container digest detect accidental corruption and
-truncation. These digests are integrity-only, not authenticity. `Pack` returns plaintext;
+truncation. These digests establish integrity, not authenticity. `Pack` returns plaintext;
 the envelope implementation `Seal` encrypts and signs those bytes when a caller supplies the authorization
 context and keys. This package does not publish remotely, reconcile, merge or apply data.
 
@@ -64,13 +64,13 @@ attestation. Its remaining byte layout is:
 | tag | 16 bytes |
 | signature | 64 bytes |
 
-Recipient entries are strictly ascending by the raw key_id bytes; duplicates and out-of-order
+Recipient entries follow strictly ascending raw key_id byte order; duplicates and out-of-order
 entries are rejected. The envelope signature preimage ends at the final tag byte, so it covers
 the ciphertext length and all preceding serialized fields. Trailing bytes are rejected.
 
 Administrative objects start `DTE | version | kind | vault[32]`; each ends with signer
-(device_id then key_id, each uint16 length plus bytes) and a 64-byte signature. Their field
-order between the vault and signer is:
+(device_id then key_id, each uint16 length plus bytes) and a 64-byte signature. Between the vault and signer, fields appear in this
+order:
 
 | Kind/object | Fields in order |
 | --- | --- |
@@ -264,7 +264,7 @@ recipients, preserve all other bindings, list that device and certificate epoch 
 carry no certificate object. Both transition kinds require the successor head count to be zero,
 the snapshot and head to name the same candidate, and the control's epoch-start snapshot CID to
 match it. `ValidatePublication` checks the same-epoch policy, active signer certificate,
-predecessor head and exact count increment. These checks do not provide transactionality; the
+predecessor head and exact count increment. These checks are not transactional; the
 atproto package owns staging, durable attempts and the separate fenced write sets.
 
 Check 7 proves recipient identity binding only: each envelope key ID maps to the certified key
@@ -280,11 +280,11 @@ A recovery kit is exactly 32 random bytes, rendered as uppercase base32 in group
 
 `VerifyControlState` takes an opaque `TrustedContext` separately from the artifact-facing `VerificationRequest`. The request contains supplied and intermediate control evidence only: it has no trust-anchor or held-position fields, and the former caller-constructible `HeldCheckpoint` and `CheckpointPosition` types are not part of the API. `NewTrustedContext` takes the vault ID and anchor in a separate call and takes no verification artifact; `SetHeldCheckpoint` adds locally held control evidence to that context. A nil or zero-value context is refused. The context fields are unexported and `SetHeldCheckpoint` copies its evidence.
 
-This separation prevents a verification request or bundle by itself from establishing its anchor or held position. Go cannot prove the provenance of a `[32]byte` anchor or control evidence: a caller can copy an anchor and held control from an artifact into the separate `NewTrustedContext` and `SetHeldCheckpoint` calls. Those calls have no path that reads fields from the verification request, but the library cannot enforce that their arguments came from independent sources. Callers must obtain the anchor from locally held trusted state or an explicit operator trust input and provide held evidence from local checkpoint state. The API does not claim cryptographic proof of that caller obligation.
+Separating the APIs prevents a verification request or bundle from establishing its own anchor or held position. Go cannot prove the provenance of a `[32]byte` anchor or control evidence: a caller can copy an anchor and held control from an artifact into the separate `NewTrustedContext` and `SetHeldCheckpoint` calls. Those calls have no path that reads fields from the verification request, but the library cannot enforce that their arguments came from independent sources. Callers must obtain the anchor from locally held trusted state or an explicit operator trust input and provide held evidence from local checkpoint state. The API does not claim cryptographic proof of that caller obligation.
 
-Verification authenticates the supplied control, its signed policy and certificate chain before it compares freshness. When a local checkpoint is held, it authenticates that control and its separately supplied policy and certificate evidence too. Any signature, key, policy-digest, vault or chain failure is a refusal, not `unverifiable`; consent is not available on that path. `AcceptUnverifiableConsent` can record consent only on a verified result whose outcome offered it.
+Verification authenticates the supplied control, its signed policy and certificate chain before comparing freshness. When a local checkpoint is held, it authenticates that control and its separately supplied policy and certificate evidence too. Any signature, key, policy-digest, vault or chain failure is a refusal, not `unverifiable`; consent is not available on that path. `AcceptUnverifiableConsent` can record consent only on a verified result whose outcome offered it.
 
-The five outcomes are checked in this strict precedence: `current` when CIDs match; `descendant` when the supplied control's authenticated predecessor chain reaches the held control; `stale` when the held control's authenticated predecessor chain reaches the supplied control; `conflicting` when both authenticated histories are complete and neither contains the other; and `unverifiable` only when no checkpoint is held, a required intermediate is missing locally, or the walk exceeds its bound. A direct predecessor link is enough; deeper links are followed only through control objects explicitly supplied as local evidence. The walk is capped at eight links, each intermediate is authenticated with its policy and certificate chain, and nothing is fetched. Missing evidence reports `missing-intermediate` and the required CID; depth exhaustion reports `depth-exceeded`. Invalid supplied evidence is refused as `invalid-intermediate`, never downgraded to uncertainty. An epoch number, device count, provider assertion or head snapshot is never used as ancestry proof.
+Verification checks the five outcomes in this strict precedence: `current` when CIDs match; `descendant` when the supplied control's authenticated predecessor chain reaches the held control; `stale` when the held control's authenticated predecessor chain reaches the supplied control; `conflicting` when both authenticated histories are complete and neither contains the other; and `unverifiable` only when no checkpoint is held, a required intermediate is missing locally, or the walk exceeds its bound. A direct predecessor link is enough; deeper links are followed only through control objects explicitly supplied as local evidence. The walk is capped at eight links, each intermediate is authenticated with its policy and certificate chain, and nothing is fetched. Missing evidence reports `missing-intermediate` and the required CID; depth exhaustion reports `depth-exceeded`. Invalid supplied evidence is refused as `invalid-intermediate`, never downgraded to uncertainty. An epoch number, device count, provider assertion or head snapshot is never used as ancestry proof.
 
 Checkpoint currency is about the control record, not the live head. An ordinary publication advances the head within the epoch and writes no control, so it does not change this verdict. A checkpoint proves only that the kit signed that position; it cannot prove that the provider is serving the newest position the kit ever signed. Local evidence can establish authenticated ancestry but not global freshness, and a malicious provider can still withhold later history. Kit reissue is not implemented; until it is, a compromised kit can re-root the vault. Consent on an unverifiable report does not apply data or advance stored checkpoint state.
 
@@ -292,12 +292,12 @@ Checkpoint currency is about the control record, not the live head. An ordinary 
 
 ### Retention declarations
 
-`EvaluateRetentionDeclaration` authenticates each point's control evidence under the held checkpoint and accepts only `current` or `descendant` outcomes. Its boundary point matches the held checkpoint's epoch, snapshot CID, policy digest and control CID. Every control authenticates its epoch-start snapshot; an ordinary-publication point additionally requires its signed head and exact CID-verified envelope whose parent equals `head.PrevHeadCID`. A below-policy confidentiality floor is surfaced as compromised without refusing valid evidence. Unknown-epoch material forces the signed floor to zero and cannot produce a compliant judgement. `BuildAttestation` keeps the published device-signed body schema version 2 and its explicit ordered `(epoch, snapshot CID)` list; per-point policy/control bindings remain local declaration evidence and do not change attestation bytes. Version-1 count-only attestations decode and re-encode byte-identically. The shared DTE header remains wire version 1. This is pure and does not persist declarations. State owns declaration history, exact-body verification and pruning. The signed floor is the confidentiality floor (oldest known surviving material), while the recovery floor is the oldest epoch with a complete inventory. Growth is not bounded by the retained-point cap, and unknown-epoch leftovers cannot be counted as deleted or hidden behind a compliant floor.
+`EvaluateRetentionDeclaration` authenticates each point's control evidence under the held checkpoint and accepts only `current` or `descendant` outcomes. Its boundary point matches the held checkpoint's epoch, snapshot CID, policy digest and control CID. Every control authenticates its epoch-start snapshot; an ordinary-publication point also requires its signed head and exact CID-verified envelope whose parent equals `head.PrevHeadCID`. A below-policy confidentiality floor is surfaced as compromised without refusing valid evidence. Unknown-epoch material forces the signed floor to zero and cannot produce a compliant judgement. `BuildAttestation` keeps the published device-signed body schema version 2 and its explicit ordered `(epoch, snapshot CID)` list; per-point policy/control bindings remain local declaration evidence and do not change attestation bytes. Version-1 count-only attestations decode and re-encode byte-identically. The shared DTE header remains wire version 1. Evaluation is pure and does not persist declarations. State owns declaration history, exact-body verification and pruning. The signed floor is the confidentiality floor (oldest known surviving material), while the recovery floor is the oldest epoch with a complete inventory. Growth is not bounded by the retained-point cap, and unknown-epoch leftovers cannot be counted as deleted or hidden behind a compliant floor.
 
 ### Current-format test vectors
 
-The lowercase-hex vectors in `testdata/` are current version-1 examples; they are not
-historical fossils. `envelope-one-recipient-chain.hex` and
+The lowercase-hex vectors in `testdata/` are current version-1 examples, not
+historical artifacts. `envelope-one-recipient-chain.hex` and
 `envelope-many-recipients-chain.hex` are deterministic `SealPrepared` outputs with fixed
 content, ephemeral, nonce and signing keys. They are verified with the separate
 `certificate-root-self-signed.hex` and `certificate-publisher-root-issued-chain.hex` values:
@@ -312,9 +312,9 @@ rebuilds each vector and compares exact bytes without overwriting existing files
 
 ## Offline vault export archive primitives
 
-`export.go` defines a versioned `DTVA` USTAR archive for caller-supplied signed policy/control/certificate/checkpoint/head objects, lineage and recovery positions, and referenced encrypted snapshot blobs. The manifest inventories every archive entry by kind, length, digest and member ordinal, and records fixed limitations plus omission codes from a closed set. It has no free-form DID or descriptive metadata. The core binding is the 32-byte vault ID and anchor fingerprint. The reader streams bounded members, requires current to descend from the authenticated checkpoint through supplied control and policy predecessors, validates policy publication bounds, and refuses missing checkpoint/current/recovery blob CIDs before returning in-memory objects. It never writes an import.
+`export.go` defines a versioned `DTVA` USTAR archive for caller-supplied signed policy/control/certificate/checkpoint/head objects, lineage and recovery positions, and referenced encrypted snapshot blobs. The manifest inventories every archive entry by kind, length, digest and member ordinal, and records fixed limitations plus omission codes from a closed set. It has no free-form DID or descriptive metadata. The archive binds to the 32-byte vault ID and anchor fingerprint. The reader streams bounded members, requires current to descend from the authenticated checkpoint through supplied control and policy predecessors, validates policy publication bounds, and refuses missing checkpoint/current/recovery blob CIDs before returning in-memory objects. It never writes an import.
 
-This is not a working `account export` or `account import` feature. There is no local artifact store for policy, certificates, head history, envelopes, retained recovery points or payloads, so commands wait for that store. The APIs do not access the network. The filesystem writer requires a caller-supplied capture-selection predicate and uses a pinned directory handle for output, but the library cannot prove that the callback checks trusted local selections; product wiring must provide the trusted boundary. The manifest states that caller-supplied inventory is not proof of completeness and includes this warning: **A repository CAR holds references, not payloads, and is not a complete blob backup.** See [`docs/recovery.md`](../../docs/recovery.md) for the format and validation order.
+These primitives do not implement a working `account export` or `account import` feature. There is no local artifact store for policy, certificates, head history, envelopes, retained recovery points or payloads, so commands wait for that store. The APIs do not access the network. The filesystem writer requires a caller-supplied capture-selection predicate and uses a pinned directory handle for output, but the library cannot prove that the callback checks trusted local selections; product wiring must provide the trusted boundary. The manifest states that caller-supplied inventory is not proof of completeness and includes this warning: **A repository CAR holds references, not payloads, and is not a complete blob backup.** See [`docs/recovery.md`](../../docs/recovery.md) for the format and validation order.
 
 ## Size measurements
 
@@ -331,4 +331,4 @@ measurement only; no compressed codec is implemented or emitted.
 | Synthetic, one 4 MiB file | 2 | 4,194,304 B | 4,197,888 B | 8,683 B |
 
 The committed golden fixture pins exact uncompressed archive bytes. The gzip comparison is
-informational only; this lane adds no compression dependency and keeps the codec `none`.
+informational only; these measurements add no compression dependency and keep the codec `none`.

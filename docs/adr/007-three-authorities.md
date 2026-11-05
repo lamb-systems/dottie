@@ -4,48 +4,48 @@ Status: accepted, 2026-10-31.
 
 ## Context
 
-Three different things grant power in this system, and conflating them produces authorization claims
-that look stronger than the evidence.
+Three authorities grant different powers in this system. Conflating them overstates the authorization
+evidence.
 
 The OAuth account authority is real and proven: four-hop discovery, PKCE, PAR, DPoP, `iss` and `sub`
-binding, strict scope enforcement, one atomic Secret Service envelope. The account-authorization work ran it live on two
-identities.
+binding, strict scope enforcement, one atomic Secret Service envelope. The account-authorization work
+exercised it live on two identities.
 
-The vault device authority does not exist yet. There are no signed roles, no recipient authorization, no
-exact signed-policy binding. The fence work's control transition was simulated, and `proofs.go` authenticates
-repository membership, not authorship or role. The atproto README says the same.
+The vault device authority does not exist yet: signed roles, recipient authorization and exact
+signed-policy binding are absent. The fence work simulated the control transition. `proofs.go`
+authenticates repository membership, not authorship or role, as the atproto README also states.
 
-The offline recovery authority does not exist yet either. Checkpoints and recovery owns it.
+The offline recovery authority does not exist yet either; checkpoints and recovery owns that work.
 
 ## Decision
 
-The three authorities are named separately in code, in documentation and in every release decision. No
-artifact may cite one as evidence for another.
+Code, documentation and every release decision must name the three authorities separately. No artifact
+may cite one as evidence for another.
 
-Credentials are stored in Secret Service only: one atomic envelope per session, no plaintext fallback,
-items scoped to `application=dottie`, tokens and response bodies redacted structurally. When the keyring
-cannot deliver a session the tool fails closed with a typed error rather than degrading.
+Credentials stay in Secret Service only: one atomic envelope per session, no plaintext fallback, items
+scoped to `application=dottie`, tokens and response bodies redacted structurally. If the keyring cannot
+deliver a session, the tool fails closed with a typed error rather than degrading.
 
-The provider-required atproto base scope does not widen write access. The blob-lifecycle work demonstrated that
-out-of-scope writes are denied, which closes the question the account-authorization work left for this task. Out-of-scope reads
-are public data, so a denial is not implied, and the anonymous control returned 200 as well.
+The provider-required atproto base scope does not widen write access. The blob-lifecycle work
+demonstrated that out-of-scope writes are denied, resolving the question left by the account-authorization work.
+Out-of-scope reads are public data, so denial is not implied; the anonymous control also returned 200.
 
 Wall-clock time does not participate in authorization. Role and revocation order come from signed epoch
 and policy, as pinned in ADR 006.
 
 Vault authorization, revocation and role checking are release prerequisites, not existing evidence. A
-revoked device must be unable to publish, and proving that belongs to device enrollment rather than a claim made here.
+revoked device must be unable to publish. Device enrollment must prove that; this record does not.
 
 ## Consequences
 
-Until device enrollment lands, the system can publish to an account but cannot say which device should be allowed
-to. That is acceptable for synthetic development and unacceptable for real data.
+Until device enrollment lands, the system can publish to an account but cannot determine which device
+should be allowed to publish. That is acceptable for synthetic development and unacceptable for real data.
 
-Revocation cannot be described as working. What exists is a repository fence that stops a stale writer. A
-writer holding valid account credentials is not stopped by it.
+Revocation cannot be described as working. The existing repository fence stops a stale writer, not a
+writer holding valid account credentials.
 
-Key separation is preserved: the OAuth token, the epoch keys and the recovery material are distinct
-secrets with distinct lifetimes, and losing one does not grant the others.
+Key separation remains intact: the OAuth token, the epoch keys and the recovery material are distinct
+secrets with distinct lifetimes. Losing one does not grant the others.
 
 ## Alternatives
 

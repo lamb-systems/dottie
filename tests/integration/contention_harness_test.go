@@ -884,7 +884,7 @@ func (l *contentionLive) stageBlob(ctx context.Context, label string) (json.RawM
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, "", nil, err
 	}
-	data := append([]byte("DOT-F05 "+label+" "), nonce...)
+	data := append([]byte("disclosure probe "+label+" "), nonce...)
 	status, response, err := l.transport.Do(ctx, http.MethodPost, "com.atproto.repo.uploadBlob", nil, data, "application/octet-stream")
 	if err != nil {
 		return nil, "", data, fmt.Errorf("stage blob failed: %s: %w", contentionResponseSummary(status, response), err)
@@ -1732,7 +1732,7 @@ func runRejectionRows(t *testing.T, live *contentionLive, session *atproto.Sessi
 			Type      string `json:"$type"`
 			Text      string `json:"text"`
 			CreatedAt string `json:"createdAt"`
-		}{Type: "app.bsky.feed.post", Text: "Dottie DOT-F05 disposable scope probe", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		}{Type: "app.bsky.feed.post", Text: "Dottie disposable authorization-scope probe", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
 		if err != nil {
 			require.NoError(t, err, safeContentionError(err))
 		}
@@ -1751,7 +1751,7 @@ func runRejectionRows(t *testing.T, live *contentionLive, session *atproto.Sessi
 			pdsRecordFailure(t, live.provider, live.identity.PDS, "F05-scope-write-rejected", fmt.Sprintf("unexpected out-of-scope write outcome=%s resolution=%s", attempt.D1, attempt.Resolution))
 		}
 	}
-	mimeStatus, mimeBody, mimeErr := live.transport.Do(ctx, http.MethodPost, "com.atproto.repo.uploadBlob", nil, []byte("DOT-F05 MIME policy probe"), "text/plain")
+	mimeStatus, mimeBody, mimeErr := live.transport.Do(ctx, http.MethodPost, "com.atproto.repo.uploadBlob", nil, []byte("disposable MIME policy probe"), "text/plain")
 	mimeMeasurement := "measured"
 	if mimeErr != nil && mimeStatus == 0 {
 		mimeMeasurement = "unmeasured: client grant prevented a provider MIME-policy request"

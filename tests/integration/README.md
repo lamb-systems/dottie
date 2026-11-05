@@ -6,7 +6,7 @@ keyring service, GNOME session or real account.
 
 ## Genesis bootstrap
 
-`bootstrap_test.go` drives `Coordinator.InitializeVault` through the real genesis composition and `atproto.CommitGenesis` over an empty synthetic `MemoryPDS`. It asserts custody-before-publication ordering, then explicitly checks `history`, `pull`, ciphertext-only `Export` and no-op `Push` against the finalized trust state. The account CLI path is tested separately with an injected authenticated provider; it prints the kit once and verifies the kit is absent from state and keyring. A repeated bootstrap is refused by the verified empty-repository preflight before minting: keyring contents, state database bytes and the first remote revision remain unchanged. The state interruption test fails one local position-history write and proves selection, checkpoint and evidence all roll back together. No live PDS, real keyring, network, GNOME session or real home is used.
+`bootstrap_test.go` drives `Coordinator.InitializeVault` through the real genesis composition and `atproto.CommitGenesis` over an empty synthetic `MemoryPDS`. It asserts custody-before-publication ordering, then checks `history`, `pull`, ciphertext-only `Export` and no-op `Push` against the finalized trust state. The account CLI path is tested separately with an injected authenticated provider; it prints the kit once and verifies the kit is absent from state and keyring. The verified empty-repository preflight refuses a repeated bootstrap before minting: keyring contents, state database bytes and the first remote revision remain unchanged. The state interruption test fails one local position-history write and proves selection, checkpoint and evidence all roll back together. No live PDS, real keyring, network, GNOME session or real home is used.
 
 ## Publication privacy and failure coverage
 
@@ -20,7 +20,7 @@ orphan and an exposed orphan. Publication cases exercise malformed authenticated
 missing data, quota rejection, auth expiry and the modeled post-blob-processing disclosure window.
 All payloads, homes, credentials and provider state in these cases are synthetic.
 
-The offline command and renderer checks cover the surfaces available without a remote account. The
+Offline command and renderer checks cover the output available without a remote account. The
 renderer test checks the per-surface disclosure contract: routine status/read/push/history/export/
 recovery/device/administrative output excludes relative entry locators; candidate preview displays
 target ids and the relative file or setting locator needed for user consent; restore displays each
@@ -58,8 +58,8 @@ standing visibility and deletion limits without CIDs or account identifiers.
 
 An owner-authorized read-only observation on a disposable identity found that
 `com.atproto.sync.listBlobs` required an authenticated request, while
-`com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were public. This is an observation on
-that disposable identity, not a protocol guarantee. The observed provider enumerated only live blobs,
+`com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were public. That observation applies to
+the disposable identity; it is not a protocol guarantee. The observed provider enumerated only live blobs,
 so the live retained set is unobservable. These observations do not establish provider compatibility.
 
 `TestLiveArchiveExportAndValidation` skips by default. It requires `DOTTIE_LIVE_ARCHIVE=1`, an
@@ -68,8 +68,8 @@ file with no group/world permission bits that decodes to exactly 32 kit bytes. T
 after use, and neither it nor its path is written to the artifact or test output. The gate uses the
 existing local vault selection and checkpoint, writes an archive only under a temporary directory,
 validates it through the coordinator,
-and blocks/asserts all repository write endpoints. A named-CID export refusal is recorded redacted and
-is not counted as provider evidence.
+and blocks/asserts all repository write endpoints. The gate records a named-CID export refusal in redacted form and
+does not count it as provider evidence.
 
 The archive gate is read-only and uses an existing local vault selection and checkpoint; it does not
 invoke genesis, so it does not depend on the publication gate's pristine-repository precondition.
@@ -91,7 +91,7 @@ and verifies exact bytes and setting values. The test transport blocks every wri
 intended `repo.uploadBlob` and `repo.applyWrites` calls, asserts exactly one publication and one enrollment
 batch, and audits current head/snapshot/blob linkage plus the fenced write batches. It does not delete any
 records or blobs; the uploaded ciphertext and new repository records remain, including a public enrollment
-for an ephemeral test device whose private key is not retained. Its redacted artifact contains
+for an ephemeral test device whose private key is not retained. The test writes a redacted artifact containing
 only outcome, counts, position epoch, content-match status and standing limits at
 `DOTTIE_LIVE_ARTIFACT_DIR/restore-milestone.json` (or the chosen temporary artifact directory). The kit
 is an authorization input, not a decryption key; same-host kit use is not independent custody. Skipping

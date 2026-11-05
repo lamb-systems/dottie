@@ -5,7 +5,7 @@ explicitly selected schema/key references and a library-only settings apply adap
 Capture reads only each selected key's user value: a writable override becomes a typed
 GVariant-present entry, and no user override becomes reset intent so destination
 defaults are not pinned. Non-writable, missing-schema, missing-key and failed reads
-are returned as `Unknown` with a reason. The caller supplies the target ID and owns
+return `Unknown` with a reason. The caller supplies the target ID and owns
 coverage outside the selected set; a key must appear in either `Entries` or `Unknown`,
 and deselected keys remain caller-owned `Untracked` decisions. The library does not
 enumerate schemas or infer coverage.
@@ -13,7 +13,7 @@ enumerate schemas or infer coverage.
 A versioned category matrix in `internal/source/gnome/matrix` publishes the local
 selection units a GNOME preset may name. Config version 2 stores each GNOME target's
 approval state, category IDs, matrix version and digest of its resolved schema/path/key
-set. A version-1 GNOME target upgrades as explicitly pending with no inferred categories.
+set. A version-1 GNOME target upgrades to an explicitly pending state with no inferred categories.
 Preset materialization requires an exact match to the currently resolved selection;
 matrix or category drift requires local re-approval and cannot widen the stored set.
 The key-set digest is SHA-256 over the domain `dottie/v1/gnome-key-set\x00`, a
@@ -30,7 +30,7 @@ category, so `appearance` requires GNOME 47 while `fonts` and `clock` require GN
 every floor is bounded by `ReviewedMax`. Runtime `missing-key` results come from the
 installed schema surface, not from `Since`: `color-scheme` and `accent-color` are
 reported that way when the schema lacks them and are never replaced with a substitute.
-An unknown category, duplicate category or empty selection is rejected. The matrix
+The matrix rejects an unknown category, duplicate category or empty selection. The matrix
 does not enumerate installed schemas, discover relocatable instances or copy dconf.
 
 Synthetic fixtures under `tests/testdata/gsettings` mirror the published key surface.
@@ -51,9 +51,9 @@ or reloads them, and it makes no cross-desktop mapping claim.
 The settings apply adapter observes only user overrides, validates the journaled
 schema/path/key identity, and opens settings at the requested path. A fixed-path schema
 accepts its resolved schema path and rejects a different supplied path; a relocatable
-schema uses the explicit journaled path. The adapter verifies the opened path matches
-the requested identity. Present values are parsed and range-checked against the schema
-key and printed in canonical GVariant form before journaling. Set and reset synchronize
+schema uses the explicit journaled path. The adapter verifies that the opened path matches
+the requested identity. Before journaling, it parses present values, range-checks them against the
+schema key and prints them in canonical GVariant form. Set and reset synchronize
 GSettings before returning, so callers can read back after backend completion. This
 synchronization is not filesystem `fsync` and does not prove durability across a crash.
 `g_settings_sync` blocks until the default backend reports completion; it has no deadline,
@@ -75,15 +75,15 @@ they do not read real user preferences or copy dconf wholesale.
 Run `make test-gnome` or `make test-gnome-race` for the opt-in native tests. They
 require Linux, cgo, a C compiler, pkg-config, GIO development files and
 `glib-compile-schemas`. The documentation-derived native GIO minimum is 2.40; Make
-enforces this floor. Only GIO/GLib 2.88.4 was observed at runtime, so older releases,
+enforces this floor. Runtime observations cover only GIO/GLib 2.88.4; older releases,
 the GNOME 50 target and other architectures have not been empirically tested.
 
 The capture/`ReadUser` boundary bounds returned type and printed user-value sizes, but
 GLib allocates a printed user value before the boundary can reject an oversized value.
 The legacy `Read` API remains for tests and does not enforce that capture bound.
 
-The S2b2 two-machine gate uses the real keyfile backend for both isolated synthetic homes. Each
+The two-machine gate uses the real keyfile backend for both isolated synthetic homes. Each
 machine's GNOME capture and apply operations run in short-lived helper processes because GLib's
-default GSettings backend is process-global. This is a keyfile integration proof with synthetic
-schemas and settings, not a production desktop session or user-preference test; the gate does not
-execute CLI wiring, and full CLI-binary acceptance is deferred to post-S3.
+default GSettings backend is process-global. The gate proves keyfile integration with synthetic
+schemas and settings, not behavior in a production desktop session or user-preference test; the gate does not
+execute CLI wiring, and full CLI-binary acceptance is deferred to a later CLI acceptance.

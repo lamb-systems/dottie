@@ -2,9 +2,9 @@
 
 The CLI persists target selections and destination-local consent in
 `$XDG_CONFIG_HOME/dottie/config.toml`. If `XDG_CONFIG_HOME` is unset, empty or
-relative, the standard `$HOME/.config` location is used. The file uses schema version 2;
+relative, the CLI uses the standard `$HOME/.config` location. The file uses schema version 2;
 unknown keys and unsupported versions fail closed. Version-1 files upgrade in memory before
-validation, and version 2 is written. Reading an absent file returns an
+validation; writes use version 2. Reading an absent file returns an
 in-memory default and creates no directories or files. The configuration directory is
 owned by the current user and mode `0700`; the file is mode `0600`.
 
@@ -12,8 +12,8 @@ A target records an identifier, source and, for file selections, a logical base
 (`home` or `xdg-config`), relative path and file/directory kind. Absolute paths and an
 expanded home directory are never serialized. The XDG configuration base takes
 precedence when it is nested under the home directory. A target may store local mode
-consent (`auto-apply`, `review` or `backup-only`) and file-root excludes. An absent
-per-target mode override inherits the default, whose absent value means `review`.
+consent (`auto-apply`, `review` or `backup-only`) and file-root excludes. Without a
+per-target mode override, the target inherits the default; an absent default means `review`.
 A file target requires a root; a GNOME target is rootless. For example:
 
 ```toml
@@ -48,7 +48,7 @@ and excludes do not enter portable target records. Remote metadata cannot grant 
 filesystem access; roots are resolved from destination-local bases and relative paths.
 A GNOME target records its approval state, category IDs, matrix version and lowercase
 SHA-256 digest of resolved schema/path/key references. File targets cannot carry this
-policy. A pending policy is explicitly unapproved and has no categories, matrix version
+policy. A pending policy is explicitly unapproved. It has no categories, matrix version
 or digest.
 
 Whole-base selections are refused. A selected root must resolve inside one of the two
@@ -61,14 +61,14 @@ new addition to fail closed; loading and listing do not require roots to exist.
 Adding an already-selected logical root is a no-op unless the supplied identifier,
 mode or excludes would change its stored entry; such changes require the explicit mode
 or remove command. Removing a selection only stops tracking it and never deletes user
-files. Excludes are validated by `internal/ignore` when a config is loaded or validated,
-and are deduplicated in order when normalized. The shared matcher supports `*`, `**`,
+files. `internal/ignore` validates excludes when a config is loaded or validated;
+normalization deduplicates them in order. The shared matcher supports `*`, `**`,
 `?` and `[class]`; braces and `!` negation are rejected instead of being silently treated
 as non-matching text. Validation errors identify the target id, pattern index and pattern
 text. Capture applies these local patterns; they are not serialized into portable targets.
 
-Updates are written to a same-directory temporary file, synchronized and atomically
-renamed. Rename is the visibility commit point: pre-rename errors preserve the previous
+Each update writes to a same-directory temporary file, synchronizes it and atomically
+renames it. Rename is the visibility commit point: pre-rename errors preserve the previous
 file and clean up the temporary file; a directory-sync error after rename reports
 uncertain durability and does not claim rollback. A configuration file that is a symlink
 to a regular file is read normally, but is never replaced; writes fail with an actionable
@@ -76,9 +76,9 @@ error. Directories, FIFOs and other non-regular paths, and dangling or unresolva
 symlinks, are refused on read. Existing owned configuration directories are tightened to
 `0700`; foreign-owned or non-directory paths are refused.
 
-Target identifiers are deterministically derived from the logical base and path unless
-an explicit identifier is supplied. Normalized or truncated collisions are errors. The
-portable target conversion retains its identifier, source and logical root while
+Unless supplied explicitly, target identifiers derive deterministically from the logical
+base and path. Normalized or truncated collisions are errors. The portable target
+conversion retains its identifier, source and logical root while
 excluding modes and excludes.
 
 A version-1 GNOME target upgrades to version 2 with approval `pending`; no categories,
@@ -86,7 +86,7 @@ keys or digest are inferred. Saving and loading preserve that state. It must be 
 re-approved through a later local workflow before use. Version-1 configurations without
 GNOME targets upgrade without changing file selections.
 
-This component does not capture files or GNOME settings, interpret excludes, enforce
+The configuration package does not capture files or GNOME settings, interpret excludes, enforce
 consent modes, synchronize or restore data, load presets, remap devices, or support
 profiles. Multi-process writes are not locked and currently use last-writer-wins
 semantics. Locking must be implemented before consent modes are actively enforced.

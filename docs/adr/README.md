@@ -1,11 +1,11 @@
 # Architecture decisions
 
-Numbered records of decisions that shaped this project. They are served publicly from this directory,
-so they contain identifiers and measurements but no secrets.
+These numbered records document decisions that shaped this project. This directory is public, so the
+records contain identifiers and measurements but no secrets.
 
-Each record states what forced the decision, what was decided, what becomes true as a result, and what
-was rejected. Where a decision was reached after a wrong turn, the turn is recorded. A record that reads
-as if the design arrived fully formed is not useful to anyone reading it later.
+Each record states what forced the decision, the decision itself, its consequences, and the rejected
+alternatives. Records include wrong turns that led to a decision; omitting them makes the design look
+fully formed and leaves later readers without useful history.
 
 | ADR | Decision |
 | --- | --- |
@@ -22,5 +22,5 @@ as if the design arrived fully formed is not useful to anyone reading it later.
 | [014](014-vault-state-machine.md) | The vault authorization and key state machine |
 | [015](015-envelope-and-primitives.md) | Snapshot envelope, primitives and signed bytes |
 
-Decisions 001 to 003 predate this directory and are preserved in the planning graph. These continue the
-numbering rather than restarting it.
+Decisions 001 to 003 predate this directory and remain in the planning graph. These records continue
+the numbering rather than restarting it.

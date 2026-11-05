@@ -101,7 +101,7 @@ func fenceRecordCID(record []byte) (string, error) {
 
 func createNeverUploadedCID(t *testing.T) string {
 	t.Helper()
-	computed, err := cid.NewPrefixV1(cid.Raw, multihash.SHA2_256).Sum([]byte("never-uploaded DOT-F04 fixture"))
+	computed, err := cid.NewPrefixV1(cid.Raw, multihash.SHA2_256).Sum([]byte("never-uploaded fence fixture"))
 	if err != nil {
 		require.NoError(t, err)
 	}

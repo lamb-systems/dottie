@@ -4,46 +4,47 @@ Status: accepted, 2026-10-31.
 
 ## Context
 
-Three resources grow without an explicit decision.
+Three resources have no explicit growth policy.
 
-Repository proofs read a whole account repository with an 8 MiB CAR limit and a 4096-record membership
-limit, and unrelated records in the same account count toward both. Local payloads are retained
-indefinitely, with no collection of unreferenced blobs. Epoch keys accumulate, and ADR 005 makes their
-retention a confidentiality question as well as a storage one.
+Repository proofs read the whole account repository under an 8 MiB CAR limit and a 4096-record
+membership limit. Unrelated records in the account count toward both. Local payloads remain
+indefinitely, with no collection of unreferenced blobs. Epoch keys accumulate; under ADR 005, their
+retention affects confidentiality as well as storage.
 
-Cloud growth is a fourth: each accepted publication adds a referenced snapshot to the account, and
-nothing yet decides how much history is kept or what happens when the account's own quota is reached.
+Cloud storage is a fourth resource: each accepted publication adds a referenced snapshot to the
+account. No decision yet limits retained history or defines what happens at the account's own quota.
 
 ## Decision
 
-Proof budgets are explicit defaults, recorded as such and revisited in the read path when production reads are
-designed. A proof exceeding the CAR or record budget fails with `ErrUntrustedCar` or
-`ErrUnprovenMembership`; it is not retried at a larger budget silently.
+Proof budgets are documented defaults, to be revisited in the read path when production reads are
+designed. A proof that exceeds the CAR or record budget fails with `ErrUntrustedCar` or
+`ErrUnprovenMembership`; the tool must not silently retry with a larger budget.
 
-Local and pending byte growth is bounded with an explicit quota-exhaustion state. When the cap is
-reached, the tool stops accepting new publications and says so. It does not delete to make room. The
-quota error is planned for publication; it does not exist yet.
+A cap bounds local and pending byte growth, with an explicit quota-exhaustion state. At the cap, the
+tool stops accepting new publications and reports why. It does not delete to make room. The quota
+error is planned for publication; it does not exist yet.
 
-Cloud history is bounded by Dottie. The provider decides retention of unreferenced blobs, which is not
-ours to collect, but nothing there decides how much referenced snapshot history we keep appending. Production limits and the pruning implementation belong to publication.
+Dottie bounds cloud history. The provider controls retention of unreferenced blobs; we cannot collect
+them. That does not determine how much referenced snapshot history Dottie keeps appending. Publication
+owns the production limits and pruning implementation.
 
-Pruning is explicit and safe. It preserves checkpoint lineage and the last complete recovery point, and
-it never prunes the only copy of something a restore needs.
+Pruning is explicit and must preserve checkpoint lineage and the last complete recovery point. It
+must never prune the only copy of material a restore needs.
 
-Epoch keys are governed by **ADR 014**, which supersedes the count-based rule previously stated here: a
-device keeps the epochs its retained recovery points need and deletes the rest, and retention is an
-obligation on every authorized device rather than a local setting.
+**ADR 014** governs epoch keys and supersedes the count-based rule previously stated here: a device
+keeps the epochs its retained recovery points need and deletes the rest. Retention binds every
+authorized device; it is not a local setting.
 
-These limits and the quota state are decisions for the read path, publication and the state store work that is not built
-yet.
+These limits and the quota state are decisions for the read path, publication and state store work,
+which is not built yet.
 
 ## Consequences
 
-A user with a large account may hit the membership record cap before our own records are reached. That
-is a visible failure with a named cause.
+A large account may reach the membership record cap before the proof reaches our records. The tool
+reports that failure with a named cause.
 
-A user who keeps publishing eventually reaches a quota, local or remote, and the tool's answer is to stop
-and explain. It does not delete their history.
+Continued publication eventually reaches a local or remote quota. The tool stops and explains why;
+it does not delete the user's history.
 
 ## Alternatives
 
