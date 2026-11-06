@@ -27,6 +27,8 @@ expose only safe stage, reason and closed bound-kind metadata. No sender, key, p
 transport metadata is accepted.
 
 These APIs verify structure and byte integrity only. They do not authenticate account or repository
-membership, authorship, global freshness, privacy, or provider behavior. The decoder is not wired to
-remote fetch, publication state or a restore CLI. Provider conformance for the fixed MIME type is
-deferred to transport work.
+membership, authorship, global freshness, privacy, or provider behavior. The unwired
+`internal/publicationstate` library calls `DecodePayload` on caller-supplied packed bytes when locally
+validating a candidate. Remote fetch, service coordination and CLI integration remain unwired, and
+this use does not change the package's authentication boundary. Provider conformance for the fixed
+MIME type is deferred to transport work.
