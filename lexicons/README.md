@@ -102,7 +102,9 @@ included, and the blob is encoded in its typed blob form. Adding a record field 
 the signature preimage and is a signature-compatibility break even when the DTE wire version does
 not change.
 
-The schema and scope tests load every lexicon document directly. The OAuth metadata's repo scope
-set must equal these seven record NSIDs, with the blob scope for the snapshot payload and
-the `atproto` base scope. `docs/client-metadata.json` is served byte-for-byte, and its own public
-URL remains equal to `client_id`.
+The schema and scope tests load the top-level `lexicons/*.json` v1 inventory directly. Separate
+v2 schema tests load only `lexicons/v2/*.json`; the v2 records are inactive and are not included in
+the OAuth repository-scope grant. The recursive release-domain guard still scans both directories.
+The OAuth metadata's repo scope set must equal these seven record NSIDs, with the blob scope for the
+snapshot payload and the `atproto` base scope. `docs/client-metadata.json` is served byte-for-byte,
+and its own public URL remains equal to `client_id`.

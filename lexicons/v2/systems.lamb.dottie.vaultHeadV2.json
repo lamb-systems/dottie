@@ -1,0 +1,47 @@
+{
+  "lexicon": 1,
+  "id": "systems.lamb.dottie.vaultHeadV2",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "The v2 current publication pointer. snapshotCid is the CID of the canonical DAG-CBOR snapshot record; blobCid is the CID of its raw plaintext payload. These are distinct CID roles.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "vault",
+          "publicationSeq",
+          "snapshotCid",
+          "blobCid"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 2
+          },
+          "vault": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "publicationSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "snapshotCid": {
+            "type": "bytes",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "blobCid": {
+            "type": "bytes",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      }
+    }
+  }
+}

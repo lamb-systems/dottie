@@ -1,0 +1,54 @@
+{
+  "lexicon": 1,
+  "id": "systems.lamb.dottie.vaultSnapshotV2",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A v2 publication pointer to one plaintext snapshot payload. The payload profile is vault Version 1 with CodecNone: canonical uncompressed USTAR and JSON manifest. The blob is application/octet-stream and is limited to 402653184 bytes inclusive. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "vault",
+          "publicationId",
+          "publicationSeq",
+          "parent",
+          "blob"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 2
+          },
+          "vault": {
+            "type": "bytes",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "publicationId": {
+            "type": "bytes",
+            "minLength": 16,
+            "maxLength": 16
+          },
+          "publicationSeq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "parent": {
+            "type": "bytes",
+            "maxLength": 128
+          },
+          "blob": {
+            "type": "blob",
+            "accept": [
+              "application/octet-stream"
+            ],
+            "maxSize": 402653184
+          }
+        }
+      }
+    }
+  }
+}
