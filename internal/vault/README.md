@@ -37,6 +37,16 @@ truncation. These digests establish integrity, not authenticity. `Pack` returns 
 the envelope implementation `Seal` encrypts and signs those bytes when a caller supplies the authorization
 context and keys. This package does not publish remotely, reconcile, merge or apply data.
 
+### Raw payload decoding
+
+`UnpackPayload` decodes fetched v2 payload bytes without sender-supplied metadata. It first streams a bounded manifest preflight, derives entry and plaintext counters, then calls the unchanged strict `UnpackWithLimits` parser. It returns a complete validated snapshot or the zero snapshot. File contents and decoded settings are independent of the caller's payload buffer. Callers must not mutate payload bytes while decoding, concurrently or otherwise, because preflight and strict validation read the original slice. The API does not authenticate a sender, establish freshness, extract files, or grant local apply rights.
+
+`UnpackPayloadWithLimits` accepts only positive limits that are no greater than the fixed profile. `MaxDepth` may be zero. `DefaultPayloadLimits()` returns a fresh value with a 402,653,184-byte packed-payload cap and the current `DefaultLimits()` snapshot bounds. Changing that returned value does not change the fixed ceiling. The packed cap is the same as the v2 publication blob cap.
+
+Payload-specific errors expose only stages `limits`, `size`, `inspect`, and `validate`; reasons `invalid`, `bound`, `unsupported_profile`, and `malformed`; and, for bound errors, one of `MaxPackedBytes`, `MaxManifestBytes`, `MaxEntries`, `MaxDepth`, `MaxEntryBytes`, `MaxTotalBytes`, or `MaxPathBytes`. Parser errors, paths, values and hashes are not retained in the error chain. Existing `Unpack` and `UnpackWithLimits` errors are unchanged.
+
+The packed input buffer may be as large as 384 MiB. Returned member bodies can add up to 256 MiB of copies, alongside bounded manifest, decoder and canonicalization transients; this parser is not constant-memory, and Go allocation overhead is not an exact RSS guarantee. A conservative valid-container byte ceiling is 16 MiB manifest + 256 MiB member bodies + 20,001 × 512-byte headers + 20,001 × 511-byte padding + 1,024 trailer bytes = 305,674,719 bytes (about 291.5 MiB), below the admission cap. This arithmetic is not a measured provider/read cost or a memory guarantee. A future transport must cap reads before creating the input buffer.
+
 ## Envelope and signed objects
 
 Every integer is big-endian. `DTE` is the three-byte ASCII prefix `44 54 45`; version is
