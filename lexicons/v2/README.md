@@ -24,8 +24,28 @@ with field and reason; after a valid reference, parser failures expose only safe
 closed bound-kind metadata. The decoder is structure and byte-integrity validation only. It does not authenticate
 account or repository membership, authorship, global freshness, privacy, or provider behavior.
 Locally computing a record CID is not a provider attestation or a claim of Spaces compatibility.
-JSON/XRPC record adaptation is outside this boundary.
+XRPC request construction and inbound JSON parsing remain outside this boundary; the outbound
+record-value conversion is described below.
+
+`publication.RecordToJSON` converts only canonical snapshot/head record blocks to outbound AT Protocol
+record-value JSON, with an 8,192-byte ceiling and a pinned-SDK reconstruction check for exact DAG-CBOR
+bytes and record CID. Byte fields use `$bytes` (including both head CIDs); only the typed blob `ref`
+uses `$link`. Initial canonical record-validation errors pass through; adapter-stage failures use `ErrRecordJSON`
+with closed field/reason metadata. The final byte-equality guard follows the CID check and is redundant
+under the collision-resistance assumption; a distinct byte-mismatch failure is not independently
+exercised.
+
+A future authorized transport caller must serialize retained candidate values and the complete
+request body before `BeginSubmission`. After a successful reservation, compare every returned
+`SubmissionMaterial` field encoded in or constraining the body with that preflight. A mismatch refuses
+sending and leaves the attempt unresolved; if all comparisons and separate authorization/preconditions
+pass, only those exact in-process bytes may be used for the initial one-shot send. These APIs provide
+no durable request-body custody, replay or retry authorization, including automatic SDK
+authentication/nonce resends. The local composition demonstrates ordering/equality across two
+explicit synthetic store bindings; it does not enforce that order in a production sender, send
+requests or choose a backend. This outbound converter provides no inbound JSON parsing,
+authentication, request construction, provider compatibility or Spaces readiness.
 
 The production fetched-payload decoder exists, but remote fetch, publication-state and restore CLI
-wiring remain deferred. The synthetic integration composition now exercises `DecodePayload` directly.
-Transport conformance for provider handling of the fixed MIME type is also deferred.
+wiring remain deferred. The synthetic integration composition also exercises `DecodePayload` directly.
+Transport conformance for provider handling of the fixed MIME type is deferred.
