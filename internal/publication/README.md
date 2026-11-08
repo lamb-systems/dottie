@@ -30,5 +30,6 @@ These APIs verify structure and byte integrity only. They do not authenticate ac
 membership, authorship, global freshness, privacy, or provider behavior. The unwired
 `internal/publicationstate` library calls `DecodePayload` on caller-supplied packed bytes when locally
 validating a candidate. Remote fetch, service coordination and CLI integration remain unwired, and
-this use does not change the package's authentication boundary. Provider conformance for the fixed
-MIME type is deferred to transport work.
+this use does not change the package's authentication boundary. Its v2 attempt layer's first-conflict
+retention also preserves caller-supplied structural evidence only; it is not provider-authenticated.
+Provider conformance for the fixed MIME type is deferred to transport work.

@@ -230,6 +230,7 @@ func (s *Store) Accept(ctx context.Context, mode Mode, expectedStateToken [32]by
 		return zeroFloor(), storageFailure(ctx, StageAccept, err)
 	}
 	var accepted Floor
+	var attemptMutationChanged bool
 	err = s.withTx(ctx, StageAccept, func(tx *sql.Tx) error {
 		state, err := s.readState(ctx, tx, StageAccept)
 		if err != nil {
@@ -263,101 +264,138 @@ func (s *Store) Accept(ctx context.Context, mode Mode, expectedStateToken [32]by
 				return classified(ErrConsent, StageAccept, ReasonConfirmation)
 			}
 		}
-		if state.revision >= publication.MaxSequence || state.generation >= publication.MaxSequence && (mode == ModeFirstUse || mode == ModeReplaceFloor) {
-			return classified(ErrLimit, StageAccept, ReasonCapacity)
-		}
-		if mode == ModeReplaceFloor && state.generation >= publication.MaxSequence {
-			return classified(ErrLimit, StageAccept, ReasonCapacity)
-		}
-		next := buildFloor(s.databaseID, s.binding, validated, state, trace, mode)
-		next.Revision = state.revision + 1
-		if mode == ModeFirstUse {
-			next.Generation = 1
-		}
-		if mode == ModeReplaceFloor {
-			next.Generation = state.generation + 1
-		}
-		body, err := makeEventBody(mode, trace.reason, state.floor, next, trace.refs, trace.stop, validated.observationDigest, validated.setDigest)
-		if err != nil {
-			return classified(ErrInvalid, StageAccept, ReasonRecordSet)
-		}
-		eventDigest := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
-		next.AcceptedEventDigest = eventDigest
-		encodedNext, err := encodeFloor(next)
-		if err != nil {
-			return classified(ErrInvalid, StageAccept, ReasonRecordSet)
-		}
-		var oldEncoded []byte
-		if state.floor != nil {
-			oldEncoded, err = encodeFloor(*state.floor)
-			if err != nil {
-				return classified(ErrSchema, StageAccept, ReasonCorrupt)
-			}
-		}
-		logicalEventBytes := eventLogicalBytes(body, eventDigest[:], oldEncoded, encodedNext, string(mode), string(trace.reason), trace.stop)
-		historyEventBytes := uint64(len(body) + len(eventDigest) + 8)
-		seenTrace := make(map[string]bool)
-		for _, record := range trace.records {
-			if !seenTrace[string(record.ref.CID)] {
-				seenTrace[string(record.ref.CID)] = true
-				historyEventBytes += recordLogicalBytes(record)
-			}
-		}
-		if state.floor != nil {
-			anchor, err := s.loadRecordByCID(ctx, tx, state.floor.RecordCID, state.floor.SnapshotKey, state.floor.Sequence, StageAccept)
-			if err != nil {
-				return err
-			}
-			found := false
-			for _, record := range trace.records {
-				if bytes.Equal(record.ref.CID, anchor.ref.CID) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				historyEventBytes += recordLogicalBytes(anchor)
-			}
-		}
-		if historyEventBytes > s.limits.HistoryEvidenceBytes {
-			return classified(ErrLimit, StageAccept, ReasonCapacity)
-		}
-		validatedNext, validationErr := s.validateEventWire(ctx, tx, body, encodedNext, eventDigest[:], oldEncoded, string(mode), string(trace.reason), trace.stop, next.Revision, trace.records, logicalEventBytes, StageAccept)
-		if validationErr != nil {
-			return validationErr
-		}
-		next = validatedNext
-		encodedNext, err = encodeFloor(next)
-		if err != nil {
-			return classified(ErrInvalid, StageAccept, ReasonRecordSet)
-		}
-		if err := s.checkAcceptedCapacity(ctx, tx, trace.records, logicalEventBytes, StageAccept); err != nil {
+		if err := s.rejectActiveCandidate(ctx, tx, validated.candidate, StageAccept); err != nil {
 			return err
 		}
-		for _, record := range trace.records {
-			if err := insertAcceptedRecord(ctx, tx, record); err != nil {
+		if mode == ModeReplaceFloor {
+			changed, err := s.blockActiveAttemptTx(ctx, tx, StageAccept)
+			if err != nil {
 				return err
 			}
+			attemptMutationChanged = changed
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO accepted_events(revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes) VALUES(?,?,?,?,?,?,?,?,?)", next.Revision, string(mode), string(trace.reason), trace.stop, nullable(oldEncoded), encodedNext, body, eventDigest[:], logicalEventBytes); err != nil {
-			return classified(ErrStorage, StageAccept, ReasonIO)
+		result, err := s.acceptFloorTx(ctx, tx, mode, state, validated, trace, StageAccept, nil)
+		if err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO active_floor(singleton,floor) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET floor=excluded.floor", encodedNext); err != nil {
-			return classified(ErrStorage, StageAccept, ReasonIO)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE store_meta SET value=? WHERE key='revision'", uint64Bytes(next.Revision)); err != nil {
-			return classified(ErrStorage, StageAccept, ReasonIO)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE store_meta SET value=? WHERE key='generation'", uint64Bytes(next.Generation)); err != nil {
-			return classified(ErrStorage, StageAccept, ReasonIO)
-		}
-		accepted = cloneFloor(next)
+		accepted = result
 		return nil
 	})
 	if err != nil {
 		return zeroFloor(), err
 	}
+	if attemptMutationChanged {
+		s.attemptMutationRevision++
+	}
 	return cloneFloor(accepted), nil
+}
+
+func (s *Store) acceptFloorTx(ctx context.Context, tx *sql.Tx, mode Mode, state stateSnapshot, validated validatedObservation, trace resolvedTrace, stage Stage, reservationAttemptID []byte) (Floor, error) {
+	if state.revision >= publication.MaxSequence || state.generation >= publication.MaxSequence && (mode == ModeFirstUse || mode == ModeReplaceFloor) {
+		return zeroFloor(), classified(ErrLimit, stage, ReasonCapacity)
+	}
+	if mode == ModeReplaceFloor && state.generation >= publication.MaxSequence {
+		return zeroFloor(), classified(ErrLimit, stage, ReasonCapacity)
+	}
+	next := buildFloor(s.databaseID, s.binding, validated, state, trace, mode)
+	next.Revision = state.revision + 1
+	if mode == ModeFirstUse {
+		next.Generation = 1
+	}
+	if mode == ModeReplaceFloor {
+		next.Generation = state.generation + 1
+	}
+	body, err := makeEventBody(mode, trace.reason, state.floor, next, trace.refs, trace.stop, validated.observationDigest, validated.setDigest)
+	if err != nil {
+		return zeroFloor(), classified(ErrInvalid, stage, ReasonRecordSet)
+	}
+	eventDigest := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
+	next.AcceptedEventDigest = eventDigest
+	encodedNext, err := encodeFloor(next)
+	if err != nil {
+		return zeroFloor(), classified(ErrInvalid, stage, ReasonRecordSet)
+	}
+	var oldEncoded []byte
+	if state.floor != nil {
+		oldEncoded, err = encodeFloor(*state.floor)
+		if err != nil {
+			return zeroFloor(), classified(ErrSchema, stage, ReasonCorrupt)
+		}
+	}
+	logicalEventBytes := eventLogicalBytes(body, eventDigest[:], oldEncoded, encodedNext, string(mode), string(trace.reason), trace.stop)
+	historyEventBytes := uint64(len(body) + len(eventDigest) + 8)
+	seenTrace := make(map[string]bool)
+	for _, record := range trace.records {
+		if !seenTrace[string(record.ref.CID)] {
+			seenTrace[string(record.ref.CID)] = true
+			historyEventBytes += recordLogicalBytes(record)
+		}
+	}
+	if state.floor != nil {
+		anchor, err := s.loadRecordByCID(ctx, tx, state.floor.RecordCID, state.floor.SnapshotKey, state.floor.Sequence, stage)
+		if err != nil {
+			return zeroFloor(), err
+		}
+		if !seenTrace[string(anchor.ref.CID)] {
+			historyEventBytes += recordLogicalBytes(anchor)
+		}
+	}
+	if historyEventBytes > s.limits.HistoryEvidenceBytes {
+		return zeroFloor(), classified(ErrLimit, stage, ReasonCapacity)
+	}
+	validatedNext, validationErr := s.validateEventWire(ctx, tx, body, encodedNext, eventDigest[:], oldEncoded, string(mode), string(trace.reason), trace.stop, next.Revision, trace.records, logicalEventBytes, stage)
+	if validationErr != nil {
+		return zeroFloor(), validationErr
+	}
+	next = validatedNext
+	encodedNext, err = encodeFloor(next)
+	if err != nil {
+		return zeroFloor(), classified(ErrInvalid, stage, ReasonRecordSet)
+	}
+	if err := s.checkAcceptedCapacityWithReservation(ctx, tx, trace.records, logicalEventBytes, reservationAttemptID, stage); err != nil {
+		return zeroFloor(), err
+	}
+	for _, record := range trace.records {
+		if err := insertAcceptedRecord(ctx, tx, record); err != nil {
+			return zeroFloor(), err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO accepted_events(revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes) VALUES(?,?,?,?,?,?,?,?,?)", next.Revision, string(mode), string(trace.reason), trace.stop, nullable(oldEncoded), encodedNext, body, eventDigest[:], logicalEventBytes); err != nil {
+		return zeroFloor(), classified(ErrStorage, stage, ReasonIO)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO active_floor(singleton,floor) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET floor=excluded.floor", encodedNext); err != nil {
+		return zeroFloor(), classified(ErrStorage, stage, ReasonIO)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE store_meta SET value=? WHERE key='revision'", uint64Bytes(next.Revision)); err != nil {
+		return zeroFloor(), classified(ErrStorage, stage, ReasonIO)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE store_meta SET value=? WHERE key='generation'", uint64Bytes(next.Generation)); err != nil {
+		return zeroFloor(), classified(ErrStorage, stage, ReasonIO)
+	}
+	return cloneFloor(next), nil
+}
+
+func (s *Store) rejectActiveCandidate(ctx context.Context, q queryer, candidate validatedRecord, stage Stage) error {
+	var idValue, coreValue any
+	err := q.QueryRowContext(ctx, "SELECT publication_attempts.attempt_id,publication_attempts.core FROM active_publication_attempt JOIN publication_attempts USING(attempt_id) WHERE active_publication_attempt.singleton=1").Scan(&idValue, &coreValue)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return storageFailure(ctx, stage, err)
+	}
+	coreBytes, ok := rawBytes(coreValue)
+	if !ok {
+		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	core, err := decodeAttemptCore(coreBytes)
+	if err != nil {
+		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if bytes.Equal(core.SnapshotCID, candidate.ref.CID) && bytes.Equal(core.SnapshotRecord, candidate.raw) {
+		return classified(ErrConsent, stage, ReasonActiveAttempt)
+	}
+	return nil
 }
 
 func validMode(mode Mode) bool {
@@ -619,7 +657,23 @@ func (s *Store) readState(ctx context.Context, source queryer, stage Stage) (sta
 	if err := s.verifyAudit(ctx, source, state, stage); err != nil {
 		return stateSnapshot{}, err
 	}
-	state.token, err = makeStateToken(s.databaseID, state.revision, state.generation, s.binding, s.limits, state.floor)
+	if s.schemaVersion >= 2 {
+		mutationRevision, err := s.reconcileAttemptMutationRevision(ctx, source, stage)
+		if err != nil {
+			return stateSnapshot{}, err
+		}
+		if mutationRevision < s.attemptMutationRevision {
+			return stateSnapshot{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		if err := s.checkAttemptGraph(ctx, source, stage); err != nil {
+			return stateSnapshot{}, err
+		}
+	}
+	if s.schemaVersion >= 2 {
+		state.token, err = s.expandedPositionToken(ctx, source, state, stage)
+	} else {
+		state.token, err = makeStateToken(s.databaseID, state.revision, state.generation, s.binding, s.limits, state.floor)
+	}
 	if err != nil {
 		return stateSnapshot{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -1031,6 +1085,10 @@ func (s *Store) verifyAcceptedRecords(ctx context.Context, source queryer, refer
 }
 
 func (s *Store) checkAcceptedCapacity(ctx context.Context, tx *sql.Tx, records []validatedRecord, eventBytes uint64, stage Stage) error {
+	return s.checkAcceptedCapacityWithReservation(ctx, tx, records, eventBytes, nil, stage)
+}
+
+func (s *Store) checkAcceptedCapacityWithReservation(ctx context.Context, tx queryer, records []validatedRecord, eventBytes uint64, excludedAttemptID []byte, stage Stage) error {
 	currentCount, err := queryInt64(ctx, tx, "SELECT COUNT(*) FROM accepted_records")
 	if err != nil {
 		return queryReadError(ctx, stage, err)
@@ -1098,7 +1156,40 @@ func (s *Store) checkAcceptedCapacity(ctx context.Context, tx *sql.Tx, records [
 		newRecords = append(newRecords, record)
 		newBytes += recordLogicalBytes(record)
 	}
-	if uint64(currentCount)+uint64(len(newRecords)) > uint64(s.limits.AcceptedRecordCount) || uint64(eventCount)+1 > uint64(s.limits.AcceptedEventCount) || uint64(currentBytes)+newBytes+eventBytes > s.limits.AcceptedLogicalBytes {
+	var reservedBytes, reservedRecords, reservedEvents uint64
+	rows, err := tx.QueryContext(ctx, "SELECT attempt_id,accepted_bytes,accepted_records,accepted_events FROM attempt_reservations")
+	if err != nil {
+		return storageFailure(ctx, stage, err)
+	}
+	for rows.Next() {
+		var idValue, bytesValue, recordsValue, eventsValue any
+		if err := rows.Scan(&idValue, &bytesValue, &recordsValue, &eventsValue); err != nil {
+			_ = rows.Close()
+			return storageFailure(ctx, stage, err)
+		}
+		id, idOK := rawBytes(idValue)
+		byteCount, byteOK := rawInt64(bytesValue)
+		recordCount, recordOK := rawInt64(recordsValue)
+		eventCount, eventOK := rawInt64(eventsValue)
+		if !idOK || len(id) != 16 || !byteOK || !recordOK || !eventOK || byteCount < 0 || recordCount < 0 || eventCount < 0 {
+			_ = rows.Close()
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		if len(excludedAttemptID) == 16 && bytes.Equal(id, excludedAttemptID) {
+			continue
+		}
+		reservedBytes += uint64(byteCount)
+		reservedRecords += uint64(recordCount)
+		reservedEvents += uint64(eventCount)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return storageFailure(ctx, stage, err)
+	}
+	if err := rows.Close(); err != nil {
+		return storageFailure(ctx, stage, err)
+	}
+	if uint64(currentCount)+uint64(len(newRecords))+reservedRecords > uint64(s.limits.AcceptedRecordCount) || uint64(eventCount)+1+reservedEvents > uint64(s.limits.AcceptedEventCount) || uint64(currentBytes)+newBytes+eventBytes+reservedBytes > s.limits.AcceptedLogicalBytes {
 		return classified(ErrLimit, stage, ReasonCapacity)
 	}
 	return nil

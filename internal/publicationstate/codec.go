@@ -110,6 +110,22 @@ type limitsWire struct {
 	HistoryEvidenceBytes  uint64 `json:"historyEvidenceBytes"`
 }
 
+type attemptLimitsWire struct {
+	ActiveAttempts       uint32 `json:"activeAttempts"`
+	HistoricalAttempts   uint32 `json:"historicalAttempts"`
+	RetainedPublications uint32 `json:"retainedPublications"`
+	ManagedObjects       uint32 `json:"managedObjects"`
+	CustodyBytes         uint64 `json:"custodyBytes"`
+	MetadataBytes        uint64 `json:"metadataBytes"`
+	EvidenceBytes        uint64 `json:"evidenceBytes"`
+	EvidenceSlotBytes    uint64 `json:"evidenceSlotBytes"`
+	LifecycleEvents      uint32 `json:"lifecycleEvents"`
+	EventBytes           uint64 `json:"eventBytes"`
+	CoreBytes            uint64 `json:"coreBytes"`
+	HistoryPageEntries   uint32 `json:"historyPageEntries"`
+	HistoryPageBytes     uint64 `json:"historyPageBytes"`
+}
+
 type stateTokenWire struct {
 	Version    uint32      `json:"version"`
 	DatabaseID []byte      `json:"databaseId"`
@@ -274,6 +290,9 @@ func decodeFloor(encoded []byte) (Floor, error) {
 
 func encodeBinding(binding Binding) ([]byte, error) { return canonicalJSON(bindingToWire(binding)) }
 func encodeLimits(limits Limits) ([]byte, error)    { return canonicalJSON(limitsToWire(limits)) }
+func encodeAttemptLimits(limits AttemptLimits) ([]byte, error) {
+	return canonicalJSON(attemptLimitsWire{ActiveAttempts: limits.ActiveAttempts, HistoricalAttempts: limits.HistoricalAttempts, RetainedPublications: limits.RetainedPublications, ManagedObjects: limits.ManagedObjects, CustodyBytes: limits.CustodyBytes, MetadataBytes: limits.MetadataBytes, EvidenceBytes: limits.EvidenceBytes, EvidenceSlotBytes: limits.EvidenceSlotBytes, LifecycleEvents: limits.LifecycleEvents, EventBytes: limits.EventBytes, CoreBytes: limits.CoreBytes, HistoryPageEntries: limits.HistoryPageEntries, HistoryPageBytes: limits.HistoryPageBytes})
+}
 
 func limitsToWire(l Limits) limitsWire {
 	return limitsWire{SuppliedSnapshotCount: l.SuppliedSnapshotCount, SuppliedTotalBytes: l.SuppliedTotalBytes, SuppliedContextBytes: l.SuppliedContextBytes, MaxLineageLinks: l.MaxLineageLinks, CacheRecordCount: l.CacheRecordCount, CacheObservationCount: l.CacheObservationCount, CacheLogicalBytes: l.CacheLogicalBytes, AcceptedRecordCount: l.AcceptedRecordCount, AcceptedEventCount: l.AcceptedEventCount, AcceptedLogicalBytes: l.AcceptedLogicalBytes, HistoryPageEvents: l.HistoryPageEvents, HistoryEvidenceBytes: l.HistoryEvidenceBytes}

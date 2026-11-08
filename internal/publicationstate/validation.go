@@ -53,6 +53,18 @@ func validateBinding(binding Binding) error {
 	return nil
 }
 
+func validateAttemptLimits(limits AttemptLimits) error {
+	defaults := DefaultAttemptLimits()
+	values := []uint64{uint64(limits.ActiveAttempts), uint64(limits.HistoricalAttempts), uint64(limits.RetainedPublications), uint64(limits.ManagedObjects), limits.CustodyBytes, limits.MetadataBytes, limits.EvidenceBytes, limits.EvidenceSlotBytes, uint64(limits.LifecycleEvents), limits.EventBytes, limits.CoreBytes, uint64(limits.HistoryPageEntries), limits.HistoryPageBytes}
+	ceilings := []uint64{uint64(defaults.ActiveAttempts), uint64(defaults.HistoricalAttempts), uint64(defaults.RetainedPublications), uint64(defaults.ManagedObjects), defaults.CustodyBytes, defaults.MetadataBytes, defaults.EvidenceBytes, defaults.EvidenceSlotBytes, uint64(defaults.LifecycleEvents), defaults.EventBytes, defaults.CoreBytes, uint64(defaults.HistoryPageEntries), defaults.HistoryPageBytes}
+	for index, value := range values {
+		if value == 0 || value > ceilings[index] || value > math.MaxInt64 {
+			return errors.New("attempt limits")
+		}
+	}
+	return nil
+}
+
 func validateLimits(limits Limits) error {
 	defaults := DefaultLimits()
 	values := []uint64{uint64(limits.SuppliedSnapshotCount), limits.SuppliedTotalBytes, uint64(limits.SuppliedContextBytes), uint64(limits.MaxLineageLinks), uint64(limits.CacheRecordCount), uint64(limits.CacheObservationCount), limits.CacheLogicalBytes, uint64(limits.AcceptedRecordCount), uint64(limits.AcceptedEventCount), limits.AcceptedLogicalBytes, uint64(limits.HistoryPageEvents), limits.HistoryEvidenceBytes}

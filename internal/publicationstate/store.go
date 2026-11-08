@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/lamb-systems/dottie/internal/platform"
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -44,27 +45,45 @@ var schemaObjects = map[string]string{
 }
 
 type Store struct {
-	mu            sync.Mutex
-	db            *sql.DB
-	conn          *sql.Conn
-	lock          *platform.Lock
-	directory     string
-	binding       Binding
-	limits        Limits
-	databaseID    [32]byte
-	closed        bool
-	needsReadback bool
+	mu                      sync.Mutex
+	db                      *sql.DB
+	conn                    *sql.Conn
+	lock                    *platform.Lock
+	directory               string
+	binding                 Binding
+	limits                  Limits
+	attemptLimits           AttemptLimits
+	databaseID              [32]byte
+	attemptMutationRevision uint64
+	closed                  bool
+	needsReadback           bool
+	rootFD                  int
+	payloadFD               int
+	schemaVersion           int
+	custodyOps              custodyOperations
+	commitTransaction       func(*sql.Tx) error
 }
 
 func Open(directory string, binding Binding) (*Store, error) {
-	return OpenWithLimits(directory, binding, DefaultLimits())
+	return OpenWithOptions(directory, binding, DefaultOpenOptions())
 }
 
 func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, error) {
+	options := DefaultOpenOptions()
+	options.PositionLimits = limits
+	return OpenWithOptions(directory, binding, options)
+}
+
+func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*Store, error) {
+	limits := options.PositionLimits
+	attemptLimits := options.AttemptLimits
 	if err := validateBinding(binding); err != nil {
 		return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
 	}
 	if err := validateLimits(limits); err != nil {
+		return nil, classified(ErrInvalid, StageOpen, ReasonLimits)
+	}
+	if err := validateAttemptLimits(attemptLimits); err != nil {
 		return nil, classified(ErrInvalid, StageOpen, ReasonLimits)
 	}
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
@@ -73,6 +92,16 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 	if err := checkPrivateDirectory(directory); err != nil {
 		return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
 	}
+	rootFD, err := openStoreRoot(directory)
+	if err != nil {
+		return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
+	}
+	rootOwned := true
+	defer func() {
+		if rootOwned {
+			_ = unix.Close(rootFD)
+		}
+	}()
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
 		if err := preflightFile(filepath.Join(directory, name)); err != nil {
 			return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
@@ -101,7 +130,12 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 	if err != nil {
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
-	probe, err := probeSchema(dbPath, binding, limits)
+	if createdDB {
+		if err := unix.Fsync(rootFD); err != nil {
+			return nil, classified(ErrStorage, StageOpen, ReasonIO)
+		}
+	}
+	probe, err := probeSchema(dbPath, binding, limits, attemptLimits)
 	if err != nil {
 		var classifiedErr *Error
 		if errors.As(err, &classifiedErr) {
@@ -111,6 +145,9 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 	}
 	if !probe.initial && !probe.recognized {
 		return nil, classified(ErrSchema, StageOpen, ReasonSchema)
+	}
+	if probe.version == 1 && !options.UpgradeFromPositions {
+		return nil, classified(ErrSchema, StageOpen, ReasonUpgradeRequired)
 	}
 	db, err := sql.Open("sqlite", dbDSN(dbPath, false))
 	if err != nil {
@@ -129,9 +166,26 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
 	if probe.initial {
-		if err := initializeSchema(context.Background(), conn, binding, limits); err != nil {
+		if err := initializeSchema(context.Background(), conn, binding, limits, attemptLimits, rootFD); err != nil {
 			cleanup()
-			return nil, classified(ErrStorage, StageOpen, ReasonIO)
+			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
+		}
+	} else if probe.version == 1 {
+		if err := checkSchemaVersion(context.Background(), conn, 1); err != nil {
+			cleanup()
+			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
+		}
+		if err := compareMetadata(context.Background(), conn, binding, limits); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if _, err := readStateForUpgrade(context.Background(), conn, binding, limits); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if err := upgradeSchema(context.Background(), conn, attemptLimits, rootFD, options.upgradeFault, options.upgradeCommit); err != nil {
+			cleanup()
+			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 		}
 	} else if err := checkSchema(context.Background(), conn); err != nil {
 		cleanup()
@@ -145,6 +199,10 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 		cleanup()
 		return nil, err
 	}
+	if err := checkAttemptMetadata(context.Background(), conn, attemptLimits); err != nil {
+		cleanup()
+		return nil, err
+	}
 	dbidBytes, dbidErr := readValueBounded(context.Background(), conn, "database_id", 32)
 	if dbidErr != nil {
 		cleanup()
@@ -154,7 +212,14 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 		cleanup()
 		return nil, classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
-	store := &Store{db: db, conn: conn, lock: lock, directory: directory, binding: binding, limits: limits}
+	store := &Store{db: db, conn: conn, lock: lock, directory: directory, binding: binding, limits: limits, attemptLimits: attemptLimits, rootFD: rootFD, payloadFD: -1, schemaVersion: 2, custodyOps: defaultCustodyOperations(), commitTransaction: func(tx *sql.Tx) error { return tx.Commit() }}
+
+	mutationBytes, mutationErr := readValueBounded(context.Background(), conn, "attempt_mutation_revision", 8)
+	if mutationErr != nil || len(mutationBytes) != 8 {
+		cleanup()
+		return nil, classified(ErrSchema, StageOpen, ReasonCorrupt)
+	}
+	store.attemptMutationRevision = binary.BigEndian.Uint64(mutationBytes)
 	copy(store.databaseID[:], dbidBytes)
 	if _, err := store.readState(context.Background(), conn, StageOpen); err != nil {
 		cleanup()
@@ -174,6 +239,10 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 		cleanup()
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
+	if err := unix.Fsync(rootFD); err != nil {
+		cleanup()
+		return nil, classified(ErrStorage, StageOpen, ReasonIO)
+	}
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
 		if err := preflightFile(filepath.Join(directory, name)); err != nil {
 			cleanup()
@@ -181,12 +250,14 @@ func OpenWithLimits(directory string, binding Binding, limits Limits) (*Store, e
 		}
 	}
 	failed = false
+	rootOwned = false
 	return store, nil
 }
 
 type schemaProbe struct {
 	initial    bool
 	recognized bool
+	version    int
 }
 
 func schemaOrStorageError(ctx context.Context, stage Stage, err error) error {
@@ -200,7 +271,7 @@ func schemaOrStorageError(ctx context.Context, stage Stage, err error) error {
 	return storageFailure(ctx, stage, err)
 }
 
-func probeSchema(path string, binding Binding, limits Limits) (schemaProbe, error) {
+func probeSchema(path string, binding Binding, limits Limits, attemptLimits AttemptLimits) (schemaProbe, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return schemaProbe{}, err
@@ -254,9 +325,13 @@ func probeSchema(path string, binding Binding, limits Limits) (schemaProbe, erro
 	if appID == 0 && version == 0 && len(objects) == 0 {
 		return schemaProbe{initial: true}, nil
 	}
-	recognized := appID == applicationID && version == 1 && sameObjects(objects, schemaObjects)
+	recognized := appID == applicationID && ((version == 1 && sameObjects(objects, schemaObjects)) || (version == 2 && sameObjects(objects, currentSchemaObjects())))
 	if recognized {
-		for _, statement := range schemaStatements {
+		statements := schemaStatements
+		if version == 2 {
+			statements = currentSchemaStatements()
+		}
+		for _, statement := range statements {
 			name := statementTableName(statement)
 			if strings.TrimSpace(definitions[name]) != statement {
 				recognized = false
@@ -269,7 +344,7 @@ func probeSchema(path string, binding Binding, limits Limits) (schemaProbe, erro
 		if metaErr != nil {
 			return schemaProbe{}, metaErr
 		}
-		metaKeys := make([]string, 0, 5)
+		metaKeys := make([]string, 0, 7)
 		for metaRows.Next() {
 			var key string
 			if err := metaRows.Scan(&key); err != nil {
@@ -285,7 +360,9 @@ func probeSchema(path string, binding Binding, limits Limits) (schemaProbe, erro
 		if err := metaRows.Close(); err != nil {
 			return schemaProbe{}, err
 		}
-		if len(metaKeys) != 5 || metaKeys[0] != "binding" || metaKeys[1] != "database_id" || metaKeys[2] != "generation" || metaKeys[3] != "limits" || metaKeys[4] != "revision" {
+		validV1Meta := len(metaKeys) == 5 && metaKeys[0] == "binding" && metaKeys[1] == "database_id" && metaKeys[2] == "generation" && metaKeys[3] == "limits" && metaKeys[4] == "revision"
+		validV2Meta := len(metaKeys) == 7 && metaKeys[0] == "attempt_limits" && metaKeys[1] == "attempt_mutation_revision" && metaKeys[2] == "binding" && metaKeys[3] == "database_id" && metaKeys[4] == "generation" && metaKeys[5] == "limits" && metaKeys[6] == "revision"
+		if (version == 1 && !validV1Meta) || (version == 2 && !validV2Meta) {
 			return schemaProbe{}, classified(ErrSchema, StageOpen, ReasonSchema)
 		}
 		wantedBinding, _ := encodeBinding(binding)
@@ -309,8 +386,30 @@ func probeSchema(path string, binding Binding, limits Limits) (schemaProbe, erro
 		if !bytes.Equal(storedLimits, wantedLimits) {
 			return schemaProbe{}, classified(ErrInvalid, StageOpen, ReasonLimits)
 		}
+		var mutationRevision uint64
+		if version == 2 {
+			storedAttemptLimits, attemptErr := readValueBounded(ctx, db, "attempt_limits", 16384)
+			storedMutationRevision, mutationErr := readValueBounded(ctx, db, "attempt_mutation_revision", 8)
+			if attemptErr != nil || mutationErr != nil || len(storedMutationRevision) != 8 {
+				return schemaProbe{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
+			}
+			mutationRevision = binary.BigEndian.Uint64(storedMutationRevision)
+			if mutationRevision > uint64(^uint64(0)>>1) {
+				return schemaProbe{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
+			}
+			wantedAttemptLimits, _ := encodeAttemptLimits(attemptLimits)
+			if !bytes.Equal(storedAttemptLimits, wantedAttemptLimits) {
+				return schemaProbe{}, classified(ErrInvalid, StageOpen, ReasonLimits)
+			}
+		}
+		var id [32]byte
+		copy(id[:], dbid)
+		tempStore := &Store{binding: binding, limits: limits, attemptLimits: attemptLimits, databaseID: id, attemptMutationRevision: mutationRevision, schemaVersion: version}
+		if _, err := tempStore.readState(ctx, db, StageOpen); err != nil {
+			return schemaProbe{}, err
+		}
 	}
-	return schemaProbe{recognized: recognized}, nil
+	return schemaProbe{recognized: recognized, version: version}, nil
 }
 
 func dbDSN(path string, readOnly bool) string {
@@ -337,7 +436,7 @@ func configureConnection(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
-func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding, limitsValue Limits) error {
+func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding, limitsValue Limits, attemptLimitsValue AttemptLimits, rootFD int) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -348,7 +447,7 @@ func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding,
 			_ = tx.Rollback()
 		}
 	}()
-	for _, statement := range schemaStatements {
+	for _, statement := range currentSchemaStatements() {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
@@ -361,23 +460,36 @@ func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding,
 	if err != nil {
 		return err
 	}
+	attemptLimits, err := encodeAttemptLimits(attemptLimitsValue)
+	if err != nil {
+		return err
+	}
 	var dbid [32]byte
 	for allZero(dbid[:]) {
 		if _, err := rand.Read(dbid[:]); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO store_meta(key,value) VALUES ('database_id',?),('revision',?),('generation',?),('binding',?),('limits',?)", dbid[:], uint64Bytes(0), uint64Bytes(0), binding, limits); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO store_meta(key,value) VALUES ('database_id',?),('revision',?),('generation',?),('binding',?),('limits',?),('attempt_limits',?),('attempt_mutation_revision',?)", dbid[:], uint64Bytes(0), uint64Bytes(0), binding, limits, attemptLimits, uint64Bytes(0)); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "PRAGMA application_id=1146376242"); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=1"); err != nil {
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
+		return err
+	}
+	if err := checkSchemaVersion(ctx, tx, 2); err != nil {
+		return err
+	}
+	if err := checkAttemptMetadata(ctx, tx, attemptLimitsValue); err != nil {
+		return err
+	}
+	if err := unix.Fsync(rootFD); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return classified(ErrStorage, StageOpen, ReasonCommitUnknown)
 	}
 	rollback = false
 	return nil
@@ -411,7 +523,7 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if appID != applicationID || version != 1 {
+	if appID != applicationID || version != 2 {
 		return errSchemaMismatch
 	}
 	rows, err := conn.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
@@ -436,14 +548,14 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if !sameObjects(objects, schemaObjects) {
+	if !sameObjects(objects, currentSchemaObjects()) {
 		return errSchemaMismatch
 	}
 	metaRows, err := conn.QueryContext(ctx, "SELECT key FROM store_meta ORDER BY key")
 	if err != nil {
 		return err
 	}
-	metaKeys := make([]string, 0, 5)
+	metaKeys := make([]string, 0, 7)
 	for metaRows.Next() {
 		var key string
 		if err := metaRows.Scan(&key); err != nil {
@@ -459,10 +571,10 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := metaRows.Close(); err != nil {
 		return err
 	}
-	if len(metaKeys) != 5 || metaKeys[0] != "binding" || metaKeys[1] != "database_id" || metaKeys[2] != "generation" || metaKeys[3] != "limits" || metaKeys[4] != "revision" {
+	if len(metaKeys) != 7 || metaKeys[0] != "attempt_limits" || metaKeys[1] != "attempt_mutation_revision" || metaKeys[2] != "binding" || metaKeys[3] != "database_id" || metaKeys[4] != "generation" || metaKeys[5] != "limits" || metaKeys[6] != "revision" {
 		return errSchemaMismatch
 	}
-	for _, statement := range schemaStatements {
+	for _, statement := range currentSchemaStatements() {
 		name := statementTableName(statement)
 		if strings.TrimSpace(definitions[name]) != statement {
 			return errSchemaMismatch
@@ -532,6 +644,10 @@ func createDatabaseFile(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := syscall.Fchmod(fd, 0o600); err != nil {
+		_ = syscall.Close(fd)
+		return false, err
+	}
 	file := os.NewFile(uintptr(fd), path)
 	return true, file.Close()
 }
@@ -574,6 +690,12 @@ func (s *Store) Close() error {
 		failed = true
 	}
 	if s.lock != nil && s.lock.Close() != nil {
+		failed = true
+	}
+	if s.payloadFD >= 0 && unix.Close(s.payloadFD) != nil {
+		failed = true
+	}
+	if s.rootFD >= 0 && unix.Close(s.rootFD) != nil {
 		failed = true
 	}
 	if failed {
@@ -619,7 +741,16 @@ func (s *Store) withTx(ctx context.Context, stage Stage, fn func(*sql.Tx) error)
 		_ = tx.Rollback()
 		return canceled(stage, err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.syncCustodyFD(s.rootFD); err != nil {
+		_ = tx.Rollback()
+		return storageFailure(ctx, stage, err)
+	}
+	commit := s.commitTransaction
+	if commit == nil {
+		commit = func(tx *sql.Tx) error { return tx.Commit() }
+	}
+	if err := commit(tx); err != nil {
+		_ = tx.Rollback()
 		s.needsReadback = true
 		return classified(ErrStorage, stage, ReasonCommitUnknown)
 	}

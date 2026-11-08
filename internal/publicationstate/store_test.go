@@ -3,6 +3,7 @@ package publicationstate
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"os"
@@ -55,7 +56,7 @@ func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
 	blobCID, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
 	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload))}}
-	record.PublicationID[15] = byte(sequence + 1)
+	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(sequence)

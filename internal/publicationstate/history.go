@@ -17,6 +17,11 @@ func (s *Store) Load(ctx context.Context) (Floor, bool, error) {
 	if err != nil {
 		return zeroFloor(), false, err
 	}
+	mutationRevision, err := s.reconcileAttemptMutationRevision(ctx, s.conn, StageLoad)
+	if err != nil {
+		return zeroFloor(), false, err
+	}
+	s.attemptMutationRevision = mutationRevision
 	s.needsReadback = false
 	if state.floor == nil {
 		return zeroFloor(), false, nil
