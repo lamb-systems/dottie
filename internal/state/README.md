@@ -1,6 +1,6 @@
 # Local state
 
-The separate, unwired `internal/publicationstate` local publication-position library is documented in its own README. Its schema-2 attempts and first-conflict evidence remain in its own publication-state database, not in this v1 state's `state.db` tables. V2 applied-base/journal integration remains unwired; the active v1 state store remains separate and unchanged.
+The separate, unwired `internal/publicationstate` local publication-position library is documented in its own README. Its attempts (SQLite schema 3) and first-conflict evidence remain in its own publication-state database, not in this v1 state's `state.db` tables. V2 applied-base/journal integration remains unwired; the active v1 state store remains separate and unchanged.
 
 The service package's process-local reconciliation base is detached plaintext held by the caller, not a persisted v1 applied base or journal row; see [offline local publication reconciliation](../service/README.md#offline-local-publication-reconciliation). The new service functions do not call `syncengine.Apply` or `RollbackApplied`; offline composition tests explicitly supply roots, policy and postimages to the existing engine. Their journal target rows provide foreign-key setup only, and nil retention provides neither v1 common-base adoption nor a v2 recovery binding or cross-store atomicity. An eligible original base can remain available after partial apply, but only a new complete observed convergence can establish a new base; observed convergence does not repair an indeterminate journal.
 

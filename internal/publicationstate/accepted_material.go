@@ -47,22 +47,22 @@ func (s *Store) ReadAcceptedMaterial(ctx context.Context, binding Binding, expec
 	if state.floor == nil {
 		return AcceptedMaterial{}, classified(ErrContinuity, StageReadAcceptedMaterial, ReasonFirstUseRequired)
 	}
-	if err := validateExpectedAcceptedFloor(expectedFloor, s.binding, s.limits); err != nil {
+	if err := validateExpectedAcceptedFloor(expectedFloor, s.binding, s.limits, StageReadAcceptedMaterial); err != nil {
 		return AcceptedMaterial{}, err
 	}
 	if !sameAcceptedFloor(*state.floor, expectedFloor) {
 		return AcceptedMaterial{}, classified(ErrContinuity, StageReadAcceptedMaterial, ReasonStale)
 	}
-	basename, record, blob, err := s.acceptedMaterialOwner(ctx, *state.floor)
+	basename, record, blob, err := s.acceptedMaterialOwner(ctx, s.conn, *state.floor, StageReadAcceptedMaterial)
 	if err != nil {
 		return AcceptedMaterial{}, err
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
-		return AcceptedMaterial{}, classifyAcceptedMaterialDirectory(err)
+		return AcceptedMaterial{}, classifyAcceptedMaterialDirectory(err, StageReadAcceptedMaterial)
 	}
 	payload, err := s.inspectPayloadFile(basename, nil, blob)
 	if err != nil {
-		return AcceptedMaterial{}, classifyAcceptedMaterialRead(err)
+		return AcceptedMaterial{}, classifyAcceptedMaterialRead(err, StageReadAcceptedMaterial)
 	}
 	if err := s.checkContext(ctx, StageReadAcceptedMaterial); err != nil {
 		return AcceptedMaterial{}, err
@@ -70,15 +70,15 @@ func (s *Store) ReadAcceptedMaterial(ctx context.Context, binding Binding, expec
 	return AcceptedMaterial{Floor: cloneFloor(*state.floor), SnapshotRecord: bytes.Clone(record), Payload: payload}, nil
 }
 
-func validateExpectedAcceptedFloor(floor Floor, binding Binding, limits Limits) error {
+func validateExpectedAcceptedFloor(floor Floor, binding Binding, limits Limits, stage Stage) error {
 	if validateBinding(floor.Binding) != nil || !sameBinding(floor.Binding, binding) {
-		return classified(ErrInvalid, StageReadAcceptedMaterial, ReasonBinding)
+		return classified(ErrInvalid, stage, ReasonBinding)
 	}
 	if len(floor.AnchorCID) == 0 || len(floor.AnchorCID) > publication.MaxCIDBytes || len(floor.Head) == 0 || len(floor.Head) > publication.MaxRecordBytes || len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes || len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes || len(floor.SnapshotKey) != publication.SequenceKeyLength || (floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace) || allZero(floor.DatabaseID[:]) {
-		return classified(ErrInvalid, StageReadAcceptedMaterial, ReasonRecordSet)
+		return classified(ErrInvalid, stage, ReasonRecordSet)
 	}
 	if err := validatePersistedFloor(floor, binding, floor.DatabaseID, limits); err != nil {
-		return classified(ErrInvalid, StageReadAcceptedMaterial, ReasonRecordSet)
+		return classified(ErrInvalid, stage, ReasonRecordSet)
 	}
 	return nil
 }
@@ -112,24 +112,44 @@ func sameAcceptedContext(left, right SuppliedContext) bool {
 	return left.Policy.Revision == right.Policy.Revision && left.Policy.OwnerOnly == right.Policy.OwnerOnly && bytes.Equal(left.Policy.Identity, right.Policy.Identity)
 }
 
-func (s *Store) acceptedMaterialOwner(ctx context.Context, floor Floor) (string, []byte, publication.BlobReference, error) {
-	count, err := queryInt64(ctx, s.conn, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(floor.Revision))
+func (s *Store) acceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
+	count, err := queryInt64(ctx, q, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(floor.Revision))
 	if err != nil {
-		return "", nil, publication.BlobReference{}, queryReadError(ctx, StageReadAcceptedMaterial, err)
+		return "", nil, publication.BlobReference{}, queryReadError(ctx, stage, err)
 	}
-	if count == 0 {
-		return "", nil, publication.BlobReference{}, classified(ErrStorage, StageReadAcceptedMaterial, ReasonMaterialNotRetained)
-	}
-	if count != 1 {
-		return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+	if count < 0 || count > 1 {
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 
+	incomingCount := int64(0)
+	if s.schemaVersion == 3 {
+		incomingCount, err = queryInt64(ctx, q, "SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision))
+		if err != nil {
+			return "", nil, publication.BlobReference{}, queryReadError(ctx, stage, err)
+		}
+		if incomingCount < 0 || incomingCount > 1 {
+			return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+	}
+	if count == 1 && incomingCount == 1 {
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if count == 0 && incomingCount == 0 {
+		return "", nil, publication.BlobReference{}, classified(ErrStorage, stage, ReasonMaterialNotRetained)
+	}
+	if count == 1 {
+		return s.finalizedAcceptedMaterialOwner(ctx, q, floor, stage)
+	}
+	return s.incomingAcceptedMaterialOwner(ctx, q, floor, stage)
+}
+
+func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
 	var idValue, idLengthValue, recordValue, recordLengthValue, blobValue, blobLengthValue any
 	var sequenceValue, sizeValue, revisionValue any
 	var lifecycleValue, lifecycleLengthValue, outcomeValue, outcomeLengthValue, blockedValue, blockedLengthValue any
 	var recordKeyValue, recordKeyLengthValue, recordSequenceValue any
 	var objectCIDValue, objectCIDLengthValue, objectSizeValue, basenameValue, basenameLengthValue any
-	err = s.conn.QueryRowContext(ctx, `SELECT
+	err := q.QueryRowContext(ctx, `SELECT
 		substr(rp.attempt_id,1,17),length(rp.attempt_id),
 		substr(rp.record_cid,1,129),length(rp.record_cid),
 		substr(rp.blob_cid,1,129),length(rp.blob_cid),rp.sequence,rp.size,rp.accepted_revision,
@@ -148,9 +168,9 @@ func (s *Store) acceptedMaterialOwner(ctx context.Context, floor Floor) (string,
 		&objectCIDValue, &objectCIDLengthValue, &objectSizeValue, &basenameValue, &basenameLengthValue)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+			return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		return "", nil, publication.BlobReference{}, storageFailure(ctx, StageReadAcceptedMaterial, err)
+		return "", nil, publication.BlobReference{}, storageFailure(ctx, stage, err)
 	}
 
 	attemptID, idOK := rawBytes(idValue)
@@ -191,22 +211,22 @@ func (s *Store) acceptedMaterialOwner(ctx context.Context, floor Floor) (string,
 		!objectSizeOK || objectSize <= 0 || uint64(objectSize) != floor.BlobSize ||
 		!basenameOK || !basenameLengthOK || basenameLength != 72 || int64(len(basename)) != basenameLength ||
 		!bytes.Equal(recordCID, floor.RecordCID) || !bytes.Equal(blobCID, floor.BlobCID) || !bytes.Equal(objectCID, floor.BlobCID) {
-		return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 
 	var id [16]byte
 	copy(id[:], attemptID)
-	attempt, err := s.loadStoredAttempt(ctx, s.conn, id, StageReadAcceptedMaterial)
+	attempt, err := s.loadStoredAttempt(ctx, q, id, stage)
 	if err != nil {
 		return "", nil, publication.BlobReference{}, err
 	}
 	if attempt.lifecycle != AttemptRetiredSuccess || attempt.outcome != OutcomeCurrent || attempt.blocked != "" ||
 		!bytes.Equal(attempt.core.SnapshotCID, floor.RecordCID) || !bytes.Equal(attempt.core.BlobCID, floor.BlobCID) ||
 		attempt.core.BlobSize != floor.BlobSize || attempt.core.SnapshotKey != floor.SnapshotKey {
-		return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 
-	record, err := s.loadRecordByCID(ctx, s.conn, floor.RecordCID, floor.SnapshotKey, floor.Sequence, StageReadAcceptedMaterial)
+	record, err := s.loadRecordByCID(ctx, q, floor.RecordCID, floor.SnapshotKey, floor.Sequence, stage)
 	if err != nil {
 		return "", nil, publication.BlobReference{}, err
 	}
@@ -214,31 +234,72 @@ func (s *Store) acceptedMaterialOwner(ctx context.Context, floor Floor) (string,
 	if err != nil || snapshot.Vault != floor.Binding.Vault || snapshot.PublicationSeq != floor.Sequence || snapshot.PublicationID != floor.PublicationID ||
 		!bytes.Equal(snapshot.Blob.CID, floor.BlobCID) || snapshot.Blob.Size != floor.BlobSize ||
 		!bytes.Equal(attempt.core.SnapshotRecord, record.raw) {
-		return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	wantedBasename, err := payloadBasenameFromCID(floor.BlobCID)
 	if err != nil || !validPayloadBasename(basename) || basename != wantedBasename {
-		return "", nil, publication.BlobReference{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return basename, record.raw, publication.BlobReference{CID: bytes.Clone(floor.BlobCID), Size: floor.BlobSize}, nil
 }
 
-func classifyAcceptedMaterialDirectory(err error) error {
-	if errors.Is(err, unix.ENOENT) {
-		return classified(ErrStorage, StageReadAcceptedMaterial, ReasonMaterialMissing)
+func (s *Store) incomingAcceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
+	var revisionTypeValue, revisionValue, recordTypeValue, recordLengthValue, recordValue any
+	var blobTypeValue, blobLengthValue, blobValue any
+	err := q.QueryRowContext(ctx, "SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).Scan(
+		&revisionTypeValue, &revisionValue, &recordTypeValue, &recordLengthValue, &recordValue,
+		&blobTypeValue, &blobLengthValue, &blobValue)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return classified(ErrStorage, StageReadAcceptedMaterial, ReasonIO)
+	if err != nil {
+		return "", nil, publication.BlobReference{}, storageFailure(ctx, stage, err)
+	}
+	revisionType, revisionTypeOK := revisionTypeValue.(string)
+	revision, revisionOK := rawInt64(revisionValue)
+	recordType, recordTypeOK := recordTypeValue.(string)
+	recordLength, recordLengthOK := rawInt64(recordLengthValue)
+	recordCID, recordOK := rawBytes(recordValue)
+	blobType, blobTypeOK := blobTypeValue.(string)
+	blobLength, blobLengthOK := rawInt64(blobLengthValue)
+	blobCID, blobOK := rawBytes(blobValue)
+	if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 || uint64(revision) != floor.Revision ||
+		!recordTypeOK || recordType != "blob" || !recordLengthOK || recordLength < 1 || recordLength > publication.MaxCIDBytes || !recordOK || int64(len(recordCID)) != recordLength ||
+		!blobTypeOK || blobType != "blob" || !blobLengthOK || blobLength < 1 || blobLength > publication.MaxCIDBytes || !blobOK || int64(len(blobCID)) != blobLength ||
+		!bytes.Equal(recordCID, floor.RecordCID) || !bytes.Equal(blobCID, floor.BlobCID) {
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	ref := incomingMaterialRef{revision: revision, recordCID: bytes.Clone(recordCID), blobCID: bytes.Clone(blobCID)}
+	if err := s.checkIncomingMaterialRef(ctx, q, ref, stage); err != nil {
+		return "", nil, publication.BlobReference{}, err
+	}
+	record, err := s.loadRecordByCID(ctx, q, floor.RecordCID, floor.SnapshotKey, floor.Sequence, stage)
+	if err != nil {
+		return "", nil, publication.BlobReference{}, err
+	}
+	basename, err := payloadBasenameFromCID(floor.BlobCID)
+	if err != nil || !validPayloadBasename(basename) {
+		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return basename, record.raw, publication.BlobReference{CID: bytes.Clone(floor.BlobCID), Size: floor.BlobSize}, nil
 }
 
-func classifyAcceptedMaterialRead(err error) error {
+func classifyAcceptedMaterialDirectory(err error, stage Stage) error {
 	if errors.Is(err, unix.ENOENT) {
-		return classified(ErrStorage, StageReadAcceptedMaterial, ReasonMaterialMissing)
+		return classified(ErrStorage, stage, ReasonMaterialMissing)
+	}
+	return classified(ErrStorage, stage, ReasonIO)
+}
+
+func classifyAcceptedMaterialRead(err error, stage Stage) error {
+	if errors.Is(err, unix.ENOENT) {
+		return classified(ErrStorage, stage, ReasonMaterialMissing)
 	}
 	if errors.Is(err, errUnsafePayloadObject) || errors.Is(err, unix.ELOOP) {
-		return classified(ErrStorage, StageReadAcceptedMaterial, ReasonMaterialUnsafe)
+		return classified(ErrStorage, stage, ReasonMaterialUnsafe)
 	}
 	if errors.Is(err, errCorruptPayloadObject) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return classified(ErrStorage, StageReadAcceptedMaterial, ReasonMaterialCorrupt)
+		return classified(ErrStorage, stage, ReasonMaterialCorrupt)
 	}
-	return classified(ErrStorage, StageReadAcceptedMaterial, ReasonIO)
+	return classified(ErrStorage, stage, ReasonIO)
 }
