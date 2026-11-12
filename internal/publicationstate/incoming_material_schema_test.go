@@ -2378,6 +2378,38 @@ type incomingMaterialWALRawObservation struct {
 
 var incomingMaterialWALRetainedStore *Store
 
+func TestIncomingMaterialWALArtifactDirectory(t *testing.T) {
+	const key = "DOTTIE_P17_B7_WAL_EVIDENCE_ROOT"
+	original, originallySet := os.LookupEnv(key)
+	for _, explicit := range []bool{false, true} {
+		name := "default"
+		if explicit {
+			name = "explicit root"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.Chmod(root, 0o700))
+			t.Setenv(key, root)
+			if !explicit {
+				require.NoError(t, os.Unsetenv(key))
+			}
+			_, configured := os.LookupEnv(key)
+			require.Equal(t, explicit, configured)
+			directory, durable := incomingMaterialWALArtifactDirectory(t)
+			require.Equal(t, explicit, durable)
+			require.NoError(t, checkPrivateDirectory(directory))
+			if explicit {
+				require.Equal(t, root, filepath.Dir(directory))
+			} else {
+				incomingMaterialWALRequireContainedDirectory(t, directory, filepath.Clean(os.TempDir()))
+			}
+		})
+		value, present := os.LookupEnv(key)
+		require.Equal(t, originallySet, present)
+		require.Equal(t, original, value)
+	}
+}
+
 func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 	_, directorySet := os.LookupEnv("DOTTIE_P17_B7_WAL_HELPER_DIR")
 	_, receiptSet := os.LookupEnv("DOTTIE_P17_B7_WAL_HELPER_RECEIPT")
@@ -2416,20 +2448,7 @@ func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 	require.Equal(t, "d2e446ca0e728ac4af1835c2d4e65c4809fb17f19ef9729f0cc305b87b45f108", sourceRaw.SHA256)
 	require.GreaterOrEqual(t, len(sourceRaw.Data), 100)
 	require.Equal(t, uint32(2), binary.BigEndian.Uint32(sourceRaw.Data[60:64]))
-	root, durable := os.LookupEnv("DOTTIE_P17_B7_WAL_EVIDENCE_ROOT")
-	var artifactDirectory string
-	if durable {
-		require.True(t, filepath.IsAbs(root))
-		require.Equal(t, filepath.Clean(root), root)
-		require.NoError(t, checkPrivateDirectory(root))
-		var err error
-		artifactDirectory, err = os.MkdirTemp(root, "committed-wal-")
-		require.NoError(t, err)
-	} else {
-		root = filepath.Clean(os.TempDir())
-		artifactDirectory = t.TempDir()
-	}
-	incomingMaterialWALRequireContainedDirectory(t, artifactDirectory, root)
+	artifactDirectory, durable := incomingMaterialWALArtifactDirectory(t)
 	t.Logf("committed-WAL artifacts: %s (durable=%t)", artifactDirectory, durable)
 	helperReceiptPath := filepath.Join(artifactDirectory, "helper-receipt.json")
 	executable, err := os.Executable()
@@ -2675,6 +2694,26 @@ func TestIncomingMaterialSchema3WALWriterHelper(t *testing.T) {
 	require.NoError(t, incomingMaterialWALWriteExclusive(receiptPath, encoded))
 	require.Nil(t, incomingMaterialWALRetainedStore)
 	incomingMaterialWALRetainedStore = store
+}
+
+func incomingMaterialWALArtifactDirectory(t *testing.T) (string, bool) {
+	t.Helper()
+	root, durable := os.LookupEnv("DOTTIE_P17_B7_WAL_EVIDENCE_ROOT")
+	var directory string
+	if durable {
+		require.True(t, filepath.IsAbs(root))
+		require.Equal(t, filepath.Clean(root), root)
+		require.NoError(t, checkPrivateDirectory(root))
+		var err error
+		directory, err = os.MkdirTemp(root, "committed-wal-")
+		require.NoError(t, err)
+	} else {
+		root = filepath.Clean(os.TempDir())
+		directory = t.TempDir()
+		require.NoError(t, os.Chmod(directory, 0o700))
+	}
+	incomingMaterialWALRequireContainedDirectory(t, directory, root)
+	return directory, durable
 }
 
 func incomingMaterialWALRequireContainedDirectory(t *testing.T, path, root string) {
