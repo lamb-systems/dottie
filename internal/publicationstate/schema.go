@@ -7,8 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 var attemptSchemaStatements = []string{
@@ -39,22 +37,60 @@ var attemptSchemaObjects = map[string]string{
 	"payload_objects_basename":   "index",
 }
 
-func currentSchemaStatements() []string {
-	statements := make([]string, 0, len(schemaStatements)+len(attemptSchemaStatements))
-	statements = append(statements, schemaStatements...)
-	statements = append(statements, attemptSchemaStatements...)
-	return statements
+type schemaInventory struct {
+	statements   []string
+	objects      map[string]string
+	metadataKeys []string
 }
 
-func currentSchemaObjects() map[string]string {
-	objects := make(map[string]string, len(schemaObjects)+len(attemptSchemaObjects))
-	for name, kind := range schemaObjects {
-		objects[name] = kind
+func schemaInventoryForVersion(version int) (schemaInventory, error) {
+	switch version {
+	case 1:
+		return schemaInventory{
+			statements:   append([]string(nil), schemaV1Statements...),
+			objects:      cloneSchemaObjects(schemaV1Objects),
+			metadataKeys: []string{"binding", "database_id", "generation", "limits", "revision"},
+		}, nil
+	case 2:
+		statements := make([]string, 0, len(schemaV1Statements)+len(attemptSchemaStatements))
+		statements = append(statements, schemaV1Statements...)
+		statements = append(statements, attemptSchemaStatements...)
+		objects := make(map[string]string, len(schemaV1Objects)+len(attemptSchemaObjects))
+		for name, kind := range schemaV1Objects {
+			objects[name] = kind
+		}
+		for name, kind := range attemptSchemaObjects {
+			objects[name] = kind
+		}
+		return schemaInventory{
+			statements:   statements,
+			objects:      objects,
+			metadataKeys: []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"},
+		}, nil
+	case 3:
+		base, err := schemaInventoryForVersion(2)
+		if err != nil {
+			return schemaInventory{}, err
+		}
+		statements := append(append([]string(nil), base.statements...), incomingMaterialSchemaStatement)
+		objects := cloneSchemaObjects(base.objects)
+		objects[statementTableName(incomingMaterialSchemaStatement)] = "table"
+		return schemaInventory{
+			statements:   statements,
+			objects:      objects,
+			metadataKeys: append([]string(nil), base.metadataKeys...),
+		}, nil
+	default:
+		return schemaInventory{}, errSchemaMismatch
 	}
-	for name, kind := range attemptSchemaObjects {
-		objects[name] = kind
+}
+
+func cloneSchemaObjects(objects map[string]string) map[string]string {
+	cloned := make(map[string]string, len(objects))
+	for name, kind := range objects {
+		cloned[name] = kind
 	}
-	return objects
+	return cloned
 }
 
 type schemaReader interface {
@@ -77,18 +113,14 @@ func checkSchemaVersion(ctx context.Context, conn schemaReader, version int) err
 	if err != nil {
 		return err
 	}
-	wantedObjects := schemaObjects
-	statements := schemaStatements
-	metadata := []string{"binding", "database_id", "generation", "limits", "revision"}
-	if version == 2 {
-		wantedObjects = currentSchemaObjects()
-		statements = currentSchemaStatements()
-		metadata = []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}
+	inventory, err := schemaInventoryForVersion(version)
+	if err != nil {
+		return err
 	}
-	if !sameObjects(objects, wantedObjects) {
+	if !sameObjects(objects, inventory.objects) {
 		return errSchemaMismatch
 	}
-	for _, statement := range statements {
+	for _, statement := range inventory.statements {
 		if strings.TrimSpace(definitions[statementTableName(statement)]) != statement {
 			return errSchemaMismatch
 		}
@@ -97,7 +129,7 @@ func checkSchemaVersion(ctx context.Context, conn schemaReader, version int) err
 	if err != nil {
 		return err
 	}
-	if !equalStrings(keys, metadata) {
+	if !equalStrings(keys, inventory.metadataKeys) {
 		return errSchemaMismatch
 	}
 	return nil
@@ -165,7 +197,7 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func readStateForUpgrade(ctx context.Context, conn *sql.Conn, binding Binding, limits Limits) (stateSnapshot, error) {
+func readStateForUpgrade(ctx context.Context, conn queryer, binding Binding, limits Limits) (stateSnapshot, error) {
 	databaseID, err := readValueBounded(ctx, conn, "database_id", 32)
 	if err != nil || len(databaseID) != 32 {
 		return stateSnapshot{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
@@ -177,100 +209,6 @@ func readStateForUpgrade(ctx context.Context, conn *sql.Conn, binding Binding, l
 	}
 	store := &Store{binding: binding, limits: limits, databaseID: id, schemaVersion: 1}
 	return store.readState(ctx, conn, StageOpen)
-}
-
-func upgradeSchema(ctx context.Context, conn *sql.Conn, limits AttemptLimits, rootFD int, fault func(int) error, commitHook func(*sql.Tx) error) error {
-	encodedLimits, err := encodeAttemptLimits(limits)
-	if err != nil {
-		return classified(ErrInvalid, StageOpen, ReasonLimits)
-	}
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	rollback := true
-	defer func() {
-		if rollback {
-			_ = tx.Rollback()
-		}
-	}()
-	stage := 0
-	for _, statement := range attemptSchemaStatements {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return storageFailure(ctx, StageOpen, err)
-		}
-		stage++
-		if fault != nil {
-			if err := fault(stage); err != nil {
-				return storageFailure(ctx, StageOpen, err)
-			}
-		}
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO store_meta(key,value) VALUES ('attempt_limits',?),('attempt_mutation_revision',?)", encodedLimits, uint64Bytes(0)); err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	stage++
-	if fault != nil {
-		if err := fault(stage); err != nil {
-			return storageFailure(ctx, StageOpen, err)
-		}
-	}
-	var fkRows *sql.Rows
-	fkRows, err = tx.QueryContext(ctx, "PRAGMA foreign_key_check")
-	if err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	if fkRows.Next() {
-		_ = fkRows.Close()
-		return classified(ErrSchema, StageOpen, ReasonCorrupt)
-	}
-	if err := fkRows.Err(); err != nil {
-		_ = fkRows.Close()
-		return storageFailure(ctx, StageOpen, err)
-	}
-	if err := fkRows.Close(); err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	stage++
-	if fault != nil {
-		if err := fault(stage); err != nil {
-			return storageFailure(ctx, StageOpen, err)
-		}
-	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	if err := checkSchemaVersion(ctx, tx, 2); err != nil {
-		return schemaOrStorageError(ctx, StageOpen, err)
-	}
-	if err := checkAttemptMetadata(ctx, tx, limits); err != nil {
-		return err
-	}
-	stage++
-	if fault != nil {
-		if err := fault(stage); err != nil {
-			return storageFailure(ctx, StageOpen, err)
-		}
-	}
-	if err := unix.Fsync(rootFD); err != nil {
-		return storageFailure(ctx, StageOpen, err)
-	}
-	stage++
-	if fault != nil {
-		if err := fault(stage); err != nil {
-			return storageFailure(ctx, StageOpen, err)
-		}
-	}
-	commit := commitHook
-	if commit == nil {
-		commit = func(tx *sql.Tx) error { return tx.Commit() }
-	}
-	if err := commit(tx); err != nil {
-		_ = tx.Rollback()
-		return classified(ErrStorage, StageOpen, ReasonCommitUnknown)
-	}
-	rollback = false
-	return nil
 }
 
 func checkAttemptMetadata(ctx context.Context, conn interface {

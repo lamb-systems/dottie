@@ -26,6 +26,7 @@ const payloadSuffix = ".payload"
 
 var errUnsafePayloadObject = errors.New("unsafe payload object")
 var errCorruptPayloadObject = errors.New("corrupt payload object")
+var errInvalidPayloadInput = errors.New("invalid payload input")
 
 type custodyOperations struct {
 	openTemp func(int, uint32) (int, error)
@@ -359,11 +360,15 @@ func (s *Store) inventoryPayloads() (map[string]uint64, uint64, error) {
 }
 
 func (s *Store) checkPayloadCapacity(ctx context.Context, name string, size uint64, createDirectory bool) error {
+	return s.checkPayloadCapacityWithQueryer(ctx, s.conn, name, size, createDirectory)
+}
+
+func (s *Store) checkPayloadCapacityWithQueryer(ctx context.Context, q queryer, name string, size uint64, createDirectory bool) error {
 	if s.payloadFD < 0 && !createDirectory {
 		fd, openErr := unix.Openat(s.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 		if errors.Is(openErr, unix.ENOENT) {
 			var catalogued any
-			if err := s.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&catalogued); err != nil {
+			if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&catalogued); err != nil {
 				return err
 			}
 			count, ok := rawInt64(catalogued)
@@ -387,7 +392,7 @@ func (s *Store) checkPayloadCapacity(ctx context.Context, name string, size uint
 		return err
 	}
 	registered := map[string]uint64{}
-	rows, err := s.conn.QueryContext(ctx, "SELECT blob_cid,basename,size FROM payload_objects")
+	rows, err := q.QueryContext(ctx, "SELECT blob_cid,basename,size FROM payload_objects")
 	if err != nil {
 		return err
 	}
@@ -442,15 +447,37 @@ func (s *Store) checkPayloadCapacity(ctx context.Context, name string, size uint
 	return nil
 }
 
+func validatePayloadForCustody(payload []byte, blob publication.BlobReference, name string) error {
+	if len(payload) == 0 || uint64(len(payload)) > publication.MaxBlobBytes || blob.Size == 0 || blob.Size > publication.MaxBlobBytes || uint64(len(payload)) != blob.Size || len(blob.CID) == 0 || len(blob.CID) > publication.MaxCIDBytes || len(name) != 64+len(payloadSuffix) {
+		return errInvalidPayloadInput
+	}
+	canonicalName, err := payloadBasenameFromCID(blob.CID)
+	if err != nil || !validPayloadBasename(name) || name != canonicalName || payloadBasename(payload) != canonicalName {
+		return errInvalidPayloadInput
+	}
+	if err := publication.VerifyPayload(payload, blob); err != nil {
+		return errInvalidPayloadInput
+	}
+	if _, err := publication.DecodePayload(payload, blob); err != nil {
+		return errInvalidPayloadInput
+	}
+	return nil
+}
+
 func (s *Store) persistCandidatePayload(ctx context.Context, candidate validatedCandidate) (string, []byte, error) {
+	return s.persistPayload(ctx, s.conn, candidate.payload, attemptPayloadReference(candidate), payloadBasename(candidate.payload))
+}
+
+func (s *Store) persistPayload(ctx context.Context, q queryer, payload []byte, blob publication.BlobReference, name string) (string, []byte, error) {
+	if err := validatePayloadForCustody(payload, blob, name); err != nil {
+		return "", nil, err
+	}
 	if err := s.ensurePayloadDirectory(); err != nil {
 		return "", nil, err
 	}
-	name := payloadBasename(candidate.payload)
-	blob := attemptPayloadReference(candidate)
 	var cataloguedName string
 	var cataloguedSize any
-	err := s.conn.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", candidate.blobCID).Scan(&cataloguedName, &cataloguedSize)
+	err := q.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&cataloguedName, &cataloguedSize)
 	if err == nil {
 		size, ok := rawInt64(cataloguedSize)
 		if !ok || size <= 0 || uint64(size) != blob.Size || cataloguedName != name {
@@ -464,7 +491,7 @@ func (s *Store) persistCandidatePayload(ctx context.Context, candidate validated
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", nil, err
 	}
-	if err := s.checkPayloadCapacity(ctx, name, blob.Size, true); err != nil {
+	if err := s.checkPayloadCapacityWithQueryer(ctx, q, name, blob.Size, true); err != nil {
 		return "", nil, err
 	}
 	var existing unix.Stat_t
@@ -476,7 +503,7 @@ func (s *Store) persistCandidatePayload(ctx context.Context, candidate validated
 	} else if !errors.Is(err, unix.ENOENT) {
 		return "", nil, err
 	}
-	if err := s.writeAnonymousPayload(ctx, candidate.payload, blob, name); err != nil {
+	if err := s.writeAnonymousPayload(ctx, payload, blob, name); err != nil {
 		return "", nil, err
 	}
 	data, err := s.syncPayloadOwnership(name, blob)

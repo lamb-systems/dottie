@@ -21,12 +21,19 @@ import (
 
 const applicationID = 0x44545032
 
+const (
+	openRootAcquiredFault         = 101
+	openLockAcquiredFault         = 102
+	openConnectionAcquiredFault   = 103
+	openCreatedDatabaseChmodFault = 104
+)
+
 var (
 	errStoredValue    = errors.New("invalid stored value")
 	errSchemaMismatch = errors.New("unsupported schema")
 )
 
-var schemaStatements = []string{
+var schemaV1Statements = []string{
 	"CREATE TABLE store_meta (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL)",
 	"CREATE TABLE cache_records (cid BLOB PRIMARY KEY NOT NULL, record_key TEXT NOT NULL, sequence INTEGER NOT NULL, raw BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
 	"CREATE TABLE cache_observations (observation_id BLOB PRIMARY KEY NOT NULL, metadata BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
@@ -35,7 +42,7 @@ var schemaStatements = []string{
 	"CREATE TABLE active_floor (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), floor BLOB NOT NULL)",
 }
 
-var schemaObjects = map[string]string{
+var schemaV1Objects = map[string]string{
 	"store_meta":         "table",
 	"cache_records":      "table",
 	"cache_observations": "table",
@@ -92,16 +99,23 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	if err := checkPrivateDirectory(directory); err != nil {
 		return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
 	}
+	store := &Store{directory: directory, binding: binding, limits: limits, attemptLimits: attemptLimits, rootFD: -1, payloadFD: -1, custodyOps: defaultCustodyOperations(), commitTransaction: func(tx *sql.Tx) error { return tx.Commit() }}
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = store.Close()
+		}
+	}()
 	rootFD, err := openStoreRoot(directory)
 	if err != nil {
 		return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
 	}
-	rootOwned := true
-	defer func() {
-		if rootOwned {
-			_ = unix.Close(rootFD)
+	store.rootFD = rootFD
+	if options.openFault != nil {
+		if err := options.openFault(openRootAcquiredFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
 		}
-	}()
+	}
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
 		if err := preflightFile(filepath.Join(directory, name)); err != nil {
 			return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
@@ -114,12 +128,12 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 		}
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
-	failed := true
-	defer func() {
-		if failed {
-			_ = lock.Close()
+	store.lock = lock
+	if options.openFault != nil {
+		if err := options.openFault(openLockAcquiredFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
 		}
-	}()
+	}
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
 		if err := preflightFile(filepath.Join(directory, name)); err != nil {
 			return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
@@ -131,7 +145,7 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
 	if createdDB {
-		if err := unix.Fsync(rootFD); err != nil {
+		if err := unix.Fsync(store.rootFD); err != nil {
 			return nil, classified(ErrStorage, StageOpen, ReasonIO)
 		}
 	}
@@ -146,7 +160,10 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	if !probe.initial && !probe.recognized {
 		return nil, classified(ErrSchema, StageOpen, ReasonSchema)
 	}
-	if probe.version == 1 && !options.UpgradeFromPositions {
+	if probe.version == 1 && (!options.UpgradeFromPositions || !options.UpgradeFromAttempts) {
+		return nil, classified(ErrSchema, StageOpen, ReasonUpgradeRequired)
+	}
+	if probe.version == 2 && !options.UpgradeFromAttempts {
 		return nil, classified(ErrSchema, StageOpen, ReasonUpgradeRequired)
 	}
 	db, err := sql.Open("sqlite", dbDSN(dbPath, false))
@@ -155,74 +172,74 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	store.db = db
 	conn, err := db.Conn(context.Background())
 	if err != nil {
-		_ = db.Close()
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
-	cleanup := func() { _ = conn.Close(); _ = db.Close() }
+	store.conn = conn
+	if options.openFault != nil {
+		if err := options.openFault(openConnectionAcquiredFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
+		}
+	}
 	if err := configureConnection(context.Background(), conn); err != nil {
-		cleanup()
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
 	if probe.initial {
-		if err := initializeSchema(context.Background(), conn, binding, limits, attemptLimits, rootFD); err != nil {
-			cleanup()
+		if err := initializeSchema(context.Background(), conn, binding, limits, attemptLimits, store.rootFD); err != nil {
 			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 		}
-	} else if probe.version == 1 {
-		if err := checkSchemaVersion(context.Background(), conn, 1); err != nil {
-			cleanup()
-			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
+	} else if probe.version == 1 || probe.version == 2 {
+		source, sourceErr := readIncomingMaterialUpgradeSource(context.Background(), conn, probe.version, binding, limits, attemptLimits)
+		if sourceErr != nil {
+			return nil, sourceErr
 		}
-		if err := compareMetadata(context.Background(), conn, binding, limits); err != nil {
-			cleanup()
-			return nil, err
+		outcome, upgradeErr := upgradeIncomingMaterial(context.Background(), conn, source, store.rootFD, options.upgradeFault, options.upgradeCommit)
+		if outcome != incomingMaterialUpgradeCommitted || upgradeErr != nil {
+			if outcome == incomingMaterialUpgradeNotAttempted && upgradeErr == nil {
+				return nil, classified(ErrStorage, StageOpen, ReasonIO)
+			}
+			return nil, incomingMaterialOpenError(outcome, upgradeErr)
 		}
-		if _, err := readStateForUpgrade(context.Background(), conn, binding, limits); err != nil {
-			cleanup()
-			return nil, err
+		var completionFault func(int) error
+		if options.openFault != nil {
+			completionFault = func(point int) error { return options.openFault(point, store) }
 		}
-		if err := upgradeSchema(context.Background(), conn, attemptLimits, rootFD, options.upgradeFault, options.upgradeCommit); err != nil {
-			cleanup()
-			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
-		}
+		transferred = true
+		return completeIncomingMaterialUpgradeOpen(context.Background(), store, source, outcome, completionFault)
 	} else if err := checkSchema(context.Background(), conn); err != nil {
-		cleanup()
 		return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 	}
+	if options.openFault != nil {
+		if err := options.openFault(incomingMaterialOpenDestinationFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
+		}
+	}
 	if err := checkSchema(context.Background(), conn); err != nil {
-		cleanup()
 		return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 	}
 	if err := compareMetadata(context.Background(), conn, binding, limits); err != nil {
-		cleanup()
 		return nil, err
 	}
 	if err := checkAttemptMetadata(context.Background(), conn, attemptLimits); err != nil {
-		cleanup()
 		return nil, err
 	}
 	dbidBytes, dbidErr := readValueBounded(context.Background(), conn, "database_id", 32)
 	if dbidErr != nil {
-		cleanup()
 		return nil, storedOrQueryError(context.Background(), StageOpen, dbidErr)
 	}
 	if len(dbidBytes) != 32 || allZero(dbidBytes) {
-		cleanup()
 		return nil, classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
-	store := &Store{db: db, conn: conn, lock: lock, directory: directory, binding: binding, limits: limits, attemptLimits: attemptLimits, rootFD: rootFD, payloadFD: -1, schemaVersion: 2, custodyOps: defaultCustodyOperations(), commitTransaction: func(tx *sql.Tx) error { return tx.Commit() }}
-
 	mutationBytes, mutationErr := readValueBounded(context.Background(), conn, "attempt_mutation_revision", 8)
 	if mutationErr != nil || len(mutationBytes) != 8 {
-		cleanup()
 		return nil, classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
 	store.attemptMutationRevision = binary.BigEndian.Uint64(mutationBytes)
 	copy(store.databaseID[:], dbidBytes)
+	store.schemaVersion = 3
 	if _, err := store.readState(context.Background(), conn, StageOpen); err != nil {
-		cleanup()
 		var stateError *Error
 		if errors.As(err, &stateError) {
 			return nil, err
@@ -230,27 +247,46 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 		return nil, storageFailure(context.Background(), StageOpen, err)
 	}
 	if createdDB {
-		if err := os.Chmod(dbPath, 0o600); err != nil {
-			cleanup()
+		if options.openFault != nil {
+			if err := options.openFault(openCreatedDatabaseChmodFault, store); err != nil {
+				return nil, storageFailure(context.Background(), StageOpen, err)
+			}
+		}
+		if options.createdDatabaseChmod != nil {
+			if err := options.createdDatabaseChmod(dbPath); err != nil {
+				return nil, classified(ErrStorage, StageOpen, ReasonIO)
+			}
+		} else if err := os.Chmod(dbPath, 0o600); err != nil {
 			return nil, classified(ErrStorage, StageOpen, ReasonIO)
 		}
 	}
+	if options.openFault != nil {
+		if err := options.openFault(incomingMaterialOpenSidecarsFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
+		}
+	}
 	if err := secureCreatedSidecars(directory); err != nil {
-		cleanup()
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
 	}
-	if err := unix.Fsync(rootFD); err != nil {
-		cleanup()
+	if options.openFault != nil {
+		if err := options.openFault(incomingMaterialOpenRootSyncFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
+		}
+	}
+	if err := unix.Fsync(store.rootFD); err != nil {
 		return nil, classified(ErrStorage, StageOpen, ReasonIO)
+	}
+	if options.openFault != nil {
+		if err := options.openFault(incomingMaterialOpenPreflightFault, store); err != nil {
+			return nil, storageFailure(context.Background(), StageOpen, err)
+		}
 	}
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
 		if err := preflightFile(filepath.Join(directory, name)); err != nil {
-			cleanup()
 			return nil, classified(ErrInvalid, StageOpen, ReasonBinding)
 		}
 	}
-	failed = false
-	rootOwned = false
+	transferred = true
 	return store, nil
 }
 
@@ -325,13 +361,10 @@ func probeSchema(path string, binding Binding, limits Limits, attemptLimits Atte
 	if appID == 0 && version == 0 && len(objects) == 0 {
 		return schemaProbe{initial: true}, nil
 	}
-	recognized := appID == applicationID && ((version == 1 && sameObjects(objects, schemaObjects)) || (version == 2 && sameObjects(objects, currentSchemaObjects())))
+	inventory, inventoryErr := schemaInventoryForVersion(version)
+	recognized := appID == applicationID && inventoryErr == nil && sameObjects(objects, inventory.objects)
 	if recognized {
-		statements := schemaStatements
-		if version == 2 {
-			statements = currentSchemaStatements()
-		}
-		for _, statement := range statements {
+		for _, statement := range inventory.statements {
 			name := statementTableName(statement)
 			if strings.TrimSpace(definitions[name]) != statement {
 				recognized = false
@@ -360,9 +393,7 @@ func probeSchema(path string, binding Binding, limits Limits, attemptLimits Atte
 		if err := metaRows.Close(); err != nil {
 			return schemaProbe{}, err
 		}
-		validV1Meta := len(metaKeys) == 5 && metaKeys[0] == "binding" && metaKeys[1] == "database_id" && metaKeys[2] == "generation" && metaKeys[3] == "limits" && metaKeys[4] == "revision"
-		validV2Meta := len(metaKeys) == 7 && metaKeys[0] == "attempt_limits" && metaKeys[1] == "attempt_mutation_revision" && metaKeys[2] == "binding" && metaKeys[3] == "database_id" && metaKeys[4] == "generation" && metaKeys[5] == "limits" && metaKeys[6] == "revision"
-		if (version == 1 && !validV1Meta) || (version == 2 && !validV2Meta) {
+		if !equalStrings(metaKeys, inventory.metadataKeys) {
 			return schemaProbe{}, classified(ErrSchema, StageOpen, ReasonSchema)
 		}
 		wantedBinding, _ := encodeBinding(binding)
@@ -387,7 +418,7 @@ func probeSchema(path string, binding Binding, limits Limits, attemptLimits Atte
 			return schemaProbe{}, classified(ErrInvalid, StageOpen, ReasonLimits)
 		}
 		var mutationRevision uint64
-		if version == 2 {
+		if version == 2 || version == 3 {
 			storedAttemptLimits, attemptErr := readValueBounded(ctx, db, "attempt_limits", 16384)
 			storedMutationRevision, mutationErr := readValueBounded(ctx, db, "attempt_mutation_revision", 8)
 			if attemptErr != nil || mutationErr != nil || len(storedMutationRevision) != 8 {
@@ -447,7 +478,11 @@ func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding,
 			_ = tx.Rollback()
 		}
 	}()
-	for _, statement := range currentSchemaStatements() {
+	inventory, err := schemaInventoryForVersion(3)
+	if err != nil {
+		return err
+	}
+	for _, statement := range inventory.statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
@@ -476,10 +511,10 @@ func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding,
 	if _, err := tx.ExecContext(ctx, "PRAGMA application_id=1146376242"); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=3"); err != nil {
 		return err
 	}
-	if err := checkSchemaVersion(ctx, tx, 2); err != nil {
+	if err := checkSchemaVersion(ctx, tx, 3); err != nil {
 		return err
 	}
 	if err := checkAttemptMetadata(ctx, tx, attemptLimitsValue); err != nil {
@@ -495,7 +530,7 @@ func initializeSchema(ctx context.Context, conn *sql.Conn, bindingValue Binding,
 	return nil
 }
 
-func compareMetadata(ctx context.Context, conn *sql.Conn, binding Binding, limits Limits) error {
+func compareMetadata(ctx context.Context, conn queryer, binding Binding, limits Limits) error {
 	wantedBinding, _ := encodeBinding(binding)
 	wantedLimits, _ := encodeLimits(limits)
 	gotBinding, bindingErr := readValueBounded(ctx, conn, "binding", 16384)
@@ -523,7 +558,7 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if appID != applicationID || version != 2 {
+	if appID != applicationID || version != 3 {
 		return errSchemaMismatch
 	}
 	rows, err := conn.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
@@ -548,7 +583,11 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if !sameObjects(objects, currentSchemaObjects()) {
+	inventory, err := schemaInventoryForVersion(3)
+	if err != nil {
+		return err
+	}
+	if !sameObjects(objects, inventory.objects) {
 		return errSchemaMismatch
 	}
 	metaRows, err := conn.QueryContext(ctx, "SELECT key FROM store_meta ORDER BY key")
@@ -571,10 +610,10 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := metaRows.Close(); err != nil {
 		return err
 	}
-	if len(metaKeys) != 7 || metaKeys[0] != "attempt_limits" || metaKeys[1] != "attempt_mutation_revision" || metaKeys[2] != "binding" || metaKeys[3] != "database_id" || metaKeys[4] != "generation" || metaKeys[5] != "limits" || metaKeys[6] != "revision" {
+	if !equalStrings(metaKeys, inventory.metadataKeys) {
 		return errSchemaMismatch
 	}
-	for _, statement := range currentSchemaStatements() {
+	for _, statement := range inventory.statements {
 		name := statementTableName(statement)
 		if strings.TrimSpace(definitions[name]) != statement {
 			return errSchemaMismatch

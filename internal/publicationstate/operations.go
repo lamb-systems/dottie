@@ -669,6 +669,11 @@ func (s *Store) readState(ctx context.Context, source queryer, stage Stage) (sta
 			return stateSnapshot{}, err
 		}
 	}
+	if s.schemaVersion == 3 {
+		if err := s.checkIncomingMaterialRefs(ctx, source, stage); err != nil {
+			return stateSnapshot{}, err
+		}
+	}
 	if s.schemaVersion >= 2 {
 		state.token, err = s.expandedPositionToken(ctx, source, state, stage)
 	} else {

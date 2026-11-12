@@ -1,0 +1,724 @@
+{
+  "formatVersion": 1,
+  "coverage": "pending-genesis-only",
+  "applicationId": 1146376242,
+  "userVersion": 2,
+  "metadataKeys": [
+    "attempt_limits",
+    "attempt_mutation_revision",
+    "binding",
+    "database_id",
+    "generation",
+    "limits",
+    "revision"
+  ],
+  "schemaObjects": [
+    {
+      "name": "accepted_events",
+      "kind": "table",
+      "sql": "CREATE TABLE accepted_events (revision INTEGER PRIMARY KEY NOT NULL, mode TEXT NOT NULL, reason TEXT NOT NULL, stop TEXT NOT NULL, old_floor BLOB, new_floor BLOB NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, logical_bytes INTEGER NOT NULL)"
+    },
+    {
+      "name": "accepted_records",
+      "kind": "table",
+      "sql": "CREATE TABLE accepted_records (cid BLOB PRIMARY KEY NOT NULL, record_key TEXT NOT NULL, sequence INTEGER NOT NULL, raw BLOB NOT NULL, logical_bytes INTEGER NOT NULL)"
+    },
+    {
+      "name": "active_floor",
+      "kind": "table",
+      "sql": "CREATE TABLE active_floor (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), floor BLOB NOT NULL)"
+    },
+    {
+      "name": "active_publication_attempt",
+      "kind": "table",
+      "sql": "CREATE TABLE active_publication_attempt (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id))"
+    },
+    {
+      "name": "attempt_events",
+      "kind": "table",
+      "sql": "CREATE TABLE attempt_events (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), ordinal INTEGER NOT NULL, kind TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, ordinal))"
+    },
+    {
+      "name": "attempt_evidence",
+      "kind": "table",
+      "sql": "CREATE TABLE attempt_evidence (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), role TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, role))"
+    },
+    {
+      "name": "attempt_payload_refs",
+      "kind": "table",
+      "sql": "CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))"
+    },
+    {
+      "name": "attempt_reservations",
+      "kind": "table",
+      "sql": "CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)"
+    },
+    {
+      "name": "cache_observations",
+      "kind": "table",
+      "sql": "CREATE TABLE cache_observations (observation_id BLOB PRIMARY KEY NOT NULL, metadata BLOB NOT NULL, logical_bytes INTEGER NOT NULL)"
+    },
+    {
+      "name": "cache_records",
+      "kind": "table",
+      "sql": "CREATE TABLE cache_records (cid BLOB PRIMARY KEY NOT NULL, record_key TEXT NOT NULL, sequence INTEGER NOT NULL, raw BLOB NOT NULL, logical_bytes INTEGER NOT NULL)"
+    },
+    {
+      "name": "payload_objects",
+      "kind": "table",
+      "sql": "CREATE TABLE payload_objects (blob_cid BLOB PRIMARY KEY NOT NULL, size INTEGER NOT NULL, basename TEXT NOT NULL UNIQUE, logical_bytes INTEGER NOT NULL)"
+    },
+    {
+      "name": "payload_objects_basename",
+      "kind": "index",
+      "sql": "CREATE INDEX payload_objects_basename ON payload_objects(basename)"
+    },
+    {
+      "name": "pending_genesis",
+      "kind": "table",
+      "sql": "CREATE TABLE pending_genesis (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), vault BLOB NOT NULL)"
+    },
+    {
+      "name": "publication_attempts",
+      "kind": "table",
+      "sql": "CREATE TABLE publication_attempts (attempt_id BLOB PRIMARY KEY NOT NULL, core BLOB NOT NULL, lifecycle TEXT NOT NULL, outcome TEXT NOT NULL, blocked TEXT NOT NULL, state_digest BLOB NOT NULL, mutation_revision INTEGER NOT NULL, created_order INTEGER NOT NULL, logical_bytes INTEGER NOT NULL, terminal_evidence BLOB, retirement_evidence BLOB)"
+    },
+    {
+      "name": "publication_attempts_order",
+      "kind": "index",
+      "sql": "CREATE INDEX publication_attempts_order ON publication_attempts(created_order, attempt_id)"
+    },
+    {
+      "name": "retained_publications",
+      "kind": "table",
+      "sql": "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)"
+    },
+    {
+      "name": "store_meta",
+      "kind": "table",
+      "sql": "CREATE TABLE store_meta (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL)"
+    }
+  ],
+  "tables": [
+    {
+      "name": "store_meta",
+      "ddl": "CREATE TABLE store_meta (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL)",
+      "columns": [
+        {
+          "name": "key",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "value",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 7,
+      "rows": [
+        [
+          {
+            "type": "text-base64",
+            "value": "YXR0ZW1wdF9saW1pdHM="
+          },
+          {
+            "type": "blob-base64",
+            "value": "eyJhY3RpdmVBdHRlbXB0cyI6MSwiaGlzdG9yaWNhbEF0dGVtcHRzIjoxMDI0LCJyZXRhaW5lZFB1YmxpY2F0aW9ucyI6NjQsIm1hbmFnZWRPYmplY3RzIjo2NCwiY3VzdG9keUJ5dGVzIjoxNjEwNjEyNzM2LCJtZXRhZGF0YUJ5dGVzIjoxMzQyMTc3MjgsImV2aWRlbmNlQnl0ZXMiOjEzNDIxNzcyOCwiZXZpZGVuY2VTbG90Qnl0ZXMiOjE2Nzc3MjE2LCJsaWZlY3ljbGVFdmVudHMiOjE2LCJldmVudEJ5dGVzIjo2NTUzNiwiY29yZUJ5dGVzIjoyNjIxNDQsImhpc3RvcnlQYWdlRW50cmllcyI6MTAwLCJoaXN0b3J5UGFnZUJ5dGVzIjoxNjc3NzIxNn0="
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "YXR0ZW1wdF9tdXRhdGlvbl9yZXZpc2lvbg=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "AAAAAAAAAAE="
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "YmluZGluZw=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "eyJhY2NvdW50RGlkIjoiZGlkOnBsYzphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3giLCJiYWNrZW5kIjoicHVibGljLXJlcG8iLCJyZXBvc2l0b3J5IjoiYXQ6Ly9kaWQ6cGxjOmFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eCIsInZhdWx0IjoiQ1FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQT0iLCJwcm9maWxlIjoic3lzdGVtcy5sYW1iLmRvdHRpZS52YXVsdFNuYXBzaG90VjIrc3lzdGVtcy5sYW1iLmRvdHRpZS52YXVsdEhlYWRWMjtzY2hlbWFWZXJzaW9uPTIifQ=="
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "ZGF0YWJhc2VfaWQ="
+          },
+          {
+            "type": "blob-base64",
+            "value": "YeQ4yH5RZachjhipqq0sZR8NOgla3JCsxYWKiXNSLBc="
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "Z2VuZXJhdGlvbg=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "AAAAAAAAAAA="
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "bGltaXRz"
+          },
+          {
+            "type": "blob-base64",
+            "value": "eyJzdXBwbGllZFNuYXBzaG90Q291bnQiOjQwOTUsInN1cHBsaWVkVG90YWxCeXRlcyI6ODM4ODYwOCwic3VwcGxpZWRDb250ZXh0Qnl0ZXMiOjE2Mzg0LCJtYXhMaW5lYWdlTGlua3MiOjQwOTQsImNhY2hlUmVjb3JkQ291bnQiOjQwOTYsImNhY2hlT2JzZXJ2YXRpb25Db3VudCI6MTAyNCwiY2FjaGVMb2dpY2FsQnl0ZXMiOjE2Nzc3MjE2LCJhY2NlcHRlZFJlY29yZENvdW50IjoxNjM4NCwiYWNjZXB0ZWRFdmVudENvdW50Ijo4MTkyLCJhY2NlcHRlZExvZ2ljYWxCeXRlcyI6MTM0MjE3NzI4LCJoaXN0b3J5UGFnZUV2ZW50cyI6MTAwLCJoaXN0b3J5RXZpZGVuY2VCeXRlcyI6MTY3NzcyMTZ9"
+          }
+        ],
+        [
+          {
+            "type": "text-base64",
+            "value": "cmV2aXNpb24="
+          },
+          {
+            "type": "blob-base64",
+            "value": "AAAAAAAAAAA="
+          }
+        ]
+      ]
+    },
+    {
+      "name": "cache_records",
+      "ddl": "CREATE TABLE cache_records (cid BLOB PRIMARY KEY NOT NULL, record_key TEXT NOT NULL, sequence INTEGER NOT NULL, raw BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "cid",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "record_key",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "sequence",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "raw",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "cache_observations",
+      "ddl": "CREATE TABLE cache_observations (observation_id BLOB PRIMARY KEY NOT NULL, metadata BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "observation_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "metadata",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "accepted_records",
+      "ddl": "CREATE TABLE accepted_records (cid BLOB PRIMARY KEY NOT NULL, record_key TEXT NOT NULL, sequence INTEGER NOT NULL, raw BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "cid",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "record_key",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "sequence",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "raw",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "accepted_events",
+      "ddl": "CREATE TABLE accepted_events (revision INTEGER PRIMARY KEY NOT NULL, mode TEXT NOT NULL, reason TEXT NOT NULL, stop TEXT NOT NULL, old_floor BLOB, new_floor BLOB NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, logical_bytes INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "revision",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "mode",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "reason",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "stop",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "old_floor",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "new_floor",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "body",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "digest",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "active_floor",
+      "ddl": "CREATE TABLE active_floor (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), floor BLOB NOT NULL)",
+      "columns": [
+        {
+          "name": "singleton",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "floor",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "publication_attempts",
+      "ddl": "CREATE TABLE publication_attempts (attempt_id BLOB PRIMARY KEY NOT NULL, core BLOB NOT NULL, lifecycle TEXT NOT NULL, outcome TEXT NOT NULL, blocked TEXT NOT NULL, state_digest BLOB NOT NULL, mutation_revision INTEGER NOT NULL, created_order INTEGER NOT NULL, logical_bytes INTEGER NOT NULL, terminal_evidence BLOB, retirement_evidence BLOB)",
+      "columns": [
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "core",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "lifecycle",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "outcome",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "blocked",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "state_digest",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "mutation_revision",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "created_order",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "terminal_evidence",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "retirement_evidence",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "eyJ2ZXJzaW9uIjoxLCJhdHRlbXB0SWQiOiJRZ0FBQUFBQUFBQUFBQUFBQUFBQUZ3PT0iLCJkYXRhYmFzZUlkIjoiWWVRNHlINVJaYWNoamhpcHFxMHNaUjhOT2dsYTNKQ3N4WVdLaVhOU0xCYz0iLCJiaW5kaW5nIjp7ImFjY291bnREaWQiOiJkaWQ6cGxjOmFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eCIsImJhY2tlbmQiOiJwdWJsaWMtcmVwbyIsInJlcG9zaXRvcnkiOiJhdDovL2RpZDpwbGM6YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4IiwidmF1bHQiOiJDUUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSIsInByb2ZpbGUiOiJzeXN0ZW1zLmxhbWIuZG90dGllLnZhdWx0U25hcHNob3RWMitzeXN0ZW1zLmxhbWIuZG90dGllLnZhdWx0SGVhZFYyO3NjaGVtYVZlcnNpb249MiJ9LCJraW5kIjoiZ2VuZXNpcyIsImNhcHR1cmVkRmxvb3IiOm51bGwsImNhcHR1cmVkUmV2aXNpb24iOjAsImNhcHR1cmVkR2VuZXJhdGlvbiI6MCwicHJlZGVjZXNzb3JLZXkiOiIiLCJwcmVkZWNlc3NvclJlY29yZCI6bnVsbCwicHJlZGVjZXNzb3JDaWQiOm51bGwsInNuYXBzaG90S2V5IjoiMDAwMDAwMDAwMDAwMDAwMCIsInNuYXBzaG90UmVjb3JkIjoicDJSaWJHOWlwR055WldiWUtsZ2xBQUZWRWlENVIybVVjc3dMdGpQUEI4a1NQVzRNZG8xSmloaFR6NE92MURRb2dEOCs2bVJ6YVhwbEdRd0FaU1IwZVhCbFpHSnNiMkpvYldsdFpWUjVjR1Y0R0dGd2NHeHBZMkYwYVc5dUwyOWpkR1YwTFhOMGNtVmhiV1VrZEhsd1pYZ2pjM2x6ZEdWdGN5NXNZVzFpTG1SdmRIUnBaUzUyWVhWc2RGTnVZWEJ6YUc5MFZqSmxkbUYxYkhSWUlBa0FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBWm5CaGNtVnVkRUJ0Y0hWaWJHbGpZWFJwYjI1SlpGQkNBQUFBQUFBQUFBQUFBQUFBQUFBWGJYTmphR1Z0WVZabGNuTnBiMjRDYm5CMVlteHBZMkYwYVc5dVUyVnhBQT09Iiwic25hcHNob3RDaWQiOiJBWEVTSU9yYTRwQ3J3aC9zZ0tvcUZ6WFFnWWNSN2RXaTJkQkNoTmFsSzE5RUtDR0QiLCJoZWFkUmVjb3JkIjoicG1Va2RIbHdaWGdmYzNsemRHVnRjeTVzWVcxaUxtUnZkSFJwWlM1MllYVnNkRWhsWVdSV01tVjJZWFZzZEZnZ0NRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUJuWW14dllrTnBaRmdrQVZVU0lQbEhhWlJ5ekF1Mk04OEh5Ukk5Ymd4MmpVbUtHRlBQZzYvVU5DaUFQejdxYTNOdVlYQnphRzkwUTJsa1dDUUJjUklnNnRyaWtLdkNIK3lBcWlvWE5kQ0JoeEh0MWFMWjBFS0UxcVVyWDBRb0lZTnRjMk5vWlcxaFZtVnljMmx2YmdKdWNIVmliR2xqWVhScGIyNVRaWEVBIiwiaGVhZENpZCI6IkFYRVNJT1Y2N0FOcVI0OXZlbDQ0RWJwbTBFbHdVNk1FMGhpVVJzRUNtMUFjNUV0LyIsImJsb2JDaWQiOiJBVlVTSVBsSGFaUnl6QXUyTTg4SHlSSTliZ3gyalVtS0dGUFBnNi9VTkNpQVB6N3EiLCJibG9iU2l6ZSI6MzA3MiwiaW5pdGlhbENvbnRleHQiOnsicmVwb3NpdG9yeVJldmlzaW9uIjoic3ludGhldGljLWdlbmVzaXMtcmV2aXNpb24iLCJyZXBvc2l0b3J5RGlnZXN0IjoiTVRJek5BPT0iLCJwb2xpY3kiOm51bGx9LCJpbml0aWFsVmlld0RpZ2VzdCI6IjlPTmxUOFcydXlkS1N4bTUvQjhKTC95MXUzUDhhekdWT0xtU1dzbzgvcXM9IiwicmV2aWV3Ijp7InNlbGVjdGlvbkRpZ2VzdCI6IlVRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9Iiwic2VsZWN0aW9uUmV2aXNpb24iOjEsImFwcHJvdmFsRGlnZXN0IjoiVWdBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQT0iLCJhcHByb3ZhbFJldmlzaW9uIjoxfSwiY2FuZGlkYXRlQ29uZmlybWF0aW9uIjoiV3FjSWJhclUrZ2E3MWc4bHRqZ1pkRFNGTXdMSEw1Zk9manRkdGdRRHc5VT0iLCJyZXNlcnZlZENvbXBsZXRpb25CeXRlcyI6NTI0Mjg4fQ=="
+          },
+          {
+            "type": "text-base64",
+            "value": "cHJlcGFyZWQ="
+          },
+          {
+            "type": "text-base64",
+            "value": "bm90LXN1Ym1pdHRlZA=="
+          },
+          {
+            "type": "text-base64",
+            "value": ""
+          },
+          {
+            "type": "blob-base64",
+            "value": "lnBIIS60oiReZEkPpmHOXDTwxin0lojnR1B9d/R51rY="
+          },
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "integer",
+            "value": "2085"
+          },
+          {
+            "type": "null",
+            "value": ""
+          },
+          {
+            "type": "null",
+            "value": ""
+          }
+        ]
+      ]
+    },
+    {
+      "name": "active_publication_attempt",
+      "ddl": "CREATE TABLE active_publication_attempt (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id))",
+      "columns": [
+        {
+          "name": "singleton",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          }
+        ]
+      ]
+    },
+    {
+      "name": "pending_genesis",
+      "ddl": "CREATE TABLE pending_genesis (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), vault BLOB NOT NULL)",
+      "columns": [
+        {
+          "name": "singleton",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "vault",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          }
+        ]
+      ]
+    },
+    {
+      "name": "attempt_events",
+      "ddl": "CREATE TABLE attempt_events (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), ordinal INTEGER NOT NULL, kind TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, ordinal))",
+      "columns": [
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "ordinal",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "kind",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "body",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "digest",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          },
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "text-base64",
+            "value": "Y3JlYXRlZA=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "eyJ2ZXJzaW9uIjoxLCJvcmRpbmFsIjoxLCJraW5kIjoiY3JlYXRlZCIsInByZXZpb3VzRGlnZXN0IjpudWxsLCJldmlkZW5jZSI6bnVsbCwic3RhdGVEaWdlc3QiOiJsbkJJSVM2MG9pUmVaRWtQcG1IT1hEVHd4aW4wbG9qblIxQjlkL1I1MXJZPSJ9"
+          },
+          {
+            "type": "blob-base64",
+            "value": "jm+1yr9EzfzPqR7J1cuS9ePx06ZE5yhsxQ4f2a0wFzM="
+          }
+        ]
+      ]
+    },
+    {
+      "name": "attempt_evidence",
+      "ddl": "CREATE TABLE attempt_evidence (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), role TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, role))",
+      "columns": [
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "role",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "body",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "digest",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "payload_objects",
+      "ddl": "CREATE TABLE payload_objects (blob_cid BLOB PRIMARY KEY NOT NULL, size INTEGER NOT NULL, basename TEXT NOT NULL UNIQUE, logical_bytes INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "blob_cid",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "size",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "basename",
+          "declaredType": "TEXT"
+        },
+        {
+          "name": "logical_bytes",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "blob-base64",
+            "value": "AVUSIPlHaZRyzAu2M88HyRI9bgx2jUmKGFPPg6/UNCiAPz7q"
+          },
+          {
+            "type": "integer",
+            "value": "3072"
+          },
+          {
+            "type": "text-base64",
+            "value": "Zjk0NzY5OTQ3MmNjMGJiNjMzY2YwN2M5MTIzZDZlMGM3NjhkNDk4YTE4NTNjZjgzYWZkNDM0Mjg4MDNmM2VlYS5wYXlsb2Fk"
+          },
+          {
+            "type": "integer",
+            "value": "3072"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "attempt_payload_refs",
+      "ddl": "CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
+      "columns": [
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "blob_cid",
+          "declaredType": "BLOB"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          },
+          {
+            "type": "blob-base64",
+            "value": "AVUSIPlHaZRyzAu2M88HyRI9bgx2jUmKGFPPg6/UNCiAPz7q"
+          }
+        ]
+      ]
+    },
+    {
+      "name": "retained_publications",
+      "ddl": "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "record_cid",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "sequence",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "blob_cid",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "size",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "accepted_revision",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 0,
+      "rows": []
+    },
+    {
+      "name": "attempt_reservations",
+      "ddl": "CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "attempt_id",
+          "declaredType": "BLOB"
+        },
+        {
+          "name": "metadata_bytes",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "accepted_bytes",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "accepted_records",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "accepted_events",
+          "declaredType": "INTEGER"
+        },
+        {
+          "name": "retained_points",
+          "declaredType": "INTEGER"
+        }
+      ],
+      "rowCount": 1,
+      "rows": [
+        [
+          {
+            "type": "blob-base64",
+            "value": "QgAAAAAAAAAAAAAAAAAAFw=="
+          },
+          {
+            "type": "integer",
+            "value": "51642464"
+          },
+          {
+            "type": "integer",
+            "value": "524288"
+          },
+          {
+            "type": "integer",
+            "value": "2"
+          },
+          {
+            "type": "integer",
+            "value": "1"
+          },
+          {
+            "type": "integer",
+            "value": "1"
+          }
+        ]
+      ]
+    }
+  ]
+}
