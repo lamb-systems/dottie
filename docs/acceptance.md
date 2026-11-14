@@ -43,4 +43,19 @@ content. A skipped gate would not have been evidence.
 - Freshness-unverified remote state is refused for apply. The existing consent path permits inspection/export continuation only; it never grants apply authority.
 - The live milestone's same-host kit file provides only a limited disposable demonstration, not evidence of independent/offline kit custody or machine-loss recovery.
 
+## Plaintext v2 publication residual (accepted by the owner 2026-11-14)
+
+The plaintext v2 profile uploads the packed snapshot payload before it attempts the atomic
+snapshot-reference and head record batch. The provider therefore holds the payload before any record
+references it, and a rejected, refused or ambiguous batch can leave an unattached plaintext blob that
+remains retrievable at the provider and cannot be deleted through Dottie.
+
+Dottie itself never exposes candidate bytes for a publication that did not succeed: no command, log,
+error, report or archive surfaces them, and the local accepted position does not advance. The residual
+is provider-side only. It is accepted as a recorded limit for the plaintext model; the equivalent
+encrypted-v1 exposure was ciphertext, and no v2 profile change re-introduces an envelope.
+
+Owner acceptance of this residual is what permits the plaintext v2 write path to be implemented. It does
+not authorize any live provider run, which still requires explicit disposable-account authorization.
+
 The owner must record explicit acceptance of these boundaries, every matrix result, and the residual limits before real user data is used. Until that acceptance is recorded, do not use Dottie with real dotfiles or preferences.

@@ -8,7 +8,10 @@ restore evidence are implemented; the live publication, archive and two-home res
 against a disposable account and the owner accepted [`docs/acceptance.md`](docs/acceptance.md) on
 2026-11-05. Real-data use is permitted under the residual limits recorded there: kit custody, no
 global freshness, one published vault per account, and provider-held records and ciphertext that
-cannot be deleted.**
+cannot be deleted. The plaintext v2 publication profile adds one disclosed residual: the packed
+snapshot is uploaded before its record batch, so a rejected or ambiguous batch can leave an unattached
+plaintext blob retrievable at the provider. Dottie never surfaces candidate bytes for a publication
+that did not succeed; the provider-side blob is accepted as a recorded limit.**
 Use `dottie account login`, `status` and `logout` for account authorization;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME

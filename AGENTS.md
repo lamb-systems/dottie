@@ -10,7 +10,14 @@
 - Presets are data, not hooks. Remote configuration cannot grant local path
   access, enable auto-apply or authorize external symlink traversal.
 - Preserve key separation, exact policy/revision checks and atomic first blob
-  reference plus head/control publication. Failed publication must not expose data.
+  reference plus head/control publication. Failed publication must not expose data
+  through Dottie itself: no Dottie command, log, error or archive may surface
+  candidate bytes for a publication that did not succeed. The plaintext v2 profile
+  uploads the packed payload before its record batch, so a rejected or ambiguous
+  batch can leave an unattached, provider-held plaintext blob that cannot be
+  deleted. That provider-side residual is accepted and recorded in
+  docs/acceptance.md; it must be disclosed, never silently assumed away, and it
+  does not license exposing candidate bytes locally.
 - Recovery authenticates data, not global freshness. Risk acceptance cannot
   override invalid signatures, wrong keys or failed policy checks.
 - Use synthetic fixtures and temporary homes, never real user dotfiles in tests.
