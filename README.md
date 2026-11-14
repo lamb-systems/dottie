@@ -68,14 +68,22 @@ real user data is permitted only under the residual limits in `docs/acceptance.m
 
 ## Target design
 
-**Select directories. Reconcile files. Store encrypted snapshots.**
+**Select directories. Reconcile files. Publish packed snapshots under account authority.**
+
+The target publication model is plaintext-as-stored: a snapshot is a packed, content-addressed
+record set published to the account's own repository under that account's authority. Snapshot
+confidentiality is delegated to the existing account and provider relationship rather than to a
+separate client-side envelope with kits, epochs and device certificates. This supersedes the
+scaffold-era encrypted design; the encrypted key/kit path still described in the status section
+above is the legacy v1 implementation, remains in-tree, and is not the model new work targets.
 
 - One executable: CLI commands and a per-user background service.
 - Two configuration sources: recursive files/directories and GNOME GSettings.
 - Declarative application presets, starting with Neovim; no application parsers.
 - Automatic inclusion of new files in approved roots and file-level conflicts.
 - Per-target consent: automatic apply, download-and-review, or backup-only.
-- Client-side encryption, independent recovery, and authenticated device roles.
+- Exact local position and material ownership, with typed refusals and no silent adoption of
+  foreign or legacy state.
 - Atomic publication of snapshot references and the accepted remote head.
 
 Applications keep their normal configuration locations. Machine-specific files can
