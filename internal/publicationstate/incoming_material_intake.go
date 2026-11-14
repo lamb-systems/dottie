@@ -13,7 +13,6 @@ import (
 )
 
 const stageAcceptMaterial Stage = "accept_material"
-const reasonModeUnsupported Reason = "mode_unsupported"
 
 type materialAttachment struct {
 	payload []byte
@@ -33,12 +32,8 @@ func (s *Store) acceptMaterial(ctx context.Context, mode Mode, expectedStateToke
 	if s.schemaVersion != 3 {
 		return zeroFloor(), classified(ErrSchema, stageAcceptMaterial, ReasonUpgradeRequired)
 	}
-	if mode != ModeFirstUse && mode != ModeAdvance {
-		reason := ReasonMode
-		if mode == ModeReplaceFloor {
-			reason = reasonModeUnsupported
-		}
-		return zeroFloor(), classified(ErrInvalid, StageInput, reason)
+	if !validMode(mode) {
+		return zeroFloor(), classified(ErrInvalid, StageInput, ReasonMode)
 	}
 	validated, err := validateObservation(observation, s.binding, s.limits)
 	if err != nil {
@@ -56,16 +51,21 @@ func (s *Store) acceptMaterial(ctx context.Context, mode Mode, expectedStateToke
 		return zeroFloor(), storageFailure(ctx, stageAcceptMaterial, err)
 	}
 	var accepted Floor
+	var attemptMutationChanged bool
 	err = s.withTx(ctx, stageAcceptMaterial, func(tx *sql.Tx) error {
-		floor, _, txErr := s.acceptTx(ctx, tx, stageAcceptMaterial, mode, expectedStateToken, validated, confirmation, &material)
+		floor, changed, txErr := s.acceptTx(ctx, tx, stageAcceptMaterial, mode, expectedStateToken, validated, confirmation, &material)
 		if txErr != nil {
 			return txErr
 		}
 		accepted = floor
+		attemptMutationChanged = changed
 		return nil
 	})
 	if err != nil {
 		return zeroFloor(), err
+	}
+	if attemptMutationChanged {
+		s.attemptMutationRevision++
 	}
 	return cloneFloor(accepted), nil
 }

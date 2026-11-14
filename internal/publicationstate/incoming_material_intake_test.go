@@ -3,6 +3,7 @@ package publicationstate
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,23 +154,442 @@ func TestAcceptMaterialSamePositionAttachesExistingRevision(t *testing.T) {
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 }
 
-func TestAcceptMaterialRefusesDeferredMode(t *testing.T) {
+func TestAcceptMaterialModeGate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unknown mode", func(t *testing.T) {
+		f := newFixture(t, BackendPublicRepo)
+		f.appendRecord(t, 0)
+		store, directory := newStore(t, f)
+		t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+		floor, err := store.acceptMaterial(ctx, Mode("bogus"), [32]byte{}, f.observation(1), f.payload, [32]byte{})
+		assert.Equal(t, Floor{}, floor)
+		requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonMode)
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+		requirePayloadDirectoryAbsent(t, directory)
+		assert.Equal(t, uint64(0), store.attemptMutationRevision)
+	})
+
+	t.Run("replace floor on empty store refuses stale", func(t *testing.T) {
+		f := newFixture(t, BackendPublicRepo)
+		f.appendRecord(t, 0)
+		store, directory := newStore(t, f)
+		t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+		floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, [32]byte{}, f.observation(1), f.payload, [32]byte{})
+		assert.Equal(t, Floor{}, floor)
+		requireErrorMetadata(t, err, ErrConsent, stageAcceptMaterial, ReasonStale)
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+		requirePayloadDirectoryAbsent(t, directory)
+		loaded, present, err := store.Load(ctx)
+		require.NoError(t, err)
+		assert.False(t, present)
+		assert.Equal(t, Floor{}, loaded)
+	})
+
+	t.Run("replace floor without discontinuity refuses at prepare", func(t *testing.T) {
+		f := newFixture(t, BackendPublicRepo)
+		f.appendRecord(t, 0)
+		store, _ := newStore(t, f)
+		t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+		accepted := incomingMaterialFirstUse(t, store, f)
+		before := readLogicalRows(t, store.conn)
+		proposal, err := store.Prepare(ctx, ModeReplaceFloor, f.observation(1), f.payload)
+		assert.Equal(t, Proposal{}, proposal)
+		requireErrorMetadata(t, err, ErrConsent, StagePrepare, ReasonMode)
+		assert.Equal(t, before, readLogicalRows(t, store.conn))
+		loaded, present, err := store.Load(ctx)
+		require.NoError(t, err)
+		require.True(t, present)
+		assert.Equal(t, accepted, loaded)
+	})
+}
+
+func TestAcceptMaterialReplaceFloorBlocksActiveAttempt(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
+	f.appendRecord(t, 1)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	genesis := f.observation(1)
+	firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.Revision)
+
+	candidate := attemptCandidate(f, 1)
+	view := attemptView(f, genesis, false)
+	review := attemptReview()
+	attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
+	require.NoError(t, err)
+	attempt, err := store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), store.attemptMutationRevision)
+	require.Equal(t, uint64(1), intakeDurableMutation(t, ctx, store))
+
+	fork := forkGenesisObservation(t, f)
+	replacement, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+	require.NoError(t, err)
+	require.Equal(t, "fork", replacement.Stop)
+	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, replacement.Confirmation)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), floor.Revision)
+	assert.Equal(t, uint64(2), floor.Generation)
+	assert.Equal(t, uint64(2), store.attemptMutationRevision)
+	assert.Equal(t, uint64(2), intakeDurableMutation(t, ctx, store))
+
+	blocked, err := store.LoadAttempt(ctx, attempt.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "blocked-floor-replaced", blocked.Blocked)
+	assert.Equal(t, AttemptPrepared, blocked.Lifecycle)
+
+	var metadataBytes, acceptedBytes, acceptedRecords, acceptedEvents, retainedPoints int64
+	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT metadata_bytes,accepted_bytes,accepted_records,accepted_events,retained_points FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).Scan(&metadataBytes, &acceptedBytes, &acceptedRecords, &acceptedEvents, &retainedPoints))
+	assert.Equal(t, int64(store.attemptReservationSize()), metadataBytes)
+	assert.Zero(t, acceptedBytes)
+	assert.Zero(t, acceptedRecords)
+	assert.Zero(t, acceptedEvents)
+	assert.Zero(t, retainedPoints)
+
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+	references := b8IncomingRows(t, ctx, store.conn)
+	require.Len(t, references, 2)
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
+	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, floor.BlobCID}, references[1])
+
+	history, err := store.History(ctx, 0, 10)
+	require.NoError(t, err)
+	require.False(t, history.HasMore)
+	require.Len(t, history.Events, 2)
+	assert.Equal(t, first, history.Events[0].NewFloor)
+	assert.Equal(t, floor, history.Events[1].NewFloor)
+
+	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
+	require.NoError(t, err)
+	assert.Equal(t, floor, material.Floor)
+	assert.Equal(t, fork.Snapshots[0].Raw, material.SnapshotRecord)
+	assert.Equal(t, f.payload, material.Payload)
+	superseded, err := store.ReadAcceptedMaterial(ctx, f.binding, first)
+	assert.Equal(t, AcceptedMaterial{}, superseded)
+	requireErrorMetadata(t, err, ErrContinuity, StageReadAcceptedMaterial, ReasonStale)
+}
+
+func TestAcceptMaterialReplaceFloorWithoutActiveAttemptKeepsMutation(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendPublicRepo)
+	f.appendRecord(t, 0)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	genesis := f.observation(1)
+	firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), store.attemptMutationRevision)
+
+	fork := forkGenesisObservation(t, f)
+	replacement, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+	require.NoError(t, err)
+	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, replacement.Confirmation)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), floor.Revision)
+	assert.Equal(t, uint64(2), floor.Generation)
+	assert.Equal(t, uint64(0), store.attemptMutationRevision)
+	assert.Equal(t, uint64(0), intakeDurableMutation(t, ctx, store))
+
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+	references := b8IncomingRows(t, ctx, store.conn)
+	require.Len(t, references, 2)
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
+	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, floor.BlobCID}, references[1])
+	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"))
+	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"))
+	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"))
+
+	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
+	require.NoError(t, err)
+	assert.Equal(t, floor, material.Floor)
+	assert.Equal(t, fork.Snapshots[0].Raw, material.SnapshotRecord)
+	assert.Equal(t, f.payload, material.Payload)
+}
+
+func TestAcceptMaterialReplaceFloorTokenBecomesStale(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendPublicRepo)
+	f.appendRecord(t, 0)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	genesis := f.observation(1)
+	firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+	_, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+	require.NoError(t, err)
+
+	fork := forkGenesisObservation(t, f)
+	superseded, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+	require.NoError(t, err)
+	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, superseded.StateToken, fork, f.payload, superseded.Confirmation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), floor.Revision)
+	require.Equal(t, uint64(2), floor.Generation)
+
+	refused, err := store.acceptMaterial(ctx, ModeReplaceFloor, superseded.StateToken, fork, f.payload, superseded.Confirmation)
+	assert.Equal(t, Floor{}, refused)
+	requireErrorMetadata(t, err, ErrConsent, stageAcceptMaterial, ReasonStale)
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+	require.Equal(t, uint64(0), intakeDurableMutation(t, ctx, store))
+	loaded, present, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	assert.Equal(t, floor, loaded)
+
+	advance, err := store.Prepare(ctx, ModeAdvance, fork, f.payload)
+	require.NoError(t, err)
+	require.Equal(t, "same", advance.Stop)
+	attached, err := store.acceptMaterial(ctx, ModeAdvance, advance.StateToken, fork, f.payload, [32]byte{})
+	require.NoError(t, err)
+	assert.Equal(t, floor, attached)
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+}
+
+func TestAcceptMaterialReplacementAttemptInvalidation(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendPublicRepo)
+	f.appendRecord(t, 0)
+	f.appendRecord(t, 1)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	genesis := f.observation(1)
+	firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+	require.NoError(t, err)
+
+	fork := forkGenesisObservation(t, f)
+	superseded, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+	require.NoError(t, err)
+
+	candidate := attemptCandidate(f, 1)
+	view := attemptView(f, genesis, false)
+	review := attemptReview()
+	attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
+	require.NoError(t, err)
+	attempt, err := store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), intakeDurableMutation(t, ctx, store))
+
+	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, superseded.StateToken, fork, f.payload, superseded.Confirmation)
+	assert.Equal(t, Floor{}, floor)
+	requireErrorMetadata(t, err, ErrConsent, stageAcceptMaterial, ReasonStale)
+	loaded, present, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	assert.Equal(t, first, loaded)
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+	require.Equal(t, uint64(1), intakeDurableMutation(t, ctx, store))
+	assert.Equal(t, uint64(1), store.attemptMutationRevision)
+	retained, err := store.LoadAttempt(ctx, attempt.ID)
+	require.NoError(t, err)
+	assert.Empty(t, retained.Blocked)
+}
+
+func TestAcceptMaterialReplaceFloorRefusalsKeepState(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("missing confirmation", func(t *testing.T) {
+		f := newFixture(t, BackendPublicRepo)
+		f.appendRecord(t, 0)
+		store, _ := newStore(t, f)
+		t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+		genesis := f.observation(1)
+		firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+		first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+		require.NoError(t, err)
+		fork := forkGenesisObservation(t, f)
+		replacement, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+		require.NoError(t, err)
+
+		floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, [32]byte{})
+		assert.Equal(t, Floor{}, floor)
+		requireErrorMetadata(t, err, ErrConsent, stageAcceptMaterial, ReasonConfirmation)
+		loaded, present, err := store.Load(ctx)
+		require.NoError(t, err)
+		require.True(t, present)
+		assert.Equal(t, first, loaded)
+		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+		require.Equal(t, uint64(0), intakeDurableMutation(t, ctx, store))
+		assert.Equal(t, uint64(0), store.attemptMutationRevision)
+	})
+
+	t.Run("active candidate", func(t *testing.T) {
+		f := newFixture(t, BackendPublicRepo)
+		for sequence := uint64(0); sequence < 3; sequence++ {
+			f.appendRecord(t, sequence)
+		}
+		store, _ := newStore(t, f)
+		t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+		genesis := f.observation(1)
+		firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+		first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), first.Revision)
+		candidate := attemptCandidate(f, 1)
+		view := attemptView(f, genesis, false)
+		review := attemptReview()
+		attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
+		require.NoError(t, err)
+		attempt, err := store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+		require.NoError(t, err)
+
+		advanceObservation := f.observation(3)
+		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, f.payload)
+		require.NoError(t, err)
+		require.Equal(t, "joined", advanceProposal.Stop)
+		second, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, f.payload, [32]byte{})
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), second.Revision)
+		require.Equal(t, uint64(2), second.Sequence)
+		retained, err := store.LoadAttempt(ctx, attempt.ID)
+		require.NoError(t, err)
+		require.Empty(t, retained.Blocked)
+
+		rollbackObservation := f.observation(2)
+		replacement, err := store.Prepare(ctx, ModeReplaceFloor, rollbackObservation, f.payload)
+		require.NoError(t, err)
+		require.Equal(t, "rollback", replacement.Stop)
+		require.Equal(t, ReasonRollback, replacement.Reason)
+		floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, replacement.StateToken, rollbackObservation, f.payload, replacement.Confirmation)
+		assert.Equal(t, Floor{}, floor)
+		requireErrorMetadata(t, err, ErrConsent, stageAcceptMaterial, ReasonActiveAttempt)
+
+		loaded, present, err := store.Load(ctx)
+		require.NoError(t, err)
+		require.True(t, present)
+		assert.Equal(t, second, loaded)
+		require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+		require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
+		require.Equal(t, uint64(1), intakeDurableMutation(t, ctx, store))
+		assert.Equal(t, uint64(1), store.attemptMutationRevision)
+		unchanged, err := store.LoadAttempt(ctx, attempt.ID)
+		require.NoError(t, err)
+		assert.Empty(t, unchanged.Blocked)
+	})
+}
+
+func TestAcceptMaterialCounterOnlyAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendPublicRepo)
+	f.appendRecord(t, 0)
+	f.appendRecord(t, 1)
 	store, directory := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 
-	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, [32]byte{}, f.observation(1), f.payload, [32]byte{})
+	genesis := f.observation(1)
+	firstProposal := prepareFirstUse(t, store, genesis, f.payload)
+	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, genesis, f.payload, firstProposal.Confirmation)
+	require.NoError(t, err)
+	candidate := attemptCandidate(f, 1)
+	view := attemptView(f, genesis, false)
+	review := attemptReview()
+	attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
+	require.NoError(t, err)
+	attempt, err := store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+	require.NoError(t, err)
+	fork := forkGenesisObservation(t, f)
+	replacement, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
+	require.NoError(t, err)
+	beforeMutation := store.attemptMutationRevision
+	require.Equal(t, uint64(1), beforeMutation)
+
+	store.commitTransaction = commitThenReturnError
+	floor, err := store.acceptMaterial(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, replacement.Confirmation)
 	assert.Equal(t, Floor{}, floor)
-	requireErrorMetadata(t, err, ErrInvalid, StageInput, reasonModeUnsupported)
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
-	requirePayloadDirectoryAbsent(t, directory)
+	requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonCommitUnknown)
+	assert.Equal(t, beforeMutation, store.attemptMutationRevision)
+	require.True(t, store.needsReadback)
+
+	require.NoError(t, store.Close())
+	reopened, err := Open(directory, f.binding)
+	if reopened != nil {
+		t.Cleanup(func() { assert.NoError(t, reopened.Close()) })
+	}
+	require.NoError(t, err)
+	require.NotNil(t, reopened)
+	durable := intakeDurableMutation(t, ctx, reopened)
+	assert.Equal(t, beforeMutation+1, durable)
+	assert.Equal(t, durable, reopened.attemptMutationRevision)
+	loaded, present, err := reopened.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	assert.Equal(t, uint64(2), loaded.Revision)
+	assert.Equal(t, uint64(2), loaded.Generation)
+	assert.Equal(t, uint64(0), loaded.Sequence)
+	assert.NotEqual(t, first, loaded)
+	blocked, err := reopened.LoadAttempt(ctx, attempt.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "blocked-floor-replaced", blocked.Blocked)
+	references := b8IncomingRows(t, ctx, reopened.conn)
+	require.Len(t, references, 2)
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
+	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, loaded.BlobCID}, references[1])
+}
+
+func TestAcceptMaterialAttachmentKeepsCounterAndToken(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendPublicRepo)
+	f.appendRecord(t, 0)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 
 	accepted := incomingMaterialFirstUse(t, store, f)
-	assert.Equal(t, uint64(1), accepted.Revision)
+	unowned, err := store.ReadAcceptedMaterial(ctx, f.binding, accepted)
+	assert.Equal(t, AcceptedMaterial{}, unowned)
+	requireErrorMetadata(t, err, ErrStorage, StageReadAcceptedMaterial, ReasonMaterialNotRetained)
+
+	before, err := store.readState(ctx, store.conn, stageAcceptMaterial)
+	require.NoError(t, err)
+	beforeMutation := store.attemptMutationRevision
+	observation := f.observation(1)
+	attachProposal, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
+	require.NoError(t, err)
+	require.Equal(t, "same", attachProposal.Stop)
+	floor, err := store.acceptMaterial(ctx, ModeAdvance, attachProposal.StateToken, observation, f.payload, [32]byte{})
+	require.NoError(t, err)
+	assert.Equal(t, accepted, floor)
+	assert.Equal(t, beforeMutation, store.attemptMutationRevision)
+	assert.Equal(t, uint64(0), intakeDurableMutation(t, ctx, store))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
+	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+
+	after, err := store.readState(ctx, store.conn, stageAcceptMaterial)
+	require.NoError(t, err)
+	assert.Equal(t, before.token, after.token)
+	assert.Equal(t, before.revision, after.revision)
+	assert.Equal(t, before.generation, after.generation)
+	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
+	require.NoError(t, err)
+	assert.Equal(t, accepted, material.Floor)
+	assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
+	assert.Equal(t, f.payload, material.Payload)
 }
 
 func TestAcceptMaterialCapacityRefusal(t *testing.T) {
@@ -436,4 +856,12 @@ func TestAcceptMaterialUsesTransactionQueryer(t *testing.T) {
 		requireErrorMetadata(t, err, ErrSchema, stageAcceptMaterial, ReasonCorrupt)
 		lease.restoreRollbackClose(t)
 	})
+}
+
+func intakeDurableMutation(t *testing.T, ctx context.Context, store *Store) uint64 {
+	t.Helper()
+	value, err := readValueBounded(ctx, store.conn, "attempt_mutation_revision", 8)
+	require.NoError(t, err)
+	require.Len(t, value, 8)
+	return binary.BigEndian.Uint64(value)
 }
