@@ -49,3 +49,37 @@ The new library does not call `syncengine.Apply` or `RollbackApplied` and grants
 Preview omits raw contents but exposes user-controlled names, sizes and unkeyed digests that can confirm guesses. Previews, bases, plans, backups and candidates are sensitive and are not routine-log-safe.
 
 Run `go test -count=1 ./internal/service` for service tests and `go test -count=1 ./tests/local -run '^TestPublicationReconcile'` for the synthetic local composition tests. The projection target's nine default seeds run with ordinary `go test`; bounded exploration is explicit: `GOTOOLCHAIN=local go test ./internal/service -run '^$' -fuzz '^FuzzProjectPublicationSnapshotBoundary$' -fuzztime=30s -parallel=2`. Its fixed synthetic GNOME projection generator limits inputs to 128 KiB, 16 entries and 4 KiB quoted values; it does not exercise native settings compatibility or the consumer barrier. `make fuzz` does not include this target.
+
+## Unwired v2 publish orchestration
+
+`PreparePublishMaterial` and `PublishMaterial` are an unwired local orchestration for the plaintext v2
+publication profile. No CLI command, coordinator dependency or service caller invokes them; `push` and
+`sync` still route to the persisted v1 coordinator. They write only through the caller-supplied
+publication-state store, and they never contact a provider: the caller supplies a `MaterialTransport`
+whose upload, conditional batch write and repository read are the only outbound surfaces.
+
+Consent is caller-supplied and two-phase. `PreparePublishMaterial` performs read-only work only — it
+loads the accepted floor, reads one repository view, packs the snapshot, builds and validates the
+complete write batch, and calls `PrepareAttempt`. It does not create an attempt, upload bytes or write
+accepted state. `PublishMaterial` requires the returned proposal plus the caller's confirmation and
+refuses a mismatch or a stale proposal before any durable write or transport call.
+
+The complete immutable batch, including both collections and keys, the expected snapshot CID, the
+create flags, the expected predecessor and the expected supplied context, is built and validated
+before the submission boundary. After `BeginSubmission` reserves that boundary the orchestration only
+compares the store's returned submission material against the prepared batch and sends exactly once.
+A transport error or an ambiguous outcome returns a typed unresolved result with no retry, no
+abandonment, no finalization and no rollback claim; a later explicit `ResolveAttempt` and
+`FinalizeAttempt` classify the outcome. Those two calls use different token domains: the attempt's
+state digest resolves, and the resolution's digest finalizes; dispatch tokens are never reusable as
+digests. Accepted-material ownership is not created here — the orchestration finalizes the attempt and
+lets the store's own floor acceptance stand, and `AcceptMaterial` remains a separate receive-side path.
+
+The transport contract is conditional and atomic: reject a stale context or a create conflict without
+installing either record, install the snapshot reference and head together only after the referenced
+payload was received and hashes to the expected CID, and derive repository views from what was actually
+committed. The tests drive this with a stateful fake that can fail before commit, commit then lose the
+response, inject a competing writer and tamper with fields. Those tests establish the local sequencing,
+refusals and durable boundaries only. They are not provider evidence: upload acceptance, batch
+atomicity, blob retention, fence behaviour under a real concurrent writer, quota classes and NSID
+registration in a PDS remain unproven until a live disposable-account gate is explicitly authorized.
