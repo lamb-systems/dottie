@@ -232,53 +232,12 @@ func (s *Store) Accept(ctx context.Context, mode Mode, expectedStateToken [32]by
 	var accepted Floor
 	var attemptMutationChanged bool
 	err = s.withTx(ctx, StageAccept, func(tx *sql.Tx) error {
-		state, err := s.readState(ctx, tx, StageAccept)
-		if err != nil {
-			return err
+		floor, changed, txErr := s.acceptTx(ctx, tx, StageAccept, mode, expectedStateToken, validated, confirmation, nil)
+		if txErr != nil {
+			return txErr
 		}
-		if !bytes.Equal(expectedStateToken[:], state.token[:]) {
-			return classified(ErrConsent, StageAccept, ReasonStale)
-		}
-		trace, err := s.resolveTrace(ctx, tx, validated, state.floor, StageAccept)
-		if err != nil {
-			return err
-		}
-		proposal, err := s.proposal(mode, validated, state, trace, StageAccept)
-		if err != nil {
-			return err
-		}
-		if mode == ModeAdvance && trace.reason == "" {
-			if !allZero(confirmation[:]) {
-				return classified(ErrConsent, StageAccept, ReasonMode)
-			}
-			if trace.stop == "same" {
-				accepted = cloneFloor(*state.floor)
-				return nil
-			}
-		}
-		if mode == ModeAdvance && trace.stop == "joined" && !allZero(confirmation[:]) {
-			return classified(ErrConsent, StageAccept, ReasonMode)
-		}
-		if mode != ModeAdvance {
-			if allZero(confirmation[:]) || !bytes.Equal(confirmation[:], proposal.Confirmation[:]) {
-				return classified(ErrConsent, StageAccept, ReasonConfirmation)
-			}
-		}
-		if err := s.rejectActiveCandidate(ctx, tx, validated.candidate, StageAccept); err != nil {
-			return err
-		}
-		if mode == ModeReplaceFloor {
-			changed, err := s.blockActiveAttemptTx(ctx, tx, StageAccept)
-			if err != nil {
-				return err
-			}
-			attemptMutationChanged = changed
-		}
-		result, err := s.acceptFloorTx(ctx, tx, mode, state, validated, trace, StageAccept, nil)
-		if err != nil {
-			return err
-		}
-		accepted = result
+		accepted = floor
+		attemptMutationChanged = changed
 		return nil
 	})
 	if err != nil {
