@@ -65,9 +65,23 @@ state, and the actual loopback listener address `http://127.0.0.1:<port>/callbac
 the token exchange. Authorization compares callback state in constant time and checks callback issuer and token subject
 against discovery before code exchange and session storage respectively. Grants are
 parsed as `atproto`, `repo:<nsid>` and `blob:<mime>` scopes. `VaultScopes()` is the canonical sorted
-set: `atproto`, all seven `repo:systems.lamb.dottie.*` collections, and `blob:application/octet-stream`.
-The metadata scope-set test compares it with `docs/client-metadata.json`. Any unrequested grant or missing
-required scope rejects the session before storage.
+authorization set: `atproto`, all seven v1 `repo:systems.lamb.dottie.*` collections, the two v2
+`repo:systems.lamb.dottie.vaultHeadV2` and `repo:systems.lamb.dottie.vaultSnapshotV2` collections, and
+`blob:application/octet-stream`. Any unrequested grant or missing required scope rejects the session
+before storage. The v1 collections remain in the request because the v1 records remain in `records.go`.
+
+The checked-in `docs/client-metadata.json` declares the same scope string and is served byte-for-byte;
+the exact-set test asserts both the metadata equality and the legacy lexicon inventory separately.
+
+Adding the two v2 collections is a deliberate, owner-approved scope change (D10 option i). An existing
+session cannot gain them: refresh validates the grant against the session's own stored scopes, so
+neither a token refresh nor a session load widens authority, and the stored scopes are never rewritten.
+Local-only commands (`account status` without `--refresh`, local `account logout`) keep working on a
+pre-change session. Using such a session for v2 publication work is refused before any outbound
+request by `ValidatePublicationScopes`/`Session.RequirePublicationScopes` with
+`ErrInsufficientPublicationScope`, a `PublicationScopeError` naming the missing collections and an
+explicit re-login instruction. The user must sign in again once to grant the widened set; that
+re-login is required, not optional.
 
 ## DPoP, resource authorization and storage
 

@@ -300,7 +300,7 @@ func TestSessionEnvelopeRetainsHandleStateAndAcceptsLegacyWithoutHandle(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, testHandle, status.Handle)
 	assert.Equal(t, SessionStateUsable, status.State)
-	assert.Len(t, status.Scopes, 9)
+	assert.Equal(t, VaultScopes(), status.Scopes)
 	var envelope sessionEnvelope
 	require.NoError(t, json.Unmarshal(store.raw(sessionItemName(client.ClientID, testDID)), &envelope))
 	assert.Equal(t, testHandle, envelope.Handle)

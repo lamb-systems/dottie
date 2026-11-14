@@ -73,6 +73,13 @@ func (s *Session) Validate() error {
 	return nil
 }
 
+func (s *Session) RequirePublicationScopes() error {
+	if s == nil {
+		return ErrSessionUnavailable
+	}
+	return ValidatePublicationScopes(s.Scopes)
+}
+
 func (e sessionEnvelope) status() (SessionStatus, error) {
 	if e.Version != sessionEnvelopeVersion || !validDID(e.DID) {
 		return SessionStatus{}, ErrSessionUnavailable

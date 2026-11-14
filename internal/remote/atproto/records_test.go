@@ -17,6 +17,7 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/ipfs/go-cid"
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,16 +67,21 @@ func TestVaultLexiconsParseNamespaceScopeAndWriteSet(t *testing.T) {
 		}
 	}
 	sort.Strings(repoScopes)
-	assert.Equal(t, recordNSIDs, repoScopes)
-	actualScopes := strings.Fields(scopes)
-	expectedScopes := make([]string, 0, len(recordNSIDs)+2)
-	for _, nsid := range recordNSIDs {
-		expectedScopes = append(expectedScopes, "repo:"+nsid)
+	legacyRepoScopes := make([]string, 0, len(recordNSIDs))
+	publicationRepoScopes := make([]string, 0, len(PublicationScopes()))
+	for _, nsid := range repoScopes {
+		if nsid == publication.HeadNSID || nsid == publication.SnapshotNSID {
+			publicationRepoScopes = append(publicationRepoScopes, nsid)
+			continue
+		}
+		legacyRepoScopes = append(legacyRepoScopes, nsid)
 	}
-	expectedScopes = append(expectedScopes, "atproto", "blob:application/octet-stream")
+	assert.Equal(t, recordNSIDs, legacyRepoScopes)
+	expectedPublicationScopes := []string{publication.HeadNSID, publication.SnapshotNSID}
+	sort.Strings(expectedPublicationScopes)
+	assert.Equal(t, expectedPublicationScopes, publicationRepoScopes)
+	actualScopes := strings.Fields(scopes)
 	sort.Strings(actualScopes)
-	sort.Strings(expectedScopes)
-	assert.Equal(t, expectedScopes, actualScopes)
 	assert.Equal(t, VaultScopes(), actualScopes)
 
 	writeSets := [][]string{

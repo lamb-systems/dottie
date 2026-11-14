@@ -1,24 +1,154 @@
 package atproto
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"sort"
+	"sync/atomic"
 	"testing"
 
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestVaultScopesContainEveryRecordCollectionAndBlob(t *testing.T) {
-	scopes := VaultScopes()
-	assert.Len(t, scopes, 9)
-	for _, required := range []string{
-		"atproto", "repo:" + VaultHeadNSID, "repo:" + VaultControlNSID, "repo:" + VaultSnapshotNSID,
+	expected := []string{
+		"atproto",
+		"repo:" + VaultHeadNSID, "repo:" + VaultControlNSID, "repo:" + VaultSnapshotNSID,
 		"repo:" + VaultPolicyNSID, "repo:" + VaultCertificateNSID, "repo:" + VaultCheckpointNSID,
-		"repo:" + VaultAttestationNSID, "blob:application/octet-stream",
-	} {
-		assert.Contains(t, scopes, required)
+		"repo:" + VaultAttestationNSID,
+		"repo:" + publication.HeadNSID, "repo:" + publication.SnapshotNSID,
+		"blob:application/octet-stream",
 	}
-	assert.NoError(t, ValidateScopes(scopes, scopes, scopes))
+	sort.Strings(expected)
+	assert.Equal(t, expected, VaultScopes())
+	assert.NoError(t, ValidateScopes(VaultScopes(), VaultScopes(), VaultScopes()))
+	assert.NoError(t, ValidatePublicationScopes(VaultScopes()))
+}
+
+func TestValidatePublicationScopesRequiresTheV2Collections(t *testing.T) {
+	legacy := make([]string, 0, len(VaultScopes()))
+	for _, scope := range VaultScopes() {
+		if scope == "repo:"+publication.HeadNSID || scope == "repo:"+publication.SnapshotNSID {
+			continue
+		}
+		legacy = append(legacy, scope)
+	}
+	require.Equal(t, len(VaultScopes())-2, len(legacy))
+
+	err := ValidatePublicationScopes(legacy)
+	require.ErrorIs(t, err, ErrInsufficientPublicationScope)
+	var refusal *PublicationScopeError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, PublicationScopes(), refusal.Missing)
+	assert.Contains(t, err.Error(), "sign in again")
+
+	snapshotMissing := append(append([]string(nil), legacy...), "repo:"+publication.HeadNSID)
+	err = ValidatePublicationScopes(snapshotMissing)
+	require.ErrorIs(t, err, ErrInsufficientPublicationScope)
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, []string{"repo:" + publication.SnapshotNSID}, refusal.Missing)
+	assert.Contains(t, err.Error(), "repo:"+publication.SnapshotNSID)
+
+	err = ValidatePublicationScopes([]string{"atproto"})
+	require.ErrorIs(t, err, ErrInsufficientPublicationScope)
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, PublicationScopes(), refusal.Missing)
+
+	err = ValidatePublicationScopes([]string{"atproto", "not-a-scope"})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrInsufficientPublicationScope)
+
+	require.NoError(t, ValidatePublicationScopes([]string{"atproto", "repo:" + publication.HeadNSID, "repo:" + publication.SnapshotNSID}))
+	session := &Session{Scopes: VaultScopes()}
+	require.NoError(t, session.RequirePublicationScopes())
+	var absent *Session
+	require.ErrorIs(t, absent.RequirePublicationScopes(), ErrSessionUnavailable)
+	session.Scopes = legacy
+	require.ErrorIs(t, session.RequirePublicationScopes(), ErrInsufficientPublicationScope)
+}
+
+func TestLegacyScopeSessionRefusesPublicationUseWithoutChangingStorage(t *testing.T) {
+	t.Run("refusal-before-outbound-work", func(t *testing.T) {
+		store := newMemoryStore()
+		outbound := &countingRoundTripper{}
+		client, err := NewClient("https://dottie.example/client-metadata.json", store,
+			WithHTTPClient(&http.Client{Transport: outbound}),
+			WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errorsNewNotFound{} }),
+		)
+		require.NoError(t, err)
+		session := legacyScopeSession(t)
+		require.NoError(t, client.saveSession(context.Background(), session))
+		item := sessionItemName(client.ClientID, testDID)
+		stored := store.raw(item)
+		require.NotEmpty(t, stored)
+
+		status, err := client.LoadSessionStatus(context.Background(), testDID)
+		require.NoError(t, err)
+		assert.Equal(t, SessionStateUsable, status.State)
+		assert.Equal(t, session.Scopes, status.Scopes)
+		loaded, err := client.LoadSession(context.Background(), testDID)
+		require.NoError(t, err)
+		assert.Equal(t, session.Scopes, loaded.Scopes)
+
+		require.ErrorIs(t, loaded.RequirePublicationScopes(), ErrInsufficientPublicationScope)
+		var refusal *PublicationScopeError
+		require.ErrorAs(t, loaded.RequirePublicationScopes(), &refusal)
+		assert.Equal(t, PublicationScopes(), refusal.Missing)
+		assert.Equal(t, int32(0), outbound.calls.Load())
+		assert.Equal(t, stored, store.raw(item))
+	})
+
+	t.Run("refresh-keeps-the-granted-scope-set", func(t *testing.T) {
+		_, client, store := newFakeOAuth(t)
+		identity, err := client.Discover(context.Background(), testHandle)
+		require.NoError(t, err)
+		session := legacyScopeSession(t)
+		session.DID = identity.DID
+		session.Handle = identity.Handle
+		session.Issuer = identity.Issuer
+		session.TokenEndpoint = identity.TokenEndpoint
+		require.NoError(t, client.saveSession(context.Background(), session))
+
+		refreshed, refreshedIdentity, err := client.Refresh(context.Background(), testHandle, session)
+		require.NoError(t, err)
+		assert.Equal(t, identity.DID, refreshedIdentity.DID)
+		assert.Equal(t, session.Scopes, refreshed.Scopes)
+		require.ErrorIs(t, refreshed.RequirePublicationScopes(), ErrInsufficientPublicationScope)
+		stored, err := client.LoadSession(context.Background(), identity.DID)
+		require.NoError(t, err)
+		assert.Equal(t, session.Scopes, stored.Scopes)
+		assert.NotEmpty(t, store.raw(sessionItemName(client.ClientID, identity.DID)))
+	})
+}
+
+func legacyScopeSession(t *testing.T) *Session {
+	t.Helper()
+	key, err := marshalPrivateKey(generateTestKey(t))
+	require.NoError(t, err)
+	legacy := make([]string, 0, len(VaultScopes()))
+	for _, scope := range VaultScopes() {
+		if scope == "repo:"+publication.HeadNSID || scope == "repo:"+publication.SnapshotNSID {
+			continue
+		}
+		legacy = append(legacy, scope)
+	}
+	return &Session{
+		DID: testDID, Handle: testHandle, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token",
+		Scopes: legacy, State: SessionStateUsable,
+		AccessToken: NewSecret("legacy-access-token-shape"), RefreshToken: NewSecret("refresh-token-shape"), DPoPPrivateKey: key,
+	}
+}
+
+type countingRoundTripper struct {
+	calls atomic.Int32
+}
+
+func (c *countingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	c.calls.Add(1)
+	return nil, errors.New("synthetic outbound transport is unreachable")
 }
 
 func TestAtprotoScopeGrantExactRequiredAndRequestedRules(t *testing.T) {

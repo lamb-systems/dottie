@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 var scopeNSID = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*){2,}$`)
@@ -131,6 +133,46 @@ func VaultScopes() []string {
 		"repo:" + VaultAttestationNSID,
 		"blob:application/octet-stream",
 	}
+	values = append(values, PublicationScopes()...)
 	sort.Strings(values)
 	return values
+}
+
+var ErrInsufficientPublicationScope = errors.New("granted OAuth scope does not cover the v2 publication profile")
+
+type PublicationScopeError struct {
+	Missing []string
+}
+
+func (e *PublicationScopeError) Error() string {
+	reason := "granted OAuth scope does not cover the v2 publication profile"
+	if e == nil || len(e.Missing) == 0 {
+		return reason
+	}
+	return reason + ": missing " + strings.Join(e.Missing, " ") + "; sign in again to grant the v2 publication collections"
+}
+
+func (e *PublicationScopeError) Unwrap() error { return ErrInsufficientPublicationScope }
+
+func PublicationScopes() []string {
+	values := []string{"repo:" + publication.HeadNSID, "repo:" + publication.SnapshotNSID}
+	sort.Strings(values)
+	return values
+}
+
+func ValidatePublicationScopes(granted []string) error {
+	set, err := scopeSet(granted)
+	if err != nil {
+		return err
+	}
+	missing := make([]string, 0, 2)
+	for _, required := range PublicationScopes() {
+		if _, ok := set[required]; !ok {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) != 0 {
+		return &PublicationScopeError{Missing: missing}
+	}
+	return nil
 }
