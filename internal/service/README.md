@@ -84,6 +84,27 @@ state digest resolves, and the resolution's digest finalizes; dispatch tokens ar
 digests. Accepted-material ownership is not created here — the orchestration finalizes the attempt and
 lets the store's own floor acceptance stand, and `AcceptMaterial` remains a separate receive-side path.
 
+Configuration identity is part of the proposal, not an argument that can be relabelled later. A
+`ReviewSource` supplies the current selection/approval digest and revision pair together with the
+configuration content token and a guard. `PreparePublishMaterial` acquires it, stores the identity,
+the token and a proposal token over that identity plus the snapshot CID, payload CID and publication ID,
+and releases it after preparation. `PublishMaterial` recomputes the proposal token from the proposal's
+own fields before any durable write, so a tampered identity, candidate or publication ID refuses
+`ErrReviewMismatch` without creating an attempt. It then re-reads the configuration identity after the
+payload upload and immediately before `BeginSubmission`: a digest or revision difference refuses
+`ErrConfigChangedSincePrepare`, and a difference while the configuration bytes are unchanged is
+`ErrReviewMismatch`. A recomputed identity is never substituted into the proposal; the current
+configuration can only veto.
+
+That check is the admission fence. The shared configuration lock is held from the identity check,
+through `PrepareWrites`, `BeginSubmission`, the single `SendWrites` and the outcome read, and released
+afterwards; configuration writes take the exclusive lock and therefore wait. A change that lands before
+the check aborts the publication with the attempt still at `upload-started` and the submission
+reservation unconsumed, which is why the check sits after the upload rather than before it. The fence is
+advisory `flock` over one machine and one user: another host, and any writer that bypasses the lock
+file, is outside it. It excludes concurrent configuration writers only once the configuration lock
+file exists, which the first configuration write creates.
+
 The transport contract is conditional and atomic: `PrepareWrites` is pure and non-network, accepts only
 the exact snapshot+head pair with the expected collections, keys, CIDs, predecessor, create flags and
 context, and refuses a policy-check-requiring batch or any non-public backend. `SendWrites` rejects a

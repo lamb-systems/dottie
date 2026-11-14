@@ -803,7 +803,10 @@ func configureManualSyncMachine(t *testing.T, machine manualSyncMachine, fileTar
 	t.Helper()
 	configuration := config.Default()
 	configuration.Targets = []config.Target{fileTarget, settingsTarget}
-	require.NoError(t, config.Save(machine.paths, configuration))
+	current, snapshotErr := config.OpenSnapshot(machine.paths)
+	require.NoError(t, snapshotErr)
+	_, updateErr := config.Update(machine.paths, current.Token, func(config.Config) (config.Config, error) { return configuration, nil })
+	require.NoError(t, updateErr)
 	require.NoError(t, machine.store.PutTarget(context.Background(), state.TargetDescriptor{
 		ID: fileTarget.ID, Version: 1, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		LogicalBase: fileTarget.Root.Base, LogicalPath: fileTarget.Root.Path, Kind: fileTarget.Root.Kind, Mode: string(config.Review), CreatedAt: 1,

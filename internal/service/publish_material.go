@@ -3,15 +3,24 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 
+	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
-var ErrPublishMaterial = errors.New("publication material refused")
+var (
+	ErrPublishMaterial           = errors.New("publication material refused")
+	ErrConfigChangedSincePrepare = errors.New("configuration changed since the publication was prepared")
+	ErrReviewMismatch            = errors.New("publication review identity does not match the configuration")
+)
+
+const materialProposalTag = "dottie/material-proposal/v1"
 
 type publishMaterialStage string
 type publishMaterialReason string
@@ -53,6 +62,8 @@ const (
 	publishMaterialReasonUpload         publishMaterialReason = "upload_failed"
 	publishMaterialReasonUnresolved     publishMaterialReason = "submission_unresolved"
 	publishMaterialReasonOutcome        publishMaterialReason = "outcome_not_current"
+	publishMaterialReasonReview         publishMaterialReason = "review_changed"
+	publishMaterialReasonReviewMismatch publishMaterialReason = "review_mismatch"
 )
 
 const materialHeadKey = "self"
@@ -120,20 +131,24 @@ type MaterialPublishRequest struct {
 	Binding       publicationstate.Binding
 	Snapshot      model.Snapshot
 	PublicationID [16]byte
-	Review        publicationstate.LocalReviewContext
+	Reviews       ReviewSource
 }
 
 type MaterialPublishProposal struct {
-	Store        *publicationstate.Store
-	Transport    MaterialTransport
-	Binding      publicationstate.Binding
-	Review       publicationstate.LocalReviewContext
-	View         publicationstate.SuppliedRepositoryView
-	Candidate    publicationstate.CandidateInput
-	Proposal     publicationstate.AttemptProposal
-	Batch        MaterialWriteBatch
-	Blob         publication.BlobReference
-	Confirmation [32]byte
+	Store         *publicationstate.Store
+	Transport     MaterialTransport
+	Binding       publicationstate.Binding
+	Review        publicationstate.LocalReviewContext
+	ConfigToken   config.Token
+	ProposalToken [32]byte
+	Reviews       ReviewSource
+	PublicationID [16]byte
+	View          publicationstate.SuppliedRepositoryView
+	Candidate     publicationstate.CandidateInput
+	Proposal      publicationstate.AttemptProposal
+	Batch         MaterialWriteBatch
+	Blob          publication.BlobReference
+	Confirmation  [32]byte
 }
 
 type MaterialPublishResult struct {
@@ -153,6 +168,11 @@ func (coordinator *Coordinator) PreparePublishMaterial(ctx context.Context, requ
 	if err := ctx.Err(); err != nil {
 		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageInput, publishMaterialReasonCanceled, err)
 	}
+	review, configToken, guard, err := request.Reviews.Acquire(ctx)
+	if err != nil {
+		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonReview, err)
+	}
+	defer guard.Release()
 	floor, present, err := request.Store.Load(ctx)
 	if err != nil {
 		return MaterialPublishProposal{}, err
@@ -180,13 +200,18 @@ func (coordinator *Coordinator) PreparePublishMaterial(ctx context.Context, requ
 	if err != nil {
 		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBatch, err)
 	}
-	attemptProposal, err := request.Store.PrepareAttempt(ctx, candidate, view, request.Review)
+	attemptProposal, err := request.Store.PrepareAttempt(ctx, candidate, view, review)
 	if err != nil {
 		return MaterialPublishProposal{}, err
 	}
+	proposalToken, err := materialProposalToken(review, candidate, request.PublicationID)
+	if err != nil {
+		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBatch, err)
+	}
 	return MaterialPublishProposal{
 		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
-		Review: request.Review, View: cloneMaterialView(view), Candidate: cloneMaterialCandidate(candidate),
+		Review: review, ConfigToken: configToken, ProposalToken: proposalToken, Reviews: request.Reviews,
+		PublicationID: request.PublicationID, View: cloneMaterialView(view), Candidate: cloneMaterialCandidate(candidate),
 		Proposal: attemptProposal, Batch: batch, Blob: blob, Confirmation: attemptProposal.Confirmation,
 	}, nil
 }
@@ -204,6 +229,10 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	}
 	if !bytes.Equal(confirmation[:], proposal.Confirmation[:]) || !bytes.Equal(confirmation[:], proposal.Proposal.Confirmation[:]) {
 		return MaterialPublishResult{}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonConfirmation, nil)
+	}
+	bound, err := materialProposalToken(proposal.Review, proposal.Candidate, proposal.PublicationID)
+	if err != nil || bound != proposal.ProposalToken {
+		return MaterialPublishResult{}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonReviewMismatch, ErrReviewMismatch)
 	}
 	expected, err := newMaterialWriteBatch(proposal.Binding, proposal.Proposal.CapturedFloor, proposal.View, proposal.Candidate)
 	if err != nil || !sameMaterialWriteBatch(expected, proposal.Batch) {
@@ -246,6 +275,17 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	}
 	if !sameMaterialBlob(uploaded, proposal.Blob) {
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageUpload, publishMaterialReasonBlob, nil)
+	}
+	review, configToken, guard, err := proposal.Reviews.Acquire(ctx)
+	if err != nil {
+		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonReview, err)
+	}
+	defer guard.Release()
+	if review != proposal.Review {
+		if configToken == proposal.ConfigToken {
+			return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonReviewMismatch, ErrReviewMismatch)
+		}
+		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageConsent, publishMaterialReasonReview, ErrConfigChangedSincePrepare)
 	}
 	prepared, err := proposal.Transport.PrepareWrites(ctx, cloneMaterialWriteBatch(proposal.Batch))
 	if err != nil {
@@ -475,8 +515,31 @@ func cloneMaterialFloor(floor publicationstate.Floor) publicationstate.Floor {
 	return out
 }
 
+func materialProposalToken(review publicationstate.LocalReviewContext, candidate publicationstate.CandidateInput, publicationID [16]byte) ([32]byte, error) {
+	snapshotCID, err := publication.RecordCID(candidate.SnapshotRecord)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	payloadCID, err := publication.RawPayloadCID(candidate.Payload)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	message := make([]byte, 0, len(materialProposalTag)+3*32+16+16+16)
+	message = append(message, materialProposalTag...)
+	message = append(message, review.SelectionDigest[:]...)
+	var revisions [16]byte
+	binary.BigEndian.PutUint64(revisions[0:8], review.SelectionRevision)
+	binary.BigEndian.PutUint64(revisions[8:16], review.ApprovalRevision)
+	message = append(message, revisions[:]...)
+	message = append(message, review.ApprovalDigest[:]...)
+	message = append(message, snapshotCID...)
+	message = append(message, payloadCID...)
+	message = append(message, publicationID[:]...)
+	return sha256.Sum256(message), nil
+}
+
 func validMaterialPublishRequest(request MaterialPublishRequest) bool {
-	if request.Store == nil || request.Transport == nil || !validMaterialBinding(request.Binding) {
+	if request.Store == nil || request.Transport == nil || request.Reviews == nil || !validMaterialBinding(request.Binding) {
 		return false
 	}
 	if request.PublicationID == ([16]byte{}) || request.Snapshot.Validate() != nil {
@@ -486,10 +549,13 @@ func validMaterialPublishRequest(request MaterialPublishRequest) bool {
 }
 
 func validMaterialPublishProposal(proposal MaterialPublishProposal) bool {
-	if proposal.Store == nil || proposal.Transport == nil || !validMaterialBinding(proposal.Binding) {
+	if proposal.Store == nil || proposal.Transport == nil || proposal.Reviews == nil || !validMaterialBinding(proposal.Binding) {
 		return false
 	}
 	if allZeroMaterial(proposal.Proposal.StateToken[:]) || proposal.Proposal.AttemptID == ([16]byte{}) || allZeroMaterial(proposal.Confirmation[:]) {
+		return false
+	}
+	if allZeroMaterial(proposal.ProposalToken[:]) {
 		return false
 	}
 	if proposal.Candidate.SnapshotKey == "" || len(proposal.Candidate.SnapshotRecord) == 0 || len(proposal.Candidate.HeadRecord) == 0 || len(proposal.Candidate.Payload) == 0 {

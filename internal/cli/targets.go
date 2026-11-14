@@ -292,6 +292,8 @@ func setTargetMode(id string, mode config.Mode, current config.Config) (config.C
 	return current, "", urfave.Exit("unknown target "+escapeField(id), 1)
 }
 
+const targetConfigUpdateAttempts = 3
+
 func updateTargetsConfig(ctx context.Context, env func(string) string, update func(platform.Paths, config.Config) (config.Config, string, error)) (string, error) {
 	paths, err := platform.Resolve(env)
 	if err != nil {
@@ -307,11 +309,17 @@ func updateTargetsConfig(ctx context.Context, env func(string) string, update fu
 		return "", urfave.Exit(err.Error(), 1)
 	}
 	var output string
-	_, err = coordinator.UpdateConfig(ctx, func(current config.Config) (config.Config, error) {
-		updated, result, updateErr := update(paths, current)
-		output = result
-		return updated, updateErr
-	})
+	for attempt := 0; attempt < targetConfigUpdateAttempts; attempt++ {
+		output = ""
+		_, err = coordinator.UpdateConfig(ctx, func(current config.Config) (config.Config, error) {
+			updated, result, updateErr := update(paths, current)
+			output = result
+			return updated, updateErr
+		})
+		if !errors.Is(err, config.ErrConfigStale) {
+			break
+		}
+	}
 	if err != nil {
 		return "", err
 	}

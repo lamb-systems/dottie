@@ -7,6 +7,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
@@ -20,8 +21,24 @@ func (port FileConfigPort) Load(context.Context) (config.Config, error) {
 	return config.Load(port.Paths)
 }
 
-func (port FileConfigPort) Save(_ context.Context, value config.Config) error {
-	return config.Save(port.Paths, value)
+func (port FileConfigPort) Snapshot(context.Context) (config.Snapshot, error) {
+	return config.OpenSnapshot(port.Paths)
+}
+
+func (port FileConfigPort) Update(_ context.Context, expected config.Token, mutate func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+	return config.Update(port.Paths, expected, mutate)
+}
+
+func (port FileConfigPort) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
+	snapshot, guard, err := config.AcquireReader(port.Paths)
+	if err != nil {
+		return publicationstate.LocalReviewContext{}, config.Token{}, nil, err
+	}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest: snapshot.Selection.Digest, SelectionRevision: snapshot.Selection.Revision,
+		ApprovalDigest: snapshot.Approval.Digest, ApprovalRevision: snapshot.Approval.Revision,
+	}
+	return review, snapshot.Token, guard, nil
 }
 
 func (coordinator *Coordinator) UpdateConfig(ctx context.Context, update func(config.Config) (config.Config, error)) (config.Config, error) {
@@ -32,21 +49,15 @@ func (coordinator *Coordinator) UpdateConfig(ctx context.Context, update func(co
 		return config.Config{}, err
 	}
 	defer coordinator.mu.Unlock()
-	current, err := coordinator.deps.Config.Load(ctx)
+	snapshot, err := coordinator.deps.Config.Snapshot(ctx)
 	if err != nil {
 		return config.Config{}, err
 	}
-	updated, err := update(current)
+	updated, err := coordinator.deps.Config.Update(ctx, snapshot.Token, update)
 	if err != nil {
 		return config.Config{}, err
 	}
-	if err := updated.Validate(); err != nil {
-		return config.Config{}, err
-	}
-	if err := coordinator.deps.Config.Save(ctx, updated); err != nil {
-		return config.Config{}, err
-	}
-	return updated, nil
+	return updated.Config, nil
 }
 
 func (coordinator *Coordinator) RecordCheckpoint(ctx context.Context, checkpoint state.VaultCheckpoint) error {

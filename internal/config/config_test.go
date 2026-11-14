@@ -83,14 +83,25 @@ func TestLoadUpgradesVersionOneWithoutInventingGNOMEApproval(t *testing.T) {
 	assert.Nil(t, loaded.Targets[0].GNOMEPolicy)
 }
 
-func TestPendingGNOMEApprovalRoundTripsThroughSaveAndLoad(t *testing.T) {
+func seedConfig(t *testing.T, paths platform.Paths, value Config) {
+	t.Helper()
+	snapshot, err := OpenSnapshot(paths)
+	require.NoError(t, err)
+	_, err = Update(paths, snapshot.Token, func(Config) (Config, error) { return value, nil })
+	require.NoError(t, err)
+}
+
+func TestPendingGNOMEApprovalRoundTripsThroughUpdateAndLoad(t *testing.T) {
 	paths := testPaths(t)
 	current := Default()
 	current.Targets = []Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
-	require.NoError(t, Save(paths, current))
+	seedConfig(t, paths, current)
 	loaded, err := Load(paths)
 	require.NoError(t, err)
-	assert.Equal(t, current, loaded)
+	assert.Equal(t, current.Version, loaded.Version, "Version")
+	assert.Equal(t, current.Targets, loaded.Targets, "Targets")
+	assert.Equal(t, uint64(1), loaded.SelectionRevision, "first use selection revision")
+	assert.Equal(t, uint64(1), loaded.ApprovalRevision, "first use approval revision")
 	encoded, err := os.ReadFile(filepath.Join(paths.AppConfigDir(), FileName))
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), "approval = ")
@@ -213,7 +224,7 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 	}
 }
 
-func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
+func TestUpdateLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	paths := testPaths(t)
 	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o755))
 	require.NoError(t, os.Chmod(paths.AppConfigDir(), 0o755))
@@ -223,9 +234,9 @@ func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	target.Mode = AutoApply
 	target.Root.Exclude = []string{".git", ".git/**", ".git"}
 	c.Targets = []Target{target, {ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
-	require.NoError(t, Save(paths, c))
+	seedConfig(t, paths, c)
 
-	assert.Len(t, c.Targets[0].Root.Exclude, 3, "Save mutated the caller's excludes")
+	assert.Len(t, c.Targets[0].Root.Exclude, 3, "Update mutated the caller's excludes")
 
 	info, err := os.Stat(paths.AppConfigDir())
 	require.NoError(t, err)
@@ -245,14 +256,14 @@ func TestSaveLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	assert.Equal(t, &GNOMEPolicy{Approval: GNOMEApprovalPending}, loaded.Targets[1].GNOMEPolicy, "pending GNOME approval")
 }
 
-func TestSaveRefusesUnsafePaths(t *testing.T) {
+func TestUpdateRefusesUnsafePaths(t *testing.T) {
 	t.Run("non-directory app path", func(t *testing.T) {
 		paths := testPaths(t)
 		require.NoError(t, os.WriteFile(paths.AppConfigDir(), []byte("x"), 0o600))
 
-		err := Save(paths, Default())
+		_, err := Update(paths, Token{}, func(Config) (Config, error) { return Default(), nil })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "directory", "Save error")
+		assert.Contains(t, err.Error(), "directory", "Update error")
 	})
 
 	t.Run("symlink config file", func(t *testing.T) {
@@ -266,11 +277,11 @@ func TestSaveRefusesUnsafePaths(t *testing.T) {
 		linkBefore, err := os.Readlink(configPath)
 		require.NoError(t, err)
 
-		err = Save(paths, Default())
+		_, err = Update(paths, Token{}, func(Config) (Config, error) { return Default(), nil })
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "configuration file is a symbolic link", "Save error")
-		assert.Contains(t, err.Error(), "Dottie will not replace", "Save error")
-		assert.Contains(t, err.Error(), "moving the file or removing the link", "Save error")
+		assert.Contains(t, err.Error(), "configuration file is a symbolic link", "Update error")
+		assert.Contains(t, err.Error(), "Dottie will not replace", "Update error")
+		assert.Contains(t, err.Error(), "moving the file or removing the link", "Update error")
 
 		linkAfter, linkErr := os.Readlink(configPath)
 		require.NoError(t, linkErr)
@@ -281,13 +292,13 @@ func TestSaveRefusesUnsafePaths(t *testing.T) {
 	})
 }
 
-func TestSaveCommitPointFailures(t *testing.T) {
+func TestUpdateCommitPointFailures(t *testing.T) {
 	for _, stage := range []string{"file-sync", "rename", "directory-sync"} {
 		t.Run(stage, func(t *testing.T) {
 			paths := testPaths(t)
 			old := Default()
 			old.Targets = []Target{filesTarget("one", model.RootHome, "old", model.SelectionDirectory)}
-			require.NoError(t, Save(paths, old))
+			seedConfig(t, paths, old)
 			configPath := filepath.Join(paths.AppConfigDir(), FileName)
 			oldBytes, err := os.ReadFile(configPath)
 			require.NoError(t, err)
@@ -307,8 +318,10 @@ func TestSaveCommitPointFailures(t *testing.T) {
 				syncDir = func(string) error { return errors.New("injected directory sync") }
 			}
 
-			err = Save(paths, changed)
-			require.Error(t, err, "Save succeeded with injected failure")
+			snapshot, snapshotErr := OpenSnapshot(paths)
+			require.NoError(t, snapshotErr)
+			_, err = Update(paths, snapshot.Token, func(Config) (Config, error) { return changed, nil })
+			require.Error(t, err, "Update succeeded with injected failure")
 
 			if stage == "directory-sync" {
 				assert.Contains(t, err.Error(), "durability uncertain", "post-commit error")

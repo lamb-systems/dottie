@@ -8,6 +8,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/state"
@@ -52,7 +53,16 @@ var (
 
 type ConfigPort interface {
 	Load(context.Context) (config.Config, error)
-	Save(context.Context, config.Config) error
+	Snapshot(context.Context) (config.Snapshot, error)
+	Update(context.Context, config.Token, func(config.Config) (config.Config, error)) (config.Snapshot, error)
+}
+
+type ConfigGuard interface {
+	Release()
+}
+
+type ReviewSource interface {
+	Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error)
 }
 
 type CapturePort interface {

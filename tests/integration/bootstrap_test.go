@@ -86,7 +86,7 @@ func TestCoordinatorBootstrapFinalizesTrustForHistoryPullExportAndPush(t *testin
 	}
 	keyring := &publicationKeyring{devices: map[string]vault.DeviceMaterial{}}
 	now := time.Unix(1_800_000_000, 0)
-	require.NoError(t, config.Save(paths, config.Default()))
+	writeIntegrationConfig(t, paths, config.Default())
 	order := make([]string, 0, 4)
 	port := bootstrapGenesisPort{identity: identity, transport: pds, observations: store, order: &order}
 	reader := atproto.RevisionReader{

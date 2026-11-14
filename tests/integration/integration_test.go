@@ -35,6 +35,14 @@ func testPaths(t *testing.T) platform.Paths {
 	return paths
 }
 
+func writeIntegrationConfig(t *testing.T, paths platform.Paths, value config.Config) {
+	t.Helper()
+	snapshot, err := config.OpenSnapshot(paths)
+	require.NoError(t, err)
+	_, err = config.Update(paths, snapshot.Token, func(config.Config) (config.Config, error) { return value, nil })
+	require.NoError(t, err)
+}
+
 func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 	paths := testPaths(t)
 	ctx := context.Background()

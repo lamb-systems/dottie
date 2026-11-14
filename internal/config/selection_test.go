@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 func TestResolveSelectionNestingAndKinds(t *testing.T) {
@@ -212,19 +214,17 @@ func TestModelConversionDoesNotCarryLocalFields(t *testing.T) {
 	assert.Equal(t, uint32(1), gnome.SourceVersion, "SourceVersion")
 }
 
-func TestConcurrentSaveAndLoadSupplemental(t *testing.T) {
+func TestConcurrentUpdatesSerialiseWithoutLostSelections(t *testing.T) {
 	paths := testPaths(t)
-	require.NoError(t, Save(paths, Default()))
+	seedConfig(t, paths, Default())
 
 	var group sync.WaitGroup
 	for writer := 0; writer < 2; writer++ {
 		group.Add(1)
 		go func(writer int) {
 			defer group.Done()
-			for i := 0; i < 8; i++ {
-				value := Default()
-				value.Targets = []Target{{ID: fmt.Sprintf("writer-%d-%d", writer, i), Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
-				if !assert.NoError(t, Save(paths, value), "Save") {
+			for i := 0; i < 4; i++ {
+				if !assert.NoError(t, addPendingGnomeTarget(paths, fmt.Sprintf("writer-%d-%d", writer, i)), "Update") {
 					return
 				}
 			}
@@ -235,4 +235,26 @@ func TestConcurrentSaveAndLoadSupplemental(t *testing.T) {
 		assert.NoError(t, err, "Load")
 	}
 	group.Wait()
+
+	loaded, err := Load(paths)
+	require.NoError(t, err)
+	assert.Len(t, loaded.Targets, 8, "concurrent updates lost a selection")
+}
+
+func addPendingGnomeTarget(paths platform.Paths, id string) error {
+	for attempt := 0; attempt < 64; attempt++ {
+		snapshot, err := OpenSnapshot(paths)
+		if err != nil {
+			return err
+		}
+		_, err = Update(paths, snapshot.Token, func(current Config) (Config, error) {
+			current.Targets = append(current.Targets, Target{ID: id, Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}})
+			return current, nil
+		})
+		if errors.Is(err, ErrConfigStale) {
+			continue
+		}
+		return err
+	}
+	return ErrConfigStale
 }

@@ -19,12 +19,29 @@ import (
 
 type memoryConfig struct {
 	value config.Config
+	token config.Token
 }
 
 func (store *memoryConfig) Load(context.Context) (config.Config, error) { return store.value, nil }
-func (store *memoryConfig) Save(_ context.Context, value config.Config) error {
-	store.value = value
-	return nil
+
+func (store *memoryConfig) Snapshot(context.Context) (config.Snapshot, error) {
+	return config.Snapshot{Config: store.value, Token: store.token}, nil
+}
+
+func (store *memoryConfig) Update(_ context.Context, expected config.Token, mutate func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+	if store.token != expected {
+		return config.Snapshot{}, config.ErrConfigStale
+	}
+	updated, err := mutate(store.value)
+	if err != nil {
+		return config.Snapshot{}, err
+	}
+	if err := updated.Validate(); err != nil {
+		return config.Snapshot{}, err
+	}
+	store.value = updated
+	store.token[0]++
+	return config.Snapshot{Config: store.value, Token: store.token}, nil
 }
 
 type emptyTrust struct{}

@@ -513,6 +513,7 @@ type atprotoMaterialFixture struct {
 	snapshot      model.Snapshot
 	publicationID [16]byte
 	review        publicationstate.LocalReviewContext
+	reviews       *materialReviewSource
 }
 
 func newATProtoMaterialFixture(t *testing.T) *atprotoMaterialFixture {
@@ -527,19 +528,20 @@ func newATProtoMaterialFixture(t *testing.T) *atprotoMaterialFixture {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	coordinator, err := NewCoordinator(Dependencies{State: openCoordinatorState(t)})
 	require.NoError(t, err)
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest: [32]byte{3}, SelectionRevision: 1, ApprovalDigest: [32]byte{4}, ApprovalRevision: 1,
+	}
 	return &atprotoMaterialFixture{
 		binding: binding, store: store, repository: repository, transport: transport, coordinator: coordinator,
 		snapshot: materialTestSnapshot("synthetic atproto genesis payload"), publicationID: [16]byte{0x35, 0x81},
-		review: publicationstate.LocalReviewContext{
-			SelectionDigest: [32]byte{3}, SelectionRevision: 1, ApprovalDigest: [32]byte{4}, ApprovalRevision: 1,
-		},
+		review: review, reviews: newMaterialReviewSource(review),
 	}
 }
 
 func (fixture *atprotoMaterialFixture) request() MaterialPublishRequest {
 	return MaterialPublishRequest{
 		Store: fixture.store, Transport: fixture.transport, Binding: fixture.binding,
-		Snapshot: fixture.snapshot, PublicationID: fixture.publicationID, Review: fixture.review,
+		Snapshot: fixture.snapshot, PublicationID: fixture.publicationID, Reviews: fixture.reviews,
 	}
 }
 

@@ -435,7 +435,7 @@ func newRestoreMilestoneHome(t *testing.T, name string, configuration config.Con
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
 	}
-	require.NoError(t, config.Save(paths, configuration))
+	writeIntegrationConfig(t, paths, configuration)
 	store, err := state.Open(paths)
 	require.NoError(t, err)
 	home := &restoreMilestoneHome{

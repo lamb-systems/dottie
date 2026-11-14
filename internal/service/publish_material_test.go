@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 	"testing"
 
+	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
@@ -435,6 +439,70 @@ func (transport *materialTestTransport) setCommitThenFail() {
 	transport.commitThenFail = true
 }
 
+type materialReviewGuard struct {
+	source *materialReviewSource
+}
+
+func (guard *materialReviewGuard) Release() {
+	guard.source.mu.Lock()
+	defer guard.source.mu.Unlock()
+	guard.source.releases++
+}
+
+type materialReviewSource struct {
+	mu       sync.Mutex
+	review   publicationstate.LocalReviewContext
+	token    config.Token
+	err      error
+	hook     func()
+	acquires int
+	releases int
+}
+
+func newMaterialReviewSource(review publicationstate.LocalReviewContext) *materialReviewSource {
+	return &materialReviewSource{review: review, token: config.Token{0x52, 0x4d}}
+}
+
+func (source *materialReviewSource) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
+	source.mu.Lock()
+	review, token, err, hook := source.review, source.token, source.err, source.hook
+	source.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return publicationstate.LocalReviewContext{}, config.Token{}, nil, err
+	}
+	source.mu.Lock()
+	source.acquires++
+	source.mu.Unlock()
+	return review, token, &materialReviewGuard{source: source}, nil
+}
+
+func (source *materialReviewSource) set(review publicationstate.LocalReviewContext, token config.Token) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.review, source.token = review, token
+}
+
+func (source *materialReviewSource) setReview(review publicationstate.LocalReviewContext) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.review = review
+}
+
+func (source *materialReviewSource) setError(err error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.err = err
+}
+
+func (source *materialReviewSource) counts() (int, int) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return source.acquires, source.releases
+}
+
 type materialPublishFixture struct {
 	binding       publicationstate.Binding
 	store         *publicationstate.Store
@@ -443,6 +511,8 @@ type materialPublishFixture struct {
 	snapshot      model.Snapshot
 	publicationID [16]byte
 	review        publicationstate.LocalReviewContext
+	reviews       *materialReviewSource
+	paths         platform.Paths
 }
 
 func newMaterialPublishFixture(t *testing.T) *materialPublishFixture {
@@ -456,11 +526,29 @@ func newMaterialPublishFixture(t *testing.T) *materialPublishFixture {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	coordinator, err := NewCoordinator(Dependencies{State: openCoordinatorState(t)})
 	require.NoError(t, err)
+	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{1}, SelectionRevision: 1, ApprovalDigest: [32]byte{2}, ApprovalRevision: 1}
 	return &materialPublishFixture{
 		binding: binding, store: store, transport: newMaterialTestTransport(binding), coordinator: coordinator,
 		snapshot: materialTestSnapshot("synthetic genesis payload"), publicationID: [16]byte{0x25, 0x71},
-		review: publicationstate.LocalReviewContext{SelectionDigest: [32]byte{1}, SelectionRevision: 1, ApprovalDigest: [32]byte{2}, ApprovalRevision: 1},
+		review: review, reviews: newMaterialReviewSource(review), paths: materialTestPaths(t),
 	}
+}
+
+func materialTestPaths(t *testing.T) platform.Paths {
+	t.Helper()
+	root := t.TempDir()
+	paths := platform.Paths{
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome:  filepath.Join(root, "state"),
+		CacheHome:  filepath.Join(root, "cache"),
+		DataHome:   filepath.Join(root, "data"),
+	}
+	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
+		require.NoError(t, os.MkdirAll(directory, 0o700))
+		require.NoError(t, os.Chmod(directory, 0o700))
+	}
+	return paths
 }
 
 func materialTestSnapshot(content string) model.Snapshot {
@@ -501,7 +589,7 @@ func materialTestCandidate(t *testing.T, binding publicationstate.Binding, publi
 func (fixture *materialPublishFixture) request() MaterialPublishRequest {
 	return MaterialPublishRequest{
 		Store: fixture.store, Transport: fixture.transport, Binding: fixture.binding,
-		Snapshot: fixture.snapshot, PublicationID: fixture.publicationID, Review: fixture.review,
+		Snapshot: fixture.snapshot, PublicationID: fixture.publicationID, Reviews: fixture.reviews,
 	}
 }
 
@@ -813,6 +901,185 @@ func TestPublishMaterialRefusesStaleProposal(t *testing.T) {
 	_, present, loadErr := fixture.store.Load(ctx)
 	require.NoError(t, loadErr)
 	assert.False(t, present)
+}
+
+func TestPublishMaterialRefusesSelectionChangeAfterPrepare(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	proposal := fixture.prepare(t)
+	review, _ := fixture.reviews.counts()
+	changed := fixture.review
+	changed.SelectionDigest = [32]byte{0x77}
+	changed.SelectionRevision = 2
+	fixture.reviews.set(changed, config.Token{0x31})
+
+	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "consent", "review_changed")
+	require.ErrorIs(t, err, ErrConfigChangedSincePrepare, "selection drift did not refuse the publication")
+	assert.Greater(t, review, 0, "prepare did not acquire the configuration review")
+	assert.Equal(t, 1, fixture.transport.uploadCount(), "the fence refused before upload")
+	assert.Equal(t, 0, fixture.transport.prepareCount(), "the fence prepared writes after a configuration change")
+	assert.Equal(t, 0, fixture.transport.sendCount(), "the fence dispatched writes after a configuration change")
+	assert.Equal(t, 0, fixture.transport.applyCount(), "the fence applied writes after a configuration change")
+	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle, "the refused publication consumed the reservation")
+	assert.Equal(t, publicationstate.OutcomeNotSubmitted, attempt.Outcome, "the refused publication claimed a submission")
+	_, present, loadErr := fixture.store.Load(ctx)
+	require.NoError(t, loadErr)
+	assert.False(t, present, "the refused publication advanced the floor")
+}
+
+func TestPublishMaterialRefusesApprovalChangeAfterPrepare(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	proposal := fixture.prepare(t)
+	changed := fixture.review
+	changed.ApprovalDigest = [32]byte{0x78}
+	changed.ApprovalRevision = 2
+	fixture.reviews.set(changed, config.Token{0x32})
+
+	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "consent", "review_changed")
+	require.ErrorIs(t, err, ErrConfigChangedSincePrepare, "approval drift did not refuse the publication")
+	assert.Equal(t, 0, fixture.transport.prepareCount(), "the fence prepared writes after an approval change")
+	assert.Equal(t, 0, fixture.transport.sendCount(), "the fence dispatched writes after an approval change")
+	assert.Equal(t, 0, fixture.transport.applyCount(), "the fence applied writes after an approval change")
+	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle, "the refused publication consumed the reservation")
+}
+
+func TestPublishMaterialRefusesTamperedReviewIdentity(t *testing.T) {
+	ctx := context.Background()
+	tamperCases := []struct {
+		name   string
+		tamper func(*MaterialPublishProposal)
+	}{
+		{"selection digest", func(p *MaterialPublishProposal) { p.Review.SelectionDigest = [32]byte{0x79} }},
+		{"selection revision", func(p *MaterialPublishProposal) { p.Review.SelectionRevision++ }},
+		{"approval digest", func(p *MaterialPublishProposal) { p.Review.ApprovalDigest = [32]byte{0x7a} }},
+		{"approval revision", func(p *MaterialPublishProposal) { p.Review.ApprovalRevision++ }},
+		{"publication id", func(p *MaterialPublishProposal) { p.PublicationID = [16]byte{0x7b} }},
+		{"proposal token", func(p *MaterialPublishProposal) { p.ProposalToken[0] ^= 0xff }},
+	}
+	for _, testCase := range tamperCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newMaterialPublishFixture(t)
+			proposal := fixture.prepare(t)
+			testCase.tamper(&proposal)
+
+			_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+			requireMaterialRefusal(t, err, "consent", "review_mismatch")
+			require.ErrorIs(t, err, ErrReviewMismatch, "a tampered proposal was not refused as a review mismatch")
+			_, hasActive, activeErr := fixture.store.ActiveAttempt(ctx)
+			require.NoError(t, activeErr)
+			assert.False(t, hasActive, "the refused proposal created an attempt")
+			assert.Equal(t, 0, fixture.transport.uploadCount(), "the refused proposal uploaded a payload")
+			assert.Equal(t, 0, fixture.transport.applyCount(), "the refused proposal applied a batch")
+		})
+	}
+}
+
+func TestPublishMaterialRefusesIdentityNoConfigurationSupports(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	proposal := fixture.prepare(t)
+	forged := fixture.review
+	forged.SelectionDigest = [32]byte{0x7c}
+	fixture.reviews.setReview(forged)
+
+	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "consent", "review_mismatch")
+	require.ErrorIs(t, err, ErrReviewMismatch, "an identity the unchanged configuration cannot support was not refused as a mismatch")
+	assert.Equal(t, 0, fixture.transport.prepareCount(), "the forged identity reached write preparation")
+	assert.Equal(t, 0, fixture.transport.sendCount(), "the forged identity reached dispatch")
+}
+
+func TestPublishMaterialFencesConfigurationWritesThroughSubmission(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	port := FileConfigPort{Paths: fixture.paths}
+	_, err := port.Update(ctx, config.Token{}, func(c config.Config) (config.Config, error) {
+		c.Targets = append(c.Targets, config.Target{ID: "files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "dotfiles", Kind: model.SelectionDirectory}})
+		return c, nil
+	})
+	require.NoError(t, err)
+	snapshot, err := port.Snapshot(ctx)
+	require.NoError(t, err)
+
+	proposal, err := fixture.coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
+		Store: fixture.store, Transport: fixture.transport, Binding: fixture.binding,
+		Snapshot: fixture.snapshot, PublicationID: fixture.publicationID, Reviews: port,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, publicationstate.LocalReviewContext{
+		SelectionDigest: snapshot.Selection.Digest, SelectionRevision: snapshot.Selection.Revision,
+		ApprovalDigest: snapshot.Approval.Digest, ApprovalRevision: snapshot.Approval.Revision,
+	}, proposal.Review, "the proposal did not carry the prepared configuration identity")
+
+	var fenced error
+	fixture.transport.setSendHook(func() { fenced = probeConfigWriter(fixture.paths) })
+	result, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	require.NoError(t, err)
+	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
+	assert.Equal(t, 1, fixture.transport.sendCount())
+	require.ErrorIs(t, fenced, syscall.EWOULDBLOCK, "a configuration writer was not fenced during SendWrites")
+	assert.NoError(t, probeConfigWriter(fixture.paths), "the published fence kept the configuration lock")
+
+	updated, err := port.Update(ctx, snapshot.Token, func(c config.Config) (config.Config, error) {
+		c.Targets[0].Mode = config.AutoApply
+		return c, nil
+	})
+	require.NoError(t, err, "a configuration write after publication was refused")
+	assert.Equal(t, snapshot.Selection.Revision+1, updated.Selection.Revision, "the fenced write did not advance the selection revision")
+}
+
+func probeConfigWriter(paths platform.Paths) error {
+	file, err := os.OpenFile(filepath.Join(paths.AppConfigDir(), config.LockFileName), os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	locked := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
+	return locked
+}
+
+func TestPublishMaterialRefusesUnavailableReviewSource(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	refused := errors.New("synthetic configuration read failure")
+	fixture.reviews.setError(refused)
+
+	_, err := fixture.coordinator.PreparePublishMaterial(ctx, fixture.request())
+	requireMaterialRefusal(t, err, "consent", "review_changed")
+	require.ErrorIs(t, err, refused)
+
+	fixture.reviews.setError(nil)
+	proposal := fixture.prepare(t)
+	fixture.reviews.setError(refused)
+	_, err = fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "consent", "review_changed")
+	require.ErrorIs(t, err, refused)
+	assert.Equal(t, 0, fixture.transport.sendCount(), "an unreadable configuration dispatched writes")
+	acquires, releases := fixture.reviews.counts()
+	assert.Equal(t, acquires, releases, "a review guard leaked")
+}
+
+func TestPublishMaterialRefusesMissingReviewSource(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	request := fixture.request()
+	request.Reviews = nil
+
+	_, err := fixture.coordinator.PreparePublishMaterial(ctx, request)
+	requireMaterialRefusal(t, err, "input", "request_invalid")
+
+	proposal := fixture.prepare(t)
+	proposal.Reviews = nil
+	_, err = fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "input", "request_invalid")
 }
 
 func TestPublishMaterialRefusesTamperedBatch(t *testing.T) {

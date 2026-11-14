@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 
 	"github.com/lamb-systems/dottie/internal/ignore"
@@ -27,9 +28,11 @@ type Defaults struct {
 }
 
 type Config struct {
-	Version  uint32   `toml:"config_version"`
-	Defaults Defaults `toml:"defaults,omitempty"`
-	Targets  []Target `toml:"targets,omitempty"`
+	Version           uint32   `toml:"config_version"`
+	SelectionRevision uint64   `toml:"selection_revision,omitempty"`
+	ApprovalRevision  uint64   `toml:"approval_revision,omitempty"`
+	Defaults          Defaults `toml:"defaults,omitempty"`
+	Targets           []Target `toml:"targets,omitempty"`
 }
 
 type Target struct {
@@ -71,6 +74,9 @@ func (c Config) Validate() error {
 	}
 	if !validModeOrEmpty(c.Defaults.Mode) {
 		return errors.New("invalid default mode")
+	}
+	if c.SelectionRevision > math.MaxInt64 || c.ApprovalRevision > math.MaxInt64 {
+		return errors.New("configuration revision exceeds the supported range")
 	}
 	ids := make(map[string]struct{}, len(c.Targets))
 	for _, target := range c.Targets {

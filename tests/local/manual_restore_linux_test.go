@@ -180,7 +180,10 @@ func TestManualRestoreCoordinatorGate(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	configuration := config.Default()
 	configuration.Targets = []config.Target{fileTarget, settingsTarget}
-	require.NoError(t, config.Save(paths, configuration))
+	current, snapshotErr := config.OpenSnapshot(paths)
+	require.NoError(t, snapshotErr)
+	_, updateErr := config.Update(paths, current.Token, func(config.Config) (config.Config, error) { return configuration, nil })
+	require.NoError(t, updateErr)
 	require.NoError(t, store.PutVaultSelection(context.Background(), state.VaultSelection{Vault: repository.vault, DeviceID: repository.root.DeviceID, RecordedAt: time.Now().Unix()}))
 	checkpoint, err := vault.DecodeCheckpoint(repository.genesis.Checkpoint)
 	require.NoError(t, err)
@@ -548,7 +551,10 @@ func TestManualRestoreRefusesStaleCheckpointRelation(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
-	require.NoError(t, config.Save(paths, configuration))
+	current, snapshotErr := config.OpenSnapshot(paths)
+	require.NoError(t, snapshotErr)
+	_, updateErr := config.Update(paths, current.Token, func(config.Config) (config.Config, error) { return configuration, nil })
+	require.NoError(t, updateErr)
 	require.NoError(t, store.PutVaultSelection(context.Background(), state.VaultSelection{Vault: repository.vault, DeviceID: repository.root.DeviceID, RecordedAt: 1}))
 	checkpoint, err := vault.DecodeCheckpoint(repository.genesis.Checkpoint)
 	require.NoError(t, err)

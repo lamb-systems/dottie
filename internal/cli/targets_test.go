@@ -42,6 +42,15 @@ func cliEnvironment(t *testing.T) (platform.Paths, func(string) string) {
 	return paths, func(key string) string { return environment[key] }
 }
 
+func writeCLIConfig(paths platform.Paths, value config.Config) error {
+	snapshot, err := config.OpenSnapshot(paths)
+	if err != nil {
+		return err
+	}
+	_, err = config.Update(paths, snapshot.Token, func(config.Config) (config.Config, error) { return value, nil })
+	return err
+}
+
 func invokeTargets(env func(string) string, args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := runTargets(args, &stdout, &stderr, env)
@@ -63,7 +72,7 @@ func TestTargetsListEmptyAndPopulatedWithoutRootProbes(t *testing.T) {
 		{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
 		{ID: "line\nbreak", Source: model.SourceGNOME, Mode: config.BackupOnly, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
 	}
-	require.NoError(t, config.Save(paths, current))
+	require.NoError(t, writeCLIConfig(paths, current))
 
 	code, out, stderr = invokeTargets(env, "list")
 	require.Equal(t, 0, code, "populated list exit code")
@@ -165,7 +174,7 @@ func TestTargetsModeInheritanceAndRemoveDoesNotDeleteFiles(t *testing.T) {
 	current, err := config.Load(paths)
 	require.NoError(t, err)
 	current.Defaults.Mode = config.AutoApply
-	require.NoError(t, config.Save(paths, current))
+	require.NoError(t, writeCLIConfig(paths, current))
 
 	current, err = config.Load(paths)
 	require.NoError(t, err)

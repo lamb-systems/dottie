@@ -295,7 +295,7 @@ func newPublicationFixtureWithTransport(t *testing.T, transport atproto.Transpor
 	fileTarget, settingsTarget := publicationAuditTargets(t, publicationAuditFileTargetID, publicationAuditSettingsTargetID)
 	configuration := config.Default()
 	configuration.Targets = []config.Target{fileTarget, settingsTarget}
-	require.NoError(t, config.Save(paths, configuration))
+	writeIntegrationConfig(t, paths, configuration)
 	for _, target := range configuration.Targets {
 		descriptor := state.TargetDescriptor{ID: target.ID, Version: 1, Source: target.Source, SourceVersion: model.SourceVersion, Mode: string(config.Review), CreatedAt: 1}
 		if target.Root != nil {
