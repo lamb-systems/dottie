@@ -103,8 +103,16 @@ the signature preimage and is a signature-compatibility break even when the DTE 
 not change.
 
 The schema and scope tests load the top-level `lexicons/*.json` v1 inventory directly. Separate
-v2 schema tests load only `lexicons/v2/*.json`; the v2 records are inactive and are not included in
-the OAuth repository-scope grant. The recursive release-domain guard still scans both directories.
-The OAuth metadata's repo scope set must equal these seven record NSIDs, with the blob scope for the
-snapshot payload and the `atproto` base scope. `docs/client-metadata.json` is served byte-for-byte,
-and its own public URL remains equal to `client_id`.
+v2 schema tests load only `lexicons/v2/*.json`. The v2 snapshot and head records are now granted:
+the requested repository-scope set covers the seven v1 NSIDs as the legacy subset plus the two v2
+collections. The recursive release-domain guard still scans both directories. The OAuth metadata's
+repo scope set must equal `VaultScopes()`, of which the seven v1 NSIDs are the legacy subset, with
+the blob scope for the snapshot payload and the `atproto` base scope unchanged.
+`docs/client-metadata.json` is served byte-for-byte, and its own public URL remains equal to
+`client_id`.
+
+Existing sessions authorized before this change hold the legacy subset only and must re-login. The
+read path validates the publication scope set before any outbound work and refuses with the typed
+insufficient-publication-scope error; the v2 write path is not wired yet and must apply the same
+predicate when it is, since it would otherwise reach the provider with a legacy-scope session. No
+hosted deployment, metadata publication or provider acceptance is claimed here.
