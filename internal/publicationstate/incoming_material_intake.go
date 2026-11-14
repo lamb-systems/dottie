@@ -126,6 +126,12 @@ func (s *Store) acceptTx(ctx context.Context, tx *sql.Tx, stage Stage, mode Mode
 			if !materialOwnerMatches(ownerName, ownerRecord, ownerBlob, validated.candidate.raw, *material) {
 				return zeroFloor(), false, classified(ErrSchema, stage, ReasonCorrupt)
 			}
+			if err := s.openPayloadDirectoryForRead(); err != nil {
+				return zeroFloor(), false, classifyAcceptedMaterialDirectory(err, stage)
+			}
+			if _, err := s.inspectPayloadFile(ownerName, nil, ownerBlob); err != nil {
+				return zeroFloor(), false, classifyMaterialCustody(err)
+			}
 		} else if materialNotRetained(ownerErr) {
 			if err := s.attachIncomingMaterialTx(ctx, tx, accepted, *material); err != nil {
 				return zeroFloor(), false, err
