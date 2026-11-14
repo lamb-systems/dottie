@@ -12,7 +12,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-const stageAcceptMaterial Stage = "accept_material"
+const StageAcceptMaterial Stage = "accept_material"
 
 type materialAttachment struct {
 	payload []byte
@@ -20,17 +20,17 @@ type materialAttachment struct {
 	name    string
 }
 
-func (s *Store) acceptMaterial(ctx context.Context, mode Mode, expectedStateToken [32]byte, observation Observation, payload []byte, confirmation [32]byte) (Floor, error) {
+func (s *Store) AcceptMaterial(ctx context.Context, mode Mode, expectedStateToken [32]byte, observation Observation, payload []byte, confirmation [32]byte) (Floor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.checkContext(ctx, stageAcceptMaterial); err != nil {
+	if err := s.checkContext(ctx, StageAcceptMaterial); err != nil {
 		return zeroFloor(), err
 	}
-	if err := s.requireReadback(stageAcceptMaterial); err != nil {
+	if err := s.requireReadback(StageAcceptMaterial); err != nil {
 		return zeroFloor(), err
 	}
 	if s.schemaVersion != 3 {
-		return zeroFloor(), classified(ErrSchema, stageAcceptMaterial, ReasonUpgradeRequired)
+		return zeroFloor(), classified(ErrSchema, StageAcceptMaterial, ReasonUpgradeRequired)
 	}
 	if !validMode(mode) {
 		return zeroFloor(), classified(ErrInvalid, StageInput, ReasonMode)
@@ -45,15 +45,15 @@ func (s *Store) acceptMaterial(ctx context.Context, mode Mode, expectedStateToke
 	}
 	material := materialAttachment{payload: payload, blob: blob, name: payloadBasename(payload)}
 	if validatePayloadForCustody(material.payload, material.blob, material.name) != nil {
-		return zeroFloor(), classified(ErrInvalid, stageAcceptMaterial, ReasonRecordSet)
+		return zeroFloor(), classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
 	}
 	if err := s.preflightSidecars(); err != nil {
-		return zeroFloor(), storageFailure(ctx, stageAcceptMaterial, err)
+		return zeroFloor(), storageFailure(ctx, StageAcceptMaterial, err)
 	}
 	var accepted Floor
 	var attemptMutationChanged bool
-	err = s.withTx(ctx, stageAcceptMaterial, func(tx *sql.Tx) error {
-		floor, changed, txErr := s.acceptTx(ctx, tx, stageAcceptMaterial, mode, expectedStateToken, validated, confirmation, &material)
+	err = s.withTx(ctx, StageAcceptMaterial, func(tx *sql.Tx) error {
+		floor, changed, txErr := s.acceptTx(ctx, tx, StageAcceptMaterial, mode, expectedStateToken, validated, confirmation, &material)
 		if txErr != nil {
 			return txErr
 		}
@@ -159,25 +159,25 @@ func (s *Store) acceptTx(ctx context.Context, tx *sql.Tx, stage Stage, mode Mode
 
 func (s *Store) attachIncomingMaterialTx(ctx context.Context, tx *sql.Tx, floor Floor, material materialAttachment) error {
 	if err := s.checkPayloadCapacityWithQueryer(ctx, tx, material.name, material.blob.Size, true); err != nil {
-		return classified(ErrLimit, stageAcceptMaterial, ReasonCapacity)
+		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)
 	}
 	if _, _, err := s.persistPayload(ctx, tx, material.payload, material.blob, material.name); err != nil {
 		return classifyMaterialCustody(err)
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING", material.blob.CID, int64(material.blob.Size), material.name, int64(material.blob.Size)); err != nil {
-		return classified(ErrStorage, stageAcceptMaterial, ReasonIO)
+		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	var cataloguedName string
 	var cataloguedSize any
 	if err := tx.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", material.blob.CID).Scan(&cataloguedName, &cataloguedSize); err != nil {
-		return storageFailure(ctx, stageAcceptMaterial, err)
+		return storageFailure(ctx, StageAcceptMaterial, err)
 	}
 	size, ok := rawInt64(cataloguedSize)
 	if !ok || size <= 0 || uint64(size) != material.blob.Size || cataloguedName != material.name {
-		return classified(ErrSchema, stageAcceptMaterial, ReasonCorrupt)
+		return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(floor.Revision), floor.RecordCID, floor.BlobCID); err != nil {
-		return classified(ErrStorage, stageAcceptMaterial, ReasonIO)
+		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	return nil
 }
@@ -193,13 +193,13 @@ func materialNotRetained(err error) bool {
 
 func classifyMaterialCustody(err error) error {
 	if errors.Is(err, unix.ENOENT) {
-		return classified(ErrStorage, stageAcceptMaterial, ReasonMaterialMissing)
+		return classified(ErrStorage, StageAcceptMaterial, ReasonMaterialMissing)
 	}
 	if errors.Is(err, errUnsafePayloadObject) || errors.Is(err, unix.ELOOP) {
-		return classified(ErrStorage, stageAcceptMaterial, ReasonMaterialUnsafe)
+		return classified(ErrStorage, StageAcceptMaterial, ReasonMaterialUnsafe)
 	}
 	if errors.Is(err, errCorruptPayloadObject) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return classified(ErrStorage, stageAcceptMaterial, ReasonMaterialCorrupt)
+		return classified(ErrStorage, StageAcceptMaterial, ReasonMaterialCorrupt)
 	}
-	return classified(ErrStorage, stageAcceptMaterial, ReasonIO)
+	return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 }

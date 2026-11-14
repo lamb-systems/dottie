@@ -60,7 +60,7 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 	inventory, total, err := store.inventoryPayloads()
@@ -72,7 +72,7 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 	require.NoError(t, err)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	second, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+	second, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
 	require.NoError(t, err)
 	assert.Equal(t, first.Revision+1, second.Revision)
 	assert.Equal(t, first.Generation, second.Generation)
@@ -143,7 +143,7 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 
@@ -168,9 +168,9 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 	require.NoError(t, err)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	floor, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+	floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
 	assert.Equal(t, Floor{}, floor)
-	requireErrorMetadata(t, err, ErrLimit, stageAcceptMaterial, ReasonCapacity)
+	requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
 	afterFile, err := observeAcceptedMaterialPayloadFile(payloadPathA, len(payloadA))
 	require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 
 		firstObservation := f.observation(1)
 		firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-		first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+		first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
 		require.NoError(t, err)
 		inventory, total, err := store.inventoryPayloads()
 		require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		second, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+		second, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
 		require.NoError(t, err)
 		assert.Equal(t, first.Revision+1, second.Revision)
 		assert.Equal(t, first.Generation, second.Generation)
@@ -285,7 +285,7 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 
 		firstObservation := f.observation(1)
 		firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-		first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+		first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), first.Revision)
 		inventory, total, err := store.inventoryPayloads()
@@ -297,9 +297,9 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		floor, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+		floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrLimit, stageAcceptMaterial, ReasonCapacity)
+		requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
 		afterInventory, afterTotal, err := store.inventoryPayloads()
 		require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payload)
-	first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payload, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payload, firstProposal.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 	previous := first
@@ -358,7 +358,7 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payload)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		floor, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payload, [32]byte{})
+		floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payload, [32]byte{})
 		require.NoError(t, err)
 		assert.Equal(t, previous.Revision+1, floor.Revision)
 		assert.Equal(t, previous.Generation, floor.Generation)

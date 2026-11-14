@@ -60,9 +60,9 @@ func TestAcceptMaterialRefusesUnsafePayloadObject(t *testing.T) {
 
 			observation := f.observation(1)
 			proposal := prepareFirstUse(t, store, observation, f.payload)
-			floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 			assert.Equal(t, Floor{}, floor)
-			requireErrorMetadata(t, err, ErrLimit, stageAcceptMaterial, ReasonCapacity)
+			requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
 			var damaged unix.Stat_t
 			require.NoError(t, unix.Lstat(path, &damaged))
@@ -118,9 +118,9 @@ func TestAcceptMaterialRefusesUnsafePayloadDirectory(t *testing.T) {
 
 			observation := f.observation(1)
 			proposal := prepareFirstUse(t, store, observation, f.payload)
-			floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 			assert.Equal(t, Floor{}, floor)
-			requireErrorMetadata(t, err, ErrLimit, stageAcceptMaterial, ReasonCapacity)
+			requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
 			var damaged unix.Stat_t
 			require.NoError(t, unix.Lstat(payloadDirectory, &damaged))
@@ -172,7 +172,7 @@ func TestAcceptMaterialAdoptsCompleteUncataloguedPayload(t *testing.T) {
 
 	observation := f.observation(1)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), floor.Revision)
 
@@ -237,9 +237,9 @@ func TestAcceptMaterialRefusesCorruptAdoptedPayload(t *testing.T) {
 
 	observation := f.observation(1)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	assert.Equal(t, Floor{}, floor)
-	requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialCorrupt)
+	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialCorrupt)
 
 	unchanged, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
 	require.NoError(t, err)
@@ -286,9 +286,9 @@ func TestAcceptMaterialRefusesMissingCataloguedPayload(t *testing.T) {
 
 	observation := f.observation(1)
 	firstUse := prepareFirstUse(t, store, observation, candidate.Payload)
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, firstUse.StateToken, observation, candidate.Payload, firstUse.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, firstUse.StateToken, observation, candidate.Payload, firstUse.Confirmation)
 	assert.Equal(t, Floor{}, floor)
-	requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialMissing)
+	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialMissing)
 
 	_, statErr = os.Lstat(path)
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
@@ -377,7 +377,7 @@ func TestAcceptMaterialSyncsBeforeReferenceCommit(t *testing.T) {
 		commitSeen = true
 		return tx.Commit()
 	}
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	require.NoError(t, err)
 	assert.True(t, commitSeen)
 	assert.Equal(t, wantPreCommitSyncs, syncOrder)
@@ -449,9 +449,9 @@ func TestAcceptMaterialSyncFailureRollsBack(t *testing.T) {
 			return errors.New("unexpected sync object")
 		}
 	}
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	assert.Equal(t, Floor{}, floor)
-	requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonIO)
+	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 	assert.Equal(t, []string{"root", "file", "payload-directory", "root"}, syncOrder)
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 
@@ -503,7 +503,7 @@ func TestAcceptMaterialChargesCataloguedMissingPayload(t *testing.T) {
 
 			firstObservation := f.observation(1)
 			firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-			first, err := store.acceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+			first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
 			require.NoError(t, err)
 			require.Equal(t, uint64(1), first.Revision)
 			fileA, err := observeAcceptedMaterialPayloadFile(filepath.Join(payloadDirectory, nameA), len(payloadA))
@@ -525,10 +525,10 @@ func TestAcceptMaterialChargesCataloguedMissingPayload(t *testing.T) {
 			advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 			require.NoError(t, err)
 			require.Equal(t, "joined", advanceProposal.Stop)
-			floor, err := store.acceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+			floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
 			if scenario.refuse {
 				assert.Equal(t, Floor{}, floor)
-				requireErrorMetadata(t, err, ErrLimit, stageAcceptMaterial, ReasonCapacity)
+				requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 				assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 				assert.Equal(t, beforeReferences, b8IncomingRows(t, ctx, store.conn))
 				require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))

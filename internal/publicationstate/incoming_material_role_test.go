@@ -32,7 +32,7 @@ func TestAcceptMaterialCoexistsWithPreparedAttempt(t *testing.T) {
 	attach, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, "same", attach.Stop)
-	floor, err := store.acceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
+	floor, err := store.AcceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
 	require.NoError(t, err)
 	assert.Equal(t, composition.accepted, floor)
 
@@ -107,7 +107,7 @@ func TestAcceptMaterialCoexistsWithSubmittedAttempt(t *testing.T) {
 	attach, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, "same", attach.Stop)
-	floor, err := store.acceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
+	floor, err := store.AcceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
 	require.NoError(t, err)
 	assert.Equal(t, composition.accepted, floor)
 
@@ -191,7 +191,7 @@ func TestAcceptMaterialCoexistsWithAbandonedAttempt(t *testing.T) {
 
 	observation := f.observation(1)
 	intake := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, intake.StateToken, observation, f.payload, intake.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, intake.StateToken, observation, f.payload, intake.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), floor.Revision)
 	require.Equal(t, uint64(1), floor.Generation)
@@ -257,7 +257,7 @@ func TestAcceptMaterialAdvancesPastRetainedPublication(t *testing.T) {
 	advance, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, "joined", advance.Stop)
-	second, err := store.acceptMaterial(ctx, ModeAdvance, advance.StateToken, observation, f.payload, [32]byte{})
+	second, err := store.AcceptMaterial(ctx, ModeAdvance, advance.StateToken, observation, f.payload, [32]byte{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), second.Revision)
 
@@ -330,7 +330,7 @@ func TestAcceptMaterialKeepsFinalizedOwnerOnSamePosition(t *testing.T) {
 	same, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, "same", same.Stop)
-	floor, err := store.acceptMaterial(ctx, ModeAdvance, same.StateToken, observation, f.payload, [32]byte{})
+	floor, err := store.AcceptMaterial(ctx, ModeAdvance, same.StateToken, observation, f.payload, [32]byte{})
 	require.NoError(t, err)
 	assert.Equal(t, finalized.Floor, floor)
 
@@ -384,7 +384,7 @@ func TestAcceptMaterialCompositionPreservesRawState(t *testing.T) {
 	attach, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, "same", attach.Stop)
-	floor, err := store.acceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
+	floor, err := store.AcceptMaterial(ctx, ModeAdvance, attach.StateToken, observation, f.payload, [32]byte{})
 	require.NoError(t, err)
 	assert.Equal(t, composition.accepted, floor)
 
@@ -697,7 +697,7 @@ func incomingRoleAcceptAttachedFirstUse(t *testing.T, store *Store, f fixture) F
 	ctx := context.Background()
 	observation := f.observation(1)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), floor.Revision)
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))

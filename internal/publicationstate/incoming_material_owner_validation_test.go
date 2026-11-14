@@ -50,7 +50,7 @@ func incomingNoOpAcceptedMaterial(t *testing.T) (*Store, fixture, string, Floor,
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	observation := f.observation(1)
 	first := prepareFirstUse(t, store, observation, f.payload)
-	accepted, err := store.acceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
+	accepted, err := store.AcceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
 	require.NoError(t, err)
 	proposal, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func incomingFinalizedNoOpMaterial(t *testing.T) (*Store, fixture, string, Final
 }
 
 func incomingNoOpIntake(ctx context.Context, store *Store, f fixture, proposal Proposal) (Floor, error) {
-	return store.acceptMaterial(ctx, ModeAdvance, proposal.StateToken, f.observation(1), f.payload, [32]byte{})
+	return store.AcceptMaterial(ctx, ModeAdvance, proposal.StateToken, f.observation(1), f.payload, [32]byte{})
 }
 
 func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
@@ -108,7 +108,7 @@ func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialMissing)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialMissing)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 		_, statErr := os.Lstat(path)
 		assert.ErrorIs(t, statErr, os.ErrNotExist)
@@ -140,7 +140,7 @@ func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialCorrupt)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialCorrupt)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 		unchanged, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
 		require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialUnsafe)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialUnsafe)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 		unchanged, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
 		require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialUnsafe)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialUnsafe)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 		unchanged, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
 		require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestAcceptMaterialNoOpValidatesSelectedBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialUnsafe)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialUnsafe)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 		unchanged, err := observeAcceptedMaterialPayloadFile(path, len(truncated))
 		require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestAcceptMaterialNoOpValidatesFinalizedOwnerBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialMissing)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialMissing)
 		requireIncomingNoOpUnchanged(t, ctx, store, finalized.Floor, state)
 		_, statErr := os.Lstat(path)
 		assert.ErrorIs(t, statErr, os.ErrNotExist)
@@ -277,7 +277,7 @@ func TestAcceptMaterialNoOpValidatesFinalizedOwnerBytes(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialCorrupt)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialCorrupt)
 		requireIncomingNoOpUnchanged(t, ctx, store, finalized.Floor, state)
 		unchanged, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
 		require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		observation := f.observation(1)
 		first := prepareFirstUse(t, store, observation, f.payload)
-		accepted, err := store.acceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
+		accepted, err := store.AcceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, store.payloadFD, 0)
 		require.NoError(t, store.Close())
@@ -312,7 +312,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		require.Equal(t, "same", proposal.Stop)
 		require.Equal(t, -1, reopened.payloadFD)
 
-		floor, err := reopened.acceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
+		floor, err := reopened.AcceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
 		require.NoError(t, err)
 		assert.Equal(t, accepted, floor)
 		require.GreaterOrEqual(t, reopened.payloadFD, 0)
@@ -333,7 +333,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		observation := f.observation(1)
 		first := prepareFirstUse(t, store, observation, f.payload)
-		accepted, err := store.acceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
+		accepted, err := store.AcceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, store.payloadFD, 0)
 		proposal, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
@@ -356,7 +356,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 
 		floor, err := incomingNoOpIntake(ctx, store, f, proposal)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonIO)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 		requireIncomingNoOpUnchanged(t, ctx, store, accepted, state)
 
 		replaced, err := os.ReadDir(payloadDirectory)
@@ -381,7 +381,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		observation := f.observation(1)
 		first := prepareFirstUse(t, store, observation, f.payload)
-		accepted, err := store.acceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
+		accepted, err := store.AcceptMaterial(ctx, ModeFirstUse, first.StateToken, observation, f.payload, first.Confirmation)
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, store.payloadFD, 0)
 		require.NoError(t, store.Close())
@@ -401,9 +401,9 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		require.Equal(t, "same", proposal.Stop)
 		state := incomingNoOpCapture(t, ctx, reopened)
 
-		floor, err := reopened.acceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
+		floor, err := reopened.AcceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialMissing)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialMissing)
 		requireIncomingNoOpUnchanged(t, ctx, reopened, accepted, state)
 		_, statErr := os.Lstat(payloadDirectory)
 		assert.ErrorIs(t, statErr, os.ErrNotExist)
@@ -426,7 +426,7 @@ func TestAcceptMaterialAttachmentPathUnchanged(t *testing.T) {
 		proposal, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 		require.NoError(t, err)
 		require.Equal(t, "same", proposal.Stop)
-		floor, err := store.acceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
+		floor, err := store.AcceptMaterial(ctx, ModeAdvance, proposal.StateToken, observation, f.payload, [32]byte{})
 		require.NoError(t, err)
 		assert.Equal(t, accepted, floor)
 		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
@@ -464,9 +464,9 @@ func TestAcceptMaterialAttachmentPathUnchanged(t *testing.T) {
 		observation := f.observation(1)
 		proposal := prepareFirstUse(t, store, observation, f.payload)
 
-		floor, err := store.acceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+		floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 		assert.Equal(t, Floor{}, floor)
-		requireErrorMetadata(t, err, ErrStorage, stageAcceptMaterial, ReasonMaterialCorrupt)
+		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonMaterialCorrupt)
 		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
 		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 		require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
