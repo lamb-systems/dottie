@@ -56,7 +56,8 @@ Run `go test -count=1 ./internal/service` for service tests and `go test -count=
 publication profile. No CLI command, coordinator dependency or service caller invokes them; `push` and
 `sync` still route to the persisted v1 coordinator. They write only through the caller-supplied
 publication-state store, and they never contact a provider: the caller supplies a `MaterialTransport`
-whose upload, conditional batch write and repository read are the only outbound surfaces.
+whose payload upload, write preparation, single prepared write send and repository read are the only
+outbound surfaces.
 
 Consent is caller-supplied and two-phase. `PreparePublishMaterial` performs read-only work only — it
 loads the accepted floor, reads one repository view, packs the snapshot, builds and validates the
@@ -66,20 +67,31 @@ refuses a mismatch or a stale proposal before any durable write or transport cal
 
 The complete immutable batch, including both collections and keys, the expected snapshot CID, the
 create flags, the expected predecessor and the expected supplied context, is built and validated
-before the submission boundary. After `BeginSubmission` reserves that boundary the orchestration only
-compares the store's returned submission material against the prepared batch and sends exactly once.
-A transport error or an ambiguous outcome returns a typed unresolved result with no retry, no
+before the submission boundary. After the payload upload, and still before `BeginSubmission`, the
+orchestration calls the non-network `PrepareWrites` with that batch and keeps the returned
+`MaterialPreparedWrites`. That value is opaque: it carries an adapter-owned secret and a dispatch count
+and no request bytes, so the service can neither construct nor edit a wire request. A preparation
+failure is a typed `batch`/`batch_invalid` refusal; an empty secret or a dispatch count other than one
+is a typed `submission`/`submission_mismatch` refusal taken before the submission reservation. After
+`BeginSubmission` reserves that boundary the orchestration compares the store's returned submission
+material against the prepared batch and then calls `SendWrites` exactly once. Each prepared value is
+single-use in the orchestration: the dispatch consumes it before the transport call, so a second send
+of the same value refuses typed without dispatching, and a transport error cannot be retried. A
+transport error or an ambiguous outcome returns a typed unresolved result with no retry, no
 abandonment, no finalization and no rollback claim; a later explicit `ResolveAttempt` and
 `FinalizeAttempt` classify the outcome. Those two calls use different token domains: the attempt's
 state digest resolves, and the resolution's digest finalizes; dispatch tokens are never reusable as
 digests. Accepted-material ownership is not created here — the orchestration finalizes the attempt and
 lets the store's own floor acceptance stand, and `AcceptMaterial` remains a separate receive-side path.
 
-The transport contract is conditional and atomic: reject a stale context or a create conflict without
-installing either record, install the snapshot reference and head together only after the referenced
-payload was received and hashes to the expected CID, and derive repository views from what was actually
-committed. The tests drive this with a stateful fake that can fail before commit, commit then lose the
-response, inject a competing writer and tamper with fields. Those tests establish the local sequencing,
-refusals and durable boundaries only. They are not provider evidence: upload acceptance, batch
-atomicity, blob retention, fence behaviour under a real concurrent writer, quota classes and NSID
-registration in a PDS remain unproven until a live disposable-account gate is explicitly authorized.
+The transport contract is conditional and atomic: `PrepareWrites` is pure and non-network, accepts only
+the exact snapshot+head pair with the expected collections, keys, CIDs, predecessor, create flags and
+context, and refuses a policy-check-requiring batch or any non-public backend. `SendWrites` rejects a
+stale context or a create conflict without installing either record, installs the snapshot reference
+and head together only after the referenced payload was received and hashes to the expected CID, and
+refuses a value it did not prepare or one it has already dispatched. Repository views must derive from
+what was actually committed. The tests drive this with a stateful fake that records call order, can
+fail before commit, commit then lose the response, inject a competing writer and tamper with fields
+and batches. Those tests establish the local sequencing, refusals and durable boundaries only. They
+are not provider evidence: upload acceptance, batch atomicity, blob retention, fence behaviour under a real concurrent writer, quota classes and NSID
+registration in a PDS remain unproven until a live disposable-account gate is explicitly authorized. One SendWrites call is also not yet proven to be one HTTP request: the production auth method may replay a POST through GetBody on a DPoP nonce or invalid-token challenge, so HTTP-level single dispatch remains unproven until a non-replaying submission transport exists.

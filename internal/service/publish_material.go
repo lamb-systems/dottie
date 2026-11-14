@@ -59,7 +59,8 @@ const materialHeadKey = "self"
 
 type MaterialTransport interface {
 	UploadPayload(ctx context.Context, payload []byte) (publication.BlobReference, error)
-	ApplyWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialWriteOutcome, error)
+	PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error)
+	SendWrites(ctx context.Context, prepared MaterialPreparedWrites) (MaterialWriteOutcome, error)
 	ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error)
 }
 
@@ -82,6 +83,35 @@ type MaterialWriteBatch struct {
 
 type MaterialWriteOutcome struct {
 	Committed bool
+}
+
+type MaterialPreparedWrites struct {
+	Secret   string
+	Dispatch int
+}
+
+type materialWriteDispatch struct {
+	prepared MaterialPreparedWrites
+	sent     bool
+}
+
+func (dispatch *materialWriteDispatch) ready() bool {
+	return !dispatch.sent && dispatch.prepared.Secret != "" && dispatch.prepared.Dispatch == 1
+}
+
+func (dispatch *materialWriteDispatch) send(ctx context.Context, transport MaterialTransport) (MaterialWriteOutcome, error) {
+	if !dispatch.ready() {
+		return MaterialWriteOutcome{}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonSubmission, nil)
+	}
+	dispatch.sent = true
+	outcome, err := transport.SendWrites(ctx, dispatch.prepared)
+	if err != nil {
+		return MaterialWriteOutcome{}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonUnresolved, err)
+	}
+	if !outcome.Committed {
+		return MaterialWriteOutcome{}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonUnresolved, nil)
+	}
+	return outcome, nil
 }
 
 type MaterialPublishRequest struct {
@@ -217,6 +247,14 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	if !sameMaterialBlob(uploaded, proposal.Blob) {
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageUpload, publishMaterialReasonBlob, nil)
 	}
+	prepared, err := proposal.Transport.PrepareWrites(ctx, cloneMaterialWriteBatch(proposal.Batch))
+	if err != nil {
+		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBatch, err)
+	}
+	dispatch := materialWriteDispatch{prepared: prepared}
+	if !dispatch.ready() {
+		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonSubmission, nil)
+	}
 	submissionProposal, err := proposal.Store.PrepareDispatch(ctx, id, publicationstate.DispatchSubmission, proposal.View, proposal.Review)
 	if err != nil {
 		return MaterialPublishResult{Attempt: attempt}, err
@@ -228,12 +266,8 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	if !sameMaterialWriteBatch(proposal.Batch, materialWriteBatchFromSubmission(submission)) {
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonSubmission, nil)
 	}
-	outcome, err := proposal.Transport.ApplyWrites(ctx, cloneMaterialWriteBatch(proposal.Batch))
-	if err != nil {
-		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonUnresolved, err)
-	}
-	if !outcome.Committed {
-		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonUnresolved, nil)
+	if _, err := dispatch.send(ctx, proposal.Transport); err != nil {
+		return MaterialPublishResult{Attempt: attempt}, err
 	}
 	resolved, err := proposal.Transport.ReadView(ctx)
 	if err != nil {

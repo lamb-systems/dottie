@@ -29,6 +29,10 @@ var (
 	errMaterialTestBeforeCommit   = errors.New("material transport: failed before commit")
 	errMaterialTestCommitUnknown  = errors.New("material transport: committed but the response was lost")
 	errMaterialTestUploadRejected = errors.New("material transport: upload rejected")
+	errMaterialTestBackend        = errors.New("material transport: backend is not a public repository")
+	errMaterialTestPolicyCheck    = errors.New("material transport: policy check is not supported for this backend")
+	errMaterialTestUnprepared     = errors.New("material transport: send refused a write value that was never prepared")
+	errMaterialTestReplayed       = errors.New("material transport: prepared write value was already dispatched")
 )
 
 type materialTestTransport struct {
@@ -41,7 +45,17 @@ type materialTestTransport struct {
 	head             []byte
 	blobs            map[string][]byte
 	uploads          int
+	prepares         int
+	sends            int
 	applies          int
+	prepared         map[string]MaterialWriteBatch
+	dispatched       map[string]bool
+	calls            []string
+	preparedSecret   *string
+	preparedDispatch *int
+	prepareErr       error
+	prepareHook      func()
+	sendHook         func()
 	applied          []MaterialWriteBatch
 	uploadErr        error
 	uploadCID        []byte
@@ -54,6 +68,7 @@ func newMaterialTestTransport(binding publicationstate.Binding) *materialTestTra
 	return &materialTestTransport{
 		binding: binding, scope: publicationstate.ViewScopeWholeRepository,
 		context: materialTestContext(0), blocks: map[string][]byte{}, blobs: map[string][]byte{},
+		prepared: map[string]MaterialWriteBatch{}, dispatched: map[string]bool{},
 	}
 }
 
@@ -71,6 +86,7 @@ func (transport *materialTestTransport) UploadPayload(ctx context.Context, paylo
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.uploads++
+	transport.calls = append(transport.calls, "upload-payload")
 	if transport.uploadErr != nil {
 		return publication.BlobReference{}, transport.uploadErr
 	}
@@ -88,12 +104,56 @@ func (transport *materialTestTransport) UploadPayload(ctx context.Context, paylo
 	return publication.BlobReference{CID: cid, Size: uint64(len(payload))}, nil
 }
 
-func (transport *materialTestTransport) ApplyWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialWriteOutcome, error) {
+func (transport *materialTestTransport) PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error) {
+	if err := ctx.Err(); err != nil {
+		return MaterialPreparedWrites{}, err
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.prepares++
+	transport.calls = append(transport.calls, "prepare-writes")
+	if transport.prepareHook != nil {
+		transport.prepareHook()
+	}
+	if err := transport.validateMaterialBatch(batch); err != nil {
+		return MaterialPreparedWrites{}, err
+	}
+	if transport.prepareErr != nil {
+		return MaterialPreparedWrites{}, transport.prepareErr
+	}
+	secret := fmt.Sprintf("synthetic-prepared-%d", transport.prepares)
+	if transport.preparedSecret != nil {
+		secret = *transport.preparedSecret
+	}
+	dispatch := 1
+	if transport.preparedDispatch != nil {
+		dispatch = *transport.preparedDispatch
+	}
+	if secret != "" {
+		transport.prepared[secret] = cloneMaterialWriteBatch(batch)
+	}
+	return MaterialPreparedWrites{Secret: secret, Dispatch: dispatch}, nil
+}
+
+func (transport *materialTestTransport) SendWrites(ctx context.Context, prepared MaterialPreparedWrites) (MaterialWriteOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return MaterialWriteOutcome{}, err
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
+	batch, known := transport.prepared[prepared.Secret]
+	if !known {
+		return MaterialWriteOutcome{}, errMaterialTestUnprepared
+	}
+	if transport.dispatched[prepared.Secret] {
+		return MaterialWriteOutcome{}, errMaterialTestReplayed
+	}
+	transport.dispatched[prepared.Secret] = true
+	transport.sends++
+	transport.calls = append(transport.calls, "send-writes")
+	if transport.sendHook != nil {
+		transport.sendHook()
+	}
 	transport.applies++
 	transport.applied = append(transport.applied, cloneMaterialWriteBatch(batch))
 	if transport.failBeforeCommit {
@@ -117,6 +177,7 @@ func (transport *materialTestTransport) ReadView(ctx context.Context) (publicati
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
+	transport.calls = append(transport.calls, "read-view")
 	keys := make([]string, 0, len(transport.blocks))
 	for key := range transport.blocks {
 		keys = append(keys, key)
@@ -133,12 +194,21 @@ func (transport *materialTestTransport) ReadView(ctx context.Context) (publicati
 	return view, nil
 }
 
-func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBatch) error {
-	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID || batch.HeadKey != materialHeadKey || !batch.SnapshotCreateOnly || !batch.RequiresAtomicBatch || !batch.RequiresCreateExclude || batch.RequiresPolicyCheck != (transport.binding.Backend == publicationstate.BackendSpaces) {
+func (transport *materialTestTransport) validateMaterialBatch(batch MaterialWriteBatch) error {
+	if transport.binding.Backend != publicationstate.BackendPublicRepo {
+		return errMaterialTestBackend
+	}
+	if batch.RequiresPolicyCheck {
+		return errMaterialTestPolicyCheck
+	}
+	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID || batch.HeadKey != materialHeadKey || !batch.SnapshotCreateOnly || !batch.RequiresAtomicBatch || !batch.RequiresCreateExclude {
 		return errMaterialTestBatchShape
 	}
-	if !sameMaterialContext(batch.ExpectedContext, transport.context) {
-		return errMaterialTestStaleContext
+	if batch.SnapshotKey == "" || len(batch.SnapshotRecord) == 0 || len(batch.ExpectedSnapshotCID) == 0 || len(batch.HeadRecord) == 0 {
+		return errMaterialTestBatchShape
+	}
+	if batch.ExpectedContext.RepositoryRevision == "" {
+		return errMaterialTestBatchShape
 	}
 	snapshot, err := publication.DecodeSnapshot(batch.SnapshotRecord)
 	if err != nil || snapshot.Vault != transport.binding.Vault {
@@ -152,13 +222,6 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 	if err != nil || !bytes.Equal(cid, batch.ExpectedSnapshotCID) {
 		return errMaterialTestRecordMismatch
 	}
-	payload, uploaded := transport.blobs[string(snapshot.Blob.CID)]
-	if !uploaded {
-		return errMaterialTestPayloadMissing
-	}
-	if uint64(len(payload)) != snapshot.Blob.Size {
-		return errMaterialTestBatchShape
-	}
 	if err := publication.VerifyHeadBinding(batch.HeadRecord, batch.SnapshotRecord, batch.SnapshotKey); err != nil {
 		return errMaterialTestBatchShape
 	}
@@ -167,21 +230,51 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 		return errMaterialTestBatchShape
 	}
 	if batch.HeadCreate {
-		if len(transport.head) != 0 {
-			return errMaterialTestHeadExists
-		}
 		if batch.ExpectedPredecessor != nil {
 			return errMaterialTestPredecessor
 		}
+		if snapshot.PublicationSeq != 0 || len(snapshot.Parent) != 0 {
+			return errMaterialTestBatchShape
+		}
+		return nil
+	}
+	if batch.ExpectedPredecessor == nil {
+		return errMaterialTestPredecessor
+	}
+	if snapshot.PublicationSeq != batch.ExpectedPredecessor.Sequence+1 || !bytes.Equal(snapshot.Parent, batch.ExpectedPredecessor.CID) {
+		return errMaterialTestPredecessor
+	}
+	return nil
+}
+
+func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBatch) error {
+	if err := transport.validateMaterialBatch(batch); err != nil {
+		return err
+	}
+	if !sameMaterialContext(batch.ExpectedContext, transport.context) {
+		return errMaterialTestStaleContext
+	}
+	snapshot, err := publication.DecodeSnapshot(batch.SnapshotRecord)
+	if err != nil {
+		return errMaterialTestBatchShape
+	}
+	payload, uploaded := transport.blobs[string(snapshot.Blob.CID)]
+	if !uploaded {
+		return errMaterialTestPayloadMissing
+	}
+	if uint64(len(payload)) != snapshot.Blob.Size {
+		return errMaterialTestBatchShape
+	}
+	if batch.HeadCreate {
+		if len(transport.head) != 0 {
+			return errMaterialTestHeadExists
+		}
 	} else {
-		if batch.ExpectedPredecessor == nil || len(transport.head) == 0 {
+		if len(transport.head) == 0 {
 			return errMaterialTestPredecessor
 		}
 		committed, err := publication.DecodeHead(transport.head)
 		if err != nil || committed.PublicationSeq != batch.ExpectedPredecessor.Sequence || !bytes.Equal(committed.SnapshotCID, batch.ExpectedPredecessor.CID) {
-			return errMaterialTestPredecessor
-		}
-		if snapshot.PublicationSeq != batch.ExpectedPredecessor.Sequence+1 || !bytes.Equal(snapshot.Parent, batch.ExpectedPredecessor.CID) {
 			return errMaterialTestPredecessor
 		}
 		if _, ok := transport.blocks[batch.ExpectedPredecessor.Key]; !ok {
@@ -256,6 +349,54 @@ func (transport *materialTestTransport) applyCount() int {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return transport.applies
+}
+
+func (transport *materialTestTransport) prepareCount() int {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.prepares
+}
+
+func (transport *materialTestTransport) sendCount() int {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.sends
+}
+
+func (transport *materialTestTransport) callOrder() []string {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return append([]string(nil), transport.calls...)
+}
+
+func (transport *materialTestTransport) setPrepareHook(hook func()) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.prepareHook = hook
+}
+
+func (transport *materialTestTransport) setSendHook(hook func()) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.sendHook = hook
+}
+
+func (transport *materialTestTransport) setPreparedSecret(secret string) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.preparedSecret = &secret
+}
+
+func (transport *materialTestTransport) setPreparedDispatch(dispatch int) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.preparedDispatch = &dispatch
+}
+
+func (transport *materialTestTransport) setPrepareError(err error) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.prepareErr = err
 }
 
 func (transport *materialTestTransport) uploadCount() int {
@@ -379,6 +520,37 @@ func (fixture *materialPublishFixture) publish(t *testing.T) (MaterialPublishPro
 	return proposal, result
 }
 
+type materialWriteWitness struct {
+	prepareActive    bool
+	prepareLifecycle publicationstate.AttemptLifecycle
+	sendActive       bool
+	sendLifecycle    publicationstate.AttemptLifecycle
+}
+
+func (fixture *materialPublishFixture) witnessMaterialWrites(t *testing.T) *materialWriteWitness {
+	t.Helper()
+	witness := &materialWriteWitness{}
+	fixture.transport.setPrepareHook(func() {
+		attempt, active, err := fixture.store.ActiveAttempt(context.Background())
+		require.NoError(t, err)
+		witness.prepareActive, witness.prepareLifecycle = active, attempt.Lifecycle
+	})
+	fixture.transport.setSendHook(func() {
+		attempt, active, err := fixture.store.ActiveAttempt(context.Background())
+		require.NoError(t, err)
+		witness.sendActive, witness.sendLifecycle = active, attempt.Lifecycle
+	})
+	return witness
+}
+
+func (witness *materialWriteWitness) assertPreparedPreSubmission(t *testing.T) {
+	t.Helper()
+	assert.True(t, witness.prepareActive, "PrepareWrites ran without a live attempt")
+	assert.Equal(t, publicationstate.AttemptUploadStarted, witness.prepareLifecycle, "PrepareWrites did not run on a pre-submission attempt")
+	assert.True(t, witness.sendActive, "SendWrites ran without a live attempt")
+	assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, witness.sendLifecycle, "SendWrites did not run after BeginSubmission reserved the attempt")
+}
+
 func requireMaterialRefusal(t *testing.T, err error, stage, reason string) {
 	t.Helper()
 	require.ErrorIs(t, err, ErrPublishMaterial)
@@ -438,10 +610,15 @@ func materialBatchTamperCases() []struct {
 func TestPublishMaterialGenesisCommitsFloorAndRetiresAttempt(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMaterialPublishFixture(t)
+	witness := fixture.witnessMaterialWrites(t)
 	packed, err := vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
 	proposal, result := fixture.publish(t)
 
+	witness.assertPreparedPreSubmission(t)
+	assert.Equal(t, []string{"read-view", "read-view", "upload-payload", "prepare-writes", "send-writes", "read-view"}, fixture.transport.callOrder())
+	assert.Equal(t, 1, fixture.transport.prepareCount())
+	assert.Equal(t, 1, fixture.transport.sendCount())
 	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
 	assert.Equal(t, publicationstate.AttemptRetiredSuccess, result.Attempt.Lifecycle)
 	assert.Equal(t, uint64(1), result.Floor.Revision)
@@ -478,6 +655,8 @@ func TestPublishMaterialSuccessorExtendsCapturedFloor(t *testing.T) {
 
 	fixture.publicationID = [16]byte{0x25, 0x72}
 	fixture.snapshot = materialTestSnapshot("synthetic successor payload")
+	witness := fixture.witnessMaterialWrites(t)
+	sendsBefore := fixture.transport.sendCount()
 	proposal := fixture.prepare(t)
 	assert.False(t, proposal.Batch.HeadCreate)
 	require.NotNil(t, proposal.Batch.ExpectedPredecessor)
@@ -485,6 +664,8 @@ func TestPublishMaterialSuccessorExtendsCapturedFloor(t *testing.T) {
 
 	result, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
 	require.NoError(t, err)
+	witness.assertPreparedPreSubmission(t)
+	assert.Equal(t, sendsBefore+1, fixture.transport.sendCount())
 	assert.Equal(t, uint64(2), result.Floor.Revision)
 	assert.Equal(t, uint64(1), result.Floor.Sequence)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, result.Floor.RecordCID)
@@ -777,7 +958,7 @@ type materialCancelingTransport struct {
 	cancel context.CancelFunc
 }
 
-func (transport materialCancelingTransport) ApplyWrites(context.Context, MaterialWriteBatch) (MaterialWriteOutcome, error) {
+func (transport materialCancelingTransport) SendWrites(context.Context, MaterialPreparedWrites) (MaterialWriteOutcome, error) {
 	transport.cancel()
 	return MaterialWriteOutcome{}, errMaterialTestBeforeCommit
 }
@@ -826,11 +1007,17 @@ func TestPublishMaterialTransportEnforcesConditionalBatch(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMaterialPublishFixture(t)
 	proposal := fixture.prepare(t)
+	prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
+	require.NoError(t, err)
 
-	_, err := fixture.transport.ApplyWrites(ctx, proposal.Batch)
+	_, err = fixture.transport.SendWrites(ctx, prepared)
 	require.ErrorIs(t, err, errMaterialTestPayloadMissing)
 	assert.Nil(t, fixture.transport.committedHead())
 
+	fixture = newMaterialPublishFixture(t)
+	proposal = fixture.prepare(t)
+	prepared, err = fixture.transport.PrepareWrites(ctx, proposal.Batch)
+	require.NoError(t, err)
 	packed, err := vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
 	_, err = fixture.transport.UploadPayload(ctx, packed.Payload)
@@ -838,46 +1025,178 @@ func TestPublishMaterialTransportEnforcesConditionalBatch(t *testing.T) {
 
 	competing := materialTestCandidate(t, fixture.binding, [16]byte{0x41}, 0, nil, packed.Payload)
 	fixture.transport.installSnapshotQuietly(t, competing.SnapshotRecord, false)
-	_, err = fixture.transport.ApplyWrites(ctx, proposal.Batch)
+	_, err = fixture.transport.SendWrites(ctx, prepared)
 	require.ErrorIs(t, err, errMaterialTestCreateConflict, "the transport accepted a create-only snapshot that already exists")
 	assert.Nil(t, fixture.transport.committedHead())
 
 	fixture = newMaterialPublishFixture(t)
 	proposal = fixture.prepare(t)
+	prepared, err = fixture.transport.PrepareWrites(ctx, proposal.Batch)
+	require.NoError(t, err)
 	packed, err = vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
 	_, err = fixture.transport.UploadPayload(ctx, packed.Payload)
 	require.NoError(t, err)
 	head := materialTestCandidate(t, fixture.binding, [16]byte{0x42}, 0, nil, packed.Payload)
 	fixture.transport.installSnapshotQuietly(t, head.SnapshotRecord, true)
-	_, err = fixture.transport.ApplyWrites(ctx, proposal.Batch)
+	_, err = fixture.transport.SendWrites(ctx, prepared)
 	require.ErrorIs(t, err, errMaterialTestHeadExists, "the transport accepted a head create against an existing head")
 	assert.Equal(t, head.SnapshotRecord, fixture.transport.committed(head.SnapshotKey))
 
 	fixture = newMaterialPublishFixture(t)
 	proposal = fixture.prepare(t)
+	prepared, err = fixture.transport.PrepareWrites(ctx, proposal.Batch)
+	require.NoError(t, err)
 	packed, err = vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
 	_, err = fixture.transport.UploadPayload(ctx, packed.Payload)
 	require.NoError(t, err)
 	fixture.transport.advanceContext()
-	_, err = fixture.transport.ApplyWrites(ctx, proposal.Batch)
+	_, err = fixture.transport.SendWrites(ctx, prepared)
 	require.ErrorIs(t, err, errMaterialTestStaleContext, "the transport accepted a batch with a stale expected context")
 	assert.Nil(t, fixture.transport.committedHead())
 
 	fixture = newMaterialPublishFixture(t)
 	proposal = fixture.prepare(t)
-	packed, err = vault.Pack(fixture.snapshot)
-	require.NoError(t, err)
-	_, err = fixture.transport.UploadPayload(ctx, packed.Payload)
-	require.NoError(t, err)
 	different := materialTestSnapshot("synthetic competing payload")
 	differentPacked, err := vault.Pack(different)
 	require.NoError(t, err)
 	other := materialTestCandidate(t, fixture.binding, [16]byte{0x43}, 0, nil, differentPacked.Payload)
 	forged := cloneMaterialWriteBatch(proposal.Batch)
 	forged.SnapshotRecord = other.SnapshotRecord
-	_, err = fixture.transport.ApplyWrites(ctx, forged)
-	require.ErrorIs(t, err, errMaterialTestRecordMismatch, "the transport accepted record bytes that do not hash to the expected snapshot cid")
+	_, err = fixture.transport.PrepareWrites(ctx, forged)
+	require.ErrorIs(t, err, errMaterialTestRecordMismatch, "the transport prepared record bytes that do not hash to the expected snapshot cid")
+	assert.Equal(t, 0, fixture.transport.sendCount())
 	assert.Nil(t, fixture.transport.committedHead())
+}
+
+func materialPrepareShapeCases() []struct {
+	name   string
+	tamper func(*MaterialWriteBatch)
+} {
+	return []struct {
+		name   string
+		tamper func(*MaterialWriteBatch)
+	}{
+		{"missing-snapshot", func(batch *MaterialWriteBatch) { batch.SnapshotRecord = nil }},
+		{"missing-head", func(batch *MaterialWriteBatch) { batch.HeadRecord = nil }},
+		{"extra-write", func(batch *MaterialWriteBatch) { batch.HeadRecord = bytes.Clone(batch.SnapshotRecord) }},
+		{"wrong-collection", func(batch *MaterialWriteBatch) { batch.SnapshotCollection = publication.HeadNSID }},
+		{"wrong-head-key", func(batch *MaterialWriteBatch) { batch.HeadKey = "other" }},
+	}
+}
+
+func TestPublishMaterialPrepareRefusesNonPairBatch(t *testing.T) {
+	ctx := context.Background()
+	for _, testCase := range materialPrepareShapeCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newMaterialPublishFixture(t)
+			proposal := fixture.prepare(t)
+			batch := cloneMaterialWriteBatch(proposal.Batch)
+			testCase.tamper(&batch)
+
+			_, err := fixture.transport.PrepareWrites(ctx, batch)
+			require.ErrorIs(t, err, errMaterialTestBatchShape)
+			assert.Equal(t, 0, fixture.transport.sendCount())
+			assert.Equal(t, 0, fixture.transport.applyCount())
+			assert.Nil(t, fixture.transport.committedHead())
+		})
+	}
+}
+
+func TestPublishMaterialPrepareRefusesPolicyCheckAndPrivateBackend(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	proposal := fixture.prepare(t)
+	policyBatch := cloneMaterialWriteBatch(proposal.Batch)
+	policyBatch.RequiresPolicyCheck = true
+
+	_, err := fixture.transport.PrepareWrites(ctx, policyBatch)
+	require.ErrorIs(t, err, errMaterialTestPolicyCheck)
+	assert.Equal(t, 0, fixture.transport.sendCount())
+	assert.Equal(t, 0, fixture.transport.applyCount())
+
+	spacesBinding := fixture.binding
+	spacesBinding.Backend = publicationstate.BackendSpaces
+	spacesTransport := newMaterialTestTransport(spacesBinding)
+	_, err = spacesTransport.PrepareWrites(ctx, proposal.Batch)
+	require.ErrorIs(t, err, errMaterialTestBackend)
+	assert.Equal(t, 0, spacesTransport.sendCount())
+	assert.Equal(t, 0, spacesTransport.applyCount())
+}
+
+func TestPublishMaterialRefusesUnusablePreparedWrites(t *testing.T) {
+	cases := []struct {
+		name      string
+		configure func(*materialTestTransport)
+	}{
+		{"empty-secret", func(transport *materialTestTransport) { transport.setPreparedSecret("") }},
+		{"dispatch-count", func(transport *materialTestTransport) { transport.setPreparedDispatch(2) }},
+		{"dispatch-zero", func(transport *materialTestTransport) { transport.setPreparedDispatch(0) }},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := newMaterialPublishFixture(t)
+			testCase.configure(fixture.transport)
+			proposal := fixture.prepare(t)
+
+			_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+			requireMaterialRefusal(t, err, "submission", "submission_mismatch")
+			assert.Equal(t, 1, fixture.transport.prepareCount())
+			assert.Equal(t, 0, fixture.transport.sendCount())
+			assert.Equal(t, 0, fixture.transport.applyCount())
+			assert.Nil(t, fixture.transport.committedHead())
+			attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+			require.NoError(t, loadErr)
+			assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle)
+			assert.Equal(t, publicationstate.OutcomeNotSubmitted, attempt.Outcome)
+		})
+	}
+}
+
+func TestPublishMaterialRefusesPrepareFailureThroughOrchestration(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	fixture.transport.setPrepareError(errMaterialTestBatchShape)
+	proposal := fixture.prepare(t)
+
+	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "batch", "batch_invalid")
+	assert.Equal(t, 1, fixture.transport.prepareCount())
+	assert.Equal(t, 0, fixture.transport.sendCount())
+	assert.Equal(t, 0, fixture.transport.applyCount())
+	assert.Nil(t, fixture.transport.committedHead())
+	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle)
+	assert.Equal(t, publicationstate.OutcomeNotSubmitted, attempt.Outcome)
+}
+
+func TestPublishMaterialDispatchConsumesPreparedWrites(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	proposal := fixture.prepare(t)
+	packed, err := vault.Pack(fixture.snapshot)
+	require.NoError(t, err)
+	_, err = fixture.transport.UploadPayload(ctx, packed.Payload)
+	require.NoError(t, err)
+	prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
+	require.NoError(t, err)
+	dispatch := materialWriteDispatch{prepared: prepared}
+
+	_, err = dispatch.send(ctx, fixture.transport)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fixture.transport.sendCount())
+	assert.Equal(t, 1, fixture.transport.applyCount())
+
+	_, replayErr := dispatch.send(ctx, fixture.transport)
+	requireMaterialRefusal(t, replayErr, "submission", "submission_mismatch")
+	assert.Equal(t, 1, fixture.transport.sendCount())
+	assert.Equal(t, 1, fixture.transport.applyCount())
+
+	_, transportReplay := fixture.transport.SendWrites(ctx, prepared)
+	require.ErrorIs(t, transportReplay, errMaterialTestReplayed)
+	assert.Equal(t, 1, fixture.transport.sendCount())
+	assert.Equal(t, 1, fixture.transport.applyCount())
 }
