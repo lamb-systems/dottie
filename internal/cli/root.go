@@ -19,6 +19,7 @@ Usage:
   dottie targets mode <id> <auto-apply|review|backup-only>
   dottie plan --from FILE [--json]
   dottie status
+  dottie position status --did DID --vault HEX
   dottie history [--did DID | --handle HANDLE] [--vault HEX] [--device-id ID]
   dottie prune --plan|--apply [--confirm] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
@@ -61,6 +62,10 @@ preview. Account bootstrap generates a fresh recovery kit and vault on every inv
 Explicit --vault selection is required when more than one local vault is configured. Remote reads do not establish
 global freshness; unverifiable state is inspection-only.
 
+Position status inspects the local publication position store and is read-only: it prints the accepted floor or an
+empty marker, refuses an absent or unsafe store, and never prints the account DID, vault, repository, CIDs, absolute
+paths, counts, tokens or payload bytes. Refusals exit 3; exit 2 is usage only.
+
 See README.md for build instructions and current status.
 `
 
@@ -70,6 +75,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "targets" {
 		return runTargets(args[1:], stdout, stderr, os.Getenv)
+	}
+	if args[0] == "position" {
+		return runPosition(args[1:], stdout, stderr, os.Getenv)
 	}
 	switch args[0] {
 	case "status", "history", "preview", "pull", "restore", "recover", "export", "import":

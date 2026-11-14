@@ -24,6 +24,23 @@ Export and onboarding fetch required snapshot bodies by CID through the verified
 
 For `history`, `export` and `import`, exit 0 means the read/validation or export succeeded (history still succeeds when its optional remote read is unavailable), exit 2 is a usage error, and exit 3 is a refusal. Exit 4 remains for partial/indeterminate push, sync and device operations; export refuses rather than publishing an incomplete archive.
 
+## Publication position status
+
+`dottie position status --did DID --vault HEX` inspects the local publication position store under
+`$XDG_STATE_HOME/dottie/publication-state` and prints exactly one line: `position: revision=N generation=N
+provenance=first|replace sequence=N`, or `position: empty` when the store is recognized but holds no accepted
+floor. Inspection is read-only: it never creates, upgrades, repairs, unlinks or checkpoints anything, and it never
+takes the store's lifetime lock. It refuses an absent store (`position_absent`), a directory that is not an owned
+`0700` non-symlink directory, a foreign binding, a schema that is not the current schema 3 (`upgrade_required` for
+schema 1 and 2), a store whose lifetime lock is held by a running writer (`locked`), and a store whose WAL still
+holds uncheckpointed frames (`io`) instead of reporting a floor that may not be current. The lock probe is shared and momentary, so two inspections never refuse each other, but a writer that
+loses the race to it refuses `locked` and is safe to retry. Reads use a read-only
+immutable connection, so a writer that acquires the store after the lock probe can make the reported floor older
+than the newest committed floor; that staleness is bounded to the accepted floor and is disclosed here rather than
+hidden. Output never contains the account DID, vault, binding, repository, CIDs, absolute paths, directory names,
+counts, tokens or payload bytes. Refusals exit 3 with the redacted class/stage/reason string; exit 2 is usage only
+and this command never exits 4.
+
 ## Push, sync, devices and onboarding
 
 `dottie push (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]` asks the coordinator to verify the current remote position, reconcile all selected local targets, and publish local changes through the fenced publisher. The output distinguishes committed, no-op, queued, starved, fence-lost, superseded, unavailable, rejected, conflicted and base-recording-failed outcomes. Only committed and no-op return exit 0. Exit 2 is a usage error, exit 3 is a refusal/conflict/rejection, and exit 4 is queued, starved, fence-lost, superseded, unavailable or another partial/non-success outcome. An uncertain or queued result is never reported as success. Output contains status only, not entry content, values or paths.

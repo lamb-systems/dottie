@@ -42,6 +42,7 @@ func TestAppDirectories(t *testing.T) {
 	assert.Equal(t, "/state/dottie", p.AppStateDir(), "AppStateDir")
 	assert.Equal(t, "/cache/dottie", p.AppCacheDir(), "AppCacheDir")
 	assert.Equal(t, "/data/dottie", p.AppDataDir(), "AppDataDir")
+	assert.Equal(t, "/state/dottie/publication-state", p.PublicationStateDir(), "PublicationStateDir")
 }
 
 func TestRealPathLongestExistingAncestor(t *testing.T) {

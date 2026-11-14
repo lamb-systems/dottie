@@ -92,6 +92,10 @@ func (p Paths) AppStateDir() string {
 	return filepath.Join(p.StateHome, "dottie")
 }
 
+func (p Paths) PublicationStateDir() string {
+	return filepath.Join(p.AppStateDir(), "publication-state")
+}
+
 func (p Paths) AppCacheDir() string {
 	return filepath.Join(p.CacheHome, "dottie")
 }

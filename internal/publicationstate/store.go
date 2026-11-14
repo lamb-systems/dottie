@@ -308,6 +308,14 @@ func schemaOrStorageError(ctx context.Context, stage Stage, err error) error {
 }
 
 func probeSchema(path string, binding Binding, limits Limits, attemptLimits AttemptLimits) (schemaProbe, error) {
+	return probeSchemaWithDSN(path, dbDSN(path, true), binding, limits, attemptLimits)
+}
+
+func probeSchemaImmutable(path string, binding Binding, limits Limits, attemptLimits AttemptLimits) (schemaProbe, error) {
+	return probeSchemaWithDSN(path, dbImmutableDSN(path), binding, limits, attemptLimits)
+}
+
+func probeSchemaWithDSN(path, dsn string, binding Binding, limits Limits, attemptLimits AttemptLimits) (schemaProbe, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return schemaProbe{}, err
@@ -319,7 +327,7 @@ func probeSchema(path string, binding Binding, limits Limits, attemptLimits Atte
 			return schemaProbe{}, walErr
 		}
 	}
-	db, err := sql.Open("sqlite", dbDSN(path, true))
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return schemaProbe{}, err
 	}
@@ -449,6 +457,10 @@ func dbDSN(path string, readOnly bool) string {
 		query = "mode=ro"
 	}
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: query}).String()
+}
+
+func dbImmutableDSN(path string) string {
+	return (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}).String()
 }
 
 func configureConnection(ctx context.Context, conn *sql.Conn) error {
