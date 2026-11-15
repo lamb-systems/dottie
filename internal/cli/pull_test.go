@@ -924,7 +924,7 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, &pullTestReader{}, nil)
 	report := "pull: applied changes=1 unchanged=0 bytes=19\n"
-	refused := pullAcceptFailure(command, report, pullTestStageRefusal{stage: "accept-material", reason: "stale"})
+	refused := pullAcceptFailure(command, "pull", report, pullTestStageRefusal{stage: "accept-material", reason: "stale"})
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, refused, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
@@ -932,7 +932,7 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 	assert.Contains(t, exitError.Error(), "the accepted floor is unchanged")
 
 	stdout.Reset()
-	unconfirmed := pullAcceptFailure(command, report, context.Canceled)
+	unconfirmed := pullAcceptFailure(command, "pull", report, context.Canceled)
 	require.ErrorAs(t, unconfirmed, &exitError)
 	assert.Equal(t, 4, exitError.ExitCode())
 	assert.Equal(t, report+"pull: applied but not accepted (accept)\n", stdout.String())
@@ -940,13 +940,13 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 }
 
 func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
-	moved := pullAcceptStagingFailure(pullTestStageRefusal{stage: "accept-position", reason: "revision_moved"})
+	moved := pullAcceptStagingFailure("pull", pullTestStageRefusal{stage: "accept-position", reason: "revision_moved"})
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, moved, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
 	assert.Contains(t, moved.Error(), "the accepted floor changed after the apply plan was prepared")
 
-	refused := pullAcceptStagingFailure(pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"})
+	refused := pullAcceptStagingFailure("pull", pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"})
 	require.ErrorAs(t, refused, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
 	assert.Contains(t, refused.Error(), "accept-prepare/proposal_refused")

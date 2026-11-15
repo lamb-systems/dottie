@@ -26,7 +26,7 @@ Usage:
   dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
   dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]
   dottie pull --did DID --vault HEX
-  dottie sync (refused: needs decision D11)
+  dottie sync --did DID [--vault HEX] [--confirm HEX]
   dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie devices enroll --request FILE --kit-file FILE --bundle-out FILE [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
   dottie devices revoke --device-id ID --kit-file FILE [--confirm HEX] [--bundle-out FILE] [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
@@ -44,12 +44,14 @@ Usage:
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
 with --confirm HEX to publish exactly that reviewed proposal. --discard abandons a retained pre-submission attempt.
-Pull is a read-only inspection: it authenticates the session and the v2 publication scope before any discovery,
-compares the provider's validated position with the locally recorded accepted floor, and prints one line — pull:
-matches, pull: absent, pull: diverges (reason) or pull: unreadable (reason). It writes nothing: no apply, no
-reconciliation, no base establishment and no position-store open. The reconciled apply path and sync are deferred
-to decision D11: dottie sync refuses without contacting the provider, and downloads are inspected with preview and
-applied with restore. For push and device operations, exit codes are:
+Pull authenticates the session and the v2 publication scope before any discovery, compares the provider's validated
+position with the locally recorded accepted floor, prints one finding, and optionally applies one reviewed plan.
+Sync is the reconciled path: it prints the pull apply plan, prepares the push half from the post-pull state, and
+binds both into one confirmation token. The unconfirmed run changes nothing. The confirmed run applies and accepts
+the pull half first, then recomposes the push candidate from the accepted floor; a changed candidate, review or
+provider view refuses before anything is published. Pull refusals stop sync before any publication, and a push
+refusal after a successful pull half exits 4 with the files applied and the floor advanced. For push, pull, sync
+and device operations, exit codes are:
 0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success. History is local-only without --did/--handle; with an account selector it attempts a verified read and reports unavailable or auth-expired distinctly while still succeeding. History output is redacted and contains no content or absolute paths.
@@ -93,7 +95,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPull(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "push":
 		return runPush(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
-	case "prune", "sync", "devices":
+	case "sync":
+		return runSync(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
+	case "prune", "devices":
 		return runOrchestration(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	}
 	if args[0] == "plan" {
@@ -119,16 +123,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 }
-
-type deferredPublicationRefusal struct {
-	command string
-}
-
-func (refusal *deferredPublicationRefusal) Error() string {
-	return refusal.command + " refused: the reconciled apply path needs a crash-safe v2 apply journal, which is decision D11; sync contacts no provider in this build; inspect the provider position with dottie pull and apply downloads with dottie restore"
-}
-
-func (refusal *deferredPublicationRefusal) ExitCode() int { return 3 }
 
 func printOutput(stdout, stderr io.Writer, text string) int {
 	if _, err := io.WriteString(stdout, text); err != nil {

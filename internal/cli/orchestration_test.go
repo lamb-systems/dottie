@@ -291,26 +291,6 @@ func TestPushCoordinatorErrorsMapToDistinctOutcomes(t *testing.T) {
 	}
 }
 
-func TestSyncRefusesWithTheD11NamingAndNeverReachesTheV1Factory(t *testing.T) {
-	calls := 0
-	var stdout, stderr bytes.Buffer
-	code := 0
-	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(&fakeOrchestrationCoordinator{}, service.VaultSelection{}, nil, &calls))
-	code = runOrchestrationForTest(command, &code, "sync", "--did", "did:plc:example")
-	require.Equal(t, 3, code)
-	assert.Zero(t, calls, "sync reached the v1 orchestration factory")
-	assert.Contains(t, stderr.String(), "D11")
-	assert.NotContains(t, stderr.String(), "C3")
-	assert.Empty(t, stdout.String())
-
-	var refusal *deferredPublicationRefusal
-	fresh := 0
-	replayed := newOrchestrationCommand(new(bytes.Buffer), new(bytes.Buffer), &fresh, orchestrationTestFactory(&fakeOrchestrationCoordinator{}, service.VaultSelection{}, nil, nil))
-	err := runOrchestrationForTestError(replayed, "sync", "--did", "did:plc:example")
-	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, 3, refusal.ExitCode())
-}
-
 func TestPullIsRoutedToTheReadOnlyInspectionBeforeAnyAccountWork(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"pull"}, &stdout, &stderr)
@@ -713,7 +693,7 @@ func TestRootHelpIncludesOrchestrationCommandsAndPolicies(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
 	require.Equal(t, 0, code)
-	for _, text := range []string{"dottie push", "dottie pull", "dottie sync", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "--confirm HEX", "D11", "chmod 600"} {
+	for _, text := range []string{"dottie push", "dottie pull", "dottie sync --did DID", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "--confirm HEX", "chmod 600"} {
 		assert.Contains(t, stdout.String(), text)
 	}
 	assert.Empty(t, stderr.String())

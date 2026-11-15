@@ -112,17 +112,18 @@ const (
 )
 
 type PublicationApplyRequest struct {
-	Journal        *publicationstate.Journal
-	Vault          [32]byte
-	FloorRevision  uint64
-	Configuration  config.Config
-	BaseSnapshot   model.Snapshot
-	RemoteSnapshot model.Snapshot
-	Roots          map[string]string
-	Local          *PublicationLocalContext
-	FileSystem     files.ApplyFileSystem
-	Barrier        func(PublicationApplyPhase, publicationstate.JournalEntry) error
-	ExpectedPlan   [32]byte
+	Journal         *publicationstate.Journal
+	Vault           [32]byte
+	FloorRevision   uint64
+	Configuration   config.Config
+	BaseSnapshot    model.Snapshot
+	RemoteSnapshot  model.Snapshot
+	Roots           map[string]string
+	Local           *PublicationLocalContext
+	FileSystem      files.ApplyFileSystem
+	Barrier         func(PublicationApplyPhase, publicationstate.JournalEntry) error
+	ExpectedPlan    [32]byte
+	ApplyRemoteOnly bool
 }
 
 type PublicationApplyPlan struct {
@@ -476,6 +477,13 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		operation.kind = PublicationApplyDelete
 		operation.journalOperation = publicationApplyDeleteOperation
 		operation.post = publicationstate.ObservedFile{}
+	case syncengine.ActionUpload, syncengine.ActionDeleteRemote:
+		if !request.ApplyRemoteOnly {
+			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, nil)
+		}
+		operation.kind = PublicationApplyUnchanged
+		operation.key = path
+		return operation, nil
 	default:
 		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, nil)
 	}

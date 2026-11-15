@@ -364,6 +364,20 @@ func productionPushSessionFactory(openKeyring accountKeyringFactory, env func(st
 
 func productionPushSourcesFactory(openKeyring accountKeyringFactory, env func(string) string) pushSourcesFactory {
 	return func(ctx context.Context, command *urfave.Command, session pushSession) (publicationPushSources, error) {
+		selection := service.VaultSelection{DeviceID: command.String("device-id")}
+		if command.IsSet("vault") {
+			vaultID, parseErr := parseVaultFingerprint(command.String("vault"))
+			if parseErr != nil {
+				return publicationPushSources{}, parseErr
+			}
+			selection.Vault = vaultID
+		}
+		return openPublicationPushSources(ctx, command, session, selection, openKeyring, env)
+	}
+}
+
+func openPublicationPushSources(ctx context.Context, command *urfave.Command, session pushSession, selection service.VaultSelection, openKeyring accountKeyringFactory, env func(string) string) (publicationPushSources, error) {
+	{
 		paths, err := platform.Resolve(env)
 		if err != nil {
 			return publicationPushSources{}, err
@@ -389,15 +403,6 @@ func productionPushSourcesFactory(openKeyring accountKeyringFactory, env func(st
 		if err != nil {
 			closeResources()
 			return publicationPushSources{}, err
-		}
-		selection := service.VaultSelection{DeviceID: command.String("device-id")}
-		if command.IsSet("vault") {
-			vaultID, parseErr := parseVaultFingerprint(command.String("vault"))
-			if parseErr != nil {
-				closeResources()
-				return publicationPushSources{}, parseErr
-			}
-			selection.Vault = vaultID
 		}
 		selected, err := coordinator.ResolveSelection(ctx, selection)
 		if err != nil {

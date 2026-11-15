@@ -132,15 +132,6 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 			return urfave.Exit("prune refused", 3)
 		}
 	}})
-	syncCommand := configure(&urfave.Command{Name: "sync", Flags: selectorFlags(), Action: func(_ context.Context, command *urfave.Command) error {
-		if command.NArg() != 0 {
-			return usageExit("sync takes no positional arguments")
-		}
-		if err := validateOrchestrationRemoteFlags(command); err != nil {
-			return err
-		}
-		return &deferredPublicationRefusal{command: "sync"}
-	}})
 	list := configure(&urfave.Command{Name: "list", Flags: selectorFlags(), Action: func(ctx context.Context, command *urfave.Command) error {
 		if command.NArg() != 0 {
 			return usageExit("devices list takes no positional arguments")
@@ -326,7 +317,7 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 	devices := configure(&urfave.Command{Name: "devices", Commands: []*urfave.Command{list, enroll, revoke}, Action: func(_ context.Context, _ *urfave.Command) error {
 		return usageExit("expected list, enroll or revoke")
 	}})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{prune, syncCommand, devices}, Writer: stdout, ErrWriter: stderr})
+	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{prune, devices}, Writer: stdout, ErrWriter: stderr})
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
 		var exitError urfave.ExitCoder

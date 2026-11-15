@@ -214,7 +214,13 @@ type publicationBaseSource func(ctx context.Context, target config.Target, porta
 
 type publicationRemoteSource func(target config.Target) ([]model.Entry, []model.EntryKey)
 
+type publicationLocalSource func(target config.Target, entries []model.Entry) []model.Entry
+
 func (coordinator *Coordinator) composePublicationSnapshot(ctx context.Context, configuration config.Config, base publicationBaseSource, remote publicationRemoteSource, blocked []model.EntryKey) (model.Snapshot, []config.Target, error) {
+	return coordinator.composePublicationSnapshotWithLocal(ctx, configuration, base, remote, nil, blocked)
+}
+
+func (coordinator *Coordinator) composePublicationSnapshotWithLocal(ctx context.Context, configuration config.Config, base publicationBaseSource, remote publicationRemoteSource, local publicationLocalSource, blocked []model.EntryKey) (model.Snapshot, []config.Target, error) {
 	candidate := model.Snapshot{Version: model.SnapshotVersion, Targets: make([]model.Target, 0, len(configuration.Targets))}
 	composed := make([]config.Target, 0, len(configuration.Targets))
 	blocked = append([]model.EntryKey(nil), blocked...)
@@ -227,6 +233,9 @@ func (coordinator *Coordinator) composePublicationSnapshot(ctx context.Context, 
 		_, localEntries, unknown, untracked, coverage, err := coordinator.captureLocal(ctx, target)
 		if err != nil {
 			return model.Snapshot{}, nil, err
+		}
+		if local != nil {
+			localEntries = local(target, localEntries)
 		}
 		baseEntries, baseStatus, baseUntracked, err := base(ctx, target, portable)
 		if err != nil {

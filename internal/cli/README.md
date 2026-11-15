@@ -79,9 +79,17 @@ A queued or indeterminate publication is never reported as success. The command 
 provisioned v2 position store; an absent store refuses with exit 3 and no substitute setup path is
 offered, because the legacy bootstrap creates v1 material that the v2 profile rejects.
 
-`dottie sync` refuses. The reconciled pull-then-push path needs a crash-safe v2 apply journal, which is the
-open owner decision D11; `sync` prints a typed refusal naming D11, contacts no provider and never reaches the
-legacy orchestration. Downloads are reviewed with `preview` and applied with `restore`.
+`dottie sync --did DID [--vault HEX] [--confirm TOKEN]` is the reconciled path: it prepares the pull half, prepares
+the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
+binding, the pull plan digest, the staged accept state token, the observation digest, the provider view digest and
+the post-pull push identity (payload digest and size, review selection and approval digests with revisions).
+Without `--confirm` it prints and changes nothing. With a matching token it applies and accepts the pull half, then
+recomposes the push snapshot from the actual post-pull state and requires the digest set to equal what was printed
+before it prepares and submits the push attempt. A pull refusal stops everything before any publication; a push
+refusal after a successful pull leaves the files applied and the floor advanced, exits 4 and never partially
+submits; a direction conflict refuses at planning and `sync` never chooses a side. The retained push record is
+issued and consumed inside the confirmed run, so an unconfirmed sync leaves none. When the pull half has nothing to
+do and the floor already matches the provider head, `sync` is a plain push with the same token shape.
 
 `dottie pull --did DID --vault HEX` is a read-only inspection of the v2 publication position. It acquires the
 stored account session and validates the publication scope before any discovery or provider contact, takes the

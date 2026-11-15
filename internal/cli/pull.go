@@ -306,38 +306,65 @@ type pullApplyPlanRequest struct {
 	Remote       pullRemote
 	Confirmation [32]byte
 	Confirmed    bool
+	RemoteOnly   bool
+	Label        string
 }
 
-func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources pullApplySourcesFactory) error {
+func (input pullApplyPlanRequest) label() string {
+	if input.Label == "" {
+		return "pull"
+	}
+	return input.Label
+}
+
+type pullApplyPreparation struct {
+	Sources     pullApplySources
+	Request     service.PublicationApplyRequest
+	Material    pullApplyMaterial
+	Plan        service.PublicationApplyPlan
+	Observation publicationstate.Observation
+	Staged      service.PublicationAcceptProposal
+	Token       [32]byte
+}
+
+func (preparation pullApplyPreparation) applies() bool {
+	return preparation.Staged.StateToken != ([32]byte{})
+}
+
+func preparePullApply(ctx context.Context, input pullApplyPlanRequest, applySources pullApplySourcesFactory) (pullApplyPreparation, error) {
 	sources, err := applySources(ctx, input.Command, input.Binding)
 	if err != nil {
-		return urfave.Exit("pull refused: the local configuration cannot be opened for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: the local configuration cannot be opened for apply; nothing was changed", 3)
 	}
+	preparation := pullApplyPreparation{Sources: sources}
 	if len(sources.Configuration.Targets) == 0 {
-		return nil
+		return preparation, nil
 	}
 	if sources.Local == nil {
-		return urfave.Exit("pull refused: the local publication context is not available for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: the local publication context is not available for apply; nothing was changed", 3)
 	}
 	roots, err := pullApplyRoots(sources.Configuration, sources.Paths)
 	if err != nil {
-		return urfave.Exit("pull refused: a selected filesystem target cannot be resolved for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed", 3)
 	}
 	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor)
 	if err != nil {
-		return pullApplyRemoteFailure(err)
+		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
 		Configuration: sources.Configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
-		Roots: roots, Local: sources.Local,
+		Roots: roots, Local: sources.Local, ApplyRemoteOnly: input.RemoteOnly,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
-		return pullApplyRefusal(err)
+		return pullApplyPreparation{}, pullApplyRefusal(input.label(), err)
 	}
+	preparation.Request = request
+	preparation.Material = material
+	preparation.Plan = plan
 	if plan.Changes == 0 {
-		return nil
+		return preparation, nil
 	}
 	observation := pullApplyObservation(input.View)
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
@@ -345,49 +372,74 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
 	})
 	if err != nil {
-		return pullAcceptStagingFailure(err)
+		return pullApplyPreparation{}, pullAcceptStagingFailure(input.label(), err)
 	}
-	output := renderPullApplyPlan(plan)
-	token := pullApplyConfirmationToken(input.Binding, plan.Digest, staged.StateToken, staged.ObservationDigest)
-	output += fmt.Sprintf("confirmation: %x\n", token)
-	if !input.Confirmed {
-		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", token)
-		return writeCommandOutput(input.Command, output)
-	}
-	if token != input.Confirmation {
-		if writeErr := writeCommandOutput(input.Command, output); writeErr != nil {
-			return writeErr
-		}
-		return urfave.Exit("pull refused: the reviewed apply plan is stale or bound to a different vault; nothing was changed", 3)
-	}
-	current, err := publicationstate.Inspect(ctx, sources.Paths.PublicationStateDir(), input.Binding)
+	preparation.Observation = observation
+	preparation.Staged = staged
+	preparation.Token = pullApplyConfirmationToken(input.Binding, plan.Digest, staged.StateToken, staged.ObservationDigest)
+	return preparation, nil
+}
+
+func applyPullPreparation(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation, output string) (publicationstate.Floor, string, error) {
+	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
 	if err != nil || !current.Present || current.Floor.Revision != input.Floor.Revision {
-		return urfave.Exit("pull refused: the accepted floor changed after the apply plan was prepared; re-run dottie pull", 3)
+		return publicationstate.Floor{}, output, urfave.Exit(input.label()+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+input.label(), 3)
 	}
-	journal, err := publicationstate.OpenJournal(sources.Paths.PublicationStateDir())
+	journal, err := publicationstate.OpenJournal(preparation.Sources.Paths.PublicationStateDir())
 	if err != nil {
-		return urfave.Exit("pull refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed", 3)
+		return publicationstate.Floor{}, output, urfave.Exit(input.label()+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed", 3)
 	}
 	defer func() { _ = journal.Close() }()
+	request := preparation.Request
 	request.Journal = journal
-	request.ExpectedPlan = plan.Digest
+	request.ExpectedPlan = preparation.Plan.Digest
 	report, applyErr := service.ApplyPublication(ctx, request)
 	if applyErr != nil {
-		return pullApplyFailure(input.Command, output, applyErr)
+		return publicationstate.Floor{}, output, pullApplyFailure(input.Command, input.label(), output, applyErr)
 	}
 	output += renderPullApplyReport(report)
 	accepted, acceptErr := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
-		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
-		Mode: staged.Mode, FloorRevision: input.Floor.Revision,
-		StateToken: staged.StateToken, Confirmation: staged.Confirmation,
-		Observation: observation, Payload: material.Payload,
+		Directory: preparation.Sources.Paths.PublicationStateDir(), Binding: input.Binding,
+		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
+		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
+		Observation: preparation.Observation, Payload: preparation.Material.Payload,
 	})
 	if acceptErr != nil {
-		return pullAcceptFailure(input.Command, output, acceptErr)
+		return publicationstate.Floor{}, output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
 	}
 	output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", accepted.Revision, accepted.Generation, accepted.Sequence)
+	return accepted, output, nil
+}
+
+func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources pullApplySourcesFactory) error {
+	preparation, err := preparePullApply(ctx, input, applySources)
+	if err != nil {
+		return err
+	}
+	if len(preparation.Sources.Configuration.Targets) == 0 {
+		return nil
+	}
+	if !preparation.applies() {
+		return nil
+	}
+	output := renderPullApplyPlan(preparation.Plan)
+	output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
+	if !input.Confirmed {
+		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", preparation.Token)
+		return writeCommandOutput(input.Command, output)
+	}
+	if preparation.Token != input.Confirmation {
+		if writeErr := writeCommandOutput(input.Command, output); writeErr != nil {
+			return writeErr
+		}
+		return urfave.Exit(input.label()+" refused: the reviewed apply plan is stale or bound to a different vault; nothing was changed", 3)
+	}
+	_, output, err = applyPullPreparation(ctx, input, preparation, output)
+	if err != nil {
+		return err
+	}
 	if err := writeCommandOutput(input.Command, output); err != nil {
-		return urfave.Exit("pull applied changes but its result could not be written", 4)
+		return urfave.Exit(input.label()+" applied changes but its result could not be written", 4)
 	}
 	return nil
 }
@@ -456,42 +508,42 @@ func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicat
 	}
 }
 
-func pullApplyRemoteFailure(err error) error {
+func pullApplyRemoteFailure(label string, err error) error {
 	if errors.Is(err, errPullApplySnapshotMoved) || errors.Is(err, errPullApplySnapshotUnavailable) || errors.Is(err, atproto.ErrAmbiguousTransport) || errors.Is(err, atproto.ErrRevisionMoving) {
-		return urfave.Exit("pull is indeterminate: the provider position changed or was unavailable while the apply plan was composed; re-run dottie pull", 4)
+		return urfave.Exit(label+" is indeterminate: the provider position changed or was unavailable while the apply plan was composed; re-run dottie "+label, 4)
 	}
-	return urfave.Exit("pull refused: the provider payload for the validated position cannot be read; nothing was changed", 3)
+	return urfave.Exit(label+" refused: the provider payload for the validated position cannot be read; nothing was changed", 3)
 }
 
-func pullApplyRefusal(err error) error {
+func pullApplyRefusal(label string, err error) error {
 	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "backup_only" {
-			return urfave.Exit("pull refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
+			return urfave.Exit(label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
 		}
-		return urfave.Exit("pull refused: the apply plan is unusable ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(label+" refused: the apply plan is unusable ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
 	}
-	return urfave.Exit("pull refused: the apply plan is unusable; nothing was changed", 3)
+	return urfave.Exit(label+" refused: the apply plan is unusable; nothing was changed", 3)
 }
 
-func pullAcceptStagingFailure(err error) error {
+func pullAcceptStagingFailure(label string, err error) error {
 	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "revision_moved" {
-			return urfave.Exit("pull refused: the accepted floor changed after the apply plan was prepared; re-run dottie pull", 3)
+			return urfave.Exit(label+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+label, 3)
 		}
-		return urfave.Exit("pull refused: the applied material cannot be staged for accept ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(label+" refused: the applied material cannot be staged for accept ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
 	}
-	return urfave.Exit("pull refused: the applied material cannot be staged for accept; nothing was changed", 3)
+	return urfave.Exit(label+" refused: the applied material cannot be staged for accept; nothing was changed", 3)
 }
 
-func pullAcceptFailure(command *urfave.Command, output string, err error) error {
+func pullAcceptFailure(command *urfave.Command, label, output string, err error) error {
 	var refusal publicationStageRefusal
 	detail := "accept"
 	if errors.As(err, &refusal) {
 		detail = refusal.Stage() + "/" + refusal.Reason()
 	}
-	output += "pull: applied but not accepted (" + escapeField(detail) + ")\n"
+	output += label + ": applied but not accepted (" + escapeField(detail) + ")\n"
 	if writeErr := writeCommandOutput(command, output); writeErr != nil {
 		return writeErr
 	}
@@ -501,12 +553,12 @@ func pullAcceptFailure(command *urfave.Command, output string, err error) error 
 		unproven = true
 	}
 	if unproven {
-		return urfave.Exit("pull did not complete: the apply finished but the accepted floor is not confirmed ("+escapeField(detail)+"); re-run dottie pull", 4)
+		return urfave.Exit(label+" did not complete: the apply finished but the accepted floor is not confirmed ("+escapeField(detail)+"); re-run dottie "+label, 4)
 	}
-	return urfave.Exit("pull did not complete: the apply finished but the accepted floor is unchanged ("+escapeField(detail)+"); re-run dottie pull", 3)
+	return urfave.Exit(label+" did not complete: the apply finished but the accepted floor is unchanged ("+escapeField(detail)+"); re-run dottie "+label, 3)
 }
 
-func pullApplyFailure(command *urfave.Command, output string, err error) error {
+func pullApplyFailure(command *urfave.Command, label, output string, err error) error {
 	if writeErr := writeCommandOutput(command, output); writeErr != nil {
 		return writeErr
 	}
@@ -514,22 +566,22 @@ func pullApplyFailure(command *urfave.Command, output string, err error) error {
 	var blocked *publicationstate.JournalBlockedError
 	switch {
 	case errors.As(err, &refusal) && refusal.Reason() == "backup_only":
-		return urfave.Exit("pull refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
+		return urfave.Exit(label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
 	case errors.As(err, &refusal) && (refusal.Stage() == "apply-mutate" || refusal.Stage() == "apply-observation"):
-		return urfave.Exit("pull did not complete: the apply is indeterminate ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); re-run dottie pull to resolve the journal", 4)
+		return urfave.Exit(label+" did not complete: the apply is indeterminate ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); re-run dottie "+label+" to resolve the journal", 4)
 	case errors.As(err, &refusal):
-		return urfave.Exit("pull refused: the apply was refused ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(label+" refused: the apply was refused ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
 	case errors.As(err, &blocked):
-		return urfave.Exit("pull refused: an earlier apply journal entry still blocks this apply; nothing was changed", 3)
+		return urfave.Exit(label+" refused: an earlier apply journal entry still blocks this apply; nothing was changed", 3)
 	}
 	var storeFailure publicationStoreFailure
 	if errors.As(err, &storeFailure) {
-		return urfave.Exit("pull refused: the apply journal cannot be used ("+escapeField(string(storeFailure.Reason()))+"); nothing was changed", 3)
+		return urfave.Exit(label+" refused: the apply journal cannot be used ("+escapeField(string(storeFailure.Reason()))+"); nothing was changed", 3)
 	}
 	if errors.Is(err, service.ErrPublicationApply) {
-		return urfave.Exit("pull refused: the apply was refused; nothing was changed", 3)
+		return urfave.Exit(label+" refused: the apply was refused; nothing was changed", 3)
 	}
-	return urfave.Exit("pull did not complete: the apply result is indeterminate; re-run dottie pull", 4)
+	return urfave.Exit(label+" did not complete: the apply result is indeterminate; re-run dottie "+label, 4)
 }
 
 func renderPullApplyPlan(plan service.PublicationApplyPlan) string {

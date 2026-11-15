@@ -42,6 +42,8 @@ type pushTestTransport struct {
 	sends      int
 	prepareErr error
 	staleWrite bool
+	viewErr    error
+	uploadErr  error
 }
 
 func newPushTestTransport(binding publicationstate.Binding) *pushTestTransport {
@@ -62,6 +64,9 @@ func (transport *pushTestTransport) UploadPayload(ctx context.Context, payload [
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.uploads++
+	if transport.uploadErr != nil {
+		return publication.BlobReference{}, transport.uploadErr
+	}
 	cid, err := publication.RawPayloadCID(payload)
 	if err != nil {
 		return publication.BlobReference{}, err
@@ -116,6 +121,9 @@ func (transport *pushTestTransport) ReadView(ctx context.Context) (publicationst
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
+	if transport.viewErr != nil {
+		return publicationstate.SuppliedRepositoryView{}, transport.viewErr
+	}
 	keys := make([]string, 0, len(transport.blocks))
 	for key := range transport.blocks {
 		keys = append(keys, key)
@@ -182,9 +190,21 @@ func (pushTestGuard) Release() {}
 
 type pushTestReviews struct {
 	review publicationstate.LocalReviewContext
+	err    error
+	calls  *int
+	failOn int
 }
 
 func (reviews pushTestReviews) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
+	if reviews.calls != nil {
+		*reviews.calls++
+		if reviews.failOn != 0 && *reviews.calls == reviews.failOn {
+			return publicationstate.LocalReviewContext{}, config.Token{}, nil, errors.New("synthetic review acquisition refused")
+		}
+	}
+	if reviews.err != nil {
+		return publicationstate.LocalReviewContext{}, config.Token{}, nil, reviews.err
+	}
 	return reviews.review, config.Token{0x61, 0x62}, pushTestGuard{}, nil
 }
 
