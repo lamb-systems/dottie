@@ -30,6 +30,22 @@ const (
 	publicationApplyFileMode        os.FileMode = 0o600
 )
 
+type publicationApplyHookStage string
+
+const (
+	publicationApplyHookJournaled publicationApplyHookStage = "journaled"
+	publicationApplyHookMutated   publicationApplyHookStage = "mutated"
+	publicationApplyHookCompleted publicationApplyHookStage = "completed"
+)
+
+var publicationApplyStageHook func(publicationApplyHookStage)
+
+func publicationApplyStageReached(stage publicationApplyHookStage) {
+	if publicationApplyStageHook != nil {
+		publicationApplyStageHook(stage)
+	}
+}
+
 const (
 	publicationApplyStageInput       publicationReconciliationStage = "apply"
 	publicationApplyStageResolve     publicationReconciliationStage = "apply-resolve"
@@ -590,6 +606,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	entry.Journal = written.Entry
 	entry.State = written.State
 	entry.Backup = written.BackupDigest
+	publicationApplyStageReached(publicationApplyHookJournaled)
 	if request.Barrier != nil {
 		if err := request.Barrier(PublicationApplyJournaled, written); err != nil {
 			return entry, err
@@ -607,6 +624,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	if err != nil {
 		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyMutationReason(err), err))
 	}
+	publicationApplyStageReached(publicationApplyHookMutated)
 	if request.Barrier != nil {
 		if err := request.Barrier(PublicationApplyMutated, written); err != nil {
 			return entry, err
@@ -619,6 +637,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	if err := request.Journal.CompleteJournal(ctx, written, publicationApplyObserved(completed)); err != nil {
 		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, err)
 	}
+	publicationApplyStageReached(publicationApplyHookCompleted)
 	entry.State = publicationstate.JournalStateApplied
 	return entry, nil
 }
