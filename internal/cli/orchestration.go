@@ -83,28 +83,6 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 			&urfave.StringFlag{Name: "handle", Usage: "signed-in account handle", OnlyOnce: true},
 		}
 	}
-	push := configure(&urfave.Command{Name: "push", Flags: selectorFlags(), Action: func(ctx context.Context, command *urfave.Command) error {
-		if command.NArg() != 0 {
-			return usageExit("push takes no positional arguments")
-		}
-		if err := validateOrchestrationRemoteFlags(command); err != nil {
-			return err
-		}
-		coordinator, selection, closeResources, err := factory(ctx, command, true)
-		if err != nil {
-			if writeErr := writeCommandOutput(command, renderPush(service.StatusRejected)); writeErr != nil {
-				return writeErr
-			}
-			return urfave.Exit("push refused: account, local selection or coordinator unavailable", 3)
-		}
-		defer closeResources()
-		result, pushErr := coordinator.Push(ctx, selection)
-		status := classifyPushResult(result, pushErr)
-		if err := writeCommandOutput(command, renderPush(status)); err != nil {
-			return err
-		}
-		return pushExit(status)
-	}})
 	prune := configure(&urfave.Command{Name: "prune", Flags: append(selectorFlags(),
 		&urfave.BoolFlag{Name: "plan", Usage: "inspect retention pruning candidates", OnlyOnce: true},
 		&urfave.BoolFlag{Name: "apply", Usage: "prune eligible retention material", OnlyOnce: true},
@@ -154,39 +132,15 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 			return urfave.Exit("prune refused", 3)
 		}
 	}})
-	syncCommand := configure(&urfave.Command{Name: "sync", Flags: selectorFlags(), Action: func(ctx context.Context, command *urfave.Command) error {
+	syncCommand := configure(&urfave.Command{Name: "sync", Flags: selectorFlags(), Action: func(_ context.Context, command *urfave.Command) error {
 		if command.NArg() != 0 {
 			return usageExit("sync takes no positional arguments")
 		}
 		if err := validateOrchestrationRemoteFlags(command); err != nil {
 			return err
 		}
-		coordinator, selection, closeResources, err := factory(ctx, command, true)
-		if err != nil {
-			if writeErr := writeCommandOutput(command, "pull: not run; coordinator unavailable\npush: not run\n"); writeErr != nil {
-				return writeErr
-			}
-			return urfave.Exit("sync refused: account, local selection or coordinator unavailable", 3)
-		}
-		defer closeResources()
-		pulled, pullErr := coordinator.Pull(ctx, selection)
-		if pullErr != nil {
-			if err := writeCommandOutput(command, "pull: refused\npush: not run\n"); err != nil {
-				return err
-			}
-			return urfave.Exit("sync pull refused; push was not run", 3)
-		}
-		var output strings.Builder
-		fmt.Fprintf(&output, "pull: verified\nepoch: %d\nremote entries: %d\ndownloads: pending explicit restore review; nothing applied\n", pulled.Read.EpochSeq, len(pulled.Snapshot.Entries))
-		pushed, pushErr := coordinator.Push(ctx, selection)
-		status := classifyPushResult(pushed, pushErr)
-		output.WriteString(renderPush(status))
-		if err := writeCommandOutput(command, output.String()); err != nil {
-			return err
-		}
-		return pushExit(status)
+		return &deferredPublicationRefusal{command: "sync"}
 	}})
-
 	list := configure(&urfave.Command{Name: "list", Flags: selectorFlags(), Action: func(ctx context.Context, command *urfave.Command) error {
 		if command.NArg() != 0 {
 			return usageExit("devices list takes no positional arguments")
@@ -372,7 +326,7 @@ func newOrchestrationCommand(stdout, stderr io.Writer, exitCode *int, factory or
 	devices := configure(&urfave.Command{Name: "devices", Commands: []*urfave.Command{list, enroll, revoke}, Action: func(_ context.Context, _ *urfave.Command) error {
 		return usageExit("expected list, enroll or revoke")
 	}})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push, prune, syncCommand, devices}, Writer: stdout, ErrWriter: stderr})
+	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{prune, syncCommand, devices}, Writer: stdout, ErrWriter: stderr})
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
 		var exitError urfave.ExitCoder

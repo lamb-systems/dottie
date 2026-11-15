@@ -1,0 +1,503 @@
+package cli
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	urfave "github.com/urfave/cli/v3"
+
+	"github.com/lamb-systems/dottie/internal/config"
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
+	"github.com/lamb-systems/dottie/internal/service"
+	"github.com/lamb-systems/dottie/internal/state"
+)
+
+var errPublicationStoreAbsent = errors.New("the v2 publication position store is not provisioned; v2 setup is not available in this build")
+
+type pushSession struct {
+	Session *atproto.Session
+}
+
+type publicationPushSources struct {
+	Paths         platform.Paths
+	Binding       publicationstate.Binding
+	Coordinator   *service.Coordinator
+	Store         *publicationstate.Store
+	Reader        service.PublicationAcceptedSource
+	Transport     service.MaterialTransport
+	Reviews       service.ReviewSource
+	Records       service.PublicationProposalStore
+	Configuration config.Config
+	Close         func()
+}
+
+type pushSessionFactory func(context.Context, *urfave.Command) (pushSession, error)
+
+type pushSourcesFactory func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error)
+
+func runPush(args []string, stdout, stderr io.Writer, openKeyring accountKeyringFactory, env func(string) string) int {
+	code := 0
+	command := newPushCommand(stdout, stderr, &code,
+		productionPushSessionFactory(openKeyring, env), productionPushSourcesFactory(openKeyring, env))
+	arguments := append([]string{"dottie"}, args...)
+	ctx := context.Background()
+	if err := command.Run(ctx, arguments); err != nil && code == 0 {
+		command.ExitErrHandler(ctx, command, err)
+	}
+	return code
+}
+
+func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, sources pushSourcesFactory) *urfave.Command {
+	configure := func(command *urfave.Command) *urfave.Command {
+		command.Suggest = false
+		command.DefaultCommand = ""
+		command.UseShortOptionHandling = false
+		command.EnableShellCompletion = false
+		command.ReadArgsFromStdin = false
+		command.OnUsageError = func(_ context.Context, _ *urfave.Command, err error, _ bool) error {
+			return urfave.Exit("usage: "+escapeField(err.Error()), 2)
+		}
+		return command
+	}
+	push := configure(&urfave.Command{
+		Name: "push",
+		Flags: []urfave.Flag{
+			&urfave.StringFlag{Name: "vault", Usage: "local vault fingerprint", OnlyOnce: true},
+			&urfave.StringFlag{Name: "device-id", Usage: "local device identifier", OnlyOnce: true},
+			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
+			&urfave.StringFlag{Name: "handle", Usage: "signed-in account handle", OnlyOnce: true},
+			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier review", OnlyOnce: true},
+			&urfave.BoolFlag{Name: "discard", Usage: "abandon the retained proposal before submission", OnlyOnce: true},
+		},
+		Action: func(ctx context.Context, command *urfave.Command) error {
+			return runPushCommand(ctx, command, sessions, sources)
+		},
+	})
+	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push}, Writer: stdout, ErrWriter: stderr})
+	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
+		code := 1
+		var exitError urfave.ExitCoder
+		if errors.As(err, &exitError) {
+			code = exitError.ExitCode()
+		}
+		if code != 2 && code != 3 && code != 4 {
+			code = 1
+		}
+		if message := escapeErrorMessage(err.Error()); message != "" {
+			fmt.Fprintf(command.ErrWriter, "dottie: %s\n", message)
+		}
+		*exitCode = code
+	}
+	return root
+}
+
+func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, sources pushSourcesFactory) error {
+	if command.NArg() != 0 {
+		return usageExit("push takes no positional arguments")
+	}
+	if command.String("did") == "" {
+		return usageExit("push requires --did DID")
+	}
+	if command.IsSet("handle") {
+		return usageExit("push requires --did; a handle cannot be resolved before the publication scope check")
+	}
+	if command.IsSet("vault") && command.String("vault") == "" || command.IsSet("device-id") && command.String("device-id") == "" {
+		return usageExit("vault or device selector value is missing")
+	}
+	var confirmation [32]byte
+	if command.IsSet("confirm") {
+		decoded, err := decodeFixedHex(command.String("confirm"), 32)
+		if err != nil {
+			return usageExit("--confirm must be the 32-byte hexadecimal confirmation printed by dottie push")
+		}
+		copy(confirmation[:], decoded)
+	}
+	session, err := sessions(ctx, command)
+	if err != nil {
+		return urfave.Exit("push refused: account session is unavailable", 3)
+	}
+	if err := session.Session.RequirePublicationScopes(); err != nil {
+		return urfave.Exit(pushScopeRefusal(err, command.String("did")), 3)
+	}
+	ports, err := sources(ctx, command, session)
+	if err != nil {
+		return urfave.Exit(escapeErrorMessage(pushSourceFailure(err)), 3)
+	}
+	defer ports.Close()
+	if ports.Binding.AccountDID != session.Session.DID {
+		return urfave.Exit("push refused: the publication binding does not match the authorized account", 3)
+	}
+	records, err := ports.Records.List(ctx)
+	if err != nil {
+		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	}
+	retained, err := selectPublicationProposal(records, ports.Binding, command.IsSet("confirm"), confirmation, command.Bool("discard"))
+	if err != nil {
+		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	}
+	publicationID := [16]byte{}
+	if retained != nil {
+		publicationID = retained.PublicationID
+	}
+	if command.Bool("discard") {
+		return runPushDiscard(ctx, command, ports, publicationID)
+	}
+	if !command.IsSet("confirm") && retained == nil {
+		if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
+			return urfave.Exit("push refused: a fresh publication identity is unavailable", 3)
+		}
+	}
+	request := service.PublicationPushRequest{
+		Store: ports.Store, Transport: ports.Transport, Reader: ports.Reader, Records: ports.Records,
+		Binding: ports.Binding, Configuration: ports.Configuration, Reviews: ports.Reviews,
+		PublicationID: publicationID, Record: retained,
+	}
+	preparation, err := ports.Coordinator.PreparePublicationPush(ctx, request)
+	if err != nil {
+		return pushPreparationFailure(command, err)
+	}
+	if preparation.NoOp {
+		output := "push: no-op\nnothing to publish; the accepted position already holds the reviewed snapshot\n"
+		if preparation.Present {
+			output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", preparation.Floor.Revision, preparation.Floor.Generation, preparation.Floor.Sequence)
+		}
+		return writeCommandOutput(command, output)
+	}
+	output := renderPushProposal(preparation)
+	if !command.IsSet("confirm") {
+		if err := writeCommandOutput(command, output); err != nil {
+			return err
+		}
+		return urfave.Exit("review the publication above, then repeat with --confirm "+hex.EncodeToString(preparation.Proposal.Confirmation[:]), 3)
+	}
+	if preparation.Proposal.Confirmation != confirmation {
+		if err := writeCommandOutput(command, output); err != nil {
+			return err
+		}
+		return urfave.Exit("push refused: the reviewed proposal is stale; state changed since review; re-run dottie push", 3)
+	}
+	result, publishErr := ports.Coordinator.ConfirmPublicationPush(ctx, request, preparation, confirmation)
+	status := pushMaterialStatus(publishErr)
+	if status == service.StatusCommitted {
+		output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", result.Floor.Revision, result.Floor.Generation, result.Floor.Sequence)
+	}
+	output += renderPush(status)
+	if err := writeCommandOutput(command, output); err != nil {
+		if status == service.StatusCommitted {
+			fmt.Fprintln(command.Root().ErrWriter, "dottie: the publication committed but its result could not be written")
+			return urfave.Exit("publication committed but its output could not be written", 4)
+		}
+		return err
+	}
+	return pushExit(status)
+}
+
+func runPushDiscard(ctx context.Context, command *urfave.Command, ports publicationPushSources, publicationID [16]byte) error {
+	if publicationID == ([16]byte{}) {
+		return urfave.Exit("push refused: no retained publication proposal is available to discard", 3)
+	}
+	attempt, err := ports.Coordinator.AbandonPublicationPush(ctx, service.PublicationPushRequest{
+		Store: ports.Store, Records: ports.Records, Binding: ports.Binding, PublicationID: publicationID,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrPublicationProposalUnresolved) {
+			if writeErr := writeCommandOutput(command, "push: unavailable\n"); writeErr != nil {
+				return writeErr
+			}
+			return urfave.Exit("push is partial or indeterminate: the attempt passed submission and is unresolved; there is no abandonment and no retry", 4)
+		}
+		return urfave.Exit("push refused: the retained proposal cannot be discarded", 3)
+	}
+	var output strings.Builder
+	output.WriteString("push: discarded\n")
+	if attempt.ID != ([16]byte{}) {
+		fmt.Fprintf(&output, "attempt: abandoned lifecycle=%s outcome=%s\n", escapeField(string(attempt.Lifecycle)), escapeField(string(attempt.Outcome)))
+	} else {
+		output.WriteString("attempt: none was created\n")
+	}
+	output.WriteString("ownership, active pointer, pending genesis and reservations released\n")
+	output.WriteString("payload files are not unlinked and published history is not rewritten\n")
+	return writeCommandOutput(command, output.String())
+}
+
+func selectPublicationProposal(records []service.PublicationProposalRecord, binding publicationstate.Binding, confirmed bool, confirmation [32]byte, discard bool) (*service.PublicationProposalRecord, error) {
+	if confirmed {
+		var retained *service.PublicationProposalRecord
+		matches := 0
+		for index := range records {
+			record := records[index]
+			if record.Binding != binding {
+				continue
+			}
+			if record.Consumed && !discard {
+				return nil, service.ErrPublicationProposalConsumed
+			}
+			matches++
+			if matches > 1 {
+				return nil, service.ErrPublicationProposal
+			}
+			retained = &records[index]
+		}
+		if retained == nil {
+			return nil, service.ErrPublicationProposalAbsent
+		}
+		return retained, nil
+	}
+	candidates := make([]service.PublicationProposalRecord, 0, len(records))
+	for _, record := range records {
+		if record.Binding != binding {
+			continue
+		}
+		if record.Consumed && !discard {
+			continue
+		}
+		candidates = append(candidates, record)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	if len(candidates) > 1 {
+		return nil, service.ErrPublicationProposal
+	}
+	retained := candidates[0]
+	return &retained, nil
+}
+
+func pushScopeRefusal(err error, did string) string {
+	message := "push refused: " + escapeErrorMessage(err.Error())
+	var scopeError *atproto.PublicationScopeError
+	if errors.As(err, &scopeError) {
+		message = "push refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it"
+	}
+	return message + "; account " + escapeField(did) + " is unchanged"
+}
+
+func pushSourceFailure(err error) string {
+	if errors.Is(err, errPublicationStoreAbsent) {
+		return err.Error()
+	}
+	if errors.Is(err, service.ErrNoVaultSelection) || errors.Is(err, service.ErrAmbiguousVaultSelection) {
+		return "push refused: local vault selection is unavailable; pass --vault and --device-id"
+	}
+	return "push refused: the local publication position, account identity or transport is unavailable"
+}
+
+func pushPreparationFailure(command *urfave.Command, err error) error {
+	switch {
+	case errors.Is(err, service.ErrPublicationProposalConsumed):
+		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	case errors.Is(err, service.ErrPublicationProposalActive):
+		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	case errors.Is(err, service.ErrPublicationProposalStale):
+		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	case errors.Is(err, service.ErrPublicationProposal), errors.Is(err, service.ErrReviewMismatch), errors.Is(err, service.ErrConfigChangedSincePrepare):
+		return urfave.Exit("push refused: the publication cannot be prepared from the current configuration", 3)
+	}
+	status := pushMaterialStatus(err)
+	if writeErr := writeCommandOutput(command, renderPush(status)); writeErr != nil {
+		return writeErr
+	}
+	if status == service.StatusRejected || status == service.StatusConflicted {
+		return urfave.Exit("push refused", 3)
+	}
+	return urfave.Exit("push did not complete", 4)
+}
+
+type publicationStoreFailure interface {
+	Reason() publicationstate.Reason
+}
+
+type materialSubmissionFailure interface {
+	Stage() string
+}
+
+func pushMaterialStatus(err error) service.StatusState {
+	if err == nil {
+		return service.StatusCommitted
+	}
+	var submissionFailure materialSubmissionFailure
+	if errors.As(err, &submissionFailure) && submissionFailure.Stage() == "submission" {
+		return service.StatusUnavailable
+	}
+	switch {
+	case errors.Is(err, service.ErrPublicationProposalConsumed),
+		errors.Is(err, service.ErrPublicationProposalAbsent),
+		errors.Is(err, service.ErrPublicationProposalStale),
+		errors.Is(err, service.ErrPublicationProposalActive),
+		errors.Is(err, service.ErrReviewMismatch),
+		errors.Is(err, service.ErrConfigChangedSincePrepare),
+		errors.Is(err, atproto.ErrInsufficientPublicationScope):
+		return service.StatusRejected
+	case errors.Is(err, atproto.ErrBatchRejected), errors.Is(err, atproto.ErrPublicationQueued):
+		return service.StatusRejected
+	case errors.Is(err, atproto.ErrFenceLost):
+		return service.StatusFenceLost
+	}
+	var storeFailure publicationStoreFailure
+	if errors.As(err, &storeFailure) {
+		switch storeFailure.Reason() {
+		case publicationstate.ReasonActiveAttempt, publicationstate.ReasonConfirmation, publicationstate.ReasonTransition:
+			return service.StatusRejected
+		case publicationstate.ReasonCommitUnknown:
+			return service.StatusUnavailable
+		}
+	}
+	return service.StatusUnavailable
+}
+
+func renderPushProposal(preparation service.PublicationPushPreparation) string {
+	var output strings.Builder
+	if preparation.Issued {
+		output.WriteString("push: review required\n")
+	} else {
+		output.WriteString("push: review required (retained proposal)\n")
+	}
+	fmt.Fprintf(&output, "targets: %d\nentries: %d\n", preparation.Targets, preparation.Entries)
+	if preparation.Present {
+		fmt.Fprintf(&output, "accepted floor: revision=%d generation=%d sequence=%d\n", preparation.Floor.Revision, preparation.Floor.Generation, preparation.Floor.Sequence)
+	} else {
+		output.WriteString("accepted floor: none (first publication)\n")
+	}
+	fmt.Fprintf(&output, "candidate record: %x\ncandidate payload: %x size=%d\n", preparation.Proposal.Proposal.CandidateRecordCID, preparation.Proposal.Proposal.CandidateBlobCID, preparation.Proposal.Blob.Size)
+	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
+		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,
+		preparation.Proposal.Review.ApprovalDigest, preparation.Proposal.Review.ApprovalRevision)
+	fmt.Fprintf(&output, "confirmation: %x\n", preparation.Proposal.Confirmation)
+	return output.String()
+}
+
+func productionPushSessionFactory(openKeyring accountKeyringFactory, env func(string) string) pushSessionFactory {
+	return func(ctx context.Context, command *urfave.Command) (pushSession, error) {
+		keyring, err := openKeyring()
+		if err != nil {
+			return pushSession{}, err
+		}
+		defer keyring.Close()
+		client, err := newAuthorizedAccountClient(keyring, env)
+		if err != nil {
+			return pushSession{}, err
+		}
+		session, err := client.LoadSession(ctx, command.String("did"))
+		if err != nil {
+			return pushSession{}, err
+		}
+		return pushSession{Session: session}, nil
+	}
+}
+
+func productionPushSourcesFactory(openKeyring accountKeyringFactory, env func(string) string) pushSourcesFactory {
+	return func(ctx context.Context, command *urfave.Command, session pushSession) (publicationPushSources, error) {
+		paths, err := platform.Resolve(env)
+		if err != nil {
+			return publicationPushSources{}, err
+		}
+		directory := paths.PublicationStateDir()
+		if info, statErr := os.Lstat(directory); statErr != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+			return publicationPushSources{}, errPublicationStoreAbsent
+		}
+		store, err := state.Open(paths)
+		if err != nil {
+			return publicationPushSources{}, err
+		}
+		keyring, err := openKeyring()
+		if err != nil {
+			_ = store.Close()
+			return publicationPushSources{}, err
+		}
+		closeResources := func() { _ = keyring.Close(); _ = store.Close() }
+		configuration := service.FileConfigPort{Paths: paths}
+		coordinator, err := service.NewCoordinator(service.Dependencies{
+			Config: configuration, State: store, Settings: manualGNOMESettings(), Paths: paths, Clock: time.Now,
+		})
+		if err != nil {
+			closeResources()
+			return publicationPushSources{}, err
+		}
+		selection := service.VaultSelection{DeviceID: command.String("device-id")}
+		if command.IsSet("vault") {
+			vaultID, parseErr := parseVaultFingerprint(command.String("vault"))
+			if parseErr != nil {
+				closeResources()
+				return publicationPushSources{}, parseErr
+			}
+			selection.Vault = vaultID
+		}
+		selected, err := coordinator.ResolveSelection(ctx, selection)
+		if err != nil {
+			closeResources()
+			return publicationPushSources{}, err
+		}
+		loaded, err := configuration.Load(ctx)
+		if err != nil {
+			closeResources()
+			return publicationPushSources{}, err
+		}
+		if err := loaded.Validate(); err != nil {
+			closeResources()
+			return publicationPushSources{}, err
+		}
+		binding := publicationstate.Binding{
+			AccountDID: session.Session.DID, Backend: publicationstate.BackendPublicRepo,
+			Repository: "at://" + session.Session.DID, Vault: selected.Vault,
+		}
+		position, err := publicationstate.Open(directory, binding)
+		if err != nil {
+			closeResources()
+			return publicationPushSources{}, err
+		}
+		closeAll := func() { _ = position.Close(); closeResources() }
+		client, err := newAuthorizedAccountClient(keyring, env)
+		if err != nil {
+			closeAll()
+			return publicationPushSources{}, err
+		}
+		identity, err := client.Discover(ctx, session.Session.Handle)
+		if err != nil || identity.DID != session.Session.DID {
+			closeAll()
+			return publicationPushSources{}, errors.New("account identity is unavailable")
+		}
+		api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session.Session)
+		if err != nil {
+			closeAll()
+			return publicationPushSources{}, err
+		}
+		transport := atproto.NewATClientTransport(api)
+		limit, err := atproto.DescribeBlobUploadLimit(ctx, transport)
+		if err != nil {
+			closeAll()
+			return publicationPushSources{}, err
+		}
+		adapter, err := service.NewATProtoMaterialTransport(service.ATProtoMaterialConfig{
+			Binding: binding, DID: identity.DID,
+			Reader:          atproto.RevisionReader{Transport: transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID, VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...)},
+			Transport:       transport,
+			BlobUploadLimit: limit,
+		})
+		if err != nil {
+			closeAll()
+			return publicationPushSources{}, err
+		}
+		reader, err := service.NewPublicationReader(service.PublicationReaderConfig{
+			Binding: binding, DID: identity.DID, Session: session.Session, Adapter: adapter,
+			Blobs: atproto.VaultReader{Transport: transport, ObservationStore: store, Budgets: atproto.DefaultBudgets(), Clock: time.Now},
+		})
+		if err != nil {
+			closeAll()
+			return publicationPushSources{}, err
+		}
+		return publicationPushSources{
+			Paths: paths, Binding: binding, Coordinator: coordinator, Store: position, Reader: reader,
+			Transport: adapter, Reviews: configuration, Records: newPublicationProposalStore(directory),
+			Configuration: loaded, Close: closeAll,
+		}, nil
+	}
+}

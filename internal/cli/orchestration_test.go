@@ -17,7 +17,6 @@ import (
 	"github.com/ipfs/go-cid"
 	urfave "github.com/urfave/cli/v3"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
@@ -143,6 +142,11 @@ func runOrchestrationForTest(command *urfave.Command, exitCode *int, args ...str
 	return *exitCode
 }
 
+func runOrchestrationForTestError(command *urfave.Command, args ...string) error {
+	ctx := context.Background()
+	return command.Run(ctx, append([]string{"dottie"}, args...))
+}
+
 func runAccountCommandForOrchestrationTest(root *urfave.Command, exitCode *int, args ...string) int {
 	ctx := context.Background()
 	if err := root.Run(ctx, append([]string{"account"}, args...)); err != nil && *exitCode == 0 {
@@ -151,77 +155,14 @@ func runAccountCommandForOrchestrationTest(root *urfave.Command, exitCode *int, 
 	return *exitCode
 }
 
-func TestPushExitStatusesAndRedactedOutput(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		status service.StatusState
-		code   int
-	}{
-		{name: "committed", status: service.StatusCommitted, code: 0},
-		{name: "no-op", status: service.StatusNoOp, code: 0},
-		{name: "rejected", status: service.StatusRejected, code: 3},
-		{name: "conflicted", status: service.StatusConflicted, code: 3},
-		{name: "queued", status: service.StatusQueued, code: 4},
-		{name: "starved", status: service.StatusStarved, code: 4},
-		{name: "fence lost", status: service.StatusFenceLost, code: 4},
-		{name: "superseded", status: service.StatusSuperseded, code: 4},
-		{name: "unavailable", status: service.StatusUnavailable, code: 4},
-		{name: "base recording failed", status: service.StatusBaseRecordingFailed, code: 4},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fake := &fakeOrchestrationCoordinator{pushResult: service.PushResult{Status: test.status}}
-			var stdout, stderr bytes.Buffer
-			code := 0
-			command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
-			code = runOrchestrationForTest(command, &code, "push", "--did", "did:plc:example")
-			require.Equal(t, test.code, code)
-			assert.Contains(t, stdout.String(), "push: "+string(test.status))
-			if test.code == 0 {
-				assert.Empty(t, stderr.String())
-			} else if test.code == 3 {
-				assert.Contains(t, stderr.String(), "push refused")
-			} else {
-				assert.Contains(t, stderr.String(), "push did not complete")
-			}
-			assert.Equal(t, []string{"push"}, fake.calls)
-		})
-	}
-}
-
-func TestPushErrorIsRedactedAndEscaped(t *testing.T) {
-	fake := &fakeOrchestrationCoordinator{pushErr: errors.New("/home/private\nsecret\x1b")}
-	var stdout, stderr bytes.Buffer
-	code := 0
-	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
-	code = runOrchestrationForTest(command, &code, "push", "--did", "did:plc:example")
-	require.Equal(t, 3, code)
-	assert.Equal(t, "push: rejected\n", stdout.String())
-	assert.NotContains(t, stderr.String(), "/home/private")
-	assert.NotContains(t, stderr.String(), "secret")
-	assert.NotContains(t, stderr.String(), "\x1b")
-}
-
-func TestPushRequiresAccountSelectorBeforeFactory(t *testing.T) {
+func TestOrchestrationRejectsPushBecauseTheV2CommandOwnsIt(t *testing.T) {
 	calls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(nil, service.VaultSelection{}, nil, &calls))
-	code = runOrchestrationForTest(command, &code, "push")
-	require.Equal(t, 2, code)
-	assert.Zero(t, calls)
-	assert.Contains(t, stderr.String(), "exactly one of --did or --handle")
-}
-
-func TestPushFactoryRefusalHasRedactedStatus(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := 0
-	factory := orchestrationTestFactory(nil, service.VaultSelection{}, errors.New("/home/private\nsecret"), nil)
-	command := newOrchestrationCommand(&stdout, &stderr, &code, factory)
+	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(&fakeOrchestrationCoordinator{}, service.VaultSelection{}, nil, &calls))
 	code = runOrchestrationForTest(command, &code, "push", "--did", "did:plc:example")
-	require.Equal(t, 3, code)
-	assert.Equal(t, "push: rejected\n", stdout.String())
-	assert.NotContains(t, stderr.String(), "/home/private")
-	assert.NotContains(t, stderr.String(), "secret")
+	require.NotEqual(t, 0, code)
+	assert.Zero(t, calls, "the v1 orchestration factory served push")
 }
 
 func TestPrunePlanReportsFloorsCandidatesAndEscapesFields(t *testing.T) {
@@ -350,34 +291,33 @@ func TestPushCoordinatorErrorsMapToDistinctOutcomes(t *testing.T) {
 	}
 }
 
-func TestSyncPullThenPushAndNeverAppliesDownloads(t *testing.T) {
-	fake := &fakeOrchestrationCoordinator{
-		pullResult: service.ReadOutcome{Read: atproto.ReadResult{EpochSeq: 7}, Snapshot: model.Snapshot{Entries: []model.Entry{{}}}},
-		pushResult: service.PushResult{Status: service.StatusNoOp, NoOp: true},
-	}
+func TestSyncRefusesWithTheC3NamingAndNeverReachesTheV1Factory(t *testing.T) {
+	calls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
-	code = runOrchestrationForTest(command, &code, "sync", "--did", "did:plc:example")
-	require.Equal(t, 0, code)
-	assert.Equal(t, []string{"pull", "push"}, fake.calls)
-	assert.Contains(t, stdout.String(), "pull: verified")
-	assert.Contains(t, stdout.String(), "downloads: pending explicit restore review; nothing applied")
-	assert.Contains(t, stdout.String(), "push: no-op")
-	assert.NotContains(t, stdout.String(), "applied: true")
-	assert.Empty(t, stderr.String())
-}
-
-func TestSyncPullRefusalDoesNotPush(t *testing.T) {
-	fake := &fakeOrchestrationCoordinator{pullErr: errors.New("private transport detail")}
-	var stdout, stderr bytes.Buffer
-	code := 0
-	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(fake, service.VaultSelection{}, nil, nil))
+	command := newOrchestrationCommand(&stdout, &stderr, &code, orchestrationTestFactory(&fakeOrchestrationCoordinator{}, service.VaultSelection{}, nil, &calls))
 	code = runOrchestrationForTest(command, &code, "sync", "--did", "did:plc:example")
 	require.Equal(t, 3, code)
-	assert.Equal(t, "pull: refused\npush: not run\n", stdout.String())
-	assert.Equal(t, []string{"pull"}, fake.calls)
-	assert.NotContains(t, stderr.String(), "private transport")
+	assert.Zero(t, calls, "sync reached the v1 orchestration factory")
+	assert.Contains(t, stderr.String(), "C3")
+	assert.Empty(t, stdout.String())
+
+	var refusal *deferredPublicationRefusal
+	fresh := 0
+	replayed := newOrchestrationCommand(new(bytes.Buffer), new(bytes.Buffer), &fresh, orchestrationTestFactory(&fakeOrchestrationCoordinator{}, service.VaultSelection{}, nil, nil))
+	err := runOrchestrationForTestError(replayed, "sync", "--did", "did:plc:example")
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, 3, refusal.ExitCode())
+}
+
+func TestPullIsInterceptedInRootDispatchWithTheC3Refusal(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"pull", "--did", "did:plc:example"}, &stdout, &stderr)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "C3")
+	assert.NotContains(t, stderr.String(), "keyring")
+	assert.NotContains(t, stderr.String(), "account session")
+	assert.Empty(t, stdout.String())
 }
 
 func TestDevicesListRendersVerifiedPublicFieldsAndEscapesDeviceIDs(t *testing.T) {
@@ -772,7 +712,7 @@ func TestRootHelpIncludesOrchestrationCommandsAndPolicies(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
 	require.Equal(t, 0, code)
-	for _, text := range []string{"dottie push", "dottie sync", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "never apply downloads", "chmod 600"} {
+	for _, text := range []string{"dottie push", "dottie sync", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "--confirm HEX", "deferred to C3", "chmod 600"} {
 		assert.Contains(t, stdout.String(), text)
 	}
 	assert.Empty(t, stderr.String())

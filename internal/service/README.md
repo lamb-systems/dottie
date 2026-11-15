@@ -50,11 +50,12 @@ Preview omits raw contents but exposes user-controlled names, sizes and unkeyed 
 
 Run `go test -count=1 ./internal/service` for service tests and `go test -count=1 ./tests/local -run '^TestPublicationReconcile'` for the synthetic local composition tests. The projection target's nine default seeds run with ordinary `go test`; bounded exploration is explicit: `GOTOOLCHAIN=local go test ./internal/service -run '^$' -fuzz '^FuzzProjectPublicationSnapshotBoundary$' -fuzztime=30s -parallel=2`. Its fixed synthetic GNOME projection generator limits inputs to 128 KiB, 16 entries and 4 KiB quoted values; it does not exercise native settings compatibility or the consumer barrier. `make fuzz` does not include this target.
 
-## Unwired v2 publish orchestration
+## v2 publish orchestration
 
-`PreparePublishMaterial` and `PublishMaterial` are an unwired local orchestration for the plaintext v2
-publication profile. No CLI command, coordinator dependency or service caller invokes them; `push` and
-`sync` still route to the persisted v1 coordinator. They write only through the caller-supplied
+`PreparePublishMaterial` and `PublishMaterial` are the local orchestration for the plaintext v2
+publication profile. `dottie push` is the only caller; `sync` and `pull` refuse and the v1 coordinator
+paths stay reachable only through `prune`, the device commands and the manual read/restore commands.
+They write only through the caller-supplied
 publication-state store, and they never contact a provider: the caller supplies a `MaterialTransport`
 whose payload upload, write preparation, single prepared write send and repository read are the only
 outbound surfaces.
@@ -116,3 +117,27 @@ fail before commit, commit then lose the response, inject a competing writer and
 and batches. Those tests establish the local sequencing, refusals and durable boundaries only. They
 are not provider evidence: upload acceptance, batch atomicity, blob retention, fence behaviour under a real concurrent writer, quota classes and NSID
 registration in a PDS remain unproven until a live disposable-account gate is explicitly authorized. One SendWrites call is also not yet proven to be one HTTP request: the production auth method may replay a POST through GetBody on a DPoP nonce or invalid-token challenge, so HTTP-level single dispatch remains unproven until a non-replaying submission transport exists.
+
+## Push candidate composition and the retained proposal
+
+`buildPublicationSnapshot` is the one composition path. It calls the same
+`composePublicationSnapshot` helper that the v1 `pushCandidate` uses, with `captureLocal`,
+`syncengine.NewTargetBinding`, `syncengine.Reconcile` and the snapshot validation unchanged; only the
+base-entry and remote-entry sources differ. v2 supplies the base from `ReadAcceptedMaterial` plus
+`DecodePayload` and the remote from `ReadAcceptedPayload`, so the accepted floor and the observed head
+are the same read. `buildPublicationMaterial` is the one packer: it produces the candidate, the blob
+reference and the complete write batch from one snapshot, and `PublishMaterial` rebuilds and compares
+that batch before submission. The reviewed candidate and the published candidate are therefore the same
+value, not two reconstructions.
+
+`PreparePublicationPush`, `ConfirmPublicationPush` and `AbandonPublicationPush` own one retained
+proposal record per publication identity. The record holds the binding, database identity and
+generation, accepted floor revision, candidate record and payload CIDs and size, review identity,
+planned attempt ID, lifecycle and confirmation; it holds no payload bytes, session material, secrets or
+local paths. The record's publication identity is the store attempt identity, so the locator and the
+attempt agree. Preparation issues a record, confirmation marks it consumed before the first durable
+write, and deletion follows only a terminal publication. `--discard` abandons only a `prepared` or
+`upload-started` attempt: it releases ownership, the active pointer, pending genesis and reservations,
+does not unlink charged payload files and does not rewrite published history. A `may-have-submitted`
+attempt is unresolved: there is no abandonment, no retry and no fabricated absence, and the operator
+resolves it through the store readback path.

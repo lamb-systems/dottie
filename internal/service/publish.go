@@ -210,10 +210,14 @@ func (coordinator *Coordinator) pushLocked(ctx context.Context, requested VaultS
 	return result, nil
 }
 
-func (coordinator *Coordinator) pushCandidate(ctx context.Context, configuration config.Config, pulled ReadOutcome) (model.Snapshot, []pushTargetPlan, error) {
+type publicationBaseSource func(ctx context.Context, target config.Target, portable model.Target) ([]model.Entry, syncengine.BaseStatus, []model.EntryKey, error)
+
+type publicationRemoteSource func(target config.Target) ([]model.Entry, []model.EntryKey)
+
+func (coordinator *Coordinator) composePublicationSnapshot(ctx context.Context, configuration config.Config, base publicationBaseSource, remote publicationRemoteSource, blocked []model.EntryKey) (model.Snapshot, []config.Target, error) {
 	candidate := model.Snapshot{Version: model.SnapshotVersion, Targets: make([]model.Target, 0, len(configuration.Targets))}
-	plans := make([]pushTargetPlan, 0, len(configuration.Targets))
-	blocked := append([]model.EntryKey(nil), pulled.Untracked...)
+	composed := make([]config.Target, 0, len(configuration.Targets))
+	blocked = append([]model.EntryKey(nil), blocked...)
 	for _, target := range configuration.Targets {
 		portable, err := targetFromConfig(target)
 		if err != nil {
@@ -224,25 +228,16 @@ func (coordinator *Coordinator) pushCandidate(ctx context.Context, configuration
 		if err != nil {
 			return model.Snapshot{}, nil, err
 		}
-		baseEntries, baseStatus, baseUntracked, err := coordinator.loadBase(ctx, target, portable, configuration)
+		baseEntries, baseStatus, baseUntracked, err := base(ctx, target, portable)
 		if err != nil {
 			return model.Snapshot{}, nil, err
 		}
 		untracked = append(untracked, baseUntracked...)
-		for _, identity := range pulled.Untracked {
-			if identity.TargetID == target.ID {
-				untracked = append(untracked, identity)
-			}
-		}
+		remoteEntries, remoteUntracked := remote(target)
+		untracked = append(untracked, remoteUntracked...)
 		binding, err := syncengine.NewTargetBinding(portable)
 		if err != nil {
 			return model.Snapshot{}, nil, err
-		}
-		remoteEntries := make([]model.Entry, 0)
-		for _, entry := range pulled.Snapshot.Entries {
-			if entry.TargetID == target.ID {
-				remoteEntries = append(remoteEntries, entry)
-			}
 		}
 		plan, err := syncengine.Reconcile(syncengine.BaseView{Entries: baseEntries, Status: baseStatus},
 			syncengine.LocalView{Entries: localEntries, Unknown: unknown, Untracked: untracked, Coverage: coverage},
@@ -250,7 +245,7 @@ func (coordinator *Coordinator) pushCandidate(ctx context.Context, configuration
 		if err != nil {
 			return model.Snapshot{}, nil, err
 		}
-		plans = append(plans, pushTargetPlan{target: target})
+		composed = append(composed, target)
 		for _, decision := range plan.Decisions {
 			switch decision.Action {
 			case syncengine.ActionConflict, syncengine.ActionBlocked:
@@ -274,6 +269,36 @@ func (coordinator *Coordinator) pushCandidate(ctx context.Context, configuration
 	}
 	if err := candidate.Validate(); err != nil {
 		return model.Snapshot{}, nil, fmt.Errorf("validate publication snapshot: %w", err)
+	}
+	return candidate, composed, nil
+}
+
+func (coordinator *Coordinator) pushCandidate(ctx context.Context, configuration config.Config, pulled ReadOutcome) (model.Snapshot, []pushTargetPlan, error) {
+	base := func(ctx context.Context, target config.Target, portable model.Target) ([]model.Entry, syncengine.BaseStatus, []model.EntryKey, error) {
+		return coordinator.loadBase(ctx, target, portable, configuration)
+	}
+	remote := func(target config.Target) ([]model.Entry, []model.EntryKey) {
+		entries := make([]model.Entry, 0)
+		untracked := make([]model.EntryKey, 0)
+		for _, entry := range pulled.Snapshot.Entries {
+			if entry.TargetID == target.ID {
+				entries = append(entries, entry)
+			}
+		}
+		for _, identity := range pulled.Untracked {
+			if identity.TargetID == target.ID {
+				untracked = append(untracked, identity)
+			}
+		}
+		return entries, untracked
+	}
+	candidate, composed, err := coordinator.composePublicationSnapshot(ctx, configuration, base, remote, pulled.Untracked)
+	if err != nil {
+		return model.Snapshot{}, nil, err
+	}
+	plans := make([]pushTargetPlan, 0, len(composed))
+	for _, target := range composed {
+		plans = append(plans, pushTargetPlan{target: target})
 	}
 	return candidate, plans, nil
 }

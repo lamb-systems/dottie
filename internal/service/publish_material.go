@@ -11,6 +11,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -187,16 +188,7 @@ func (coordinator *Coordinator) PreparePublishMaterial(ctx context.Context, requ
 	if view.Origin != request.Binding {
 		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageView, publishMaterialReasonView, nil)
 	}
-	candidate, blob, err := newMaterialCandidate(request, floor, present)
-	if err != nil {
-		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBatch, err)
-	}
-	var captured *publicationstate.Floor
-	if present {
-		cloned := cloneMaterialFloor(floor)
-		captured = &cloned
-	}
-	batch, err := newMaterialWriteBatch(request.Binding, captured, view, candidate)
+	candidate, blob, batch, err := buildPublicationMaterial(request.Binding, request.Snapshot, floor, present, view, request.PublicationID)
 	if err != nil {
 		return MaterialPublishProposal{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBatch, err)
 	}
@@ -329,47 +321,6 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 		return MaterialPublishResult{Attempt: resolution.Attempt, Outcome: resolution.Outcome}, err
 	}
 	return MaterialPublishResult{Floor: finalization.Floor, Attempt: finalization.Attempt, Outcome: resolution.Outcome}, nil
-}
-
-func newMaterialCandidate(request MaterialPublishRequest, floor publicationstate.Floor, present bool) (publicationstate.CandidateInput, publication.BlobReference, error) {
-	packed, err := vault.Pack(request.Snapshot)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	blobCID, err := publication.RawPayloadCID(packed.Payload)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	blob := publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}
-	var sequence uint64
-	parent := []byte{}
-	if present {
-		sequence = floor.Sequence + 1
-		parent = bytes.Clone(floor.RecordCID)
-	}
-	key, err := publication.SequenceKey(sequence)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: request.Binding.Vault, PublicationID: request.PublicationID,
-		PublicationSeq: sequence, Parent: parent, Blob: blob,
-	})
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	snapshotCID, err := publication.RecordCID(snapshotRecord)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	headRecord, err := publication.EncodeHead(publication.HeadRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: request.Binding.Vault, PublicationSeq: sequence,
-		SnapshotCID: snapshotCID, BlobCID: blobCID,
-	})
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	return publicationstate.CandidateInput{SnapshotKey: key, SnapshotRecord: snapshotRecord, HeadRecord: headRecord, Payload: packed.Payload}, blob, nil
 }
 
 func newMaterialWriteBatch(binding publicationstate.Binding, captured *publicationstate.Floor, view publicationstate.SuppliedRepositoryView, candidate publicationstate.CandidateInput) (MaterialWriteBatch, error) {
@@ -505,16 +456,6 @@ func cloneMaterialCandidate(candidate publicationstate.CandidateInput) publicati
 	}
 }
 
-func cloneMaterialFloor(floor publicationstate.Floor) publicationstate.Floor {
-	out := floor
-	out.AnchorCID = bytes.Clone(floor.AnchorCID)
-	out.SuppliedContext = cloneMaterialContext(floor.SuppliedContext)
-	out.Head = bytes.Clone(floor.Head)
-	out.RecordCID = bytes.Clone(floor.RecordCID)
-	out.BlobCID = bytes.Clone(floor.BlobCID)
-	return out
-}
-
 func materialProposalToken(review publicationstate.LocalReviewContext, candidate publicationstate.CandidateInput, publicationID [16]byte) ([32]byte, error) {
 	snapshotCID, err := publication.RecordCID(candidate.SnapshotRecord)
 	if err != nil {
@@ -588,4 +529,277 @@ func publishMaterialFailure(ctx context.Context, stage publishMaterialStage, rea
 		reason = publishMaterialReasonCanceled
 	}
 	return &publishMaterialError{stage: stage, reason: reason, cause: cause}
+}
+
+var (
+	ErrPublicationProposal           = errors.New("publication proposal refused")
+	ErrPublicationProposalAbsent     = errors.New("no retained publication proposal matches the reviewed confirmation")
+	ErrPublicationProposalConsumed   = errors.New("the retained publication proposal was already consumed; re-run dottie push without --confirm to review a new proposal")
+	ErrPublicationProposalStale      = errors.New("the publication proposal is stale; state changed since review, re-run dottie push")
+	ErrPublicationProposalActive     = errors.New("a publication attempt is already active; re-run dottie push --discard to abandon it before preparing again")
+	ErrPublicationProposalUnresolved = errors.New("the publication attempt passed submission and has an unresolved outcome; there is no abandonment and no retry; resolve it through the publication store readback")
+)
+
+const publicationProposalRecordVersion uint64 = 1
+
+type PublicationProposalRecord struct {
+	Version              uint64
+	Binding              publicationstate.Binding
+	DatabaseID           [32]byte
+	Generation           uint64
+	FloorRevision        uint64
+	CandidateRecordCID   []byte
+	CandidatePayloadCID  []byte
+	CandidatePayloadSize uint64
+	Review               publicationstate.LocalReviewContext
+	PublicationID        [16]byte
+	Lifecycle            publicationstate.AttemptLifecycle
+	Consumed             bool
+	Confirmation         [32]byte
+}
+
+type PublicationProposalStore interface {
+	List(context.Context) ([]PublicationProposalRecord, error)
+	Issue(context.Context, PublicationProposalRecord) error
+	Consume(context.Context, [16]byte) error
+	Delete(context.Context, [16]byte) error
+}
+
+type PublicationAcceptedSource interface {
+	ReadAcceptedPayload(context.Context) (AcceptedPublication, error)
+}
+
+type PublicationPushRequest struct {
+	Store         *publicationstate.Store
+	Transport     MaterialTransport
+	Reader        PublicationAcceptedSource
+	Records       PublicationProposalStore
+	Binding       publicationstate.Binding
+	Configuration config.Config
+	Reviews       ReviewSource
+	PublicationID [16]byte
+	Record        *PublicationProposalRecord
+}
+
+type PublicationPushPreparation struct {
+	Proposal MaterialPublishProposal
+	Record   PublicationProposalRecord
+	Issued   bool
+	NoOp     bool
+	Present  bool
+	Floor    publicationstate.Floor
+	Targets  int
+	Entries  int
+}
+
+func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
+	if record.Version != publicationProposalRecordVersion || record.PublicationID == ([16]byte{}) || allZeroMaterial(record.Confirmation[:]) || allZeroMaterial(record.Review.SelectionDigest[:]) || allZeroMaterial(record.Review.ApprovalDigest[:]) || record.Review.SelectionRevision == 0 || record.Review.ApprovalRevision == 0 || !validMaterialBinding(record.Binding) || len(record.CandidateRecordCID) == 0 || len(record.CandidatePayloadCID) == 0 || record.CandidatePayloadSize == 0 {
+		return ErrPublicationProposal
+	}
+	return nil
+}
+
+func (coordinator *Coordinator) PreparePublicationPush(ctx context.Context, request PublicationPushRequest) (PublicationPushPreparation, error) {
+	if err := ctx.Err(); err != nil {
+		return PublicationPushPreparation{}, err
+	}
+	if !validPublicationPushRequest(request) {
+		return PublicationPushPreparation{}, ErrPublicationProposal
+	}
+	if request.Record != nil {
+		if err := VerifyPublicationProposalRecord(*request.Record); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		if request.Record.Consumed {
+			return PublicationPushPreparation{}, ErrPublicationProposalConsumed
+		}
+		if request.Record.PublicationID != request.PublicationID || request.Record.Binding != request.Binding {
+			return PublicationPushPreparation{}, ErrPublicationProposal
+		}
+	}
+	floor, present, err := request.Store.Load(ctx)
+	if err != nil {
+		return PublicationPushPreparation{}, err
+	}
+	if present && floor.Binding != request.Binding {
+		return PublicationPushPreparation{}, ErrPublicationProposal
+	}
+	base := model.Snapshot{}
+	var acceptedPayload []byte
+	if present {
+		material, err := request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
+		if err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		record, err := publication.DecodeSnapshot(material.SnapshotRecord)
+		if err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
+		if err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		base = snapshot
+		acceptedPayload = material.Payload
+	}
+	remote := model.Snapshot{}
+	accepted, err := request.Reader.ReadAcceptedPayload(ctx)
+	switch {
+	case err == nil:
+		remote = accepted.Snapshot
+	case errors.Is(err, atproto.ErrReadRecordMissing) && !present:
+	default:
+		return PublicationPushPreparation{}, err
+	}
+	snapshot, err := coordinator.buildPublicationSnapshot(ctx, PublicationCandidateRequest{
+		Configuration: request.Configuration, BaseSnapshot: base,
+		RemoteSnapshot: remote, PublicationID: request.PublicationID,
+	})
+	if err != nil {
+		return PublicationPushPreparation{}, err
+	}
+	counts := PublicationPushPreparation{Present: present, Floor: floor, Targets: len(snapshot.Targets), Entries: len(snapshot.Entries)}
+	if present {
+		packed, err := vault.Pack(snapshot)
+		if err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		if bytes.Equal(packed.Payload, acceptedPayload) {
+			counts.NoOp = true
+			return coordinator.preparePublicationPushNoOp(ctx, request, counts)
+		}
+	}
+	proposal, err := coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
+		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
+		Snapshot: snapshot, PublicationID: request.PublicationID, Reviews: request.Reviews,
+	})
+	if err != nil {
+		return PublicationPushPreparation{}, coordinator.publicationPushRefusal(ctx, request, err)
+	}
+	record := newPublicationProposalRecord(proposal)
+	counts.Proposal = proposal
+	counts.Record = record
+	if request.Record != nil {
+		return counts, nil
+	}
+	if err := request.Records.Issue(ctx, record); err != nil {
+		return PublicationPushPreparation{}, err
+	}
+	counts.Issued = true
+	return counts, nil
+}
+
+func (coordinator *Coordinator) ConfirmPublicationPush(ctx context.Context, request PublicationPushRequest, preparation PublicationPushPreparation, confirmation [32]byte) (MaterialPublishResult, error) {
+	if err := ctx.Err(); err != nil {
+		return MaterialPublishResult{}, err
+	}
+	if preparation.NoOp || preparation.Proposal.Proposal.AttemptID == ([16]byte{}) {
+		return MaterialPublishResult{}, ErrPublicationProposal
+	}
+	if !bytes.Equal(confirmation[:], preparation.Proposal.Confirmation[:]) {
+		return MaterialPublishResult{}, ErrPublicationProposalStale
+	}
+	if err := request.Records.Consume(ctx, preparation.Proposal.PublicationID); err != nil {
+		return MaterialPublishResult{}, err
+	}
+	result, err := coordinator.PublishMaterial(ctx, preparation.Proposal, confirmation)
+	if err != nil {
+		return result, err
+	}
+	if err := request.Records.Delete(ctx, preparation.Proposal.PublicationID); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (coordinator *Coordinator) AbandonPublicationPush(ctx context.Context, request PublicationPushRequest) (publicationstate.Attempt, error) {
+	if err := coordinator.lock(ctx); err != nil {
+		return publicationstate.Attempt{}, err
+	}
+	defer coordinator.mu.Unlock()
+	if request.Store == nil || request.Records == nil || request.PublicationID == ([16]byte{}) {
+		return publicationstate.Attempt{}, ErrPublicationProposal
+	}
+	active, has, err := request.Store.ActiveAttempt(ctx)
+	if err != nil {
+		return publicationstate.Attempt{}, err
+	}
+	if !has {
+		if err := request.Records.Consume(ctx, request.PublicationID); err != nil {
+			return publicationstate.Attempt{}, err
+		}
+		return publicationstate.Attempt{}, request.Records.Delete(ctx, request.PublicationID)
+	}
+	if active.ID != request.PublicationID || (active.Lifecycle != publicationstate.AttemptPrepared && active.Lifecycle != publicationstate.AttemptUploadStarted) {
+		return publicationstate.Attempt{}, ErrPublicationProposalUnresolved
+	}
+	proposal, err := request.Store.PrepareAbandon(ctx, request.PublicationID, nil)
+	if err != nil {
+		return publicationstate.Attempt{}, err
+	}
+	attempt, err := request.Store.AbandonAttempt(ctx, request.PublicationID, proposal.StateToken, nil, proposal.Confirmation)
+	if err != nil {
+		return publicationstate.Attempt{}, err
+	}
+	if err := request.Records.Consume(ctx, request.PublicationID); err != nil {
+		return attempt, err
+	}
+	return attempt, request.Records.Delete(ctx, request.PublicationID)
+}
+
+func (coordinator *Coordinator) preparePublicationPushNoOp(ctx context.Context, request PublicationPushRequest, preparation PublicationPushPreparation) (PublicationPushPreparation, error) {
+	if request.Record != nil {
+		if err := request.Records.Consume(ctx, request.PublicationID); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		if err := request.Records.Delete(ctx, request.PublicationID); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+	}
+	return preparation, nil
+}
+
+func (coordinator *Coordinator) publicationPushRefusal(ctx context.Context, request PublicationPushRequest, err error) error {
+	var stateError *publicationstate.Error
+	if errors.As(err, &stateError) {
+		switch stateError.Reason() {
+		case publicationstate.ReasonActiveAttempt:
+			return ErrPublicationProposalActive
+		case publicationstate.ReasonStale:
+			if request.Record != nil {
+				if consumeErr := request.Records.Consume(ctx, request.PublicationID); consumeErr != nil {
+					return consumeErr
+				}
+			}
+			return ErrPublicationProposalStale
+		}
+	}
+	return err
+}
+
+func newPublicationProposalRecord(proposal MaterialPublishProposal) PublicationProposalRecord {
+	record := PublicationProposalRecord{
+		Version: publicationProposalRecordVersion, Binding: proposal.Binding,
+		Generation:           proposal.Proposal.CapturedGeneration,
+		CandidateRecordCID:   bytes.Clone(proposal.Proposal.CandidateRecordCID),
+		CandidatePayloadCID:  bytes.Clone(proposal.Proposal.CandidateBlobCID),
+		CandidatePayloadSize: proposal.Proposal.CandidateBlobSize,
+		Review:               proposal.Review, PublicationID: proposal.PublicationID,
+		Lifecycle: publicationstate.AttemptPrepared, Confirmation: proposal.Confirmation,
+	}
+	if proposal.Proposal.CapturedFloor != nil {
+		record.DatabaseID = proposal.Proposal.CapturedFloor.DatabaseID
+		record.FloorRevision = proposal.Proposal.CapturedFloor.Revision
+	}
+	return record
+}
+
+func validPublicationPushRequest(request PublicationPushRequest) bool {
+	if request.Store == nil || request.Transport == nil || request.Reader == nil || request.Records == nil || request.Reviews == nil || !validMaterialBinding(request.Binding) {
+		return false
+	}
+	if request.PublicationID == ([16]byte{}) || request.Configuration.Validate() != nil {
+		return false
+	}
+	return true
 }

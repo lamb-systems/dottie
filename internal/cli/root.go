@@ -24,9 +24,9 @@ Usage:
   dottie prune --plan|--apply [--confirm] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
   dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
-  dottie pull (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
-  dottie push (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
-  dottie sync (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
+  dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]
+  dottie pull (refused: deferred to C3)
+  dottie sync (refused: deferred to C3)
   dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie devices enroll --request FILE --kit-file FILE --bundle-out FILE [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
   dottie devices revoke --device-id ID --kit-file FILE [--confirm HEX] [--bundle-out FILE] [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
@@ -41,9 +41,12 @@ Usage:
   dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX] [--request FILE]
   dottie account import-bundle --bundle FILE --anchor HEX [--vault HEX]
 
-Push publishes the reconciled snapshot for selected local targets; sync verifies a pull, reports downloads pending
-for explicit restore review, then pushes local changes. Push and sync never apply downloads or settings.
-For push, sync and device operations, exit codes are: 0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
+Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
+invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
+with --confirm HEX to publish exactly that reviewed proposal. --discard abandons a retained pre-submission attempt.
+The reconciled pull/sync path is deferred to C3: dottie sync and dottie pull refuse without contacting the provider,
+and downloads are inspected with preview and applied with restore. For push and device operations, exit codes are:
+0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success. History is local-only without --did/--handle; with an account selector it attempts a verified read and reports unavailable or auth-expired distinctly while still succeeding. History output is redacted and contains no content or absolute paths.
 Export writes a complete ciphertext-only archive atomically through the guarded writer; an existing output requires --overwrite. Export authenticates its checkpoint with a regular owner-only kit file decoding to exactly 32 bytes; the kit is cleared and never stored or archived. Export completeness requires retained authenticated history on the exporting machine; v1 count-only attestations with nonzero recovery-point counts cannot be enumerated and refuse export. Import requires independent --vault, --anchor and kit inputs and is validation-only; it changes no state or preferences. Import validates ciphertext without decrypting content or establishing global freshness.
@@ -80,9 +83,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPosition(args[1:], stdout, stderr, os.Getenv)
 	}
 	switch args[0] {
-	case "status", "history", "preview", "pull", "restore", "recover", "export", "import":
+	case "status", "history", "preview", "restore", "recover", "export", "import":
 		return runManual(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
-	case "push", "prune", "sync", "devices":
+	case "pull":
+		return deferredPublicationExit("pull", stdout, stderr)
+	case "push":
+		return runPush(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
+	case "prune", "sync", "devices":
 		return runOrchestration(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	}
 	if args[0] == "plan" {
@@ -107,6 +114,22 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "dottie: unsupported command %q; run 'dottie help'\n", args[0])
 		return 2
 	}
+}
+
+type deferredPublicationRefusal struct {
+	command string
+}
+
+func (refusal *deferredPublicationRefusal) Error() string {
+	return refusal.command + " refused: the reconciled pull and sync path is deferred to C3 for the v2 publication profile; pull and sync contact no provider in this build; publish with dottie push and review downloads with dottie restore"
+}
+
+func (refusal *deferredPublicationRefusal) ExitCode() int { return 3 }
+
+func deferredPublicationExit(command string, stdout, stderr io.Writer) int {
+	refusal := &deferredPublicationRefusal{command: command}
+	fmt.Fprintf(stderr, "dottie: %s\n", escapeErrorMessage(refusal.Error()))
+	return refusal.ExitCode()
 }
 
 func printOutput(stdout, stderr io.Writer, text string) int {

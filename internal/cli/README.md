@@ -2,7 +2,7 @@
 
 ## Manual coordinator workflows
 
-`dottie status` is local-only. `dottie pull (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]` reads a verified repository revision, checks it against the locally recorded trust checkpoint and persists authenticated read evidence. It does not publish. Without a vault override, the command requires exactly one local `(vault, device)` selection; otherwise it refuses and instructs the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
+`dottie status` is local-only. `dottie pull` is deferred to C3: root dispatch refuses it with a typed message naming C3, contacts no provider and reads nothing. The legacy v1 read path that this command used to describe is retained only for commands that still require it and is not reachable through `pull`. Without a vault override, the command requires exactly one local `(vault, device)` selection; otherwise it refuses and instructs the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
 
 `dottie preview --target ID ...` prints names, action/reason, sizes and a candidate digest, never file contents or GSettings values. The digest covers the verified remote snapshot, local target policy/selection, captured observations, reconciliation decisions and resulting action set. It changes when any same-size candidate content or intended postimage changes. `dottie restore --target ID [--confirm DIGEST] ...` reads and recomputes the candidate before mutation. `backup-only` refuses; `review` requires a matching `--confirm`; `auto-apply` still re-verifies. Apply is limited to current/verified-descendant checkpoints, prepared roots and journaled syncengine operations. Pending journals are recovered before apply. A failed operation reports the applied prefix, failed item and untouched suffix. `dottie recover` runs journal recovery without a remote session.
 
@@ -22,7 +22,7 @@ Export and onboarding fetch required snapshot bodies by CID through the verified
 
 `dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID [--vault HEX] [--device-id ID] [--confirm DIGEST]` restores files from an archive offline. `--archive` is mutually exclusive with `--did`/`--handle`; kit and anchor require archive mode. The expected vault defaults to the local selection, while the anchor and kit are explicit. Restore validates the archive and opens the kit-signed checkpoint position with the selected device recipient private key from Secret Service. Only that checkpoint epoch is eligible: positions above it are lineage, the archive may not be the newest state, and no provider/session transport is constructed or contacted. A kit authorizes/checks the checkpoint but cannot decrypt content; without a compatible surviving recipient private key restore refuses. The archive path uses the same preview/candidate digest, review-mode confirmation, journaled apply and rollback path as remote restore. It does not relax freshness-unverified inspection-only policy.
 
-For `history`, `export` and `import`, exit 0 means the read/validation or export succeeded (history still succeeds when its optional remote read is unavailable), exit 2 is a usage error, and exit 3 is a refusal. Exit 4 remains for partial/indeterminate push, sync and device operations; export refuses rather than publishing an incomplete archive.
+For `history`, `export` and `import`, exit 0 means the read/validation or export succeeded (history still succeeds when its optional remote read is unavailable), exit 2 is a usage error, and exit 3 is a refusal. Exit 4 remains for partial/indeterminate push and device operations; export refuses rather than publishing an incomplete archive.
 
 ## Publication position status
 
@@ -43,9 +43,54 @@ and this command never exits 4.
 
 ## Push, sync, devices and onboarding
 
-`dottie push (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]` asks the coordinator to verify the current remote position, reconcile all selected local targets, and publish local changes through the fenced publisher. The output distinguishes committed, no-op, queued, starved, fence-lost, superseded, unavailable, rejected, conflicted and base-recording-failed outcomes. Only committed and no-op return exit 0. Exit 2 is a usage error, exit 3 is a refusal/conflict/rejection, and exit 4 is queued, starved, fence-lost, superseded, unavailable or another partial/non-success outcome. An uncertain or queued result is never reported as success. Output contains status only, not entry content, values or paths.
+`dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]` publishes the reconciled
+snapshot of every configured target through the v2 publication profile. It is a two-invocation command.
+The first invocation acquires the stored account session for `--did`, validates that the grant covers the
+v2 publication collections before any discovery or provider contact, composes exactly one candidate from
+the local capture plus the accepted position and the observed head, and prepares a proposal. It prints a
+summary — target and entry counts, the accepted floor, the candidate record and payload CIDs and the
+review digests and revisions — and a `confirmation:` line holding the 32-byte store confirmation in hex.
+It publishes nothing and exits 3 so the operator can review. The summary never contains entry content,
+setting values, absolute paths or the vault fingerprint.
 
-`dottie sync` performs a verified pull and then push as one foreground operation. It reports verified remote entries as pending explicit restore review and does not apply downloaded files or settings. `pull`, `push` and `sync` never apply downloads implicitly; inspect with `preview` and use `restore` explicitly.
+`dottie push --did DID --confirm HEX` repeats the same preparation and compares the freshly computed
+confirmation with the supplied value. Equality publishes exactly that proposal and prints the accepted
+floor; a difference is a stale proposal, exits 3 and dispatches nothing, and the retained proposal is
+left untouched so an unchanged re-run still works. Any difference in the candidate, the view context, the
+store database identity or generation, the state token, the attempt identity or the review identity
+produces a different confirmation and refuses the old value. `--confirm` is the same flag and meaning the
+other destructive commands use; there is no second token.
+
+The service owns the retained proposal at `$XDG_STATE_HOME/dottie/publication-state/proposal-<id>.json`:
+it is written with mode 0600, it is marked consumed before the first durable publication write, and it is
+deleted only after the attempt reaches a terminal state. The command reads it and never rewrites it. A
+consumed record refuses `--confirm` with the instruction to re-run `dottie push` without `--confirm`; an
+already active attempt refuses with `--discard` guidance; a proposal whose planned attempt identity is
+already retired refuses as stale and marks the record consumed; and a creation that reports
+`commit_unknown` keeps the record and exits 4 instead of inferring absence.
+
+`dottie push --did DID --discard` abandons a retained attempt that has not passed submission. It releases
+the attempt's ownership, active pointer, pending genesis and reservation rows, marks the record consumed
+and deletes it, and it says so: charged payload files are not unlinked and published history is not
+rewritten. Without a planned attempt it only discards the retained record. An attempt that already passed
+submission is unresolved: `--discard` refuses with exit 4, there is no abandonment and no retry, and the
+operator resolves the outcome through the publication store readback path. `push` requires `--did`
+because a handle would have to be resolved through discovery before the local scope check.
+
+Exit codes: 0 committed or no-op, 2 usage (missing or invalid flags, malformed confirmation), 3 refusal
+(session or scope, unusable or consumed or foreign or stale proposal, config drift before submission,
+store mismatch), 4 partial or indeterminate (unresolved submission, commit-unknown,
+queued/starved/fence-lost/unavailable outcomes, and a rendering failure after a committed publication,
+which is stated as committed on stderr).
+A queued or indeterminate publication is never reported as success. The command requires an already
+provisioned v2 position store; an absent store refuses with exit 3 and no substitute setup path is
+offered, because the legacy bootstrap creates v1 material that the v2 profile rejects.
+
+`dottie sync` refuses. The reconciled pull-then-push path is deferred to C3 and the code charged with it,
+so `sync` prints a typed refusal naming C3, contacts no provider and never reaches the legacy
+orchestration. `dottie pull` is intercepted in root dispatch with the same C3 refusal, so downloads are
+inspected with `preview` and applied with `restore`. `restore`, `preview`, `status`, `history`, `prune`,
+`recover`, the export/import commands and the device commands keep their existing paths.
 
 `dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]` uses a verified read and lists device ID, role, current epoch, revoked status and a SHA-256 fingerprint of the public recipient key when present. It does not print keys, secrets or absolute paths.
 
