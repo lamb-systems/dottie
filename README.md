@@ -65,9 +65,10 @@ known material. Unknown-epoch holdings make the confidentiality floor unknown. T
 epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
 preserving version-1 count-only decoding. Offline publication, renderer, source-loss archive, apply and
 rollback tests use synthetic records and temporary homes. They do not establish provider compatibility,
-hosted-log visibility or production desktop behavior. The retained journaled apply engine and the GNOME
-settings backend are exercised by the tagged keyfile gates under `make test-gnome`; no production command
-reaches that engine any more, so those gates are engine evidence, not command evidence. The live
+hosted-log visibility or production desktop behavior. The retained journaled apply engine is exercised only by package tests under
+`internal/syncengine`; the GNOME settings backend is exercised by the tagged keyfile gate under
+`make test-gnome`. No production command reaches that engine any more, so those are engine evidence,
+not command evidence. The live
 publication-privacy gate requires a pristine disposable repository because that gate tests genesis, and the
 read-only live archive gate needs explicit disposable-account authorization. A skipped gate is not provider
 evidence. Real user data is permitted only under the residual limits in `docs/acceptance.md`, which the owner
@@ -183,47 +184,33 @@ result in `docs/acceptance.md` is historical evidence for that removed path. All
 skipped gate is not provider evidence. Hosted provider logs and server-side storage are not observable from a
 client.
 
-## Local journaled apply and rollback gate
+## Two-machine publication apply gate
 
-[`tests/local/restore_gate_test.go`](tests/local/restore_gate_test.go) composes filesystem capture, reconciliation preview, journaled apply and rollback on a synthetic Neovim tree plus a custom WM root under temporary directories. It checks automatic module inclusion, combined file edits, rename planning, missing-root and unsafe-link refusals, local-only exclusions, convergence, repeatability, and preservation of a newer edit during rollback. Run it offline with `go test -v ./tests/local`. This is an internal integration proof of the retained apply engine, not a CLI workflow: no production command reaches that engine after the v1 command surface was retired; it does not exercise GNOME, network services, remote publication or a real home directory.
+[`tests/local/publication_two_machine_test.go`](tests/local/publication_two_machine_test.go) is the
+offline replacement for the retired v1 two-machine gate. It runs two isolated temporary homes over
+one synthetic in-memory provider: machine A publishes through `PreparePublicationPush` and
+`ConfirmPublicationPush`, and machine B applies through `publicationstate.Inspect`,
+`PlanPublicationApply`, `StagePublicationAccept`, `ApplyPublication` and `AcceptPublication`. It
+checks exact applied bytes, both sentinel exclusions, terminal apply-journal rows, floor revision,
+sequence and record CID, no-op re-application with inode and mtime identity, a reverse pull after B
+publishes, a re-executed `SIGKILL` at the journaled stage followed by recovery, and a same-entry
+conflict that refuses without changing either home, the provider revision or either accepted floor.
+Run it with `go test -count=1 ./tests/local -run TestTwoMachine`. It uses synthetic homes, a fake
+session, a fake provider transport and no network or PDS. The deleted gate also covered onboarding
+import, device enrollment/revocation identity and GNOME present/reset application; those remain
+single-machine coordinator and tagged GNOME-backend evidence, not two-machine command evidence.
 
-## Combined GNOME/files apply gate
+## GNOME settings backend gate
 
-Run `make test-gnome` for the offline apply gate, or `make test-gnome-race` for
-its race-enabled form. It runs one combined filesystem-and-settings apply scenario
-against both the native GSettings keyfile backend and the native dconf backend. The
-dconf run uses the real `dconf-service` activated on a temporary private D-Bus; both
-runs use isolated temporary homes and XDG paths, compiled synthetic schemas with
-canonical source defaults and different vendor destination defaults, and pre-created
-selected directory skeletons with matching modes. The gate checks exact setting and
-file values, reset behavior, convergence and no-op re-apply, unrelated cross-schema
-sentinels, and journaled rollback while preserving newer file and setting edits. It
-also checks missing keys and schemas, plus a 12-key synthetic per-key older-schema
-subset (not older category compatibility).
-
-**Real versus simulated boundary:** the gate exercises the real keyfile backend and
-real dconf backend with a real dconf service on a temporary private bus, synthetic
-schemas, isolated temporary homes, prepared directory selections, and simulated
-locks. It does not use a production desktop session or profile, real user preferences,
-system-db lockdown, a VM, or CLI wiring. The locked case decorates the real backend to
-report one setting as non-writable; it does not validate real lockdown. The gate
-proves apply only into prepared directory selections: applying a file preview creates files
-inside existing roots, not a missing selected root or directory hierarchy. The
-unrelated-settings check covers cross-schema preservation, not key-level isolation within
-the schema being written. The 12-key older-surface case is a synthetic per-key subset,
-not evidence of support for older GNOME categories or automatic degradation.
-
-## Retired two-machine gate
-
-The offline two-machine gate that published from synthetic publisher A and pulled into
-newcomer B was deleted with the v1 command surface. It proved onboarding-bundle import with an
-independently supplied anchor, successor authentication from imported predecessor evidence, exact
-file bytes and mode plus GNOME present/reset intent applied on B, no-op re-application, restore-only
-and revoked-device push refusals, wrong-kit and wrong-anchor controls, stale predecessor refusal,
-fingerprint-confirmed revocation and historical decryption. None of that coverage has a successor
-yet: the v2 apply API (`PlanPublicationApply`/`ApplyPublication`) is covered single-machine only, and
-`go test -count=1 ./tests/local` plus `internal/cli` pull tests do not substitute for a two-machine
-gate. Reinstating it on the v2 apply API is the open follow-up.
+Run `make test-gnome` or `make test-gnome-race` for the native GSettings backend gate. It uses
+isolated temporary homes and XDG paths, compiled synthetic schemas with canonical source defaults
+and different vendor destination defaults, and the real keyfile and dconf backends; the dconf run
+uses a real `dconf-service` on a temporary private D-Bus. It checks observe/set/reset/read-back,
+canonicalization, path identity, missing keys and schemas, and a 12-key synthetic per-key
+older-schema subset. The combined files-and-settings apply and rollback scenario was retired with
+the v1 apply engine. The gate does not use a production desktop session or profile, real user
+preferences, system-db lockdown, a VM, or CLI wiring; it proves backend behavior, not v2 publication
+apply of settings.
 
 ## Continuous integration
 

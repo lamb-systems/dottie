@@ -42,7 +42,7 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	initial := encodePublicationReconcileMaterial(t, binding, initialSnapshot, 0, nil, [16]byte{0x25, 0xa1})
 	initialObservation := publicationReconcileObservation(binding, suppliedContext, initial)
 	home.floor = acceptPublicationReconcilePosition(t, home.pubStore, publicationstate.ModeFirstUse, initialObservation, initial.payload)
-	originalFloor := clonePublicationReconcilePreservationFloor(home.floor)
+	originalFloor := clonePublicationReconcileFloor(home.floor)
 	originalRecord := bytes.Clone(initial.record)
 	originalPayload := bytes.Clone(initial.payload)
 
@@ -190,7 +190,7 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	assert.Equal(t, originalPayload, request.Payload)
 
 	refreshedRequest := request
-	refreshedRequest.ExpectedFloor = clonePublicationReconcilePreservationFloor(loadedFloor)
+	refreshedRequest.ExpectedFloor = clonePublicationReconcileFloor(loadedFloor)
 	refreshedRequest.SnapshotRecord = bytes.Clone(successor.record)
 	refreshedRequest.Payload = bytes.Clone(originalPayload)
 	refreshed, refreshedDisposition, err := service.PreviewPublicationTarget(ctx, refreshedRequest, base)
