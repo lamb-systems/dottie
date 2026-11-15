@@ -55,6 +55,18 @@ func (reader *pullTestReader) ReadPayload(ctx context.Context, record publicatio
 	return snapshot, nil
 }
 
+func (reader *pullTestReader) ReadBlob(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
+	snapshot, err := reader.ReadPayload(ctx, record)
+	if err != nil {
+		return nil, err
+	}
+	packed, err := vault.Pack(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return packed.Payload, nil
+}
+
 func (reader *pullTestReader) ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error) {
 	if err := ctx.Err(); err != nil {
 		return publicationstate.SuppliedRepositoryView{}, err
@@ -278,7 +290,7 @@ func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *
 		if factoryCalls != nil {
 			*factoryCalls++
 		}
-		return pullRemote{Reader: reader, Payload: reader.ReadPayload, Close: func() {}}, nil
+		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Close: func() {}}, nil
 	}
 	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), os.Getenv)
 }
@@ -612,16 +624,24 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 	assert.Zero(t, factoryCalls)
 }
 
-func TestPullConfirmationTokenBindsTheVaultAndPlan(t *testing.T) {
+func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *testing.T) {
 	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
 	binding.Repository = "at://" + pullTestDID
 	plan := sha256.Sum256([]byte("prepared plan"))
-	token := pullApplyConfirmationToken(binding, plan)
-	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan"))))
+	state := sha256.Sum256([]byte("staged state"))
+	observation := sha256.Sum256([]byte("observed position"))
+	token := pullApplyConfirmationToken(binding, plan, state, observation)
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation))
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation))
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation"))))
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
-	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan))
-	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan))
+	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan, state, observation))
+	otherAccount := binding
+	otherAccount.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc"
+	otherAccount.Repository = "at://" + otherAccount.AccountDID
+	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation))
+	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation))
 }
 
 func TestPullPrintsTheApplyPlanAndAppliesOnlyThePreparedToken(t *testing.T) {
@@ -732,6 +752,7 @@ func TestPullSurfacesAnApplyLeaseRefusal(t *testing.T) {
 	fixture.accept(t)
 	fixture.configure(t, "")
 	fixture.writeBaseFile(t)
+	before := fixture.acceptedFloor(t)
 	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
 	reader := &pullTestReader{view: view, payloads: payloads}
 	var stdout, stderr bytes.Buffer
@@ -758,4 +779,176 @@ func TestPullSurfacesAnApplyLeaseRefusal(t *testing.T) {
 	content, err := os.ReadFile(fixture.targetPath("init.lua"))
 	require.NoError(t, err)
 	assert.Equal(t, pullTestBaseContent, string(content))
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, before.Revision, accepted.Revision)
+	assert.Equal(t, before.RecordCID, accepted.RecordCID)
+}
+
+func (fixture *pullTestFixture) acceptedFloor(t *testing.T) publicationstate.Floor {
+	t.Helper()
+	store := fixture.openStore(t)
+	defer func() { assert.NoError(t, store.Close()) }()
+	floor, present, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.True(t, present)
+	return floor
+}
+
+type pullTestStageRefusal struct {
+	stage  string
+	reason string
+}
+
+func (refusal pullTestStageRefusal) Error() string  { return "synthetic accept refusal" }
+func (refusal pullTestStageRefusal) Stage() string  { return refusal.stage }
+func (refusal pullTestStageRefusal) Reason() string { return refusal.reason }
+
+func TestPullAdvancesTheAcceptedFloorAfterAConfirmedApply(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	before := fixture.acceptedFloor(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", before.Revision+1, before.Generation, before.Sequence+1))
+	assert.NotContains(t, stdout.String(), "applied but not accepted")
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, before.Revision+1, accepted.Revision)
+	assert.Equal(t, before.Generation, accepted.Generation)
+	assert.Equal(t, before.Sequence+1, accepted.Sequence)
+	packed, err := vault.Pack(payloads[before.Sequence+1])
+	require.NoError(t, err)
+	store := fixture.openStore(t)
+	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, accepted)
+	require.NoError(t, err)
+	assert.Equal(t, packed.Payload, material.Payload)
+	require.NoError(t, store.Close())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: matches\n", stdout.String())
+	assert.Equal(t, accepted.Revision, fixture.acceptedFloor(t).Revision)
+}
+
+func TestPullRefusesAConfirmationWhoseObservationDigestChanged(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	before := fixture.acceptedFloor(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	movedView := view
+	movedView.SuppliedContext = publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-pull-revision-moved", RepositoryDigest: fixture.context.RepositoryDigest,
+	}
+	reader = &pullTestReader{view: movedView, payloads: payloads}
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "stale or bound to a different vault")
+	assert.Contains(t, stdout.String(), "apply: changes=1 unchanged=0\n")
+	assert.NotContains(t, stdout.String(), "pull: applied")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content), "a confirmation bound to another observation applied the plan")
+	assert.Equal(t, before.Revision, fixture.acceptedFloor(t).Revision)
+}
+
+func TestPullReportsAFailedAcceptAsAppliedButNotAccepted(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	before := fixture.acceptedFloor(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(fixture.paths.PublicationStateDir(), "payloads")))
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)))
+	assert.Contains(t, stdout.String(), "pull: applied but not accepted (accept-material/")
+	assert.Contains(t, stderr.String(), "the accepted floor is unchanged")
+	assert.NotContains(t, stderr.String(), fixture.paths.Home)
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestRemoteContent, string(content), "the apply did not run before the accepted material was refused")
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, before.Revision, accepted.Revision)
+	assert.Equal(t, before.RecordCID, accepted.RecordCID)
+}
+
+func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, &pullTestReader{}, nil)
+	report := "pull: applied changes=1 unchanged=0 bytes=19\n"
+	refused := pullAcceptFailure(command, report, pullTestStageRefusal{stage: "accept-material", reason: "stale"})
+	var exitError urfave.ExitCoder
+	require.ErrorAs(t, refused, &exitError)
+	assert.Equal(t, 3, exitError.ExitCode())
+	assert.Equal(t, report+"pull: applied but not accepted (accept-material/stale)\n", stdout.String())
+	assert.Contains(t, exitError.Error(), "the accepted floor is unchanged")
+
+	stdout.Reset()
+	unconfirmed := pullAcceptFailure(command, report, context.Canceled)
+	require.ErrorAs(t, unconfirmed, &exitError)
+	assert.Equal(t, 4, exitError.ExitCode())
+	assert.Equal(t, report+"pull: applied but not accepted (accept)\n", stdout.String())
+	assert.Contains(t, exitError.Error(), "not confirmed")
+}
+
+func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
+	moved := pullAcceptStagingFailure(pullTestStageRefusal{stage: "accept-position", reason: "revision_moved"})
+	var exitError urfave.ExitCoder
+	require.ErrorAs(t, moved, &exitError)
+	assert.Equal(t, 3, exitError.ExitCode())
+	assert.Contains(t, moved.Error(), "the accepted floor changed after the apply plan was prepared")
+
+	refused := pullAcceptStagingFailure(pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"})
+	require.ErrorAs(t, refused, &exitError)
+	assert.Equal(t, 3, exitError.ExitCode())
+	assert.Contains(t, refused.Error(), "accept-prepare/proposal_refused")
+	assert.Contains(t, refused.Error(), "nothing was changed")
 }

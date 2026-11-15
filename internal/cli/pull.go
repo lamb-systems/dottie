@@ -51,9 +51,9 @@ type pullViewReader interface {
 }
 
 type pullRemote struct {
-	Reader  pullViewReader
-	Payload func(context.Context, publication.SnapshotRecord) (model.Snapshot, error)
-	Close   func()
+	Reader pullViewReader
+	Blob   func(context.Context, publication.SnapshotRecord) ([]byte, error)
+	Close  func()
 }
 
 type pullRemoteFactory func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error)
@@ -65,6 +65,12 @@ type pullApplySources struct {
 }
 
 type pullApplySourcesFactory func(context.Context, *urfave.Command, publicationstate.Binding) (pullApplySources, error)
+
+type pullApplyMaterial struct {
+	Base    model.Snapshot
+	Remote  model.Snapshot
+	Payload []byte
+}
 
 var (
 	errPullApplySnapshotUnavailable = errors.New("the provider position holds no snapshot to apply")
@@ -286,7 +292,7 @@ func pullStoreReason(err error) string {
 	return pullReasonPosition
 }
 
-type publicationApplyRefusal interface {
+type publicationStageRefusal interface {
 	Stage() string
 	Reason() string
 }
@@ -317,13 +323,13 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 	if err != nil {
 		return urfave.Exit("pull refused: a selected filesystem target cannot be resolved for apply; nothing was changed", 3)
 	}
-	base, remote, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor)
+	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor)
 	if err != nil {
 		return pullApplyRemoteFailure(err)
 	}
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
-		Configuration: sources.Configuration, BaseSnapshot: base, RemoteSnapshot: remote,
+		Configuration: sources.Configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
 		Roots: roots, Local: sources.Local,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
@@ -333,8 +339,16 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 	if plan.Changes == 0 {
 		return nil
 	}
+	observation := pullApplyObservation(input.View)
+	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
+		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
+		FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
+	})
+	if err != nil {
+		return pullAcceptStagingFailure(err)
+	}
 	output := renderPullApplyPlan(plan)
-	token := pullApplyConfirmationToken(input.Binding, plan.Digest)
+	token := pullApplyConfirmationToken(input.Binding, plan.Digest, staged.StateToken, staged.ObservationDigest)
 	output += fmt.Sprintf("confirmation: %x\n", token)
 	if !input.Confirmed {
 		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", token)
@@ -362,6 +376,16 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return pullApplyFailure(input.Command, output, applyErr)
 	}
 	output += renderPullApplyReport(report)
+	accepted, acceptErr := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
+		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
+		Mode: staged.Mode, FloorRevision: input.Floor.Revision,
+		StateToken: staged.StateToken, Confirmation: staged.Confirmation,
+		Observation: observation, Payload: material.Payload,
+	})
+	if acceptErr != nil {
+		return pullAcceptFailure(input.Command, output, acceptErr)
+	}
+	output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", accepted.Revision, accepted.Generation, accepted.Sequence)
 	if err := writeCommandOutput(input.Command, output); err != nil {
 		return urfave.Exit("pull applied changes but its result could not be written", 4)
 	}
@@ -387,35 +411,49 @@ func pullApplyRoots(configuration config.Config, paths platform.Paths) (map[stri
 	return roots, nil
 }
 
-func pullApplySnapshots(ctx context.Context, remote pullRemote, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor) (model.Snapshot, model.Snapshot, error) {
-	if len(view.Snapshots) == 0 || remote.Payload == nil {
-		return model.Snapshot{}, model.Snapshot{}, errPullApplySnapshotUnavailable
+func pullApplySnapshots(ctx context.Context, remote pullRemote, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor) (pullApplyMaterial, error) {
+	if len(view.Snapshots) == 0 || remote.Blob == nil {
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	terminal, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	if err != nil {
-		return model.Snapshot{}, model.Snapshot{}, errPullApplySnapshotUnavailable
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	remoteSnapshot, err := remote.Payload(ctx, terminal)
+	payload, err := remote.Blob(ctx, terminal)
 	if err != nil {
-		return model.Snapshot{}, model.Snapshot{}, err
+		return pullApplyMaterial{}, err
+	}
+	remoteSnapshot, err := publication.DecodePayload(payload, terminal.Blob)
+	if err != nil {
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	if floor.Sequence >= uint64(len(view.Snapshots)) {
-		return model.Snapshot{}, model.Snapshot{}, errPullApplySnapshotMoved
+		return pullApplyMaterial{}, errPullApplySnapshotMoved
 	}
 	block := view.Snapshots[floor.Sequence]
 	baseRecord, err := publication.DecodeSnapshot(block.Raw)
 	if err != nil {
-		return model.Snapshot{}, model.Snapshot{}, errPullApplySnapshotUnavailable
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	baseCID, err := publication.RecordCID(block.Raw)
 	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) || !bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) || baseRecord.Blob.Size != floor.BlobSize {
-		return model.Snapshot{}, model.Snapshot{}, errPullApplySnapshotMoved
+		return pullApplyMaterial{}, errPullApplySnapshotMoved
 	}
-	base, err := remote.Payload(ctx, baseRecord)
+	basePayload, err := remote.Blob(ctx, baseRecord)
 	if err != nil {
-		return model.Snapshot{}, model.Snapshot{}, err
+		return pullApplyMaterial{}, err
 	}
-	return base, remoteSnapshot, nil
+	base, err := publication.DecodePayload(basePayload, baseRecord.Blob)
+	if err != nil {
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
+	}
+	return pullApplyMaterial{Base: base, Remote: remoteSnapshot, Payload: payload}, nil
+}
+
+func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicationstate.Observation {
+	return publicationstate.Observation{
+		Origin: view.Origin, SuppliedContext: view.SuppliedContext, Head: view.Head, Snapshots: view.Snapshots,
+	}
 }
 
 func pullApplyRemoteFailure(err error) error {
@@ -426,7 +464,7 @@ func pullApplyRemoteFailure(err error) error {
 }
 
 func pullApplyRefusal(err error) error {
-	var refusal publicationApplyRefusal
+	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "backup_only" {
 			return urfave.Exit("pull refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
@@ -436,11 +474,43 @@ func pullApplyRefusal(err error) error {
 	return urfave.Exit("pull refused: the apply plan is unusable; nothing was changed", 3)
 }
 
+func pullAcceptStagingFailure(err error) error {
+	var refusal publicationStageRefusal
+	if errors.As(err, &refusal) {
+		if refusal.Reason() == "revision_moved" {
+			return urfave.Exit("pull refused: the accepted floor changed after the apply plan was prepared; re-run dottie pull", 3)
+		}
+		return urfave.Exit("pull refused: the applied material cannot be staged for accept ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+	}
+	return urfave.Exit("pull refused: the applied material cannot be staged for accept; nothing was changed", 3)
+}
+
+func pullAcceptFailure(command *urfave.Command, output string, err error) error {
+	var refusal publicationStageRefusal
+	detail := "accept"
+	if errors.As(err, &refusal) {
+		detail = refusal.Stage() + "/" + refusal.Reason()
+	}
+	output += "pull: applied but not accepted (" + escapeField(detail) + ")\n"
+	if writeErr := writeCommandOutput(command, output); writeErr != nil {
+		return writeErr
+	}
+	unproven := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	var storeFailure *publicationstate.Error
+	if errors.As(err, &storeFailure) && storeFailure.Class() == publicationstate.ErrStorage {
+		unproven = true
+	}
+	if unproven {
+		return urfave.Exit("pull did not complete: the apply finished but the accepted floor is not confirmed ("+escapeField(detail)+"); re-run dottie pull", 4)
+	}
+	return urfave.Exit("pull did not complete: the apply finished but the accepted floor is unchanged ("+escapeField(detail)+"); re-run dottie pull", 3)
+}
+
 func pullApplyFailure(command *urfave.Command, output string, err error) error {
 	if writeErr := writeCommandOutput(command, output); writeErr != nil {
 		return writeErr
 	}
-	var refusal publicationApplyRefusal
+	var refusal publicationStageRefusal
 	var blocked *publicationstate.JournalBlockedError
 	switch {
 	case errors.As(err, &refusal) && refusal.Reason() == "backup_only":
@@ -480,7 +550,7 @@ func renderPullApplyReport(report service.PublicationApplyReport) string {
 	return fmt.Sprintf("pull: applied changes=%d unchanged=%d bytes=%d\n", report.Applied, report.Unchanged, report.BytesWritten)
 }
 
-func pullApplyConfirmationToken(binding publicationstate.Binding, plan [32]byte) [32]byte {
+func pullApplyConfirmationToken(binding publicationstate.Binding, plan [32]byte, stateToken [32]byte, observationDigest [32]byte) [32]byte {
 	digest := sha256.New()
 	var length [4]byte
 	writeField := func(value string) {
@@ -488,12 +558,14 @@ func pullApplyConfirmationToken(binding publicationstate.Binding, plan [32]byte)
 		_, _ = digest.Write(length[:])
 		_, _ = digest.Write([]byte(value))
 	}
-	writeField("dottie/pull-apply/v1")
+	writeField("dottie/pull-apply/v2")
 	writeField(binding.AccountDID)
 	writeField(string(binding.Backend))
 	writeField(binding.Repository)
 	_, _ = digest.Write(binding.Vault[:])
 	_, _ = digest.Write(plan[:])
+	_, _ = digest.Write(stateToken[:])
+	_, _ = digest.Write(observationDigest[:])
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))
 	return token
@@ -580,13 +652,9 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 		if err != nil {
 			return fail(err)
 		}
-		payload := func(ctx context.Context, record publication.SnapshotRecord) (model.Snapshot, error) {
-			blob, fetchErr := blobs.FetchBlob(ctx, identity.DID, record.Blob.CID, int64(record.Blob.Size))
-			if fetchErr != nil {
-				return model.Snapshot{}, fetchErr
-			}
-			return publication.DecodePayload(blob, record.Blob)
+		blob := func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
+			return blobs.FetchBlob(ctx, identity.DID, record.Blob.CID, int64(record.Blob.Size))
 		}
-		return pullRemote{Reader: reader, Payload: payload, Close: func() { _ = keyring.Close() }}, nil
+		return pullRemote{Reader: reader, Blob: blob, Close: func() { _ = keyring.Close() }}, nil
 	}
 }

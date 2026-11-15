@@ -91,19 +91,30 @@ compares the provider's validated view with the locally recorded accepted floor.
 `pull: diverges (payload_size)`; or `pull: unreadable (reason)` with the typed reason (`position_absent`,
 `floor_absent`, `binding`, `locked`, `io`, `schema`, `upgrade_required`, `corrupt`, `record` or the reader's view
 reason). The comparison reads the position through the authenticated `PublicationReader.ReadView` and the local
-floor through the immutable `publicationstate.Inspect`: it never opens the position store, never takes its
-lifetime lock, never fetches the payload blob, applies and reconciles nothing, establishes no base and writes no
-file, row or WAL.
+floor through the immutable `publicationstate.Inspect`: the comparison never opens the position store, never takes
+its lifetime lock, never fetches the payload blob, applies and reconciles nothing, establishes no base and writes
+no file, row or WAL.
 
 After the comparison, `pull` composes the apply plan for the configured files targets from the authenticated base
 snapshot at the accepted floor and the provider's terminal view. It never applies without confirmation: a
 non-empty plan is printed with a `confirmation:` token, and `--confirm TOKEN` repeats the run with that token to
-apply it. The token is bound to the selection binding and the plan digest, so a changed plan, a different vault or
-a stale token refuses instead of applying something that was not shown. An empty plan and an `absent` position
-apply nothing and exit 0. Applying goes through the same journal, admission, apply lease, containment, captured
-preimage and backup-only refusals the engine enforces, and a backup-only selection always refuses to apply. Exit 2
-is usage, exit 3 is a local refusal (unusable store, unusable plan, backup-only, lease held) and exit 4 is an
-indeterminate provider read. `pull` takes `--did`, optional `--vault` and `--confirm`; no other flag is new.
+apply it. Before printing, `pull` stages the acceptance for the material the plan was built from and binds the
+selection binding, the plan digest, the staged acceptance state token and the observation digest into the token, so
+a changed plan, a different vault, a moved provider observation or a moved local position refuses instead of
+applying or accepting something that was not shown. An empty plan and an `absent` position apply and accept
+nothing and exit 0. Applying goes through the same journal, admission, apply lease, containment, captured preimage
+and backup-only refusals the engine enforces, and a backup-only selection always refuses to apply.
+
+A confirmed run applies the plan first and accepts the material second, never one transaction for both. After a
+fully applied plan it re-validates that the accepted floor revision is still the one the plan used, then accepts
+the applied material into the position store with mode `advance` when a floor exists and `first-use` only when the
+store reports none; a replacement floor is never offered by `pull`. The run prints the new `floor:` revision, so
+the next `pull` reports `matches` instead of re-planning the same apply. A refusal at accept leaves the applied
+files and the unchanged floor behind, prints `pull: applied but not accepted` with the typed reason and exits 3; an
+accept whose outcome cannot be proven exits 4 without claiming success. Exit 2 is usage, exit 3 is a local refusal
+(unusable store, unusable plan, backup-only, lease held, unusable acceptance) and exit 4 is an indeterminate
+provider read or an unproven acceptance. `pull` takes `--did`, optional `--vault` and `--confirm`; no other flag is
+new.
 
 Divergence is a finding, not a failure, so a completed comparison exits 0; exit 2 is usage,
 exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, no accepted floor,
