@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -49,6 +50,7 @@ const (
 	publicationApplyReasonCaptureIncomplete publicationReconciliationReason = "capture_incomplete"
 	publicationApplyReasonBounds            publicationReconciliationReason = "bounds_exceeded"
 	publicationApplyReasonPlanUnresolved    publicationReconciliationReason = "plan_unresolved"
+	publicationApplyReasonConfirmation      publicationReconciliationReason = "confirmation_mismatch"
 	publicationApplyReasonRoot              publicationReconciliationReason = "root_mismatch"
 	publicationApplyReasonContainment       publicationReconciliationReason = "containment_refused"
 	publicationApplyReasonParent            publicationReconciliationReason = "missing_parent"
@@ -104,6 +106,20 @@ type PublicationApplyRequest struct {
 	Local          *PublicationLocalContext
 	FileSystem     files.ApplyFileSystem
 	Barrier        func(PublicationApplyPhase, publicationstate.JournalEntry) error
+	ExpectedPlan   [32]byte
+}
+
+type PublicationApplyPlan struct {
+	Entries []PublicationApplyPlanEntry
+	Changes int
+	Digest  [32]byte
+}
+
+type PublicationApplyPlanEntry struct {
+	TargetID  string
+	Path      string
+	Operation PublicationApplyOperation
+	Size      uint64
 }
 
 type PublicationApplyEntry struct {
@@ -218,6 +234,9 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 	if err != nil {
 		return report, err
 	}
+	if request.ExpectedPlan != ([32]byte{}) && publicationApplyPlanDigest(operations) != request.ExpectedPlan {
+		return report, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonConfirmation, nil)
+	}
 	for _, operation := range operations {
 		if err := ctx.Err(); err != nil {
 			return report, publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonCanceled, err)
@@ -239,8 +258,70 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 	return report, nil
 }
 
+func PlanPublicationApply(ctx context.Context, request PublicationApplyRequest) (PublicationApplyPlan, error) {
+	plan := PublicationApplyPlan{Entries: make([]PublicationApplyPlanEntry, 0)}
+	if err := validatePublicationApplyPlanRequest(ctx, request); err != nil {
+		return plan, err
+	}
+	fileSystem := request.FileSystem
+	if fileSystem == nil {
+		fileSystem = files.DefaultApplyFileSystem()
+	}
+	operations, err := planPublicationApply(ctx, request, fileSystem)
+	if err != nil {
+		return plan, err
+	}
+	plan.Digest = publicationApplyPlanDigest(operations)
+	for _, operation := range operations {
+		plan.Entries = append(plan.Entries, PublicationApplyPlanEntry{
+			TargetID: operation.targetID, Path: operation.path, Operation: operation.kind, Size: operation.post.Size,
+		})
+		if operation.kind != PublicationApplyUnchanged {
+			plan.Changes++
+		}
+	}
+	return plan, nil
+}
+
+func publicationApplyPlanDigest(operations []publicationApplyOperation) [32]byte {
+	digest := sha256.New()
+	var scratch [8]byte
+	writeField := func(value string) {
+		binary.BigEndian.PutUint64(scratch[:], uint64(len(value)))
+		_, _ = digest.Write(scratch[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	for _, operation := range operations {
+		writeField(operation.targetID)
+		writeField(operation.path)
+		writeField(string(operation.kind))
+		_, _ = digest.Write(operation.post.Digest[:])
+		binary.BigEndian.PutUint64(scratch[:], operation.post.Size)
+		_, _ = digest.Write(scratch[:])
+		if operation.captured.present {
+			_, _ = digest.Write([]byte{1})
+			_, _ = digest.Write(operation.captured.digest[:])
+			var mode [4]byte
+			binary.BigEndian.PutUint32(mode[:], operation.captured.mode)
+			_, _ = digest.Write(mode[:])
+		} else {
+			_, _ = digest.Write([]byte{0})
+		}
+	}
+	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result
+}
+
 func validatePublicationApplyRequest(ctx context.Context, request PublicationApplyRequest) error {
-	if ctx == nil || request.Journal == nil || request.Local == nil || len(request.Configuration.Targets) == 0 || request.Roots == nil {
+	if request.Journal == nil {
+		return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonRequestInvalid, nil)
+	}
+	return validatePublicationApplyPlanRequest(ctx, request)
+}
+
+func validatePublicationApplyPlanRequest(ctx context.Context, request PublicationApplyRequest) error {
+	if ctx == nil || request.Local == nil || len(request.Configuration.Targets) == 0 || request.Roots == nil {
 		return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonRequestInvalid, nil)
 	}
 	if request.Vault == ([32]byte{}) {

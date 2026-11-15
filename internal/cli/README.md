@@ -2,7 +2,7 @@
 
 ## Manual coordinator workflows
 
-`dottie status` is local-only. `dottie pull` is a read-only inspection of the v2 publication position, described with the push and sync commands below; it is not the legacy read path and never applies, reconciles or establishes a base. Without a vault override, the manual read, preview, restore and recovery commands require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
+`dottie status` is local-only. `dottie pull` inspects the v2 publication position and applies a reviewed, confirmed plan, described with the push and sync commands below; it is not the legacy read path and never reconciles. Without a vault override, the manual read, preview, restore and recovery commands require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
 
 `dottie preview --target ID ...` prints names, action/reason, sizes and a candidate digest, never file contents or GSettings values. The digest covers the verified remote snapshot, local target policy/selection, captured observations, reconciliation decisions and resulting action set. It changes when any same-size candidate content or intended postimage changes. `dottie restore --target ID [--confirm DIGEST] ...` reads and recomputes the candidate before mutation. `backup-only` refuses; `review` requires a matching `--confirm`; `auto-apply` still re-verifies. Apply is limited to current/verified-descendant checkpoints, prepared roots and journaled syncengine operations. Pending journals are recovered before apply. A failed operation reports the applied prefix, failed item and untouched suffix. `dottie recover` runs journal recovery without a remote session.
 
@@ -93,7 +93,19 @@ compares the provider's validated view with the locally recorded accepted floor.
 reason). The comparison reads the position through the authenticated `PublicationReader.ReadView` and the local
 floor through the immutable `publicationstate.Inspect`: it never opens the position store, never takes its
 lifetime lock, never fetches the payload blob, applies and reconciles nothing, establishes no base and writes no
-file, row or WAL. Divergence is a finding, not a failure, so a completed comparison exits 0; exit 2 is usage,
+file, row or WAL.
+
+After the comparison, `pull` composes the apply plan for the configured files targets from the authenticated base
+snapshot at the accepted floor and the provider's terminal view. It never applies without confirmation: a
+non-empty plan is printed with a `confirmation:` token, and `--confirm TOKEN` repeats the run with that token to
+apply it. The token is bound to the selection binding and the plan digest, so a changed plan, a different vault or
+a stale token refuses instead of applying something that was not shown. An empty plan and an `absent` position
+apply nothing and exit 0. Applying goes through the same journal, admission, apply lease, containment, captured
+preimage and backup-only refusals the engine enforces, and a backup-only selection always refuses to apply. Exit 2
+is usage, exit 3 is a local refusal (unusable store, unusable plan, backup-only, lease held) and exit 4 is an
+indeterminate provider read. `pull` takes `--did`, optional `--vault` and `--confirm`; no other flag is new.
+
+Divergence is a finding, not a failure, so a completed comparison exits 0; exit 2 is usage,
 exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, no accepted floor,
 unreadable or invalid position, invalid provider view) and exit 4 is an indeterminate provider read. Output never
 contains the vault, account DID, absolute paths, tokens or payload bytes. `restore`, `preview`, `status`,

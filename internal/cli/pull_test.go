@@ -11,12 +11,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"testing"
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
@@ -29,11 +31,28 @@ import (
 
 const pullTestDID = "did:plc:abcdefghijklmnopqrstuvwx"
 
+const (
+	pullTestBaseContent   = "synthetic pull payload"
+	pullTestRemoteContent = "synthetic pull payload two"
+)
+
 type pullTestReader struct {
-	mu    sync.Mutex
-	view  publicationstate.SuppliedRepositoryView
-	err   error
-	reads int
+	mu       sync.Mutex
+	view     publicationstate.SuppliedRepositoryView
+	payloads map[uint64]model.Snapshot
+	err      error
+	reads    int
+}
+
+func (reader *pullTestReader) ReadPayload(ctx context.Context, record publication.SnapshotRecord) (model.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Snapshot{}, err
+	}
+	snapshot, ok := reader.payloads[record.PublicationSeq]
+	if !ok {
+		return model.Snapshot{}, errors.New("synthetic payload is unavailable")
+	}
+	return snapshot, nil
 }
 
 func (reader *pullTestReader) ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error) {
@@ -67,13 +86,14 @@ func (failure pullTestViewFailure) Unwrap() error { return failure.cause }
 func (failure pullTestViewFailure) Reason() string { return failure.reason }
 
 type pullTestFixture struct {
-	paths   platform.Paths
-	binding publicationstate.Binding
-	payload []byte
-	context publicationstate.SuppliedContext
-	block   publicationstate.SnapshotBlock
-	record  publication.SnapshotRecord
-	head    []byte
+	paths    platform.Paths
+	binding  publicationstate.Binding
+	payload  []byte
+	snapshot model.Snapshot
+	context  publicationstate.SuppliedContext
+	block    publicationstate.SnapshotBlock
+	record   publication.SnapshotRecord
+	head     []byte
 }
 
 func newPullTestFixture(t *testing.T) *pullTestFixture {
@@ -89,15 +109,16 @@ func newPullTestFixture(t *testing.T) *pullTestFixture {
 	}
 	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
 	binding.Repository = "at://" + binding.AccountDID
-	packed, err := vault.Pack(model.Snapshot{
+	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
 		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic pull payload"), Mode: 0o600}}},
-	})
+		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(pullTestBaseContent), Mode: 0o600}}},
+	}
+	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
 	block, record := pullTestSnapshot(t, binding, packed.Payload, 0, nil)
 	return &pullTestFixture{
-		paths: paths, binding: binding, payload: packed.Payload,
+		paths: paths, binding: binding, payload: packed.Payload, snapshot: snapshot,
 		context: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-pull-revision", RepositoryDigest: []byte{0x51, 0x52, 0x53}},
 		block:   block, record: record, head: pullTestHead(t, binding, block, record),
 	}
@@ -184,6 +205,62 @@ func (fixture *pullTestFixture) emptyStore(t *testing.T) {
 	require.NoError(t, fixture.openStore(t).Close())
 }
 
+func (fixture *pullTestFixture) payloads() map[uint64]model.Snapshot {
+	return map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot}
+}
+
+func (fixture *pullTestFixture) advancedView(t *testing.T, content string) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
+	t.Helper()
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion, Targets: fixture.snapshot.Targets,
+		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: 0o600}}},
+	}
+	packed, err := vault.Pack(snapshot)
+	require.NoError(t, err)
+	parent, err := publication.RecordCID(fixture.block.Raw)
+	require.NoError(t, err)
+	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, fixture.record.PublicationSeq+1, parent)
+	view := publicationstate.SuppliedRepositoryView{
+		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: fixture.context,
+		Head:            pullTestHead(t, fixture.binding, block, record),
+		Snapshots:       []publicationstate.SnapshotBlock{{Key: fixture.block.Key, Raw: bytes.Clone(fixture.block.Raw)}, block},
+	}
+	payloads := map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot, record.PublicationSeq: snapshot}
+	return view, payloads
+}
+
+func (fixture *pullTestFixture) writeBaseFile(t *testing.T) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.targetPath("init.lua")), 0o700))
+	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte(pullTestBaseContent), 0o600))
+}
+
+func (fixture *pullTestFixture) configure(t *testing.T, mode config.Mode) {
+	t.Helper()
+	directory := fixture.paths.AppConfigDir()
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	require.NoError(t, os.Chmod(directory, 0o700))
+	content := "config_version = 2\n\n[[targets]]\nid = \"files\"\nsource = \"files\"\n"
+	if mode != "" {
+		content += "mode = \"" + string(mode) + "\"\n"
+	}
+	content += "\n[targets.root]\nbase = \"home\"\npath = \"config\"\nkind = \"directory\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, config.FileName), []byte(content), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "config"), 0o700))
+}
+
+func (fixture *pullTestFixture) targetPath(name string) string {
+	return filepath.Join(fixture.paths.Home, "config", name)
+}
+
+func pullTestConfirmation(t *testing.T, output string) string {
+	t.Helper()
+	match := regexp.MustCompile(`(?m)^confirmation: ([0-9a-f]{64})$`).FindStringSubmatch(output)
+	require.Len(t, match, 2)
+	return match[1]
+}
+
 func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int) *urfave.Command {
 	t.Helper()
 	t.Setenv("HOME", fixture.paths.Home)
@@ -201,9 +278,9 @@ func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *
 		if factoryCalls != nil {
 			*factoryCalls++
 		}
-		return pullRemote{Reader: reader, Close: func() {}}, nil
+		return pullRemote{Reader: reader, Payload: reader.ReadPayload, Close: func() {}}, nil
 	}
-	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, os.Getenv)
+	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), os.Getenv)
 }
 
 func runPullForTest(command *urfave.Command, exitCode *int, args ...string) int {
@@ -519,6 +596,7 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 		{name: "handle instead of did", args: []string{"--did", pullTestDID, "--handle", "example.test", "--vault", pullTestVaultHex()}, want: "a handle cannot be resolved before the publication scope check"},
 		{name: "invalid did", args: []string{"--did", "not-a-did", "--vault", pullTestVaultHex()}, want: "--did must be a valid account DID"},
 		{name: "malformed vault", args: []string{"--did", pullTestDID, "--vault", "abcd"}, want: "--vault must be a 32-byte hexadecimal identifier"},
+		{name: "malformed confirmation", args: []string{"--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", "abcd"}, want: "--confirm must be the 32-byte hexadecimal confirmation printed by dottie pull"},
 		{name: "positional argument", args: []string{"--did", pullTestDID, "--vault", pullTestVaultHex(), "extra"}, want: "pull takes no positional arguments"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -532,4 +610,152 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 		})
 	}
 	assert.Zero(t, factoryCalls)
+}
+
+func TestPullConfirmationTokenBindsTheVaultAndPlan(t *testing.T) {
+	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding.Repository = "at://" + pullTestDID
+	plan := sha256.Sum256([]byte("prepared plan"))
+	token := pullApplyConfirmationToken(binding, plan)
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan"))))
+	otherVault := binding
+	otherVault.Vault = [32]byte{0x63}
+	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan))
+	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan))
+}
+
+func TestPullPrintsTheApplyPlanAndAppliesOnlyThePreparedToken(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "pull: diverges (record_cid)\n")
+	assert.Contains(t, stdout.String(), "apply: changes=1 unchanged=0\n")
+	assert.Contains(t, stdout.String(), fmt.Sprintf("apply: write init.lua size=%d\n", len(pullTestRemoteContent)))
+	assert.Contains(t, stdout.String(), "pull: plan only; nothing was applied; repeat with --confirm ")
+	assert.NotContains(t, stdout.String(), "pull: applied")
+	target := fixture.targetPath("init.lua")
+	content, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content), "the unconfirmed plan changed a target file")
+	token := pullTestConfirmation(t, stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)))
+	content, err = os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, pullTestRemoteContent, string(content))
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestPullAppliesNothingWhenTheProviderMatchesTheFloor(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: matches\n", stdout.String())
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
+}
+
+func TestPullRefusesAConfirmationWhosePlanChanged(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	firstView, firstPayloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: firstView, payloads: firstPayloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	secondView, secondPayloads := fixture.advancedView(t, "synthetic pull payload three")
+	reader = &pullTestReader{view: secondView, payloads: secondPayloads}
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "stale or bound to a different vault")
+	assert.Contains(t, stdout.String(), "apply: changes=1 unchanged=0\n")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content), "a stale confirmation applied the plan")
+}
+
+func TestPullRefusesABackupOnlySelectionWithoutApplying(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, config.BackupOnly)
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "backup-only")
+	assert.NotContains(t, stdout.String(), "confirmation:")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
+}
+
+func TestPullSurfacesAnApplyLeaseRefusal(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	journal, err := publicationstate.OpenJournal(fixture.paths.PublicationStateDir())
+	require.NoError(t, err)
+	lease, err := journal.AcquireApplyLease(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, journal.Close())
+	defer func() { assert.NoError(t, lease.Close()) }()
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "apply_lease_held")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
 }
