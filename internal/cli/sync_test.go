@@ -368,8 +368,9 @@ func (fixture *syncTestFixture) setEnvironment(t *testing.T) {
 }
 
 type syncTestHooks struct {
-	preview func(*syncTestFixture)
-	push    func(*syncTestFixture)
+	preview  func(*syncTestFixture)
+	provider func(*syncTestFixture)
+	push     func(*syncTestFixture)
 }
 
 func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks, args ...string) (int, string, string) {
@@ -391,6 +392,9 @@ func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks,
 		}, nil
 	}
 	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		if hooks.provider != nil {
+			hooks.provider(fixture)
+		}
 		if hooks.push != nil {
 			hooks.push(fixture)
 		}
@@ -744,4 +748,35 @@ func mustPullBlobSize(t *testing.T, raw []byte) uint64 {
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
 	return record.Blob.Size
+}
+
+func TestSyncRefusesAProviderViewThatDivergesWhileTheFloorStillMatches(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	before := fixture.readFloor(t)
+	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	token := syncTestToken(t, stdout)
+
+	code, confirmed, stderr := runSyncForTest(t, fixture, syncTestHooks{provider: func(fixture *syncTestFixture) {
+		fixture.transport.mu.Lock()
+		defer fixture.transport.mu.Unlock()
+		terminalKey := ""
+		for key := range fixture.transport.blocks {
+			if key > terminalKey {
+				terminalKey = key
+			}
+		}
+		require.NotEmpty(t, terminalKey)
+		earlier := bytes.Clone(fixture.transport.blocks[terminalKey])
+		fixture.transport.blocks["0000000000000"] = earlier
+	}}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 4, code)
+	assert.Contains(t, confirmed, "pull: applied changes=1")
+	assert.Contains(t, stderr, "post_pull_provider_moved")
+	assert.Equal(t, before.Revision+1, fixture.readFloor(t).Revision, "the pull half did not stay accepted")
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads, "a diverged provider view uploaded")
+	assert.Zero(t, sends, "a diverged provider view dispatched writes")
+	assert.Zero(t, fixture.proposalCount(t), "a diverged provider view left a retained record")
 }
