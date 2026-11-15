@@ -2,24 +2,21 @@
 
 ## Reachability
 
-No production path in this tree reaches `Apply`, `ApplyRequest`, `Postimage`, `SettingPostimage`,
-`ModePolicy`, `PartialApplyError` or `RollbackApplied`. `dottie preview` and `dottie restore` were the
-last commands that composed them, and both were retired: `syncengine.Apply` is unreachable dead code
-retained only because `internal/syncengine/apply_test.go` and `internal/syncengine/rollback_test.go`
-still drive it. The retained apply path is `service.ApplyPublication` over `publicationstate`, which
-consumes only `Reconcile`, `BuildPreview` and `PreviewEntry` from this package. `go test ./internal/cli
--run TestRemovedV1ApplyEngineHasNoProductionReference` fails if any non-test file under `cmd/`,
-`internal/cli` or `internal/service` references `syncengine.Apply` again. The `tests/local` v1 apply,
-rollback and publication-reconcile suites were deleted with the retired commands; the two-machine v2
-gate and the single-machine `publication_apply` tests cover the replacement path. Retiring this engine
-and its two package test files is the next slice's work.
+`Reconcile`, `BuildPreview`, `Preview` and `PreviewEntry` are reached from `internal/service` for v2
+publication planning. `dottie pull --confirm` is the only apply path; it journals and applies through
+`publicationstate`, not this package. `RecoverInterruptedWithSettings` is reached from
+`internal/service` by `dottie recover`, with `RecoverInterrupted` as the file-only wrapper. The v1
+`Apply` and `RollbackApplied` engines, their apply and rollback internals, and their package test files
+were deleted with the retired `dottie preview` and `dottie restore` commands, as were the `tests/local`
+v1 apply, rollback and publication-reconcile suites. `go test ./internal/cli -run
+TestRemovedV1ApplyEngineHasNoProductionReference` fails if any non-test file under `cmd/`,
+`internal/cli` or `internal/service` references a removed v1 apply or rollback symbol again, or if this
+package redeclares one. The two-machine v2 gate and the single-machine `publication_apply` tests cover
+the replacement path.
 
 `Reconcile` is a pure, deterministic decision function. It takes an explicit `BaseView`, a
 `LocalView`, remote entries, and caller-supplied validated target bindings. It performs no I/O,
-uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan. The
-separate journaled `Apply` consumer accepts supported file operations and library-level GNOME
-settings set/reset with a supplied backend; it does not change the reconciliation function or
-authorize target roots.
+uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan.
 
 ## Input and ownership
 
@@ -70,12 +67,11 @@ the remote.
 An `ObservationPresent` carrying a `SettingReset` entry represents an explicit GNOME reset.
 Present file observations retain their existing validation. `BuildPreview` treats present and
 reset settings as transferable candidates and can represent reset-to-present or present-to-reset
-upload/download changes without retaining a setting value in the preview. The journaled apply consumer
-accepts supported file operations and library-level GNOME setting set/reset when the caller supplies a
-settings backend; CLI/preset activation remains later work. Unsupported file kinds are rejected during model validation before a reconciliation
-decision exists, so unsupported is not a preview outcome here. This pure layer does not inspect
-target roots, so it cannot infer a disappeared-root risk from supplied decisions. The CLI's JSON
-bundle supplies input only; it does not make capture or synchronization operational.
+upload/download changes without retaining a setting value in the preview. Unsupported file kinds are
+rejected during model validation before a reconciliation decision exists, so unsupported is not a
+preview outcome here. This pure layer does not inspect target roots, so it cannot infer a
+disappeared-root risk from supplied decisions. The CLI's JSON bundle supplies input only; it does not
+make capture or synchronization operational.
 
 ## State classification and precedence
 
@@ -164,11 +160,12 @@ a plan is a plaintext data leak. Do not log a `Plan`. `Plan.Diagnostic` and `Enc
 produce the redacted diagnostic form; it contains only entry keys, actions, reasons, and digests.
 That diagnostic form is the only representation suitable for logs.
 
-`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The
-journaled local apply path permits only `download` and `delete-local` reconciliation actions;
-uploads, remote deletes and blocked, untracked, unknown or conflict entries are not local writes.
-An entry's supplied postimage digest checks that the bytes match the caller-supplied digest; it does
-not independently establish that those bytes are the right candidate for the reconciled action.
+`conflict` and `blocked` are non-actionable. Consumers must not apply either automatically. The v2
+local apply path in `internal/service` permits only `download` and `delete-local` reconciliation
+actions; uploads, remote deletes and blocked, untracked, unknown or conflict entries are not local
+writes. An entry's postimage digest in that journal checks that the bytes match the caller-supplied
+digest; it does not independently establish that those bytes are the right candidate for the
+reconciled action.
 
 ## Precedence, as implemented
 
@@ -186,65 +183,25 @@ GNOME target MUST list every key it did not successfully read in `LocalView.Unkn
 neither in `Entries` nor in `Unknown` is treated as known-absent and can drive a deletion, which is
 correct only if the caller's observation really covered it. This is the contract L10 relies on.
 
-## Journaled apply
+## Recovery
 
-`Apply` consumes the content-free preview together with caller-resolved destination roots, an exact
-set of postimage bytes/digests/modes for file create/change entries, a local `ModePolicy`, an
-injected filesystem boundary, and—when the preview contains GNOME settings—an exact set of
-canonicalized setting postimages plus a `SettingsBackend`. It refuses directories, symlinks, root
-deletion, unmatched content and unsupported actions before writing a journal row. File mode policy
-has a restrictive `0600` default and optional per-target overrides; an incoming content mode must
-match that local choice and is never transplanted.
+`RecoverInterruptedWithSettings` is the recovery entry point used by `dottie recover` through
+`internal/service`; `RecoverInterrupted` is the file-only wrapper that supplies a nil settings
+backend. The journal stores the resolved destination directory and its device/inode identity, so
+recovery does not re-resolve a target from changed configuration.
 
-Settings are observed and precondition-checked, canonicalized against the schema key, journaled with
-a small typed-value backup, rechecked, set or reset, synchronized by the adapter, and read back
-exactly. A failure stops the sequence; earlier applied entries remain journaled. `PartialApplyError`
-reports the applied prefix and the failed entry. Recovery and rollback have settings-aware variants;
-the file-only functions remain wrappers with a nil settings backend. Pruning an eligible setting
-backup clears the journal's stored value fields in the same transaction.
+Recovery classifies every pending row independently: a preimage match means failed, a destination
+matching neither fingerprint is indeterminate, and a postimage match is also indeterminate because a
+user's identical edit cannot be distinguished from Dottie's completed write using the current journal
+evidence. Missing or changed destination roots are indeterminate and untouched. Re-running recovery
+is idempotent. Older journal rows without a resolved root are reported indeterminate rather than
+redirected through current target configuration.
 
-Before acting, apply observes all requested paths and compares each available preview digest and
-mode; it repeats the comparison immediately before each journaled operation. The filesystem operation
-also receives the expected preimage and re-hashes/re-checks its mode immediately before rename or
-remove. A mismatch returns `ErrPreconditionChanged` and leaves the destination and staged replacement
-untouched. For replacement, this moves the check past temporary-file writing and fsync, shrinking the
-race window from that whole interval to the final stat-to-rename instant; deletion has the equivalent
-stat-to-remove interval. These are check-then-mutate operations, not atomic conditional writes: they cannot prevent a
-concurrent edit in the final syscall window. The recheck states the preimage size the engine observed, so a
-destination that grew after that observation is refused after one byte past the observed size instead of
-being read in full; the engine's own observations and a recheck whose expected preimage states no size
-remain unbounded.
-Each file operation records a pending state row and an immutable backup before touching the
-destination. The journal stores the resolved destination directory and its device/inode identity, so
-recovery does not re-resolve a target from changed configuration. Replacements use same-directory
-temp-and-rename, then read back the bytes and mode. Success marks the entry applied and retains its
-backup for seven days. Failure marks an entry failed only when the preimage is still present;
-otherwise it remains indeterminate with its backup retained. A caller must invoke
-`RecoverInterrupted(ctx, store, filesystem, clock)` before beginning new apply work; `Apply` returns
-`ErrRecoveryRequired` while pending rows remain. Recovery classifies every pending row independently:
-a preimage match means failed, a destination matching neither fingerprint is indeterminate, and a
-postimage match is also indeterminate because a user's identical edit cannot be distinguished from
-Dottie's completed write using the current journal evidence. Missing or changed destination roots
-are indeterminate and untouched. Re-running recovery is idempotent. Older journal rows without a
-resolved root are reported indeterminate rather than redirected through current target configuration.
-
-`RollbackApplied` is also local-only and reports one result per entry. It restores an entry only
-while the destination still matches that entry's postimage; a newer edit is left untouched and
-reported as `skipped-newer-edit`. That skip is durable, blocks restoration of older journal history
-for the same destination, and retains the backup. Rollback intent is persisted before mutation;
-interrupted or indeterminate restores are not retried as successful restores and their backups are
-not expired. Each restore is verified against the recorded preimage before being marked rolled-back.
-Verified rolled-back material is pruned; verified applied backups expire after seven days. Failed
-and indeterminate backups are never pruned. The state journal's setting foundations define
-`setting-set`, `setting-reset` and `setting-read-back` stages and enumerate journal rows in SQLite
-`rowid` insertion order. Pruning an eligible setting backup atomically detaches the backup and clears
-its preimage/postimage value type and text fields; unresolved rows retain their recovery material.
-The global rollback-material limit is 256 MiB until targets are associated with vaults; an apply that would exceed it fails with
-a typed error naming the entries holding existing material, and no existing backup is dropped to
-make room. Age cleanup and bound checks use the injected clock. If a future case is unclear, retain
+Pending GNOME rows need a settings backend. Without one, a setting that cannot be observed or is
+locked, or a setting matching neither fingerprint, is indeterminate; a setting still matching its
+preimage is failed. A setting matching its postimage remains indeterminate for the same reason as a
+file destination matching its postimage. Recovery then prunes expired journal backups. Failed and
+indeterminate backups are never pruned; eligible applied backups expire after seven days. Pruning an
+eligible setting backup atomically detaches the backup and clears its preimage/postimage value type
+and text fields; unresolved rows retain their recovery material. If a future case is unclear, retain
 the backup rather than deleting it on a judgment call.
-
-Apply and rollback are per-entry operations, not a transaction. A failing entry stops the apply
-sequence; earlier entries may already be applied and later entries are not. A rollback may restore
-some entries and skip or fail others, and its report states the result for each. Apply
-never infers deletion from absence and never deletes directories or files absent from the preview.

@@ -16,8 +16,43 @@ import (
 
 const v1ApplyEngineImport = "github.com/lamb-systems/dottie/internal/syncengine"
 
+var removedV1ApplySymbols = map[string]bool{
+	"Apply":                       true,
+	"ApplyRequest":                true,
+	"ErrNotActionable":            true,
+	"ErrPreconditionChanged":      true,
+	"ErrRecoveryRequired":         true,
+	"MaxRollbackMaterialBytes":    true,
+	"ModePolicy":                  true,
+	"NotActionableError":          true,
+	"PartialApplyError":           true,
+	"Postimage":                   true,
+	"RollbackApplied":             true,
+	"RollbackAppliedWithSettings": true,
+	"RollbackMaterialLimitError":  true,
+	"RollbackReport":              true,
+	"SettingPostimage":            true,
+	"UnsupportedApplyEntryError":  true,
+}
+
 func TestRemovedV1ApplyEngineHasNoProductionReference(t *testing.T) {
 	root := filepath.Join("..", "..")
+
+	reintroduced := make([]string, 0)
+	syncengineDir := filepath.Join(root, "internal", "syncengine")
+	entries, err := os.ReadDir(syncengineDir)
+	require.NoError(t, err, "read syncengine directory")
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(syncengineDir, entry.Name())
+		found, err := fileDeclaresRemovedApplySymbol(path)
+		require.NoError(t, err, "parse syncengine file")
+		reintroduced = append(reintroduced, found...)
+	}
+	assert.Empty(t, reintroduced, "the retired v1 apply engine must stay deleted")
+
 	references := make([]string, 0)
 	for _, directory := range []string{filepath.Join("cmd"), filepath.Join("internal", "cli"), filepath.Join("internal", "service")} {
 		entries, err := os.ReadDir(filepath.Join(root, directory))
@@ -27,7 +62,7 @@ func TestRemovedV1ApplyEngineHasNoProductionReference(t *testing.T) {
 				continue
 			}
 			path := filepath.Join(root, directory, entry.Name())
-			found, err := fileReferencesApply(path)
+			found, err := fileReferencesRemovedApplySymbol(path)
 			require.NoError(t, err, "parse production file")
 			if found {
 				references = append(references, path)
@@ -37,7 +72,39 @@ func TestRemovedV1ApplyEngineHasNoProductionReference(t *testing.T) {
 	assert.Empty(t, references, "production code must not reach the retired v1 apply engine")
 }
 
-func fileReferencesApply(path string) (bool, error) {
+func fileDeclaresRemovedApplySymbol(path string) ([]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	found := make([]string, 0)
+	for _, declaration := range file.Decls {
+		switch declaration := declaration.(type) {
+		case *ast.FuncDecl:
+			if declaration.Recv == nil && removedV1ApplySymbols[declaration.Name.Name] {
+				found = append(found, declaration.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, spec := range declaration.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					if removedV1ApplySymbols[spec.Name.Name] {
+						found = append(found, spec.Name.Name)
+					}
+				case *ast.ValueSpec:
+					for _, name := range spec.Names {
+						if removedV1ApplySymbols[name.Name] {
+							found = append(found, name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+	return found, nil
+}
+
+func fileReferencesRemovedApplySymbol(path string) (bool, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return false, err
@@ -62,7 +129,7 @@ func fileReferencesApply(path string) (bool, error) {
 	found := false
 	ast.Inspect(file, func(node ast.Node) bool {
 		selector, ok := node.(*ast.SelectorExpr)
-		if !ok || selector.Sel.Name != "Apply" {
+		if !ok || !removedV1ApplySymbols[selector.Sel.Name] {
 			return true
 		}
 		identifier, ok := selector.X.(*ast.Ident)
