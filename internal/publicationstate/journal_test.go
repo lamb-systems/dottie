@@ -38,6 +38,7 @@ func journalTestIntent(preimage, postimage []byte, seenFloorRevision uint64) Jou
 		Operation:         "apply",
 		DestinationDir:    journalTestDirectory,
 		DestinationPath:   "init.lua",
+		Anchor:            journalTestAnchor(),
 		Postimage:         ObservedJournalFile(postimage),
 		SeenFloorRevision: seenFloorRevision,
 	}
@@ -49,8 +50,26 @@ func journalTestIntent(preimage, postimage []byte, seenFloorRevision uint64) Jou
 	return intent
 }
 
+func journalTestAnchor() JournalAnchor {
+	return JournalAnchor{Path: journalTestDirectory, Device: 42, Inode: 7}
+}
+
 func journalTestPath(name string) string {
 	return filepath.Join(journalTestDirectory, name)
+}
+
+func journalTestDeleteIntent(preimage []byte, seenFloorRevision uint64) JournalIntent {
+	intent := journalTestIntent(preimage, nil, seenFloorRevision)
+	intent.Operation = "delete"
+	intent.Postimage = ObservedFile{}
+	return intent
+}
+
+func journalStoredPostimage(t *testing.T, journal *Journal, entry int64) (any, any) {
+	t.Helper()
+	var digestValue, sizeValue any
+	require.NoError(t, journal.conn.QueryRowContext(context.Background(), "SELECT postimage_digest,postimage_size FROM journal WHERE entry=?", entry).Scan(&digestValue, &sizeValue))
+	return digestValue, sizeValue
 }
 
 func requireJournalError(t *testing.T, err error, class error, stage Stage, reason Reason) {
@@ -541,11 +560,11 @@ func TestJournalResolveInterruptedResolvesAndReports(t *testing.T) {
 	absent := begin("absent.lua", nil, 1)
 	observed[journalTestPath("absent.lua")] = ObservedFile{}
 
-	observe := func(path string) (ObservedFile, error) {
-		if path == unobservable {
+	observe := func(entry JournalEntry) (ObservedFile, error) {
+		if entry.Path() == unobservable {
 			return ObservedFile{}, errors.New("observation unavailable")
 		}
-		value, ok := observed[path]
+		value, ok := observed[entry.Path()]
 		if !ok {
 			return ObservedFile{}, errors.New("unexpected path")
 		}
@@ -614,17 +633,101 @@ func TestJournalResolveInterruptedResolvesAndReports(t *testing.T) {
 	requireJournalError(t, err, ErrStorage, StageJournal, ReasonCanceled)
 }
 
+func TestJournalDeleteIntentBeginsWithoutAPostimage(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	preimage := []byte("preimage")
+
+	entry, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
+	require.NoError(t, err)
+	assert.False(t, entry.Postimage.Present)
+	assert.Equal(t, uint64(0), entry.Postimage.Size)
+	require.NotNil(t, entry.Preimage)
+	assert.Equal(t, journalTestVault(), entry.Vault)
+	state, stage := journalStoredState(t, journal, entry.Entry)
+	assert.Equal(t, JournalStatePending, state)
+	assert.Equal(t, JournalStageApplyPending, stage)
+	digestValue, sizeValue := journalStoredPostimage(t, journal, entry.Entry)
+	assert.Nil(t, digestValue)
+	assert.Nil(t, sizeValue)
+	require.NotNil(t, entry.BackupDigest)
+	retained, err := journal.BackupBytes(ctx, *entry.BackupDigest)
+	require.NoError(t, err)
+	assert.Equal(t, preimage, retained)
+}
+
+func TestJournalDeleteCompletionRequiresObservedAbsence(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	preimage := []byte("preimage")
+
+	applied, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
+	require.NoError(t, err)
+	requireJournalError(t, journal.CompleteJournal(ctx, applied, ObservedJournalFile(preimage)), ErrInvalid, StageJournal, ReasonJournalObservation)
+	state, stage := journalStoredState(t, journal, applied.Entry)
+	assert.Equal(t, JournalStatePending, state)
+	assert.Equal(t, JournalStageApplyPending, stage)
+
+	require.NoError(t, journal.CompleteJournal(ctx, applied, ObservedFile{}))
+	state, stage = journalStoredState(t, journal, applied.Entry)
+	assert.Equal(t, JournalStateApplied, state)
+	assert.Equal(t, JournalStageApplyComplete, stage)
+	requireJournalError(t, journal.CompleteJournal(ctx, applied, ObservedFile{}), ErrInvalid, StageJournal, ReasonTransition)
+
+	resolved, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
+	require.NoError(t, err)
+	resolutions, err := journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil })
+	require.NoError(t, err)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, JournalResolution{Entry: resolved.Entry, Outcome: JournalOutcomeApplied}, resolutions[0])
+	state, stage = journalStoredState(t, journal, resolved.Entry)
+	assert.Equal(t, JournalStateApplied, state)
+	assert.Equal(t, JournalStageApplyComplete, stage)
+}
+
+func TestJournalDeleteResolutionLeavesUndecidableRowsIndeterminate(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	preimage := []byte("preimage")
+
+	entry, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
+	require.NoError(t, err)
+	resolutions, err := journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) {
+		return ObservedJournalFile([]byte("user edit")), nil
+	})
+	require.NoError(t, err)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, JournalOutcomeIndeterminate, resolutions[0].Outcome)
+	state, stage := journalStoredState(t, journal, entry.Entry)
+	assert.Equal(t, JournalStateIndeterminate, state)
+	assert.Equal(t, JournalStageIndeterminate, stage)
+
+	var blocked *JournalBlockedError
+	err = journal.CheckAdmission(ctx, 100)
+	require.ErrorAs(t, err, &blocked)
+	assert.Equal(t, entry.Entry, blocked.Entry)
+	assert.Equal(t, JournalStateIndeterminate, blocked.State)
+
+	resolutions, err = journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil })
+	require.NoError(t, err)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, JournalOutcomeApplied, resolutions[0].Outcome)
+	state, stage = journalStoredState(t, journal, entry.Entry)
+	assert.Equal(t, JournalStateApplied, state)
+	assert.Equal(t, JournalStageApplyComplete, stage)
+}
+
 func TestJournalEntryBoundRefusesBeforeWriting(t *testing.T) {
 	ctx := context.Background()
 	journal, _ := newJournal(t)
 	tx, err := journal.conn.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	statement, err := tx.PrepareContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	statement, err := tx.PrepareContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	require.NoError(t, err)
 	vault := journalTestVault()
 	digest := sha256.Sum256([]byte("postimage"))
 	for index := 0; index < journalMaxEntries; index++ {
-		_, err = statement.ExecContext(ctx, vault[:], "apply", string(JournalStageApplyPending), string(JournalStatePending), []byte(journalTestDirectory), "file.lua", nil, nil, digest[:], 8, nil, 0, 1, 1)
+		_, err = statement.ExecContext(ctx, vault[:], "apply", string(JournalStageApplyPending), string(JournalStatePending), []byte(journalTestDirectory), "file.lua", []byte(journalTestDirectory), 42, 7, nil, nil, digest[:], 8, nil, 0, 1, 1)
 		require.NoError(t, err)
 	}
 	require.NoError(t, statement.Close())
@@ -667,7 +770,7 @@ func TestJournalLeavesPositionStoreUntouched(t *testing.T) {
 	_, err = journal.ResolveIndeterminate(ctx, second, ObservedJournalFile([]byte("replacement")))
 	require.NoError(t, err)
 	require.NoError(t, journal.CheckAdmission(ctx, 1))
-	_, err = journal.ResolveInterrupted(ctx, func(string) (ObservedFile, error) { return ObservedFile{}, nil })
+	_, err = journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil })
 	require.NoError(t, err)
 	require.NoError(t, journal.Close())
 
@@ -710,5 +813,201 @@ func journalPositionStoreBytes(t *testing.T, directory string) map[string]string
 }
 
 func journalFile(name string) bool {
-	return name == journalDatabaseName || name == journalLockName || name == journalWalName || name == journalShmName
+	return name == journalDatabaseName || name == journalLockName || name == journalWalName || name == journalShmName || name == journalLeaseName
+}
+
+func TestJournalBeginRefusesReusingCorruptBackup(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	preimage := []byte("original file bytes\n")
+	digest := sha256.Sum256(preimage)
+	entry, err := journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("replacement"), 4))
+	require.NoError(t, err)
+	require.Equal(t, digest, *entry.BackupDigest)
+
+	var sizeValue, dataValue any
+	truncated := preimage[:len(preimage)-4]
+	_, err = journal.conn.ExecContext(ctx, "UPDATE backups SET data=? WHERE digest=?", truncated, digest[:])
+	require.NoError(t, err)
+	_, err = journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("second replacement"), 4))
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+	assert.Equal(t, int64(1), journalStoredCount(t, journal, "journal"))
+	assert.Equal(t, int64(1), journalStoredCount(t, journal, "backups"))
+	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).Scan(&sizeValue, &dataValue))
+	assert.Equal(t, int64(len(preimage)), sizeValue)
+	assert.Equal(t, truncated, dataValue)
+
+	corrupt := append([]byte(nil), preimage...)
+	corrupt[0] ^= 0xff
+	_, err = journal.conn.ExecContext(ctx, "UPDATE backups SET data=? WHERE digest=?", corrupt, digest[:])
+	require.NoError(t, err)
+	_, err = journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("third replacement"), 4))
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+	assert.Equal(t, int64(1), journalStoredCount(t, journal, "journal"))
+	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).Scan(&sizeValue, &dataValue))
+	assert.Equal(t, int64(len(preimage)), sizeValue)
+	assert.Equal(t, corrupt, dataValue)
+}
+
+func TestJournalBackupReuseAcceptsVerifiedBytes(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	preimage := []byte("original file bytes\n")
+	first, err := journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("replacement"), 4))
+	require.NoError(t, err)
+	second, err := journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("second replacement"), 4))
+	require.NoError(t, err)
+	require.NotNil(t, second.BackupDigest)
+	assert.Equal(t, *first.BackupDigest, *second.BackupDigest)
+	assert.Equal(t, int64(1), journalStoredCount(t, journal, "backups"))
+	retained, err := journal.BackupBytes(ctx, *second.BackupDigest)
+	require.NoError(t, err)
+	assert.Equal(t, preimage, retained)
+}
+
+func journalInsertRawEntry(t *testing.T, ctx context.Context, journal *Journal, postimageDigest, postimageSize any) int64 {
+	t.Helper()
+	vault := journalTestVault()
+	result, err := journal.conn.ExecContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		vault[:], "apply", string(JournalStageApplyPending), string(JournalStatePending),
+		[]byte(journalTestDirectory), "init.lua", []byte(journalTestDirectory), 42, 7,
+		nil, nil, postimageDigest, postimageSize, nil, 0, 1, 1)
+	require.NoError(t, err)
+	id, err := result.LastInsertId()
+	require.NoError(t, err)
+	return id
+}
+
+func journalReadRawEntry(journal *Journal, entry int64) (JournalEntry, error) {
+	var read JournalEntry
+	err := journal.withTx(context.Background(), StageJournal, func(tx *sql.Tx) error {
+		var readErr error
+		read, readErr = readJournalEntry(context.Background(), tx, entry)
+		return readErr
+	})
+	return read, err
+}
+
+func TestJournalEntryScanRequiresNullForAbsence(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	empty := sha256.Sum256(nil)
+
+	_, err := journalReadRawEntry(journal, journalInsertRawEntry(t, ctx, journal, []byte{}, nil))
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+
+	present := journalInsertRawEntry(t, ctx, journal, empty[:], int64(0))
+	read, err := journalReadRawEntry(journal, present)
+	require.NoError(t, err)
+	assert.True(t, read.Postimage.Present)
+	assert.Equal(t, empty, read.Postimage.Digest)
+	assert.Equal(t, uint64(0), read.Postimage.Size)
+
+	_, err = journalReadRawEntry(journal, journalInsertRawEntry(t, ctx, journal, empty[:], nil))
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+
+	_, err = journalReadRawEntry(journal, journalInsertRawEntry(t, ctx, journal, empty[:31], int64(0)))
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+
+	orphanSize := journalInsertRawEntry(t, ctx, journal, nil, int64(0))
+	_, err = journalReadRawEntry(journal, orphanSize)
+	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
+}
+
+func TestJournalPersistsAnchorIdentity(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	entry, err := journal.BeginJournal(ctx, journalTestIntent([]byte("preimage"), []byte("postimage"), 3))
+	require.NoError(t, err)
+	assert.Equal(t, journalTestAnchor(), entry.Anchor)
+
+	var pathValue, deviceValue, inodeValue any
+	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT anchor_path,anchor_device,anchor_inode FROM journal WHERE entry=?", entry.Entry).Scan(&pathValue, &deviceValue, &inodeValue))
+	assert.Equal(t, []byte(journalTestDirectory), pathValue)
+	assert.Equal(t, int64(42), deviceValue)
+	assert.Equal(t, int64(7), inodeValue)
+
+	missing := journalTestIntent([]byte("preimage"), []byte("postimage"), 3)
+	missing.Anchor = JournalAnchor{}
+	_, err = journal.BeginJournal(ctx, missing)
+	requireJournalError(t, err, ErrInvalid, StageJournal, ReasonBinding)
+
+	noInode := journalTestIntent([]byte("preimage"), []byte("postimage"), 3)
+	noInode.Anchor.Inode = 0
+	_, err = journal.BeginJournal(ctx, noInode)
+	requireJournalError(t, err, ErrInvalid, StageJournal, ReasonBinding)
+
+	relative := journalTestIntent([]byte("preimage"), []byte("postimage"), 3)
+	relative.Anchor.Path = "relative/anchor"
+	_, err = journal.BeginJournal(ctx, relative)
+	requireJournalError(t, err, ErrInvalid, StageJournal, ReasonBinding)
+	assert.Equal(t, int64(1), journalStoredCount(t, journal, "journal"))
+}
+
+func TestJournalResolveInterruptedGivesTheObserverTheRecordedAnchor(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	entry, err := journal.BeginJournal(ctx, journalTestDeleteIntent([]byte("preimage"), 4))
+	require.NoError(t, err)
+
+	seen := make([]JournalAnchor, 0, 1)
+	resolutions, err := journal.ResolveInterrupted(ctx, func(row JournalEntry) (ObservedFile, error) {
+		seen = append(seen, row.Anchor)
+		return ObservedFile{}, errors.New("anchor unavailable")
+	})
+	require.NoError(t, err)
+	require.Len(t, seen, 1)
+	assert.Equal(t, journalTestAnchor(), seen[0])
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, JournalResolution{Entry: entry.Entry, Outcome: JournalOutcomeUnobserved}, resolutions[0])
+	state, stage := journalStoredState(t, journal, entry.Entry)
+	assert.Equal(t, JournalStatePending, state)
+	assert.Equal(t, JournalStageApplyPending, stage)
+	requireJournalError(t, journal.CheckAdmission(ctx, 100), ErrContinuity, StageJournal, ReasonJournalBlocked)
+}
+
+func TestJournalApplyLeaseIsExclusiveAndRefusesImmediately(t *testing.T) {
+	ctx := context.Background()
+	journal, directory := newJournal(t)
+	lease, err := journal.AcquireApplyLease(ctx)
+	require.NoError(t, err)
+	info, err := os.Lstat(filepath.Join(directory, journalLeaseName))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	_, err = journal.AcquireApplyLease(ctx)
+	requireJournalError(t, err, ErrLocked, StageJournal, ReasonLocked)
+
+	require.NoError(t, lease.Close())
+	require.NoError(t, lease.Close())
+	reacquired, err := journal.AcquireApplyLease(ctx)
+	require.NoError(t, err)
+
+	canceledContext, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = journal.AcquireApplyLease(canceledContext)
+	requireJournalError(t, err, ErrStorage, StageJournal, ReasonCanceled)
+	require.NoError(t, reacquired.Close())
+
+	require.NoError(t, journal.Close())
+	_, err = journal.AcquireApplyLease(ctx)
+	requireJournalError(t, err, ErrClosed, StageJournal, ReasonClosed)
+}
+
+func TestJournalEntryCountReadsWithoutMutating(t *testing.T) {
+	ctx := context.Background()
+	journal, _ := newJournal(t)
+	count, err := journal.EntryCount(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), count)
+
+	first, err := journal.BeginJournal(ctx, journalTestIntent([]byte("preimage"), []byte("postimage"), 3))
+	require.NoError(t, err)
+	require.NoError(t, journal.MarkIndeterminate(ctx, first))
+	count, err = journal.EntryCount(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+	state, stage := journalStoredState(t, journal, first.Entry)
+	assert.Equal(t, JournalStateIndeterminate, state)
+	assert.Equal(t, JournalStageIndeterminate, stage)
 }
