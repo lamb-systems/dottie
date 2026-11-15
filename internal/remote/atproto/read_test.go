@@ -77,9 +77,8 @@ func newReadFixture(t *testing.T) readFixture {
 	rootRecipient := readX25519Key(t, 21)
 	publisherSigning := fixtureSigningKey(12)
 	publisherRecipient := readX25519Key(t, 22)
-	kit := bytes.Repeat([]byte{7}, 32)
 	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: rootRecipient}
-	bootstrap, err := vault.Bootstrap(kit, "read fixture", rootDevice)
+	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
 	ephemeralPublisher := readX25519Key(t, 31)
 	ephemeralRoot := readX25519Key(t, 32)
@@ -191,7 +190,7 @@ func newBuilderReadHistory(t *testing.T) readBuilderHistory {
 	t.Helper()
 	root := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: fixtureSigningKey(11), Recipient: readX25519Key(t, 21)}
 	publisher := vault.DeviceMaterial{DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: fixtureSigningKey(12), Recipient: readX25519Key(t, 22)}
-	bootstrap, err := vault.Bootstrap(bytes.Repeat([]byte{7}, 32), "builder read fixture", root)
+	bootstrap, err := vault.Bootstrap("builder read fixture", root)
 	require.NoError(t, err)
 	transition, err := vault.PrepareTransition(vault.Predecessor{
 		ControlCID: readRawCID(t, bootstrap.Control), PolicyDigest: readPolicyDigest(t, bootstrap.Policy),

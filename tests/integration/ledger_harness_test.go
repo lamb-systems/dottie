@@ -168,7 +168,7 @@ func TestLiveLedgerSharedRootRace(t *testing.T) {
 	rootSigning, rootRecipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	root := vault.DeviceMaterial{DeviceID: "ledger-root", KeyID: bytes.Clone(vaultNameBytes[:]), Signing: rootSigning, Recipient: rootRecipient}
-	bootstrap, err := vault.Bootstrap(kit, vaultName, root)
+	bootstrap, err := vault.Bootstrap(vaultName, root)
 	require.NoError(t, err)
 	bootstrapWrites, err := ledgerBootstrapWrites(bootstrap)
 	require.NoError(t, err)

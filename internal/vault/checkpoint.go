@@ -115,11 +115,6 @@ func (r *VerificationRefusal) Unwrap() []error {
 	return []error{ErrInvalidVerification, r.Err}
 }
 
-func verifyControlEvidence(vaultID, trustAnchor [32]byte, evidence ControlEvidence) (Control, []byte, error) {
-	position, controlCID, err := verifyControlPositionEvidence(vaultID, trustAnchor, evidence)
-	return position.control, controlCID, err
-}
-
 func verifyControlPositionEvidence(vaultID, trustAnchor [32]byte, evidence ControlEvidence) (authenticatedControlPosition, []byte, error) {
 	control, err := DecodeControl(evidence.Control)
 	if err != nil {
@@ -370,4 +365,15 @@ func RequireUnverifiableConsent(result VerificationResult) error {
 		return ErrConsentNotOffered
 	}
 	return ErrConsentRequired
+}
+
+func VerifyControlState(context *TrustedContext, request VerificationRequest) (VerificationResult, error) {
+	result, err := compareControlCheckpoints(context, request)
+	if err != nil {
+		return VerificationResult{}, err
+	}
+	if result.validityPassed {
+		result.proof = &verificationProof{outcome: result.Outcome, consentAvailable: result.ConsentAvailable, validityPassed: true}
+	}
+	return result, nil
 }

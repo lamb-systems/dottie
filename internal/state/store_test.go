@@ -211,7 +211,7 @@ func TestVaultCheckpointRoundTripsControlBytesAndRejectsBackwardUpdate(t *testin
 func TestAuthenticatedPositionEvidenceRoundTripsWithDeterministicCertificates(t *testing.T) {
 	paths := testPaths(t)
 	store := openTestStore(t, paths)
-	genesis, root, kit := stateGenesisFixture(t)
+	genesis, root := stateGenesisFixture(t)
 	publisher := stateDeviceFixture(t, "z-position-publisher", "z-position-publisher-key", 12, 22)
 	predecessor := vault.Predecessor{
 		ControlCID: bytes.Clone(genesis.ControlCID), PolicyDigest: genesis.PolicyDigest, EpochSeq: 0,
@@ -261,13 +261,13 @@ func TestAuthenticatedPositionEvidenceRoundTripsWithDeterministicCertificates(t 
 	missing, err := store.AuthenticatedPositionEvidence(context.Background(), [32]byte{99}, evidence.Epoch, evidence.PolicyDigest)
 	require.ErrorIs(t, err, ErrAuthenticatedPositionEvidenceNotFound)
 	assert.Empty(t, missing.Policy)
-	assert.NoError(t, vault.ValidateGenesis(genesis, kit))
+	assert.NoError(t, vault.ValidateGenesis(genesis))
 }
 
 func TestAuthenticatedPositionEvidencePreservesOptionalCheckpointAndSurvivesRestart(t *testing.T) {
 	paths := testPaths(t)
 	store := openTestStore(t, paths)
-	genesis, _, kit := stateGenesisFixture(t)
+	genesis, _ := stateGenesisFixture(t)
 	evidence := AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
 		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
@@ -281,12 +281,12 @@ func TestAuthenticatedPositionEvidencePreservesOptionalCheckpointAndSurvivesRest
 	stored, err := reopened.AuthenticatedPositionEvidence(context.Background(), evidence.Vault, evidence.Epoch, evidence.PolicyDigest)
 	require.NoError(t, err)
 	assert.Equal(t, evidence, stored)
-	assert.NoError(t, vault.ValidateGenesis(genesis, kit))
+	assert.NoError(t, vault.ValidateGenesis(genesis))
 }
 
 func TestAuthenticatedPositionEvidenceRejectsMismatchedKeysAndOversizedObjects(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
-	genesis, _, _ := stateGenesisFixture(t)
+	genesis, _ := stateGenesisFixture(t)
 	evidence := AuthenticatedPositionEvidence{
 		Vault: genesis.Vault, Epoch: 0, PolicyDigest: genesis.PolicyDigest, Policy: bytes.Clone(genesis.Policy),
 		Control: bytes.Clone(genesis.Control), Head: bytes.Clone(genesis.Head),
@@ -302,7 +302,7 @@ func TestAuthenticatedPositionEvidenceRejectsMismatchedKeysAndOversizedObjects(t
 
 func TestInitializeVaultTrustRollsBackAllRowsWhenPositionHistoryWriteFails(t *testing.T) {
 	store := openTestStore(t, testPaths(t))
-	genesis, device, _ := stateGenesisFixture(t)
+	genesis, device := stateGenesisFixture(t)
 	ctx := context.Background()
 	selection := VaultSelection{Vault: genesis.Vault, DeviceID: device.DeviceID, RecordedAt: 123}
 	checkpoint := VaultCheckpoint{
@@ -338,9 +338,8 @@ func TestInitializeVaultTrustRollsBackAllRowsWhenPositionHistoryWriteFails(t *te
 	require.NoError(t, err)
 }
 
-func stateGenesisFixture(t *testing.T) (vault.Genesis, vault.DeviceMaterial, []byte) {
+func stateGenesisFixture(t *testing.T) (vault.Genesis, vault.DeviceMaterial) {
 	t.Helper()
-	kit := bytes.Repeat([]byte{17}, 32)
 	recipient, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{21}, 32))
 	require.NoError(t, err)
 	root := vault.DeviceMaterial{
@@ -348,14 +347,14 @@ func stateGenesisFixture(t *testing.T) (vault.Genesis, vault.DeviceMaterial, []b
 		Signing: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{11}, ed25519.SeedSize)), Recipient: recipient,
 	}
 	genesis, err := vault.ComposeGenesis(vault.GenesisIntent{
-		Kit: kit, VaultName: "state evidence fixture", RootDevice: root, ContentKey: bytes.Repeat([]byte{31}, 32),
+		VaultName: "state evidence fixture", RootDevice: root, ContentKey: bytes.Repeat([]byte{31}, 32),
 		Wraps: []vault.RecipientWrapInput{{
 			KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(bytes.Repeat([]byte{41}, 32)), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24)),
 		}},
 		PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{71}, 24)),
 	})
 	require.NoError(t, err)
-	return genesis, root, kit
+	return genesis, root
 }
 
 func stateDeviceFixture(t *testing.T, deviceID, keyID string, signingSeed, recipientSeed byte) vault.DeviceMaterial {

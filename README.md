@@ -9,7 +9,10 @@ apply journal and recovery proven against real process death. `dottie pull --con
 apply path. The v1 encrypted read-and-apply authority, the recovery-kit cross-machine workflow and
 every command that served them were retired: `preview`, `restore`, `recover`, `export`, `import`,
 `prune`, `history`, `devices *`, `account enroll`, `account import-bundle`, `account recovery` and
-`account verify` no longer exist. Cross-machine recovery without a live PDS is not supported and is
+`account verify` no longer exist. The signing material those commands consumed is gone from the tree:
+`dottie account bootstrap` no longer mints a recovery kit, writes no kit to state or the keyring and
+prints none, and `internal/vault` no longer creates, parses or validates kit material, kit-signed
+checkpoints or export archives. Cross-machine recovery without a live PDS is not supported and is
 not planned; v2 publication replaces it. Real-data use is permitted under the residual limits in
 [`docs/acceptance.md`](docs/acceptance.md): no global freshness, one published vault per account, and
 provider-held records that cannot be deleted. The plaintext profile adds one disclosed residual: the
@@ -26,10 +29,18 @@ push/sync, device administration, history summaries, export and archive validati
 capture for publication requires a build with the `gsettings` tag and an available settings backend.
 `account bootstrap` requires a
 verified empty repository and a signed-in account. It checks repository emptiness before minting
-keys or a kit, stores device keys in Secret Service, prints and flushes the recovery kit before
-publication, then records trust atomically after verified publication. An account can hold only
-one published Dottie vault because genesis requires an empty repository. Multi-vault selection
-refers only to locally recorded vaults, not multiple published vaults on one account.
+keys, stores root device keys in Secret Service, and records trust atomically after verified
+publication. An account can hold only one published Dottie vault because genesis requires an empty
+repository. Multi-vault selection refers only to locally recorded vaults, not multiple published
+vaults on one account.
+
+Authenticity is repo-scoped through AT Protocol account authority: the records live in the
+account's own repository, signed by the account's repository key, and writing them requires an
+authenticated session. Dottie adds no vault signature, no device-signed epoch authority and no
+offline anchor; a reader can verify that a record set is authentic for the account, and cannot
+verify that a position was ever authorized offline or that the provider withheld nothing. Vault
+identity is derived from the vault name and the root device signing key, so no secret beyond the
+device keys exists. The plaintext provider residual above is unchanged.
 
 The retired commands are gone rather than deprecated: there is no kit generation to consume, no
 ciphertext archive to export or validate, no retention sweep and no device administration surface.
@@ -39,12 +50,11 @@ ciphertext archive to export or validate, no retention sweep and no device admin
 
 **Select directories. Reconcile files. Publish packed snapshots under account authority.**
 
-The target publication model is plaintext-as-stored: a snapshot is a packed, content-addressed
-record set published to the account's own repository under that account's authority. Snapshot
-confidentiality is delegated to the existing account and provider relationship rather than to a
-separate client-side envelope with kits, epochs and device certificates. This supersedes the
-scaffold-era encrypted design; the encrypted key/kit path still described in the status section
-above is the legacy v1 implementation, remains in-tree, and is not the model new work targets.
+The publication model is plaintext-as-stored: a snapshot is a packed, content-addressed record set
+published to the account's own repository under that account's authority. Snapshot confidentiality
+is delegated to the existing account and provider relationship rather than to a separate
+client-side envelope with kits, epochs and device certificates. This supersedes the scaffold-era
+encrypted design, which is retired rather than retained as a parallel model.
 
 - One executable: CLI commands and a per-user background service.
 - Two configuration sources: recursive files/directories and GNOME GSettings.

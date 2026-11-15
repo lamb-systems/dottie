@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -105,11 +104,6 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 				}
 				return urfave.Exit("genesis preflight could not verify an empty repository", 3)
 			}
-			kit, err := vault.GenerateRecoveryKit()
-			if err != nil {
-				return urfave.Exit("cannot generate recovery kit", 1)
-			}
-			defer clear(kit)
 			signing, recipient, err := vault.GenerateDeviceKeys()
 			if err != nil {
 				return urfave.Exit("cannot generate device keys", 1)
@@ -117,17 +111,7 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 			defer clear(signing)
 			material := vault.DeviceMaterial{DeviceID: command.String("device-id"), KeyID: deviceKeyID(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient}
 			result, initializeErr := coordinator.InitializeVault(ctx, service.BootstrapRequest{
-				VaultName: command.String("vault-name"), Kit: kit, Device: material,
-				DeliverKit: func(bootstrap vault.BootstrapResult, recoveryKit []byte) error {
-					kitPublic, err := vault.RecoveryKitSigningPublicKey(recoveryKit, bootstrap.Vault)
-					if err != nil {
-						return errors.New("cannot derive recovery kit signing key")
-					}
-					checkpointFingerprint := sha256.Sum256(bootstrap.Checkpoint)
-					kitPublicFingerprint := sha256.Sum256(kitPublic)
-					output := fmt.Sprintf("recovery kit (keep offline): %s\nvault fingerprint: %x\nanchor fingerprint: %x\ncheckpoint fingerprint: %x\nkit public-key fingerprint: %x\n", groupRecoveryKit(recoveryKit), bootstrap.Vault, bootstrap.Anchor, checkpointFingerprint, kitPublicFingerprint)
-					return writeAndFlushKit(command, output)
-				},
+				VaultName: command.String("vault-name"), Device: material,
 			})
 			if initializeErr != nil {
 				if result.Outcome == service.BootstrapUnresolved {
@@ -324,7 +308,7 @@ func (port sessionGenesisPort) BlobUploadLimit(ctx context.Context) (int64, erro
 	return limit, nil
 }
 
-func (port sessionGenesisPort) CommitGenesis(ctx context.Context, blobLimit int64, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
+func (port sessionGenesisPort) CommitGenesis(ctx context.Context, blobLimit int64, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
 	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil || port.observations == nil {
 		return atproto.GenesisCommitResult{}, errors.New("authenticated genesis provider wiring is unavailable")
 	}
@@ -335,7 +319,7 @@ func (port sessionGenesisPort) CommitGenesis(ctx context.Context, blobLimit int6
 		},
 		Transport: port.transport, BlobUploadLimit: blobLimit, DID: port.identity.DID,
 		ObservationStore: port.observations, Clock: time.Now,
-	}, kit, root, genesis)
+	}, root, genesis)
 }
 
 type manualReadSession struct {
@@ -352,20 +336,6 @@ func (session manualReadSession) ReadRequest(_ context.Context, selection servic
 		Vault:               selection.Vault, TrustAnchor: anchor, PreviousPolicy: append([]byte(nil), previousPolicy...),
 		PreviousControl: append([]byte(nil), previousControl...), DeviceKeyID: append([]byte(nil), device.KeyID...), DeviceKey: device.Recipient,
 	}, nil
-}
-
-func writeAndFlushKit(command *urfave.Command, output string) error {
-	writer := command.Root().Writer
-	written, err := io.WriteString(writer, output)
-	if err != nil || written != len(output) {
-		return urfave.Exit("cannot deliver recovery kit before publication", 1)
-	}
-	if flusher, ok := writer.(interface{ Flush() error }); ok {
-		if err := flusher.Flush(); err != nil {
-			return urfave.Exit("cannot flush recovery kit before publication", 1)
-		}
-	}
-	return nil
 }
 
 func renderFinalizeResult(result service.FinalizeResult) string {
@@ -397,22 +367,6 @@ func renderBootstrapOutcome(result service.BootstrapResult) string {
 		fmt.Fprintf(&output, "commit: %s\ncheckpoint: %s\n", escapeField(result.Genesis.CommitCID), escapeField(result.Genesis.CheckpointCID))
 	}
 	return output.String()
-}
-
-func groupRecoveryKit(kit []byte) string {
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(kit)
-	var grouped strings.Builder
-	for offset := 0; offset < len(encoded); offset += 4 {
-		if offset > 0 {
-			grouped.WriteByte('-')
-		}
-		end := offset + 4
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		grouped.WriteString(encoded[offset:end])
-	}
-	return grouped.String()
 }
 
 func deviceKeyID(public ed25519.PublicKey) []byte {

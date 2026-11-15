@@ -30,7 +30,7 @@ func TestMemoryPDSDrivesGenesisAndOrdinaryPublication(t *testing.T) {
 		t.Run(responseHook.name, func(t *testing.T) {
 			fixture, pds := memoryPDSGenesisFixture(t)
 			ctx := context.Background()
-			genesis, err := CommitGenesis(ctx, fixture.io, fixture.kit, fixture.root, fixture.genesis)
+			genesis, err := CommitGenesis(ctx, fixture.io, fixture.root, fixture.genesis)
 			require.NoError(t, err)
 			assert.Zero(t, genesis.ReadResult.PublicationCount)
 			assert.True(t, genesis.Revision.HasRecord(RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}))
@@ -85,7 +85,7 @@ func TestMemoryPDSDrivesGenesisAndOrdinaryPublication(t *testing.T) {
 func TestPublishAttestationResolvesLostResponseAndIsIdempotent(t *testing.T) {
 	fixture, pds := memoryPDSGenesisFixture(t)
 	ctx := context.Background()
-	_, err := CommitGenesis(ctx, fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	_, err := CommitGenesis(ctx, fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	encoded, err := vault.BuildAttestation(vault.AttestationBuildRequest{
 		VaultID: fixture.genesis.Vault, TrustAnchor: fixture.genesis.Anchor,
@@ -142,7 +142,7 @@ func TestPublishAttestationResolvesLostResponseAndIsIdempotent(t *testing.T) {
 func TestMemoryPDSServesCommittedEnrollmentTransition(t *testing.T) {
 	fixture, pds := memoryPDSGenesisFixture(t)
 	ctx := context.Background()
-	_, err := CommitGenesis(ctx, fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	_, err := CommitGenesis(ctx, fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 
 	adapter := ATProtoTransitionIO{

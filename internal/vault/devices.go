@@ -5,12 +5,10 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"hash"
 	"sort"
 	"time"
 	"unicode/utf8"
@@ -72,7 +70,6 @@ type BootstrapResult struct {
 }
 
 type GenesisIntent struct {
-	Kit           []byte
 	VaultName     string
 	RootDevice    DeviceMaterial
 	ContentKey    []byte
@@ -223,24 +220,16 @@ func GenerateDeviceKeys() (ed25519.PrivateKey, *ecdh.PrivateKey, error) {
 	return signing, recipient, nil
 }
 
-func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (BootstrapResult, error) {
-	if len(kit) != 32 || vaultName == "" || !utf8.ValidString(vaultName) {
-		return BootstrapResult{}, fmt.Errorf("%w: kit or vault name", ErrFormat)
+func Bootstrap(vaultName string, rootDevice DeviceMaterial) (BootstrapResult, error) {
+	if vaultName == "" || !utf8.ValidString(vaultName) {
+		return BootstrapResult{}, fmt.Errorf("%w: vault name", ErrFormat)
 	}
 	if err := validateDeviceMaterial(rootDevice); err != nil {
 		return BootstrapResult{}, err
 	}
-	vaultID, err := deriveVaultID(kit, vaultName)
-	if err != nil {
-		return BootstrapResult{}, err
-	}
 	rootPublic := rootDevice.Signing.Public().(ed25519.PublicKey)
+	vaultID := deriveVaultID(vaultName, rootPublic)
 	anchor := sha256.Sum256(rootPublic)
-	kitPrivate, err := deriveKitSigningKey(kit, vaultID)
-	if err != nil {
-		return BootstrapResult{}, err
-	}
-	kitFingerprint := sha256.Sum256(kitPrivate.Public().(ed25519.PublicKey))
 	rootRecipient := rootDevice.Recipient.PublicKey().Bytes()
 	var recipientPublic [32]byte
 	copy(recipientPublic[:], rootRecipient)
@@ -262,7 +251,7 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 		Roles:                []RoleBinding{{DeviceID: rootDevice.DeviceID, Role: RoleRoot}},
 		Recipients:           []PolicyRecipient{{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID), PublicKey: recipientPublic}},
 		PolicyRetentionFloor: defaults.PolicyRetentionFloor, RetainedRecoveryPoints: defaults.RetainedRecoveryPoints,
-		MaxPublications: defaults.MaxPublications, MaxEpochAge: defaults.MaxEpochAge, RecoveryAnchor: kitFingerprint,
+		MaxPublications: defaults.MaxPublications, MaxEpochAge: defaults.MaxEpochAge, RecoveryAnchor: [32]byte{},
 		Signer: Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
 	}
 	policyBytes, err := signPolicy(policy, rootDevice.Signing)
@@ -287,9 +276,9 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 	}
 	checkpoint := Checkpoint{
 		Vault: vaultID, EpochSeq: 0, PolicyDigest: policyDigest, Anchor: anchor, ControlCID: controlCID,
-		Signer: Signer{DeviceID: "recovery-kit", KeyID: kitFingerprint[:]},
+		Signer: Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
 	}
-	checkpointBytes, err := signCheckpoint(checkpoint, kitPrivate)
+	checkpointBytes, err := signCheckpoint(checkpoint, rootDevice.Signing)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
@@ -300,7 +289,7 @@ func Bootstrap(kit []byte, vaultName string, rootDevice DeviceMaterial) (Bootstr
 }
 
 func ComposeGenesis(intent GenesisIntent) (Genesis, error) {
-	bootstrap, err := Bootstrap(intent.Kit, intent.VaultName, intent.RootDevice)
+	bootstrap, err := Bootstrap(intent.VaultName, intent.RootDevice)
 	if err != nil {
 		return Genesis{}, err
 	}
@@ -364,11 +353,7 @@ func ComposeGenesis(intent GenesisIntent) (Genesis, error) {
 	}
 	checkpoint.SnapshotCID = bytes.Clone(snapshotCID)
 	checkpoint.ControlCID = bytes.Clone(controlCID)
-	kitKey, err := deriveKitSigningKey(intent.Kit, bootstrap.Vault)
-	if err != nil {
-		return Genesis{}, err
-	}
-	checkpointBytes, err := signCheckpoint(checkpoint, kitKey)
+	checkpointBytes, err := signCheckpoint(checkpoint, intent.RootDevice.Signing)
 	if err != nil {
 		return Genesis{}, err
 	}
@@ -383,13 +368,13 @@ func ComposeGenesis(intent GenesisIntent) (Genesis, error) {
 	bootstrap.Control = controlBytes
 	bootstrap.Checkpoint = checkpointBytes
 	genesis := Genesis{BootstrapResult: bootstrap, Head: head, Snapshot: snapshotBytes, SnapshotCID: snapshotCID, ControlCID: controlCID, PolicyDigest: policyDigest}
-	if err := ValidateGenesis(genesis, intent.Kit); err != nil {
+	if err := ValidateGenesis(genesis); err != nil {
 		return Genesis{}, err
 	}
 	return genesis, nil
 }
 
-func ValidateGenesis(genesis Genesis, kit []byte) error {
+func ValidateGenesis(genesis Genesis) error {
 	policy, err := DecodePolicy(genesis.Policy)
 	if err != nil {
 		return fmt.Errorf("%w: genesis policy", ErrAuthorization)
@@ -443,11 +428,6 @@ func ValidateGenesis(genesis Genesis, kit []byte) error {
 	}
 	if len(policy.Roles) != 1 || len(policy.Recipients) != 1 || policy.Recipients[0].DeviceID != certificate.DeviceID || !bytes.Equal(policy.Recipients[0].KeyID, certificate.KeyID) || !bytes.Equal(policy.Recipients[0].PublicKey[:], certificate.EncryptionPublicKey[:]) || !publicationRecipientsMatch(policy, envelope) {
 		return fmt.Errorf("%w: genesis recipient set", ErrAuthorization)
-	}
-	kitAnchor, err := RecoveryKitCheckpointAnchor(kit, genesis.Vault, genesis.Checkpoint)
-	kitFingerprint, fingerprintErr := RecoveryKitPublicKeyFingerprint(kit, genesis.Vault)
-	if err != nil || fingerprintErr != nil || kitAnchor != genesis.Anchor || policy.RecoveryAnchor != kitFingerprint {
-		return fmt.Errorf("%w: genesis checkpoint authentication", ErrCheckpointAnchor)
 	}
 	objects := []struct {
 		context   string
@@ -1860,51 +1840,11 @@ func signHead(value Head, key ed25519.PrivateKey) ([]byte, error) {
 	return EncodeHead(value)
 }
 
-func deriveVaultID(kit []byte, vaultName string) ([32]byte, error) {
-	info := "dottie/v1/vault/" + vaultName
-	derived, err := hkdf.Key[hash.Hash](sha256.New, kit, nil, info, 32)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("%w: vault identity derivation", ErrFormat)
-	}
-	return sha256.Sum256(derived), nil
-}
-
-func RecoveryKitSigningPublicKey(kit []byte, vaultID [32]byte) (ed25519.PublicKey, error) {
-	if len(kit) != 32 {
-		return nil, fmt.Errorf("%w: recovery kit", ErrFormat)
-	}
-	privateKey, err := deriveKitSigningKey(kit, vaultID)
-	if err != nil {
-		return nil, err
-	}
-	return bytes.Clone(privateKey.Public().(ed25519.PublicKey)), nil
-}
-
-func VerifyCheckpoint(encoded []byte, kitPublic ed25519.PublicKey) (Checkpoint, error) {
-	checkpoint, err := DecodeCheckpoint(encoded)
-	if err != nil {
-		return Checkpoint{}, err
-	}
-	if len(kitPublic) != ed25519.PublicKeySize || checkpoint.Signer.DeviceID != "recovery-kit" {
-		return Checkpoint{}, fmt.Errorf("%w: checkpoint kit signer", ErrAuthorization)
-	}
-	fingerprint := sha256.Sum256(kitPublic)
-	if !bytes.Equal(checkpoint.Signer.KeyID, fingerprint[:]) {
-		return Checkpoint{}, fmt.Errorf("%w: checkpoint kit key id", ErrAuthorization)
-	}
-	prefix := encoded[:len(encoded)-ed25519.SignatureSize]
-	if err := Verify("dottie/v1/sig-checkpoint", objectSignaturePreimage(prefix), checkpoint.Signature[:], kitPublic); err != nil {
-		return Checkpoint{}, err
-	}
-	return checkpoint, nil
-}
-
-func deriveKitSigningKey(kit []byte, vaultID [32]byte) (ed25519.PrivateKey, error) {
-	seed, err := hkdf.Key[hash.Hash](sha256.New, kit, vaultID[:], "dottie/v1/recovery-signing", ed25519.SeedSize)
-	if err != nil {
-		return nil, fmt.Errorf("%w: kit key derivation", ErrFormat)
-	}
-	return ed25519.NewKeyFromSeed(seed), nil
+func deriveVaultID(vaultName string, rootPublic ed25519.PublicKey) [32]byte {
+	preimage := append([]byte("dottie/v2/vault\x00"), []byte(vaultName)...)
+	preimage = append(preimage, 0)
+	preimage = append(preimage, rootPublic...)
+	return sha256.Sum256(preimage)
 }
 
 func rawCID(data []byte) ([]byte, error) {

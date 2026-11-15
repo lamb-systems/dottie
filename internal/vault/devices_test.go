@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"fmt"
 	"testing"
 	"time"
@@ -17,7 +16,6 @@ import (
 )
 
 type devicesFixture struct {
-	kit         []byte
 	root        DeviceMaterial
 	newDevice   DeviceMaterial
 	bootstrap   BootstrapResult
@@ -29,8 +27,7 @@ type devicesFixture struct {
 func newDevicesFixture(t *testing.T) devicesFixture {
 	t.Helper()
 	root := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
-	kit := fixtureBytes(1, 32)
-	boot, err := Bootstrap(kit, "synthetic vault", root)
+	boot, err := Bootstrap("synthetic vault", root)
 	require.NoError(t, err)
 	policy, err := DecodePolicy(boot.Policy)
 	require.NoError(t, err)
@@ -64,7 +61,7 @@ func newDevicesFixture(t *testing.T) devicesFixture {
 	}
 	transition, err := PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
-	return devicesFixture{kit: kit, root: root, newDevice: newDevice, bootstrap: boot, predecessor: predecessor, intent: intent, transition: transition}
+	return devicesFixture{root: root, newDevice: newDevice, bootstrap: boot, predecessor: predecessor, intent: intent, transition: transition}
 }
 
 func ecdhPrivateForFixture(seed byte) (*ecdh.PrivateKey, error) {
@@ -319,15 +316,18 @@ func recipientDeviceIDs(recipients []PolicyRecipient) []string {
 
 func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	root := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
-	kit := fixtureBytes(1, 32)
-	first, err := Bootstrap(kit, "vault-a", root)
+	first, err := Bootstrap("vault-a", root)
 	require.NoError(t, err)
-	second, err := Bootstrap(kit, "vault-a", root)
+	second, err := Bootstrap("vault-a", root)
 	require.NoError(t, err)
 	assert.Equal(t, first, second, "identical bootstrap inputs must produce identical signed bytes")
-	other, err := Bootstrap(kit, "vault-b", root)
+	other, err := Bootstrap("vault-b", root)
 	require.NoError(t, err)
 	assert.NotEqual(t, first.Vault, other.Vault, "vault names must derive distinct identities")
+	anotherRoot := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(12), Recipient: fixedX25519Key(21)}
+	otherRoot, err := Bootstrap("vault-a", anotherRoot)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Vault, otherRoot.Vault, "root device keys must derive distinct vault identities")
 
 	certificate, err := DecodeCertificate(first.Certificate)
 	require.NoError(t, err)
@@ -336,10 +336,7 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	require.NoError(t, verifyCertificateChain(certificate, request, 1, make(map[string]bool)))
 	policy, err := DecodePolicy(first.Policy)
 	require.NoError(t, err)
-	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(kit, first.Vault)
-	require.NoError(t, err)
-	assert.Equal(t, kitFingerprint, policy.RecoveryAnchor, "bootstrap policy recovery anchor must identify the kit signing key")
-	assert.NotEqual(t, first.Anchor, policy.RecoveryAnchor, "policy kit anchor must differ from the root signing-key anchor")
+	assert.Equal(t, [32]byte{}, policy.RecoveryAnchor, "bootstrap must not claim an offline recovery anchor")
 	policyPrefix, err := encodePolicyPrefix(policy)
 	require.NoError(t, err)
 	require.NoError(t, Verify("dottie/v1/sig-policy", objectSignaturePreimage(policyPrefix), policy.Signature[:], certificate.SigningPublicKey[:]))
@@ -351,61 +348,11 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	checkpoint, err := DecodeCheckpoint(first.Checkpoint)
 	require.NoError(t, err)
 	assert.Equal(t, first.Anchor, checkpoint.Anchor, "checkpoint anchor")
-	kitPublic, err := RecoveryKitSigningPublicKey(kit, first.Vault)
+	assert.Equal(t, root.DeviceID, checkpoint.Signer.DeviceID, "genesis checkpoint is signed by the root device")
+	assert.Equal(t, root.KeyID, checkpoint.Signer.KeyID, "genesis checkpoint carries the root device key id")
+	checkpointPrefix, err := encodeCheckpointPrefix(checkpoint)
 	require.NoError(t, err)
-	kitKeyID := sha256.Sum256(kitPublic)
-	assert.Equal(t, kitKeyID[:], checkpoint.Signer.KeyID, "checkpoint signer key id")
-	verified, err := VerifyCheckpoint(first.Checkpoint, kitPublic)
-	require.NoError(t, err)
-	assert.Equal(t, checkpoint, verified, "verified checkpoint")
-}
-
-func TestRecoveryKitCheckpointVerificationAndDerivation(t *testing.T) {
-	fixture := newDevicesFixture(t)
-	public, err := RecoveryKitSigningPublicKey(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	repeated, err := RecoveryKitSigningPublicKey(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	assert.Equal(t, public, repeated, "kit signing public key derivation is deterministic")
-	otherVault := fixture.bootstrap.Vault
-	otherVault[0] ^= 1
-	otherPublic, err := RecoveryKitSigningPublicKey(fixture.kit, otherVault)
-	require.NoError(t, err)
-	assert.NotEqual(t, public, otherPublic, "different vault ids derive different kit signing keys")
-	_, err = RecoveryKitSigningPublicKey(fixture.kit[:31], fixture.bootstrap.Vault)
-	assert.ErrorIs(t, err, ErrFormat, "short kit is rejected")
-
-	verified, err := VerifyCheckpoint(fixture.bootstrap.Checkpoint, public)
-	require.NoError(t, err)
-	assert.Equal(t, fixture.bootstrap.Anchor, verified.Anchor, "checkpoint continues to carry the root signing-key anchor")
-	kitFingerprint, err := RecoveryKitPublicKeyFingerprint(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	assert.NotEqual(t, kitFingerprint, verified.Anchor, "checkpoint root anchor remains distinct from the kit fingerprint")
-
-	otherKit := fixture.kit
-	otherKit[0] ^= 1
-	otherPublic, err = RecoveryKitSigningPublicKey(otherKit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	_, err = VerifyCheckpoint(fixture.bootstrap.Checkpoint, otherPublic)
-	assert.ErrorIs(t, err, ErrAuthorization, "a different kit cannot verify the checkpoint")
-
-	checkpoint, err := DecodeCheckpoint(fixture.bootstrap.Checkpoint)
-	require.NoError(t, err)
-	checkpoint.Anchor[0] ^= 1
-	private, err := deriveKitSigningKey(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	alteredAnchor, err := signCheckpointBytes(checkpoint, private)
-	require.NoError(t, err)
-	_, err = VerifyCheckpoint(alteredAnchor, public)
-	assert.ErrorIs(t, err, ErrSignature, "altered checkpoint anchor invalidates its signature")
-
-	checkpoint, err = DecodeCheckpoint(fixture.bootstrap.Checkpoint)
-	require.NoError(t, err)
-	checkpoint.Signer.KeyID[0] ^= 1
-	alteredKeyID, err := signCheckpointBytes(checkpoint, private)
-	require.NoError(t, err)
-	_, err = VerifyCheckpoint(alteredKeyID, public)
-	assert.ErrorIs(t, err, ErrAuthorization, "claimed kit key fingerprint mismatch")
+	require.NoError(t, Verify("dottie/v1/sig-checkpoint", objectSignaturePreimage(checkpointPrefix), checkpoint.Signature[:], certificate.SigningPublicKey[:]))
 }
 
 func TestPrepareTransitionFirstEnrollmentCreatesFirstSnapshot(t *testing.T) {
@@ -585,9 +532,7 @@ func TestValidateTransitionRevalidationChecksReturnSpecificErrors(t *testing.T) 
 		checkpoint, err := DecodeCheckpoint(fixture.bootstrap.Checkpoint)
 		require.NoError(t, err)
 		checkpoint.Anchor[0] ^= 1
-		kitKey, err := deriveKitSigningKey(fixture.kit, fixture.bootstrap.Vault)
-		require.NoError(t, err)
-		checkpointBytes, err := signCheckpointBytes(checkpoint, kitKey)
+		checkpointBytes, err := signCheckpointBytes(checkpoint, fixture.root.Signing)
 		require.NoError(t, err)
 		transition := fixture.transition
 		transition.Checkpoint = checkpointBytes

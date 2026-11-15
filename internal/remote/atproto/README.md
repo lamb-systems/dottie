@@ -211,14 +211,16 @@ is never blindly retried.
 
 ## Genesis bootstrap composition
 
-`CommitGenesis` is separate from ordinary publication and transition commits. It first
+`CommitGenesis` is separate from ordinary publication and transition commits. The six-record write set is unchanged: the v2 read path requires policy, control, head, certificate set, snapshot record plus blob, and a checkpoint record at `self`. It first
 requires a real verified empty repository revision, stages the sealed canonical empty
 snapshot, and sends policy, control, certificate, checkpoint, snapshot reference and
 count-zero head as one all-creates `applyWrites` batch fenced to that empty revision. It
 never routes through `PreparePublication` or `commitPublication`. Every transmitted batch
 is resolved with a fresh signed revision; success also requires exact six-record
-membership, exact checkpoint record binding plus kit authentication, a successful real
-`VaultReader` result and the canonical empty plaintext snapshot. A reread that proves the
+membership, exact checkpoint record binding against the composed position, a successful
+real `VaultReader` result and the canonical empty plaintext snapshot. The genesis checkpoint
+is signed by the root device and binds the root anchor; no kit signing material exists, and
+`CommitGenesis` performs no kit authentication. A reread that proves the
 records absent returns `ErrGenesisNotLanded`; a failed or moving reread returns
 `ErrGenesisUnavailable`. The next call reads the repository again before another attempt.
 

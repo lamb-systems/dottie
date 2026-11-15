@@ -116,12 +116,11 @@ func TestLivePublicationVersusRootRevocationSharedDeviceKeys(t *testing.T) {
 		require.False(t, strings.HasPrefix(key.Collection, "systems.lamb.dottie."), "refusing to alter an account with existing vault records")
 	}
 
-	kit := publicationHarnessRandom(t, 32)
 	vaultName := "publication-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(publicationHarnessRandom(t, 16)))
 	rootSigning, rootRecipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	root := vault.DeviceMaterial{DeviceID: "publication-root", KeyID: publicationHarnessRandom(t, 16), Signing: rootSigning, Recipient: rootRecipient}
-	bootstrap, err := vault.Bootstrap(kit, vaultName, root)
+	bootstrap, err := vault.Bootstrap(vaultName, root)
 	require.NoError(t, err)
 	bootstrapWrites, err := ledgerBootstrapWrites(bootstrap)
 	require.NoError(t, err)

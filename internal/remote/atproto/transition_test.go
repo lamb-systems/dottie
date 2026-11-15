@@ -708,11 +708,10 @@ func transitionResolutionRevision(publication FencedPublication, resolution stri
 
 func newTransitionTestFixture(t *testing.T) transitionTestFixture {
 	t.Helper()
-	kit := bytes.Repeat([]byte{41}, 32)
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	root := vault.DeviceMaterial{DeviceID: "root-device", KeyID: []byte("root-key"), Signing: signing, Recipient: recipient}
-	bootstrap, err := vault.Bootstrap(kit, "transition-test", root)
+	bootstrap, err := vault.Bootstrap("transition-test", root)
 	require.NoError(t, err)
 	policyDigest, err := vault.ComputePolicyDigest(bootstrap.Policy)
 	require.NoError(t, err)

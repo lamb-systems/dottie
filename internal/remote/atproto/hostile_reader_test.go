@@ -985,9 +985,8 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 	rootRecipient := readX25519Key(t, 21)
 	restoreSigning := fixtureSigningKey(12)
 	restoreRecipient := readX25519Key(t, 22)
-	kit := bytes.Repeat([]byte{7}, 32)
 	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: rootRecipient}
-	bootstrap, err := vault.Bootstrap(kit, "read fixture", rootDevice)
+	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
 	restore := vault.DeviceMaterial{DeviceID: "restore", KeyID: []byte("restore-sign"), Signing: restoreSigning, Recipient: restoreRecipient}
 	intent := vault.TransitionIntent{
@@ -1096,9 +1095,8 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 	rootSigning := fixtureSigningKey(11)
 	publisherSigning := fixtureSigningKey(12)
 	thirdSigning := fixtureSigningKey(13)
-	kit := bytes.Repeat([]byte{7}, 32)
 	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: readX25519Key(t, 21)}
-	bootstrap, err := vault.Bootstrap(kit, "read fixture", rootDevice)
+	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
 	publisher := vault.DeviceMaterial{DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: publisherSigning, Recipient: readX25519Key(t, 22)}
 	intentOne := vault.TransitionIntent{

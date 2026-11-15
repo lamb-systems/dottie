@@ -6,7 +6,7 @@ keyring service, GNOME session or real account.
 
 ## Genesis bootstrap
 
-`bootstrap_test.go` drives `Coordinator.InitializeVault` through the real genesis composition and `atproto.CommitGenesis` over an empty synthetic `MemoryPDS`. It asserts custody-before-publication ordering, then checks `history`, `pull`, ciphertext-only `Export` and no-op `Push` against the finalized trust state. The account CLI path is tested separately with an injected authenticated provider; it prints the kit once and verifies the kit is absent from state and keyring. The verified empty-repository preflight refuses a repeated bootstrap before minting: keyring contents, state database bytes and the first remote revision remain unchanged. The state interruption test fails one local position-history write and proves selection, checkpoint and evidence all roll back together. No live PDS, real keyring, network, GNOME session or real home is used.
+`bootstrap_test.go` drives `Coordinator.InitializeVault` through the real genesis composition and `atproto.CommitGenesis` over an empty synthetic `MemoryPDS`. It asserts custody-before-publication ordering, then checks the finalized trust state against the published position. The account CLI path is tested separately with an injected authenticated provider; bootstrap mints no recovery kit, so the command prints no secret and flushes nothing before publication, and the test asserts that. The verified empty-repository preflight refuses a repeated bootstrap before minting: keyring contents, state database bytes and the first remote revision remain unchanged. The state interruption test fails one local position-history write and proves selection, checkpoint and evidence all roll back together. No live PDS, real keyring, network, GNOME session or real home is used.
 
 ## Publication privacy and failure coverage
 
@@ -27,17 +27,18 @@ and restore consent renderers are gone with their commands. No retained renderer
 setting values. Retention output may display local payload or backup references, with absolute
 references confined to the state directory.
 
-## Archive recovery boundary
+## Authenticity boundary
 
-`TestArchiveRecoveryAfterSourceLoss` exports through the service coordinator to a fixture cache path,
-then removes the synthetic source repository records and all source blobs. It checks that the online
-read refuses without changing local application state, the validated archive imports with the
-independently supplied vault/anchor/kit, and the parsed archive alone supplies the current policy,
-control, certificates and envelope used to recover the exact published plaintext with the retained
-recipient private key in a fresh temporary home. It also checks wrong-kit, wrong-anchor, missing-blob
-(no archive file written) and tampered-member refusals.
+There is no archive recovery boundary in this tree. The export/import archive primitives, their
+coordinator entry points, their CLI commands and the tests that exercised them were retired with the
+v1 product, and this change removed the last of the kit-anchored material they depended on. Nothing
+here validates an archive or recovers plaintext from one.
 
-`TestArchiveRecoveryAfterSourceLoss` is archive-to-plaintext recovery, not destination restoration. A retained recipient key is required; kit-only decryption is impossible by design. Applying an archive into a home was the retired v1 restore path; its `TestRestoreFromArchiveAppliesOnlyKitCheckpointThroughSharedApply` and `TestRestoreMilestoneOfflineTwoHomeAndRecovery` cases were deleted with that command, so nothing here applies archive contents to a destination. Archive validation authenticates the archive but does not establish global freshness.
+Authenticity is repo-scoped: a published record set is authentic because it lives in the account's
+own AT Repository and was written by an authenticated session. Dottie adds no vault signature over a
+published position and no offline anchor, so no test can demonstrate offline authorization. Recovery
+of published bytes requires a surviving device key and a live provider; losing every device key is
+data loss.
 
 ## Opt-in live gates
 
@@ -61,17 +62,6 @@ An owner-authorized read-only observation on a disposable identity found that
 the disposable identity; it is not a protocol guarantee. The observed provider enumerated only live blobs,
 so the live retained set is unobservable. These observations do not establish provider compatibility.
 
-`TestLiveArchiveExportAndValidation` skips by default. It requires `DOTTIE_LIVE_ARCHIVE=1`, an
-allowlisted disposable identity in `DOTTIE_HANDLE`, and `DOTTIE_RECOVERY_KIT_FILE` naming a regular
-file with no group/world permission bits that decodes to exactly 32 kit bytes. The kit is cleared
-after use, and neither it nor its path is written to the artifact or test output. The gate uses the
-existing local vault selection and checkpoint, writes an archive only under a temporary directory,
-validates it through the coordinator,
-and blocks/asserts all repository write endpoints. The gate records a named-CID export refusal in redacted form and
-does not count it as provider evidence.
-
-The archive gate is read-only and uses an existing local vault selection and checkpoint; it does not
-invoke genesis, so it does not depend on the publication gate's pristine-repository precondition.
 A skipped live gate is not provider evidence. Hosted provider logs and server-side storage are not
 observable from a client. No real account, provider, desktop session or user dotfiles are used by the
 default suite.

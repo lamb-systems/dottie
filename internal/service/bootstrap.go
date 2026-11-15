@@ -27,10 +27,8 @@ const (
 )
 
 type BootstrapRequest struct {
-	VaultName  string
-	Kit        []byte
-	Device     vault.DeviceMaterial
-	DeliverKit func(vault.BootstrapResult, []byte) error
+	VaultName string
+	Device    vault.DeviceMaterial
 }
 
 type BootstrapResult struct {
@@ -84,10 +82,10 @@ func (coordinator *Coordinator) initializeVaultLocked(ctx context.Context, reque
 	if !ok {
 		return BootstrapResult{}, errors.New("device key store does not support bootstrap custody")
 	}
-	if len(request.Kit) != 32 || request.DeliverKit == nil {
-		return BootstrapResult{}, errors.New("bootstrap kit and delivery are required")
+	if request.VaultName == "" {
+		return BootstrapResult{}, errors.New("bootstrap vault name is required")
 	}
-	boot, err := vault.Bootstrap(request.Kit, request.VaultName, request.Device)
+	boot, err := vault.Bootstrap(request.VaultName, request.Device)
 	if err != nil {
 		return BootstrapResult{}, err
 	}
@@ -101,11 +99,6 @@ func (coordinator *Coordinator) initializeVaultLocked(ctx context.Context, reque
 		return BootstrapResult{}, fmt.Errorf("store device keys before bootstrap: %w", err)
 	}
 	result := BootstrapResult{Bootstrap: boot}
-	if err := request.DeliverKit(boot, request.Kit); err != nil {
-		_ = keyStore.DeleteDeviceKeys(ctx, boot.Vault, request.Device.DeviceID)
-		result.Outcome = BootstrapPrecommitFailure
-		return result, fmt.Errorf("%w: %w", ErrBootstrapKitDeliveryFailed, err)
-	}
 	blobLimit, err := coordinator.deps.Genesis.BlobUploadLimit(ctx)
 	if err != nil || blobLimit <= 0 {
 		_ = keyStore.DeleteDeviceKeys(ctx, boot.Vault, request.Device.DeviceID)
@@ -115,14 +108,14 @@ func (coordinator *Coordinator) initializeVaultLocked(ctx context.Context, reque
 		}
 		return result, fmt.Errorf("cannot determine provider blob upload limit: %w", err)
 	}
-	genesis, err := composeBootstrapGenesis(request.Kit, request.VaultName, request.Device)
+	genesis, err := composeBootstrapGenesis(request.VaultName, request.Device)
 	if err != nil {
 		_ = keyStore.DeleteDeviceKeys(ctx, boot.Vault, request.Device.DeviceID)
 		result.Outcome = BootstrapPrecommitFailure
 		return result, err
 	}
 	defer clear(genesis.Snapshot)
-	commit, commitErr := coordinator.deps.Genesis.CommitGenesis(ctx, blobLimit, request.Kit, request.Device, genesis)
+	commit, commitErr := coordinator.deps.Genesis.CommitGenesis(ctx, blobLimit, request.Device, genesis)
 	result.Genesis = commit
 	result.RecordTargets = append([]atproto.GenesisRecordTarget(nil), commit.RecordTargets...)
 	if commitErr != nil || commit.Phase != atproto.GenesisVerified {
@@ -356,7 +349,7 @@ func sameFinalizePosition(local, remote state.AuthenticatedPositionEvidence) boo
 	return true
 }
 
-func composeBootstrapGenesis(kit []byte, vaultName string, device vault.DeviceMaterial) (vault.Genesis, error) {
+func composeBootstrapGenesis(vaultName string, device vault.DeviceMaterial) (vault.Genesis, error) {
 	contentKey := make([]byte, 32)
 	defer clear(contentKey)
 	if _, err := rand.Read(contentKey); err != nil {
@@ -383,7 +376,7 @@ func composeBootstrapGenesis(kit []byte, vaultName string, device vault.DeviceMa
 	}
 	defer clear(nonce[:])
 	return vault.ComposeGenesis(vault.GenesisIntent{
-		Kit: kit, VaultName: vaultName, RootDevice: device, ContentKey: contentKey,
+		VaultName: vaultName, RootDevice: device, ContentKey: contentKey,
 		Wraps: []vault.RecipientWrapInput{wrap}, PublicationID: publicationID, Nonce: nonce,
 	})
 }

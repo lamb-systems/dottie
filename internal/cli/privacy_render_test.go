@@ -27,12 +27,11 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 	cacheRoot := "/dottie-canary/cache-root"
 	dataRoot := "/dottie-canary/data-root"
 	tempRoot := "/dottie-canary/temporary-root"
-	kitBytes := bytes.Repeat([]byte{0x71}, 32)
 	signingPrivateBytes := bytes.Repeat([]byte{0x42}, 64)
 	recipientPrivateBytes := bytes.Repeat([]byte{0x35}, 32)
 	sessionToken := "eyJ.synthetic.session-token-canary.credential"
 	forbiddenRepresentations := []string{fileContent, settingValue, homeRoot, configRoot, cacheRoot, dataRoot, tempRoot}
-	for _, raw := range [][]byte{kitBytes, signingPrivateBytes, recipientPrivateBytes, []byte(sessionToken), []byte(fileContent), []byte(settingValue)} {
+	for _, raw := range [][]byte{signingPrivateBytes, recipientPrivateBytes, []byte(sessionToken), []byte(fileContent), []byte(settingValue)} {
 		forbiddenRepresentations = append(forbiddenRepresentations, string(raw), hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw), base64.URLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw))
 	}
 

@@ -42,7 +42,7 @@ type genesisMemoryTransport struct {
 
 func TestCommitGenesisPublishesAllCreatesAndVerifiesRealVaultRead(t *testing.T) {
 	fixture := newGenesisFixture(t)
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	require.NotNil(t, result.Revision)
 	assert.Equal(t, result.Revision.CommitCID(), result.CommitCID)
@@ -65,7 +65,7 @@ func TestCommitGenesisPublishesAllCreatesAndVerifiesRealVaultRead(t *testing.T) 
 func TestCommitGenesisResolvesLostApplyResponseByVerifiedRead(t *testing.T) {
 	fixture := newGenesisFixture(t)
 	fixture.transport.loseAfterApply = true
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	assert.Equal(t, 1, fixture.transport.applyCalls)
 	assert.Equal(t, GenesisVerified, result.Phase)
@@ -76,14 +76,14 @@ func TestCommitGenesisResolvesLostApplyResponseByVerifiedRead(t *testing.T) {
 func TestCommitGenesisRequiresVerifiedAbsenceBeforeAnotherAttempt(t *testing.T) {
 	fixture := newGenesisFixture(t)
 	fixture.transport.loseBeforeApply = true
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.ErrorIs(t, err, ErrGenesisNotLanded)
 	assert.Equal(t, GenesisSubmitted, result.Phase)
 	assert.Len(t, result.RecordTargets, 6)
 	assert.Equal(t, 1, fixture.transport.applyCalls)
 	beforeSecond := len(fixture.transport.events)
 
-	result, err = CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err = CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	assert.Equal(t, 2, fixture.transport.applyCalls)
 	assert.True(t, result.Revision.HasRecord(RecordKey{Collection: VaultCheckpointNSID, RKey: "self"}))
@@ -95,7 +95,7 @@ func TestCommitGenesisRequiresVerifiedAbsenceBeforeAnotherAttempt(t *testing.T) 
 func TestCommitGenesisRetriesBoundedReadbackFailures(t *testing.T) {
 	fixture := newGenesisFixture(t)
 	fixture.transport.failLatestAfterApply = 2
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.NoError(t, err)
 	assert.Equal(t, GenesisVerified, result.Phase)
 	assert.Equal(t, 0, fixture.transport.failLatestAfterApply)
@@ -105,7 +105,7 @@ func TestCommitGenesisRetriesBoundedReadbackFailures(t *testing.T) {
 func TestCommitGenesisPreservesVerifiedMembershipWhenFinalReadbackFails(t *testing.T) {
 	fixture := newGenesisFixture(t)
 	fixture.transport.failGenesisBlobs = true
-	result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+	result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 	require.ErrorIs(t, err, ErrGenesisReadbackRejected)
 	assert.Equal(t, GenesisMembershipVerified, result.Phase)
 	assert.Len(t, result.RecordTargets, 6)
@@ -124,7 +124,7 @@ func TestCommitGenesisRejectsOmittedOrMismatchedCheckpoint(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newGenesisFixture(t)
 			test.set(fixture.transport)
-			result, err := CommitGenesis(context.Background(), fixture.io, fixture.kit, fixture.root, fixture.genesis)
+			result, err := CommitGenesis(context.Background(), fixture.io, fixture.root, fixture.genesis)
 			require.ErrorIs(t, err, ErrGenesisCheckpointMismatch)
 			assert.Equal(t, GenesisSubmitted, result.Phase)
 			assert.Equal(t, 1, fixture.transport.applyCalls)
@@ -133,7 +133,6 @@ func TestCommitGenesisRejectsOmittedOrMismatchedCheckpoint(t *testing.T) {
 }
 
 type genesisFixture struct {
-	kit       []byte
 	root      vault.DeviceMaterial
 	genesis   vault.Genesis
 	transport *genesisMemoryTransport
@@ -143,10 +142,9 @@ type genesisFixture struct {
 
 func newGenesisFixture(t *testing.T) genesisFixture {
 	t.Helper()
-	kit := bytes.Repeat([]byte{7}, 32)
 	root := vault.DeviceMaterial{DeviceID: "genesis-root", KeyID: []byte("genesis-root-key"), Signing: fixtureSigningKey(11), Recipient: readX25519Key(t, 21)}
 	genesis, err := vault.ComposeGenesis(vault.GenesisIntent{
-		Kit: kit, VaultName: "genesis commit fixture", RootDevice: root, ContentKey: bytes.Repeat([]byte{31}, 32),
+		VaultName: "genesis commit fixture", RootDevice: root, ContentKey: bytes.Repeat([]byte{31}, 32),
 		Wraps: []vault.RecipientWrapInput{{
 			KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(readX25519Key(t, 22).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24)),
 		}},
@@ -172,7 +170,7 @@ func newGenesisFixture(t *testing.T) genesisFixture {
 		},
 		Transport: transport, BlobUploadLimit: 1 << 20, DID: genesisTestDID, ObservationStore: store,
 	}
-	return genesisFixture{kit: kit, root: root, genesis: genesis, transport: transport, io: io, store: store}
+	return genesisFixture{root: root, genesis: genesis, transport: transport, io: io, store: store}
 }
 
 func (transport *genesisMemoryTransport) Do(_ context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {

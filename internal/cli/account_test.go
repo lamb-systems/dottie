@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
-	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -105,10 +104,18 @@ func accountItemKey(vaultID [32]byte, deviceID string) string {
 	return hex.EncodeToString(vaultID[:]) + ":" + deviceID
 }
 
-type bootstrapOutputFailure struct{}
+type flushRecordingWriter struct {
+	buffer bytes.Buffer
+	flush  int
+}
 
-func (bootstrapOutputFailure) Write([]byte) (int, error) {
-	return 0, errors.New("synthetic output failure")
+func (writer *flushRecordingWriter) Write(data []byte) (int, error) {
+	return writer.buffer.Write(data)
+}
+
+func (writer *flushRecordingWriter) Flush() error {
+	writer.flush++
+	return nil
 }
 
 type injectedBootstrapGenesisPort struct {
@@ -128,11 +135,11 @@ func (port injectedBootstrapGenesisPort) BlobUploadLimit(context.Context) (int64
 	return port.limit, nil
 }
 
-func (port injectedBootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
+func (port injectedBootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
 	result, err := atproto.CommitGenesis(ctx, atproto.GenesisIO{
 		Reader: port.reader, Transport: port.transport, BlobUploadLimit: limit, DID: port.did,
 		ObservationStore: port.observations,
-	}, kit, root, genesis)
+	}, root, genesis)
 	if err == nil && port.unresolved {
 		result.Phase = atproto.GenesisSubmitted
 		return result, atproto.ErrGenesisUnavailable
@@ -194,15 +201,7 @@ func TestAccountBootstrapCommandPublishesWithInjectedAuthenticatedProvider(t *te
 		return runArgs([]string{"bootstrap", "--vault-name", "personal", "--device-id", "root-device", "--did", did}, stdout, stderr)
 	}
 	var stderr bytes.Buffer
-	code := run(bootstrapOutputFailure{}, &stderr)
-	assert.NotZero(t, code)
-	assert.Empty(t, keyring.items)
-	store, err := state.Open(paths)
-	require.NoError(t, err)
-	selections, err := store.VaultSelections(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, selections)
-	require.NoError(t, store.Close())
+	code := 0
 	emptyRevision, err := reader.Read(context.Background(), did)
 	require.NoError(t, err)
 	assert.Empty(t, emptyRevision.Membership())
@@ -216,27 +215,20 @@ func TestAccountBootstrapCommandPublishesWithInjectedAuthenticatedProvider(t *te
 	require.NoError(t, err)
 	assert.Equal(t, emptyRevision.CommitCID(), revisionAfterKeyringFailure.CommitCID())
 	keyring.err = nil
-	var stdout bytes.Buffer
+	stdout := &flushRecordingWriter{}
 	stderr.Reset()
-	code = run(&stdout, &stderr)
+	code = run(stdout, &stderr)
 	require.Equal(t, 0, code)
 	assert.Empty(t, stderr.String())
-	assert.Equal(t, 1, strings.Count(stdout.String(), "recovery kit (keep offline):"))
-	assert.Contains(t, stdout.String(), "genesis: verified-commit")
-	kitLine := strings.SplitN(stdout.String(), "recovery kit (keep offline): ", 2)
-	require.Len(t, kitLine, 2)
-	groupedKit := strings.Fields(kitLine[1])[0]
-	kit, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ReplaceAll(groupedKit, "-", ""))
-	require.NoError(t, err)
-	require.Len(t, kit, 32)
+	assert.Contains(t, stdout.buffer.String(), "genesis: verified-commit")
+	assert.NotContains(t, strings.ToLower(stdout.buffer.String()), "kit")
+	assert.NotContains(t, stdout.buffer.String(), "recovery kit (keep offline):")
+	assert.NotRegexp(t, `(^|\s)[A-Z2-7]{4}(-[A-Z2-7]{4})+`, stdout.buffer.String(), "bootstrap output must not render grouped kit material")
+	assert.Zero(t, stdout.flush, "bootstrap must not flush kit material before publication")
 	assert.Len(t, keyring.items, 1)
-	for _, device := range keyring.items {
-		assert.False(t, bytes.Contains(device.Signing, kit))
-		assert.False(t, bytes.Contains(device.Recipient.Bytes(), kit))
-	}
-	store, err = state.Open(paths)
+	store, err := state.Open(paths)
 	require.NoError(t, err)
-	selections, err = store.VaultSelections(context.Background())
+	selections, err := store.VaultSelections(context.Background())
 	require.NoError(t, err)
 	require.Len(t, selections, 1)
 	checkpoint, err := store.VaultCheckpoint(context.Background(), selections[0].Vault)
@@ -254,18 +246,17 @@ func TestAccountBootstrapCommandPublishesWithInjectedAuthenticatedProvider(t *te
 	assert.NotContains(t, finalizeOut.String(), "recovery kit")
 	stateBytes, err := os.ReadFile(filepath.Join(paths.AppStateDir(), "state.db"))
 	require.NoError(t, err)
-	assert.False(t, bytes.Contains(stateBytes, kit))
 	revision, err := reader.Read(context.Background(), did)
 	require.NoError(t, err)
 	beforeCommit := revision.CommitCID()
 	storeCallsBeforeRefusal := keyring.storeCalls
 	deleteCallsBeforeRefusal := keyring.deleteCalls
-	stdout.Reset()
+	stdout.buffer.Reset()
 	stderr.Reset()
-	code = run(&stdout, &stderr)
+	code = run(stdout, &stderr)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "genesis requires an empty verified repository")
-	assert.NotContains(t, stdout.String(), "recovery kit (keep offline):")
+	assert.NotContains(t, stdout.buffer.String(), "recovery kit (keep offline):")
 	assert.Len(t, keyring.items, 1)
 	store, err = state.Open(paths)
 	require.NoError(t, err)
@@ -292,7 +283,6 @@ func TestAccountBootstrapCommandPublishesWithInjectedAuthenticatedProvider(t *te
 	require.NoError(t, err)
 	assert.Equal(t, beforeCommit, revision.CommitCID())
 	assert.Len(t, revision.Records(), 6)
-	assert.NotContains(t, stdout.String(), string(kit))
 	secondRepositoryKey, err := atprototest.NewSigningKey()
 	require.NoError(t, err)
 	pds, err = atprototest.NewMemoryPDS(did, secondRepositoryKey)
@@ -302,14 +292,16 @@ func TestAccountBootstrapCommandPublishesWithInjectedAuthenticatedProvider(t *te
 		ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
 	}}}
 	unresolved = true
-	stdout.Reset()
+	stdout.buffer.Reset()
+	stdout.flush = 0
 	stderr.Reset()
-	code = runArgs([]string{"bootstrap", "--vault-name", "unresolved vault", "--device-id", "second-root", "--did", did}, &stdout, &stderr)
+	code = runArgs([]string{"bootstrap", "--vault-name", "unresolved vault", "--device-id", "second-root", "--did", did}, stdout, &stderr)
 	require.Equal(t, 4, code)
-	assert.Contains(t, stdout.String(), "genesis: unresolved")
-	assert.Equal(t, 1, strings.Count(stdout.String(), "recovery kit (keep offline):"))
-	assert.Equal(t, 6, strings.Count(stdout.String(), "record target:"))
-	assert.Contains(t, stdout.String(), "do not retry bootstrap until publication is resolved")
+	assert.Contains(t, stdout.buffer.String(), "genesis: unresolved")
+	assert.NotContains(t, stdout.buffer.String(), "recovery kit (keep offline):")
+	assert.Zero(t, stdout.flush, "unresolved bootstrap must not flush kit material")
+	assert.Equal(t, 6, strings.Count(stdout.buffer.String(), "record target:"))
+	assert.Contains(t, stdout.buffer.String(), "do not retry bootstrap until publication is resolved")
 	assert.Contains(t, stderr.String(), "genesis publication is unresolved")
 	assert.Len(t, keyring.items, 2)
 	revision, err = reader.Read(context.Background(), did)

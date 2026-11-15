@@ -10,15 +10,14 @@ import (
 )
 
 func TestComposeGenesisBindsCountZeroObjectsToCanonicalEmptySnapshot(t *testing.T) {
-	kit := fixtureBytes(1, 32)
 	root := DeviceMaterial{DeviceID: "genesis-root", KeyID: []byte("genesis-root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
 	genesis, err := ComposeGenesis(GenesisIntent{
-		Kit: kit, VaultName: "genesis fixture", RootDevice: root, ContentKey: fixtureBytes(31, 32),
+		VaultName: "genesis fixture", RootDevice: root, ContentKey: fixtureBytes(31, 32),
 		Wraps:         []RecipientWrapInput{{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(41, 32)), WrapNonce: [24]byte(fixtureBytes(51, 24))}},
 		PublicationID: [16]byte(fixtureBytes(61, 16)), Nonce: [24]byte(fixtureBytes(71, 24)),
 	})
 	require.NoError(t, err)
-	require.NoError(t, ValidateGenesis(genesis, kit))
+	require.NoError(t, ValidateGenesis(genesis))
 
 	policy, err := DecodePolicy(genesis.Policy)
 	require.NoError(t, err)
@@ -52,10 +51,9 @@ func TestComposeGenesisBindsCountZeroObjectsToCanonicalEmptySnapshot(t *testing.
 }
 
 func TestValidateGenesisRejectsMismatchedCheckpointAndHead(t *testing.T) {
-	kit := fixtureBytes(2, 32)
 	root := DeviceMaterial{DeviceID: "genesis-root", KeyID: []byte("genesis-root-key"), Signing: fixedSigningKey(12), Recipient: fixedX25519Key(22)}
 	genesis, err := ComposeGenesis(GenesisIntent{
-		Kit: kit, VaultName: "genesis hostile fixture", RootDevice: root, ContentKey: fixtureBytes(32, 32),
+		VaultName: "genesis hostile fixture", RootDevice: root, ContentKey: fixtureBytes(32, 32),
 		Wraps:         []RecipientWrapInput{{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(42, 32)), WrapNonce: [24]byte(fixtureBytes(52, 24))}},
 		PublicationID: [16]byte(fixtureBytes(62, 16)), Nonce: [24]byte(fixtureBytes(72, 24)),
 	})
@@ -63,15 +61,15 @@ func TestValidateGenesisRejectsMismatchedCheckpointAndHead(t *testing.T) {
 
 	omittedCheckpoint := genesis
 	omittedCheckpoint.Checkpoint = nil
-	assert.Error(t, ValidateGenesis(omittedCheckpoint, kit))
+	assert.Error(t, ValidateGenesis(omittedCheckpoint))
 
 	mismatchedCID := genesis
 	mismatchedCID.Checkpoint = bytes.Clone(genesis.Checkpoint)
 	mismatchedCID.Checkpoint[10] ^= 0xff
-	assert.Error(t, ValidateGenesis(mismatchedCID, kit))
+	assert.Error(t, ValidateGenesis(mismatchedCID))
 
 	mismatchedHead := genesis
 	mismatchedHead.Head = bytes.Clone(genesis.Head)
 	mismatchedHead.Head[10] ^= 0xff
-	assert.Error(t, ValidateGenesis(mismatchedHead, kit))
+	assert.Error(t, ValidateGenesis(mismatchedHead))
 }

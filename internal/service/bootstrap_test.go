@@ -93,7 +93,7 @@ func (port *bootstrapTestGenesisPort) BlobUploadLimit(context.Context) (int64, e
 	return 1 << 20, port.limitErr
 }
 
-func (port *bootstrapTestGenesisPort) CommitGenesis(_ context.Context, _ int64, _ []byte, _ vault.DeviceMaterial, _ vault.Genesis) (atproto.GenesisCommitResult, error) {
+func (port *bootstrapTestGenesisPort) CommitGenesis(_ context.Context, _ int64, _ vault.DeviceMaterial, _ vault.Genesis) (atproto.GenesisCommitResult, error) {
 	port.commitCalls++
 	*port.order = append(*port.order, "publication")
 	return port.result, port.commitErr
@@ -134,30 +134,19 @@ func TestCoordinatorInitializeVaultMapsGenesisOutcomesAndCustody(t *testing.T) {
 			port := &bootstrapTestGenesisPort{result: atproto.GenesisCommitResult{Phase: test.phase}, commitErr: test.commitErr, order: &order}
 			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, Genesis: port})
 			require.NoError(t, err)
-			kit, err := vault.GenerateRecoveryKit()
-			require.NoError(t, err)
-			defer clear(kit)
 			signing, recipient, err := vault.GenerateDeviceKeys()
 			require.NoError(t, err)
 			defer clear(signing)
 			device := vault.DeviceMaterial{DeviceID: "bootstrap-test-root", KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
-			delivered := false
 			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
-				VaultName: "bootstrap test", Kit: kit, Device: device,
-				DeliverKit: func(_ vault.BootstrapResult, deliveredKit []byte) error {
-					assert.Equal(t, kit, deliveredKit)
-					delivered = true
-					order = append(order, "kit-delivered")
-					return nil
-				},
+				VaultName: "bootstrap test", Device: device,
 			})
 			require.ErrorIs(t, initializeErr, test.commitErr)
 			assert.Equal(t, test.outcome, result.Outcome)
-			assert.True(t, delivered)
 			assert.Equal(t, 1, port.commitCalls)
 			assert.Equal(t, test.deleteCalls, keyring.deleteCalls)
 			assert.Equal(t, test.keyRetained, len(keyring.items) == 1)
-			assert.Equal(t, []string{"kit-delivered", "blob-limit", "publication"}, order)
+			assert.Equal(t, []string{"blob-limit", "publication"}, order)
 			assert.Empty(t, result.RecordTargets)
 			selections, err := store.VaultSelections(context.Background())
 			require.NoError(t, err)
@@ -170,14 +159,12 @@ func TestCoordinatorInitializeVaultAbortsBeforePublicationOnCustodyFailure(t *te
 	for _, test := range []struct {
 		name        string
 		storeErr    error
-		deliverErr  error
 		wantStored  int
 		wantDelete  int
 		wantOutcome BootstrapOutcome
 		wantErr     error
 	}{
 		{name: "keyring failure", storeErr: platform.ErrKeyringUnavailable, wantDelete: 1, wantErr: platform.ErrKeyringUnavailable},
-		{name: "kit delivery failure", deliverErr: errors.New("synthetic stdout failure"), wantStored: 1, wantDelete: 1, wantOutcome: BootstrapPrecommitFailure, wantErr: ErrBootstrapKitDeliveryFailed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, _ := openCoordinatorStateWithPaths(t)
@@ -186,19 +173,12 @@ func TestCoordinatorInitializeVaultAbortsBeforePublicationOnCustodyFailure(t *te
 			port := &bootstrapTestGenesisPort{order: &order}
 			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, Genesis: port})
 			require.NoError(t, err)
-			kit, err := vault.GenerateRecoveryKit()
-			require.NoError(t, err)
-			defer clear(kit)
 			signing, recipient, err := vault.GenerateDeviceKeys()
 			require.NoError(t, err)
 			defer clear(signing)
 			device := vault.DeviceMaterial{DeviceID: "custody-test-root", KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
 			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
-				VaultName: "custody test", Kit: kit, Device: device,
-				DeliverKit: func(vault.BootstrapResult, []byte) error {
-					order = append(order, "kit-delivered")
-					return test.deliverErr
-				},
+				VaultName: "custody test", Device: device,
 			})
 			require.ErrorIs(t, initializeErr, test.wantErr)
 			assert.Equal(t, test.wantOutcome, result.Outcome)

@@ -101,7 +101,7 @@ func (port bootstrapGenesisPort) BlobUploadLimit(context.Context) (int64, error)
 	return 1 << 20, nil
 }
 
-func (port bootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
+func (port bootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
 	*port.order = append(*port.order, "publication")
 	result, err := atproto.CommitGenesis(ctx, atproto.GenesisIO{
 		Reader: atproto.RevisionReader{
@@ -110,7 +110,7 @@ func (port bootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64,
 		},
 		Transport: port.transport, BlobUploadLimit: limit, DID: port.identity.DID,
 		ObservationStore: port.observations,
-	}, kit, root, genesis)
+	}, root, genesis)
 	if err == nil && port.unresolved {
 		result.Phase = atproto.GenesisSubmitted
 		return result, atproto.ErrGenesisUnavailable
@@ -155,25 +155,17 @@ func TestCoordinatorBootstrapFinalizesTrust(t *testing.T) {
 		Genesis: port, Clock: func() time.Time { return now },
 	})
 	require.NoError(t, err)
-	kit, err := vault.GenerateRecoveryKit()
-	require.NoError(t, err)
-	defer clear(kit)
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	defer clear(signing)
 	device := vault.DeviceMaterial{DeviceID: "coordinator-bootstrap-root", KeyID: bytes.Clone(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient}
 	require.NoError(t, coordinator.PreflightVault(ctx))
 	result, err := coordinator.InitializeVault(ctx, service.BootstrapRequest{
-		VaultName: "coordinator bootstrap", Kit: kit, Device: device,
-		DeliverKit: func(_ vault.BootstrapResult, delivered []byte) error {
-			require.Equal(t, kit, delivered)
-			order = append(order, "kit-delivered")
-			return nil
-		},
+		VaultName: "coordinator bootstrap", Device: device,
 	})
 	require.NoError(t, err)
 	require.Equal(t, service.BootstrapVerifiedCommit, result.Outcome)
-	assert.Equal(t, []string{"preflight", "kit-delivered", "blob-limit", "publication"}, order)
+	assert.Equal(t, []string{"preflight", "blob-limit", "publication"}, order)
 	assert.Equal(t, device.DeviceID, keyring.devices[device.DeviceID].DeviceID)
 
 	checkpoint, err := store.VaultCheckpoint(ctx, result.Bootstrap.Vault)
@@ -190,7 +182,6 @@ type bootstrapRecoveryFixture struct {
 	reader        atproto.RevisionReader
 	keyring       *publicationKeyring
 	device        vault.DeviceMaterial
-	kit           []byte
 	result        service.BootstrapResult
 	initializeErr error
 }
@@ -235,20 +226,16 @@ func newBootstrapRecoveryFixture(t *testing.T, unresolved, failFinalization bool
 		bootstrapSQLiteExec(t, paths, `CREATE TRIGGER fail_genesis_position_history BEFORE INSERT ON authenticated_position_history BEGIN SELECT RAISE(FAIL, 'interrupted write'); END`)
 	}
 	require.NoError(t, coordinator.PreflightVault(context.Background()))
-	kit, err := vault.GenerateRecoveryKit()
-	require.NoError(t, err)
-	t.Cleanup(func() { clear(kit) })
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	t.Cleanup(func() { clear(signing) })
 	device := vault.DeviceMaterial{DeviceID: "bootstrap-recovery-root", KeyID: bytes.Clone(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient}
 	result, initializeErr := coordinator.InitializeVault(context.Background(), service.BootstrapRequest{
-		VaultName: "bootstrap recovery", Kit: kit, Device: device,
-		DeliverKit: func(vault.BootstrapResult, []byte) error { return nil },
+		VaultName: "bootstrap recovery", Device: device,
 	})
 	return &bootstrapRecoveryFixture{
 		coordinator: coordinator, store: store, paths: paths, pds: pds, reader: reader,
-		keyring: keyring, device: device, kit: kit, result: result, initializeErr: initializeErr,
+		keyring: keyring, device: device, result: result, initializeErr: initializeErr,
 	}
 }
 

@@ -83,12 +83,12 @@ func CheckGenesisRepositoryEmpty(ctx context.Context, reader RevisionReader, tra
 	return nil
 }
 
-func CommitGenesis(ctx context.Context, io GenesisIO, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (GenesisCommitResult, error) {
+func CommitGenesis(ctx context.Context, io GenesisIO, root vault.DeviceMaterial, genesis vault.Genesis) (GenesisCommitResult, error) {
 	result := GenesisCommitResult{Phase: GenesisNotSubmitted}
 	if io.Transport == nil || io.DID == "" || io.BlobUploadLimit <= 0 || io.ObservationStore == nil || root.Recipient == nil || len(root.Signing) != ed25519.PrivateKeySize {
 		return result, fmt.Errorf("%w: genesis transport, DID, blob limit, observation store and root device are required", ErrBatchRejected)
 	}
-	if err := vault.ValidateGenesis(genesis, kit); err != nil {
+	if err := vault.ValidateGenesis(genesis); err != nil {
 		return result, fmt.Errorf("%w: %w", ErrBatchRejected, err)
 	}
 	certificate, err := vault.DecodeCertificate(genesis.Certificate)
@@ -147,7 +147,7 @@ func CommitGenesis(ctx context.Context, io GenesisIO, kit []byte, root vault.Dev
 		return result, fmt.Errorf("%w: verified genesis read-back failed after retries: %w", ErrGenesisUnavailable, readErr)
 	}
 	result.Revision = verified
-	if err := verifyGenesisRevision(verified, expected, genesis, kit); err != nil {
+	if err := verifyGenesisRevision(verified, expected, genesis); err != nil {
 		return result, err
 	}
 	result.Phase = GenesisMembershipVerified
@@ -160,7 +160,7 @@ func CommitGenesis(ctx context.Context, io GenesisIO, kit []byte, root vault.Dev
 			Vault: genesis.Vault, TrustAnchor: genesis.Anchor, DeviceKeyID: bytes.Clone(root.KeyID), DeviceKey: root.Recipient,
 		})
 		if readErr == nil {
-			if verifyErr := verifyGenesisRevision(readResult.Revision, expected, genesis, kit); verifyErr != nil {
+			if verifyErr := verifyGenesisRevision(readResult.Revision, expected, genesis); verifyErr != nil {
 				return result, verifyErr
 			}
 			packed, packErr := vault.Pack(model.Snapshot{Version: model.SnapshotVersion})
@@ -332,7 +332,7 @@ func genesisPublication(genesis vault.Genesis, signer ed25519.PrivateKey, blobRe
 	return publication, expected, nil
 }
 
-func verifyGenesisRevision(revision *Revision, expected map[RecordKey]genesisExpectedRecord, genesis vault.Genesis, kit []byte) error {
+func verifyGenesisRevision(revision *Revision, expected map[RecordKey]genesisExpectedRecord, genesis vault.Genesis) error {
 	if revision == nil {
 		return fmt.Errorf("%w: verified revision is missing", ErrGenesisUnavailable)
 	}
@@ -351,10 +351,9 @@ func verifyGenesisRevision(revision *Revision, expected map[RecordKey]genesisExp
 	if !checkpointExists || revision.membership[checkpointKey] != checkpointExpected.cid {
 		return ErrGenesisCheckpointMismatch
 	}
-	anchor, err := vault.RecoveryKitCheckpointAnchor(kit, genesis.Vault, genesis.Checkpoint)
 	checkpoint, decodeErr := vault.DecodeCheckpoint(genesis.Checkpoint)
 	controlCID := rawTransitionCID(genesis.Control)
-	if err != nil || decodeErr != nil || anchor != genesis.Anchor || checkpoint.Vault != genesis.Vault || checkpoint.EpochSeq != 0 || checkpoint.PolicyDigest != genesis.PolicyDigest || !bytes.Equal(checkpoint.ControlCID, controlCID) || !bytes.Equal(checkpoint.SnapshotCID, genesis.SnapshotCID) {
+	if decodeErr != nil || checkpoint.Anchor != genesis.Anchor || checkpoint.Vault != genesis.Vault || checkpoint.EpochSeq != 0 || checkpoint.PolicyDigest != genesis.PolicyDigest || !bytes.Equal(checkpoint.ControlCID, controlCID) || !bytes.Equal(checkpoint.SnapshotCID, genesis.SnapshotCID) {
 		return ErrGenesisCheckpointMismatch
 	}
 	for key, wanted := range expected {

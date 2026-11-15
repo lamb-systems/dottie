@@ -14,6 +14,13 @@ this acceptance still applies.
 > or history summaries describe the retired path and are no longer exercised; they are retained unchanged
 > as historical evidence and must not be read as coverage of the current tree. In particular the v1
 > publication-privacy audit and the live archive gate no longer run, and no v2 equivalent exists yet.
+>
+> **Kit material removal, added 2026-11-15.** The remaining vault-signing material was removed too:
+> `account bootstrap` no longer mints, prints or stores a recovery kit, `internal/vault` no longer
+> derives or validates kit signing keys and checkpoints, and the export/onboarding archive primitives
+> and their tests were deleted. Authenticity is repo-scoped through AT Protocol account authority;
+> Dottie adds no vault signature over a published position and offers no offline anchor. The
+> plaintext provider residual recorded below is unchanged and still applies.
 
 > **Retirement note, added 2026-11-15.** `dottie preview` and `dottie restore` were removed with the
 > v1 read and apply authority, so the rows below that name `TestRestoreMilestoneOfflineTwoHomeAndRecovery`,
@@ -55,11 +62,13 @@ content. A skipped gate would not have been evidence.
 
 ## Settled recovery and restore boundaries
 
-- The recovery kit authorizes root recovery and signs checkpoints. It does **not** decrypt content. Decryption needs a surviving compatible device recipient private key.
-- An independent archive plus that compatible recipient key can recover the archive's checkpoint snapshot without contacting the provider. The archive may not contain the newest provider state. A kit alone, or an archive without a compatible recipient key, cannot recover plaintext.
-- Losing every device key without an independent complete export is data loss. A repository CAR is not a complete blob archive.
-- Freshness-unverified remote state is refused for apply. The existing consent path permits inspection/export continuation only; it never grants apply authority.
-- The live milestone's same-host kit file provides only a limited disposable demonstration, not evidence of independent/offline kit custody or machine-loss recovery.
+- There is no recovery authority. No offline secret authorizes a root replacement, signs a position or
+  restores data; content and publication both require a surviving device key.
+- Authenticity is repo-scoped: a record set is authentic for the account that holds it. Dottie makes no
+  client-side claim of global freshness, and a provider that withholds later history is not detectable.
+- Losing every device key is data loss, and Dottie cannot retrieve bytes the provider no longer holds.
+- Freshness-unverified remote state is refused for apply. A freshness-unverified inspection path reports
+  a position only; it never grants apply authority.
 
 ## Plaintext v2 publication residual (accepted by the owner 2026-11-14)
 

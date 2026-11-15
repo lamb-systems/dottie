@@ -17,7 +17,6 @@ type checkpointFixture struct {
 	anchor        [32]byte
 	root          DeviceMaterial
 	cert          []byte
-	kit           []byte
 	checkpoint    []byte
 	genesisPolicy []byte
 }
@@ -25,11 +24,10 @@ type checkpointFixture struct {
 func newCheckpointFixture(t *testing.T) checkpointFixture {
 	t.Helper()
 	root := DeviceMaterial{DeviceID: "checkpoint-root", KeyID: []byte("checkpoint-root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
-	kit := fixtureBytes(1, 32)
-	boot, err := Bootstrap(kit, "checkpoint fixture", root)
+	boot, err := Bootstrap("checkpoint fixture", root)
 	require.NoError(t, err)
 	return checkpointFixture{
-		vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate, kit: kit,
+		vaultID: boot.Vault, anchor: boot.Anchor, root: root, cert: boot.Certificate,
 		checkpoint: boot.Checkpoint, genesisPolicy: bytes.Clone(boot.Policy),
 	}
 }

@@ -1,11 +1,8 @@
 package vault
 
 import (
-	"archive/tar"
 	"bytes"
 	"crypto/ed25519"
-	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,10 +39,8 @@ type securityDefect struct {
 
 var caseMatrix = []matrixCase{
 	{id: "1b", status: statusNewRefusal, test: "TestEnrollmentRefusesParentMismatch", refusal: "TestExpectedRefusalEnrollmentParentJoin"},
-	{id: "2", status: statusNewRefusal, test: "TestExportRefusesCheckpointNamingAbsentRoot"},
 	{id: "3a-i", status: statusExisting, test: "TestOpenVerificationOrderAndAuthorizationErrors"},
 	{id: "3a-ii", status: statusNewRefusal, test: "TestOpenRefusesRecipientAbsentFromPolicy"},
-	{id: "12", status: statusNewRefusal, test: "TestExportRefusesOverCapAndMismatchedMembers"},
 	{id: "13", status: statusNewRefusal, test: "TestVerifyControlStateRefusesSkippedPolicyChain", refusal: "TestExpectedRefusalCheckpointSkippedPolicyChain"},
 	{id: "14", status: statusNewRefusal, test: "TestEnrollmentRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalEnrollmentDeltaPolicyFields"},
 	{id: "15", status: statusNewRefusal, test: "TestRevocationRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalRevocationDeltaPolicyFields"},
@@ -57,7 +52,7 @@ var knownSecurityDefects []securityDefect
 
 const hostilePackageName = "vault"
 
-var frozenCaseInventory = []string{"1b", "2", "3a-i", "3a-ii", "12", "13", "14", "15", "19", "20"}
+var frozenCaseInventory = []string{"1b", "3a-i", "3a-ii", "13", "14", "15", "19", "20"}
 
 func testSourceFunctions(t *testing.T) map[string]bool {
 	t.Helper()
@@ -321,7 +316,7 @@ func TestRevocationRefusesNonRosterPolicyFieldChanges(t *testing.T) {
 
 func demotedRootEvidence(t *testing.T, fixture checkpointFixture, heldCID []byte) ControlEvidence {
 	t.Helper()
-	boot, err := Bootstrap(fixture.kit, "checkpoint fixture", fixture.root)
+	boot, err := Bootstrap("checkpoint fixture", fixture.root)
 	require.NoError(t, err)
 	policy, err := DecodePolicy(boot.Policy)
 	require.NoError(t, err)
@@ -437,86 +432,4 @@ func TestOpenRefusesRecipientAbsentFromPolicy(t *testing.T) {
 	}
 	_, err = Open(hostileEnvelope, request)
 	require.ErrorIs(t, err, ErrRecipient, "Open must refuse a signed envelope recipient absent from policy authorization")
-}
-
-func splitExportArchive(t *testing.T, encoded []byte) (ExportManifest, []exportTestMember) {
-	t.Helper()
-	require.True(t, bytes.HasPrefix(encoded, []byte(exportMagic)))
-	tarReader := tar.NewReader(bytes.NewReader(encoded[len(exportMagic):]))
-	var members []exportTestMember
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		data, err := io.ReadAll(tarReader)
-		require.NoError(t, err)
-		members = append(members, exportTestMember{name: header.Name, data: data})
-	}
-	require.NotEmpty(t, members)
-	var manifest ExportManifest
-	require.NoError(t, json.Unmarshal(members[0].data, &manifest))
-	return manifest, members[1:]
-}
-
-func buildHostileExportArchive(t *testing.T, manifest ExportManifest, members []exportTestMember) []byte {
-	t.Helper()
-	manifestBytes, err := encodeExportManifest(manifest)
-	require.NoError(t, err)
-	var result bytes.Buffer
-	result.WriteString(exportMagic)
-	writer := tar.NewWriter(&result)
-	require.NoError(t, writeMember(writer, exportManifestMember, manifestBytes))
-	for _, member := range members {
-		require.NoError(t, writeMember(writer, member.name, member.data))
-	}
-	require.NoError(t, writer.Close())
-	return result.Bytes()
-}
-
-func TestExportRefusesCheckpointNamingAbsentRoot(t *testing.T) {
-	input, fixture := exportTestInput(t)
-	anchorA := fixture.bootstrap.Anchor
-	require.Equal(t, anchorA, exportTestOptions(fixture).ExpectedAnchor)
-	genuine, err := EncodeExportArchive(input)
-	require.NoError(t, err)
-	manifest, members := splitExportArchive(t, genuine)
-	checkpointIndex := -1
-	for index, entry := range manifest.Entries {
-		if entry.Kind == exportEntryCheckpoint {
-			checkpointIndex = index
-		}
-	}
-	require.GreaterOrEqual(t, checkpointIndex, 0)
-	original, err := DecodeCheckpoint(members[checkpointIndex].data)
-	require.NoError(t, err)
-	require.Equal(t, anchorA, original.Anchor)
-	var anchorB [32]byte
-	copy(anchorB[:], bytes.Repeat([]byte{0xB1}, 32))
-	require.NotEqual(t, anchorA, anchorB)
-	original.Anchor = anchorB
-	kitKey, err := deriveKitSigningKey(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	forged := signCheckpointValue(t, original, kitKey)
-	members[checkpointIndex].data = forged
-	manifest.Entries[checkpointIndex].SHA256 = exportDigest(forged)
-	manifest.Entries[checkpointIndex].Length = int64(len(forged))
-
-	kitPublic, err := RecoveryKitSigningPublicKey(fixture.kit, fixture.bootstrap.Vault)
-	require.NoError(t, err)
-	forgedCheckpoint, verifyErr := VerifyCheckpoint(forged, kitPublic)
-	require.NoError(t, verifyErr, "the forged checkpoint is correctly kit-signed")
-	require.Equal(t, anchorB, forgedCheckpoint.Anchor)
-	require.NotEqual(t, anchorA, forgedCheckpoint.Anchor)
-
-	rejected := input
-	rejected.Checkpoint = forged
-	_, encodeErr := EncodeExportArchive(rejected)
-	require.ErrorIs(t, encodeErr, ErrAuthorization, "EncodeExportArchive refuses the foreign-anchor checkpoint up front")
-
-	hostile := buildHostileExportArchive(t, manifest, members)
-	err = readExportRefusalWithoutMutation(t, hostile, exportTestOptions(fixture))
-	require.ErrorIs(t, err, ErrAuthorization)
-	require.ErrorContains(t, err, "checkpoint vault or anchor")
 }

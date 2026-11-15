@@ -36,15 +36,13 @@ func (source memoryDeviceKeys) LoadDeviceKeys(_ context.Context, vaultID [32]byt
 
 func seedGenesisTrust(t *testing.T, store *state.Store) (vault.Genesis, vault.DeviceMaterial) {
 	t.Helper()
-	kit, err := vault.GenerateRecoveryKit()
-	require.NoError(t, err)
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	device := vault.DeviceMaterial{DeviceID: "trust-root", KeyID: bytes.Repeat([]byte{7}, 32), Signing: signing, Recipient: recipient}
 	public := signing.Public().(ed25519.PublicKey)
 	copy(device.KeyID, public[:])
 	genesis, err := vault.ComposeGenesis(vault.GenesisIntent{
-		Kit: kit, VaultName: "trust fixture", RootDevice: device, ContentKey: bytes.Repeat([]byte{9}, 32),
+		VaultName: "trust fixture", RootDevice: device, ContentKey: bytes.Repeat([]byte{9}, 32),
 		Wraps:         []vault.RecipientWrapInput{{KeyID: bytes.Clone(device.KeyID), EphemeralPrivate: [32]byte(bytes.Repeat([]byte{3}, 32)), WrapNonce: [24]byte(bytes.Repeat([]byte{4}, 24))}},
 		PublicationID: [16]byte(bytes.Repeat([]byte{5}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{6}, 24)),
 	})

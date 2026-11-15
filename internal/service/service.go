@@ -28,7 +28,6 @@ var (
 	ErrGNOMEReapproval                  = errors.New("GNOME category approval requires re-approval")
 	ErrUnapprovedEntry                  = errors.New("remote or base entry is not approved by local target policy")
 	ErrAdministrativeRootRequired       = errors.New("administrative operation requires the selected root device")
-	ErrRecoveryKitMismatch              = errors.New("recovery kit does not match the vault recovery anchor")
 	ErrOnboardingAnchorMismatch         = errors.New("onboarding anchor does not match the supplied root fingerprint")
 	ErrOnboardingVaultMismatch          = errors.New("onboarding bundle does not match the selected vault")
 	ErrOnboardingDeviceMismatch         = errors.New("onboarding bundle does not contain the selected device recipient")
@@ -39,7 +38,6 @@ var (
 	ErrFinalizeKeysMissing              = errors.New("device keys for this vault are missing from Secret Service")
 	ErrFinalizeStateConflict            = errors.New("local vault trust exists but does not match the verified remote position")
 	ErrFinalizeStateIncomplete          = errors.New("local vault trust is incomplete")
-	ErrBootstrapKitDeliveryFailed       = errors.New("recovery kit delivery failed before publication")
 	ErrBootstrapTrustFinalizationFailed = errors.New("verified genesis local trust finalization failed")
 )
 
@@ -78,7 +76,7 @@ type RemoteReadPort interface {
 type GenesisPort interface {
 	Preflight(context.Context) error
 	BlobUploadLimit(context.Context) (int64, error)
-	CommitGenesis(context.Context, int64, []byte, vault.DeviceMaterial, vault.Genesis) (atproto.GenesisCommitResult, error)
+	CommitGenesis(context.Context, int64, vault.DeviceMaterial, vault.Genesis) (atproto.GenesisCommitResult, error)
 }
 
 type TrustSource interface {

@@ -72,7 +72,6 @@ snapshot-blob notation describes the bytes uploaded before the fenced commit.
 | Enroll | policy, control, certificate, head, snapshot |
 | Publish | head, snapshot |
 | Policy change, revoke, rotate, root rotation | policy, control, certificate, head, snapshot |
-| Reissue kit | control, checkpoint, certificate |
 | Recover | policy, control, certificate, checkpoint, head |
 | Retention attestation | attestation |
 

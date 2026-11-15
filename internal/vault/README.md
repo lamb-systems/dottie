@@ -190,28 +190,24 @@ handling.
 ## Bootstrap and device transitions
 
 Bootstrap is deterministic over its inputs. Device Ed25519 and X25519 keys are generated separately
-with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. A 32-byte recovery kit
-and vault name derive the vault identifier. The root device's certificate is self-signed by its
-Ed25519 key. The kit-derived signing key signs only the genesis checkpoint, whose `anchor` is the
-SHA-256 fingerprint of the root signing public key. `ComposeGenesis` seals the canonical empty
-snapshot and builds the count-zero head, control and kit-signed checkpoint so the control and
-checkpoint bind the final snapshot and control CIDs. `ValidateGenesis` verifies those bindings
-and signatures. This is the seal composition only; repository publication and verified read-back
-are owned by `internal/remote/atproto`.
+with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. The vault identifier is
+`sha256("dottie/v2/vault\x00" || vault name || 0x00 || root device signing public key)`, so it needs
+no kit, secret or provider input, and two devices bootstrapping the same name derive different
+vault IDs. The root device's certificate is self-signed by its Ed25519 key, and its fingerprint is
+the `anchor`. The genesis checkpoint is signed by the root device and carries that anchor; the
+policy's `recovery_anchor` field is all zeros, because no offline anchor exists. `ComposeGenesis`
+seals the canonical empty snapshot and builds the count-zero head, control and checkpoint so the
+control and checkpoint bind the final snapshot and control CIDs. `ValidateGenesis` verifies those
+bindings and signatures. This is the seal composition only; repository publication and verified
+read-back are owned by `internal/remote/atproto`.
 
-On first use, the operator supplies the kit and treats it as the root of trust:
-`RecoveryKitSigningPublicKey` derives the verifier key and `VerifyCheckpoint` checks the
-checkpoint's kit signer, key fingerprint and signature. The verified checkpoint's `anchor`
-then becomes the `TrustAnchor` used for certificate-chain verification. This is the operator's
-assertion that the vault is theirs, not a provider-derived fact. A stolen kit can vouch for an
-attacker's root. A checkpoint older than unseen history cannot reveal that missing history;
-anything below the pinned anchor is still rejected. Later starts use a checkpoint already held
-by the device. `dottie account bootstrap` prints the grouped kit plus vault, anchor, checkpoint
-and kit-public-key fingerprints for independent recording. `SignRecoveryKitCheckpoint` accepts
-a 32-byte kit and the explicit successor vault, root anchor, nonzero supported epoch, policy digest,
-control CID and epoch-start snapshot CID; it derives the same labeled signing key as bootstrap,
-signs one checkpoint and retains no kit. It rejects malformed CIDs, invalid position sizes and
-unsupported administrative epochs. Durable checkpoint storage is the state store's responsibility.
+There is no vault signature beyond these per-object device signatures and no offline anchor. The
+published record set is authentic because it lives in the account's own AT Protocol repository and
+was written by an authenticated session, not because Dottie signed the position. A checkpoint is a
+device-signed statement of position; a reader can verify that statement against the root
+certificate, and cannot verify that the position was ever authorized offline or that the provider
+withheld nothing. `dottie account bootstrap` prints the vault, anchor, commit and checkpoint
+fingerprints; it mints, prints and stores no secret for offline use.
 
 `PrepareTransition` supports enrollment and revocation. Enrollment binds the authenticated
 predecessor's control CID, policy digest, epoch and head CID to a successor root-signed policy,
@@ -242,31 +238,6 @@ the transition checks with private-material enrollment, including the exact reci
 certificate bindings, epoch and ancestry checks, and checkpoint exclusion. The older private-material
 `PrepareTransition` API remains unchanged for existing callers.
 
-`OnboardingBundle` is version 1 canonical JSON with exactly these fields: `version`, `vault_id`,
-`anchor_fingerprint`, `recovery_anchor`, `successor_checkpoint`, `successor_policy`,
-`successor_control`, `predecessor_policy`, `predecessor_control`, `predecessor_head`,
-`predecessor_snapshot` and `predecessor_certificates`. The vault ID and fingerprints are 32-byte
-lowercase hex strings; object fields and each certificate are lowercase hex encodings of signed vault
-objects. Policy, control, head, checkpoint and certificate objects are bounded by
-`MaxPolicyObjectBytes` (64 KiB), the predecessor snapshot by `MaxEnvelopeBytes` (384 MiB), and the
-certificate count by `MaxRecipients` (64). The complete JSON is bounded by
-`MaxOnboardingBundleBytes`, which includes the hex expansion of these bounds. No fields are optional.
-Decode rejects unknown or duplicate fields, non-canonical encodings, trailing values, unsupported
-versions and oversized input. The bundle contains no kit, private device key, token, approval or
-snapshot plaintext; the predecessor snapshot is encrypted ciphertext.
-
-Predecessor certificates are deterministically ordered by `(device_id, key_id)`. The bundle binds
-the predecessor policy/control/head/snapshot/certificates to one another and to the successor epoch,
-policy digest and control ancestry; it verifies predecessor certificate chains, head and snapshot
-signatures. The coordinator authenticates predecessor and successor policy/control signatures against
-the explicit root anchor before import, then persists the full predecessor position through the
-existing evidence API. The kit-signed successor checkpoint is bound to the successor control and
-recovery-key fingerprint, but its signature cannot be verified by a newcomer that does not possess the
-kit; the operator-supplied root anchor remains independent and must be confirmed out-of-band. The
-first remote read re-authenticates the successor position and exact checkpoint control. The bundle is
-public evidence, not provider authority. No AT Protocol record-CID assertion is made by this vault
-format.
-
 `ValidateTransition` authenticates the predecessor, requires one-step epoch advance and policy
 and control ancestry, and verifies the successor signatures. Enrollment must add exactly its
 certificate and recipient. Revocation must remove exactly one non-root device from roles and
@@ -284,9 +255,12 @@ binding remain the record schemas work; this package prepares encoded signed obj
 SHA-256 CIDs over those canonical bytes. AT Protocol repository records remain DAG-CBOR records with
 DAG-CBOR CIDs; they are a different object family and do not use the vault-object CID codec.
 
-## Recovery kits and checkpoint verification
+## Checkpoint verification
 
-A recovery kit is exactly 32 random bytes, rendered as uppercase base32 in groups of four characters. `ParseRecoveryKit` accepts that rendering with hyphens and surrounding whitespace and rejects any value that does not decode to exactly 32 bytes. The vault identifier is derived from the kit and the vault name. The existing kit signing-key derivation is vault-specific; its public-key fingerprint is the kit key ID used by `VerifyCheckpoint`. A verified checkpoint supplies the root signing-key fingerprint (`anchor`); the recovery command cannot print that anchor unless an authenticated checkpoint is supplied. Recovery does not mint a kit: bootstrap is the operation that creates a secret the operator must keep offline.
+Checkpoints are signed by a device key. Authenticity is repo-scoped: a published record set is
+authentic for the account that holds it, and a locally held checkpoint supplies the trusted root
+anchor fingerprint that certificate chains resolve to. The package no longer derives, parses or
+verifies kit signing keys, and no offline anchor can be established from a secret.
 
 `VerifyControlState` takes an opaque `TrustedContext` separately from the artifact-facing `VerificationRequest`. The request contains supplied and intermediate control evidence only: it has no trust-anchor or held-position fields, and the former caller-constructible `HeldCheckpoint` and `CheckpointPosition` types are not part of the API. `NewTrustedContext` takes the vault ID and anchor in a separate call and takes no verification artifact; `SetHeldCheckpoint` adds locally held control evidence to that context. A nil or zero-value context is refused. The context fields are unexported and `SetHeldCheckpoint` copies its evidence.
 
@@ -296,9 +270,7 @@ Verification authenticates the supplied control, its signed policy and certifica
 
 Verification checks the five outcomes in this strict precedence: `current` when CIDs match; `descendant` when the supplied control's authenticated predecessor chain reaches the held control; `stale` when the held control's authenticated predecessor chain reaches the supplied control; `conflicting` when both authenticated histories are complete and neither contains the other; and `unverifiable` only when no checkpoint is held, a required intermediate is missing locally, or the walk exceeds its bound. A direct predecessor link is enough; deeper links are followed only through control objects explicitly supplied as local evidence. The walk is capped at eight links, each intermediate is authenticated with its policy and certificate chain, and nothing is fetched. Missing evidence reports `missing-intermediate` and the required CID; depth exhaustion reports `depth-exceeded`. Invalid supplied evidence is refused as `invalid-intermediate`, never downgraded to uncertainty. An epoch number, device count, provider assertion or head snapshot is never used as ancestry proof.
 
-Checkpoint currency is about the control record, not the live head. An ordinary publication advances the head within the epoch and writes no control, so it does not change this verdict. A checkpoint proves only that the kit signed that position; it cannot prove that the provider is serving the newest position the kit ever signed. Local evidence can establish authenticated ancestry but not global freshness, and a malicious provider can still withhold later history. Kit reissue is not implemented; until it is, a compromised kit can re-root the vault. Consent on an unverifiable report does not apply data or advance stored checkpoint state.
-
-`account recovery --vault-name NAME` reads the existing kit from stdin, validates and re-renders it, and prints the derived vault and kit public-key fingerprints. `--checkpoint FILE` optionally supplies the local signed checkpoint whose signature is verified before printing its root anchor fingerprint. The command never generates or stores a replacement kit. `account verify --bundle FILE` consumes one offline JSON bundle with hexadecimal `vault` and `supplied` control/policy/certificate bytes; optional `held` evidence supplies the policy and certificates for the checkpoint already in local state, and optional `intermediates` supplies authenticated chain objects. The bundle format rejects a trust anchor or checkpoint field. With a local checkpoint, verification uses its locally recorded anchor; without one, the operator must supply `--trust-anchor HEX` as a distinct command-line input. The held control bytes are taken from the local checkpoint table and must match the bundle. `--consent` is accepted only for an authenticated `unverifiable` result and permits reporting/inspection/export only; `--record` writes the supplied position only after `current` or `descendant`. Neither command fetches, publishes or applies data.
+Checkpoint currency is about the control record, not the live head. An ordinary publication advances the head within the epoch and writes no control, so it does not change this verdict. A checkpoint proves only that a device signed that position; it cannot prove that the provider is serving the newest position ever signed. Local evidence can establish authenticated ancestry but not global freshness, and a malicious provider can still withhold later history. Consent on an unverifiable report does not apply data or advance stored checkpoint state.
 
 ### Retention declarations
 
@@ -319,12 +291,6 @@ the envelopes. `policy-root-signed-chain.hex` is the one-recipient policy;
 signed-object examples. `kind-ambiguity.hex` is a structural negative vector that parses as
 an envelope and, when the kind check is ignored, as a checkpoint body. The regeneration test
 rebuilds each vector and compares exact bytes without overwriting existing files.
-
-## Offline vault export archive primitives
-
-`export.go` defines a versioned `DTVA` USTAR archive for caller-supplied signed policy/control/certificate/checkpoint/head objects, lineage and recovery positions, and referenced encrypted snapshot blobs. The manifest inventories every archive entry by kind, length, digest and member ordinal, and records fixed limitations plus omission codes from a closed set. It has no free-form DID or descriptive metadata. The archive binds to the 32-byte vault ID and anchor fingerprint. The reader streams bounded members, requires current to descend from the authenticated checkpoint through supplied control and policy predecessors, validates policy publication bounds, and refuses missing checkpoint/current/recovery blob CIDs before returning in-memory objects. It never writes an import.
-
-These primitives do not implement a working `account export` or `account import` feature. There is no local artifact store for policy, certificates, head history, envelopes, retained recovery points or payloads, so commands wait for that store. The APIs do not access the network. The filesystem writer requires a caller-supplied capture-selection predicate and uses a pinned directory handle for output, but the library cannot prove that the callback checks trusted local selections; product wiring must provide the trusted boundary. The manifest states that caller-supplied inventory is not proof of completeness and includes this warning: **A repository CAR holds references, not payloads, and is not a complete blob backup.** See [`docs/recovery.md`](../../docs/recovery.md) for the format and validation order.
 
 ## Size measurements
 
