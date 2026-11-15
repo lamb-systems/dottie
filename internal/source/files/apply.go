@@ -95,6 +95,29 @@ func (e *UnsupportedPathError) Error() string {
 	return fmt.Sprintf("unsupported apply path %q: %s", e.Path, e.Reason)
 }
 
+type ObservationLimitError struct {
+	Path  string
+	Limit int64
+}
+
+func (e *ObservationLimitError) Error() string {
+	return fmt.Sprintf("observation of %q exceeds the %d byte bound", e.Path, e.Limit)
+}
+
+func readApplyObservation(file ApplyFile, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(file)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, &ObservationLimitError{Limit: limit}
+	}
+	return data, nil
+}
+
 type osApplyFileSystem struct{}
 type osApplyRoot struct{ root *os.Root }
 
@@ -148,15 +171,19 @@ func (f osApplyFile) Sync() error                      { return f.file.Sync() }
 func (f osApplyFile) Close() error                     { return f.file.Close() }
 
 func ObserveFile(filesystem ApplyFileSystem, targetRoot, key string) (ApplyObservation, error) {
+	return ObserveFileBounded(filesystem, targetRoot, key, 0)
+}
+
+func ObserveFileBounded(filesystem ApplyFileSystem, targetRoot, key string, limit int64) (ApplyObservation, error) {
 	location, err := openApplyLocation(filesystem, targetRoot, key)
 	if err != nil {
 		return ApplyObservation{}, err
 	}
 	defer location.close()
-	return observeApplyLocation(location, key)
+	return observeApplyLocation(location, key, limit)
 }
 
-func observeApplyLocation(location applyLocation, key string) (ApplyObservation, error) {
+func observeApplyLocation(location applyLocation, key string, limit int64) (ApplyObservation, error) {
 	info, err := location.root.Lstat(location.name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ApplyObservation{}, nil
@@ -182,7 +209,15 @@ func observeApplyLocation(location applyLocation, key string) (ApplyObservation,
 		}
 		return ApplyObservation{}, &UnsupportedPathError{Path: key, Reason: "file changed during inspection"}
 	}
-	data, readErr := io.ReadAll(file)
+	data, readErr := readApplyObservation(file, limit)
+	if readErr != nil {
+		var oversized *ObservationLimitError
+		if errors.As(readErr, &oversized) {
+			_ = file.Close()
+			oversized.Path = key
+			return ApplyObservation{}, oversized
+		}
+	}
 	fdAfter, fdErr := file.Stat()
 	pathAfter, pathErr := location.root.Lstat(location.name)
 	closeErr := file.Close()
@@ -260,7 +295,7 @@ func DeleteFile(filesystem ApplyFileSystem, targetRoot, key string, expected Exp
 }
 
 func verifyExpectedPreimage(location applyLocation, key string, expected ExpectedPreimage) error {
-	observed, err := observeApplyLocation(location, key)
+	observed, err := observeApplyLocation(location, key, 0)
 	if err != nil {
 		return &PreconditionError{Path: key, Expected: expected}
 	}

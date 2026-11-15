@@ -25,9 +25,10 @@ var ErrPublicationApply = errors.New("publication apply refused")
 var errPublicationApplyAnchor = errors.New("apply anchor identity changed")
 
 const (
-	publicationApplyWriteOperation              = "apply"
-	publicationApplyDeleteOperation             = "delete"
-	publicationApplyFileMode        os.FileMode = 0o600
+	publicationApplyWriteOperation               = "apply"
+	publicationApplyDeleteOperation              = "delete"
+	publicationApplyFileMode         os.FileMode = 0o600
+	publicationApplyMaxObservedBytes int64       = 8 << 20
 )
 
 type publicationApplyHookStage string
@@ -72,6 +73,8 @@ const (
 	publicationApplyReasonParent            publicationReconciliationReason = "missing_parent"
 	publicationApplyReasonUnreadable        publicationReconciliationReason = "destination_unreadable"
 	publicationApplyReasonPreimage          publicationReconciliationReason = "preimage_changed"
+	publicationApplyReasonOversized         publicationReconciliationReason = "oversized"
+	publicationApplyReasonModeUnsupported   publicationReconciliationReason = "mode_unsupported"
 	publicationApplyReasonBackupOnly        publicationReconciliationReason = "backup_only"
 	publicationApplyReasonMutation          publicationReconciliationReason = "mutation_failed"
 )
@@ -465,6 +468,9 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		if !ok || entry.File == nil || entry.File.State != model.FilePresent || entry.File.Kind != model.FileRegular {
 			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonTargetUnsupported, nil)
 		}
+		if entry.File.Mode != uint32(publicationApplyFileMode) {
+			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
+		}
 		operation.kind = PublicationApplyWrite
 		operation.journalOperation = publicationApplyWriteOperation
 		operation.content = append([]byte(nil), entry.File.Content...)
@@ -494,6 +500,9 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 	operation.captured = captured
 	if operation.kind == PublicationApplyDelete && !captured.present {
 		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPreimage, nil)
+	}
+	if operation.kind == PublicationApplyWrite && captured.present && captured.digest == operation.post.Digest && captured.mode != uint32(publicationApplyFileMode) {
+		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
 	}
 	destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
 	if err != nil {
@@ -582,7 +591,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 		return entry, nil
 	}
 	bound := publicationApplyBoundFileSystem{ApplyFileSystem: fileSystem, anchor: operation.anchor}
-	observed, err := files.ObserveFile(bound, operation.root, operation.key)
+	observed, err := files.ObserveFileBounded(bound, operation.root, operation.key, publicationApplyMaxObservedBytes)
 	if err != nil {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyObservationReason(err), err)
 	}
@@ -638,7 +647,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 			return entry, err
 		}
 	}
-	completed, err := files.ObserveFile(bound, operation.root, operation.key)
+	completed, err := files.ObserveFileBounded(bound, operation.root, operation.key, publicationApplyMaxObservedBytes)
 	if err != nil {
 		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageObservation, publicationApplyObservationReason(err), err))
 	}
@@ -696,6 +705,10 @@ func publicationApplyCapturedMatches(captured publicationApplyCapturedPreimage, 
 }
 
 func publicationApplyObservationReason(err error) publicationReconciliationReason {
+	var oversized *files.ObservationLimitError
+	if errors.As(err, &oversized) {
+		return publicationApplyReasonOversized
+	}
 	if errors.Is(err, errPublicationApplyAnchor) {
 		return publicationApplyReasonContainment
 	}
@@ -721,7 +734,7 @@ func observePublicationApplyEntry(fileSystem files.ApplyFileSystem, entry public
 		return publicationstate.ObservedFile{}, errors.New("journal destination is not the recorded anchor")
 	}
 	bound := publicationApplyBoundFileSystem{ApplyFileSystem: fileSystem, anchor: entry.Anchor}
-	observed, err := files.ObserveFile(bound, entry.Anchor.Path, entry.DestinationPath)
+	observed, err := files.ObserveFileBounded(bound, entry.Anchor.Path, entry.DestinationPath, publicationApplyMaxObservedBytes)
 	if err != nil {
 		return publicationstate.ObservedFile{}, err
 	}

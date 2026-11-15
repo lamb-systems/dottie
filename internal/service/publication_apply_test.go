@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -379,7 +380,7 @@ func TestApplyPublicationRefusesOversizedPostCaptureGrowthWithoutMutating(t *tes
 	require.NoError(t, err)
 
 	report, err := ApplyPublication(context.Background(), fixture.request(local, base, remote))
-	requirePublicationApplyRefusal(t, err, "apply-observe", "preimage_changed")
+	requirePublicationApplyRefusal(t, err, "apply-observe", "oversized")
 	assert.Equal(t, 0, report.Applied)
 	require.NotNil(t, report.Stopped)
 	assert.Zero(t, report.Stopped.Journal)
@@ -950,4 +951,219 @@ func TestApplyPublicationJournalRowCountSeesTerminalRows(t *testing.T) {
 	state, stage := publicationApplyJournalState(t, fixture, entry.Entry)
 	assert.Equal(t, "failed", state)
 	assert.Equal(t, "apply-failed", stage)
+}
+
+func publicationApplyModeEntry(targetID, path, content string, mode uint32) model.Entry {
+	return model.Entry{TargetID: targetID, File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: mode}}
+}
+
+func TestApplyPublicationRefusesUnsupportedModeChanges(t *testing.T) {
+	cases := map[string]struct {
+		local      string
+		localMode  os.FileMode
+		base       string
+		remote     string
+		remoteMode uint32
+	}{
+		"mode only difference":               {local: "same", localMode: 0o600, base: "same", remote: "same", remoteMode: 0o644},
+		"content and mode difference":        {local: "before", localMode: 0o600, base: "before", remote: "after", remoteMode: 0o644},
+		"local mode is not the applied mode": {local: "same", localMode: 0o644, base: "same", remote: "same", remoteMode: 0o600},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPublicationApplyFixture(t)
+			fixture.write(t, "note.ini", testCase.local)
+			require.NoError(t, os.Chmod(fixture.path("note.ini"), testCase.localMode))
+			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", testCase.base, uint32(testCase.localMode))})
+			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", testCase.remote, testCase.remoteMode)})
+			before, err := os.Lstat(fixture.path("note.ini"))
+			require.NoError(t, err)
+
+			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
+			requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			assert.Empty(t, plan.Entries)
+
+			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
+			requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			assert.Equal(t, 0, report.Applied)
+			assert.Nil(t, report.Stopped)
+			after, err := os.Lstat(fixture.path("note.ini"))
+			require.NoError(t, err)
+			assert.True(t, os.SameFile(before, after))
+			assert.Equal(t, testCase.localMode, after.Mode().Perm())
+			assert.Equal(t, testCase.local, fixture.read(t, "note.ini"))
+			fixture.assertNoJournalRows(t)
+		})
+	}
+}
+
+func TestApplyPublicationRefusesMixedPlanBeforeAnyMutation(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "supported.ini", "before")
+	fixture.write(t, "unsupported.ini", "before")
+	base := fixture.targetSnapshot([]model.Entry{
+		publicationApplyModeEntry(fixture.target.ID, "supported.ini", "before", 0o600),
+		publicationApplyModeEntry(fixture.target.ID, "unsupported.ini", "before", 0o600),
+	})
+	remote := fixture.targetSnapshot([]model.Entry{
+		publicationApplyModeEntry(fixture.target.ID, "supported.ini", "after", 0o600),
+		publicationApplyModeEntry(fixture.target.ID, "unsupported.ini", "after", 0o644),
+	})
+
+	report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
+	requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+	assert.Equal(t, 0, report.Applied)
+	assert.Nil(t, report.Stopped)
+	for _, name := range []string{"supported.ini", "unsupported.ini"} {
+		assert.Equal(t, "before", fixture.read(t, name))
+		info, err := os.Lstat(fixture.path(name))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
+	fixture.assertNoJournalRows(t)
+}
+
+type publicationApplyCountingFileSystem struct {
+	files.ApplyFileSystem
+	growth int
+	read   int64
+}
+
+type publicationApplyCountingRoot struct {
+	files.ApplyRoot
+	filesystem *publicationApplyCountingFileSystem
+}
+
+type publicationApplyCountingFile struct {
+	files.ApplyFile
+	filesystem *publicationApplyCountingFileSystem
+}
+
+func (f *publicationApplyCountingFileSystem) OpenRoot(path string) (files.ApplyRoot, error) {
+	root, err := f.ApplyFileSystem.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	return &publicationApplyCountingRoot{ApplyRoot: root, filesystem: f}, nil
+}
+
+func (r *publicationApplyCountingRoot) OpenFile(name string, flag int, mode os.FileMode) (files.ApplyFile, error) {
+	file, err := r.ApplyRoot.OpenFile(name, flag, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &publicationApplyCountingFile{ApplyFile: file, filesystem: r.filesystem}, nil
+}
+
+func (f *publicationApplyCountingFile) Read(buffer []byte) (int, error) {
+	read, err := f.ApplyFile.Read(buffer)
+	f.filesystem.read += int64(read)
+	if !errors.Is(err, io.EOF) {
+		return read, err
+	}
+	if f.filesystem.growth == 0 {
+		return read, err
+	}
+	extra := f.filesystem.growth
+	if extra > len(buffer) {
+		extra = len(buffer)
+	}
+	for index := 0; index < extra; index++ {
+		buffer[index] = 'g'
+	}
+	f.filesystem.growth -= extra
+	f.filesystem.read += int64(extra)
+	return extra, nil
+}
+
+func (fixture publicationApplyFixture) writeSized(t *testing.T, name string, size int64) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(fixture.path(name), nil, 0o600))
+	require.NoError(t, os.Truncate(fixture.path(name), size))
+}
+
+func TestApplyPublicationRefusesOversizedPreimageWithoutReadingPastTheBound(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "big.bin", "A")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "A"}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "B"}))
+	counter := &publicationApplyCountingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), growth: 1 << 16}
+	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+		result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+		require.NoError(t, err)
+		fixture.writeSized(t, "big.bin", publicationApplyMaxObservedBytes)
+		return result, nil
+	})
+	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
+	require.NoError(t, err)
+	request := fixture.request(local, base, remote)
+	request.FileSystem = counter
+
+	report, err := ApplyPublication(context.Background(), request)
+	requirePublicationApplyRefusal(t, err, "apply-observe", "oversized")
+	assert.Equal(t, publicationApplyMaxObservedBytes+1, counter.read)
+	assert.Equal(t, 0, report.Applied)
+	require.NotNil(t, report.Stopped)
+	assert.Zero(t, report.Stopped.Journal)
+	info, err := os.Lstat(fixture.path("big.bin"))
+	require.NoError(t, err)
+	assert.Equal(t, publicationApplyMaxObservedBytes, info.Size())
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	fixture.assertNoJournalRows(t)
+}
+
+func TestApplyPublicationRefusesOversizedPostimageWithoutReadingPastTheBound(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "before")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}))
+	counter := &publicationApplyCountingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem()}
+	request := fixture.request(fixture.local, base, remote)
+	request.FileSystem = counter
+	request.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {
+		if phase != PublicationApplyMutated {
+			return nil
+		}
+		fixture.writeSized(t, "note.ini", publicationApplyMaxObservedBytes)
+		counter.read = 0
+		counter.growth = 1 << 16
+		return nil
+	}
+
+	report, err := ApplyPublication(context.Background(), request)
+	requirePublicationApplyRefusal(t, err, "apply-observation", "oversized")
+	assert.Equal(t, publicationApplyMaxObservedBytes+1, counter.read)
+	assert.Equal(t, 0, report.Applied)
+	require.NotNil(t, report.Stopped)
+	assert.Equal(t, publicationstate.JournalStateIndeterminate, report.Stopped.State)
+	assert.NotZero(t, report.Stopped.Journal)
+}
+
+func TestApplyPublicationRefusesOversizedRecoveryObservationWithoutReadingPastTheBound(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "before")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}))
+	stop := errors.New("synthetic stop before mutation")
+	interrupted := fixture.request(fixture.local, base, remote)
+	interrupted.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {
+		if phase == PublicationApplyJournaled {
+			return stop
+		}
+		return nil
+	}
+	_, err := ApplyPublication(context.Background(), interrupted)
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, int64(1), fixture.journalRowCount(t))
+
+	fixture.writeSized(t, "note.ini", publicationApplyMaxObservedBytes)
+	counter := &publicationApplyCountingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), growth: 1 << 16}
+	recovery := fixture.request(fixture.local, base, remote)
+	recovery.FileSystem = counter
+
+	_, err = ApplyPublication(context.Background(), recovery)
+	requirePublicationApplyRefusal(t, err, "apply-resolve", "journal_unobserved")
+	assert.Equal(t, publicationApplyMaxObservedBytes+1, counter.read)
+	require.ErrorIs(t, fixture.journal.CheckAdmission(context.Background(), 1000), publicationstate.ErrContinuity)
+	assert.Equal(t, int64(1), fixture.journalRowCount(t))
 }

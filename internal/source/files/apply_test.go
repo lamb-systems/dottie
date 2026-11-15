@@ -3,6 +3,8 @@ package files
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -71,6 +73,102 @@ func TestApplyFilesystemSupportsSingleFileSelectionRoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
 	require.NoError(t, ReplaceFile(DefaultApplyFileSystem(), path, ".", []byte("after"), 0o600, ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600}))
 	assert.Equal(t, []byte("after"), readFileForApplyTest(t, path))
+}
+
+func TestObserveFileBoundedStopsReadingAtTheLimit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	require.NoError(t, os.Truncate(path, 4096))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem()}
+
+	_, err := ObserveFileBounded(counter, root, "file", 1024)
+	var oversized *ObservationLimitError
+	require.ErrorAs(t, err, &oversized)
+	assert.Equal(t, "file", oversized.Path)
+	assert.Equal(t, int64(1024), oversized.Limit)
+	assert.Equal(t, int64(1025), counter.read)
+
+	counter.read = 0
+	observed, err := ObserveFileBounded(counter, root, "file", 4096)
+	require.NoError(t, err)
+	require.True(t, observed.Exists)
+	assert.Equal(t, 4096, len(observed.Data))
+	assert.Equal(t, int64(4096), counter.read)
+
+	counter.read = 0
+	observed, err = ObserveFile(counter, root, "file")
+	require.NoError(t, err)
+	assert.Equal(t, 4096, len(observed.Data))
+	assert.Equal(t, int64(4096), counter.read)
+}
+
+func TestObserveFileBoundedRefusesGrowthDuringTheRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	require.NoError(t, os.Truncate(path, 4096))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem(), growth: 1 << 16}
+
+	_, err := ObserveFileBounded(counter, root, "file", 4096)
+	var oversized *ObservationLimitError
+	require.ErrorAs(t, err, &oversized)
+	assert.Equal(t, int64(4096), oversized.Limit)
+	assert.Equal(t, int64(4097), counter.read)
+}
+
+type countingApplyFileSystem struct {
+	ApplyFileSystem
+	growth int
+	read   int64
+}
+
+type countingApplyRoot struct {
+	ApplyRoot
+	filesystem *countingApplyFileSystem
+}
+
+type countingApplyFile struct {
+	ApplyFile
+	growth int
+	read   *int64
+}
+
+func (f *countingApplyFileSystem) OpenRoot(path string) (ApplyRoot, error) {
+	root, err := f.ApplyFileSystem.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	return &countingApplyRoot{ApplyRoot: root, filesystem: f}, nil
+}
+
+func (r *countingApplyRoot) OpenFile(name string, flag int, mode os.FileMode) (ApplyFile, error) {
+	file, err := r.ApplyRoot.OpenFile(name, flag, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &countingApplyFile{ApplyFile: file, growth: r.filesystem.growth, read: &r.filesystem.read}, nil
+}
+
+func (f *countingApplyFile) Read(buffer []byte) (int, error) {
+	read, err := f.ApplyFile.Read(buffer)
+	*f.read += int64(read)
+	if !errors.Is(err, io.EOF) {
+		return read, err
+	}
+	if f.growth == 0 {
+		return read, err
+	}
+	extra := f.growth
+	if extra > len(buffer) {
+		extra = len(buffer)
+	}
+	for index := 0; index < extra; index++ {
+		buffer[index] = 'g'
+	}
+	f.growth -= extra
+	*f.read += int64(extra)
+	return extra, nil
 }
 
 func applyDigestHex(data []byte) string {
