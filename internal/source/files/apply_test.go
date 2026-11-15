@@ -119,8 +119,9 @@ func TestObserveFileBoundedRefusesGrowthDuringTheRead(t *testing.T) {
 
 type countingApplyFileSystem struct {
 	ApplyFileSystem
-	growth int
-	read   int64
+	growth    int
+	read      int64
+	requested int
 }
 
 type countingApplyRoot struct {
@@ -130,8 +131,8 @@ type countingApplyRoot struct {
 
 type countingApplyFile struct {
 	ApplyFile
-	growth int
-	read   *int64
+	growth     int
+	filesystem *countingApplyFileSystem
 }
 
 func (f *countingApplyFileSystem) OpenRoot(path string) (ApplyRoot, error) {
@@ -147,12 +148,15 @@ func (r *countingApplyRoot) OpenFile(name string, flag int, mode os.FileMode) (A
 	if err != nil {
 		return nil, err
 	}
-	return &countingApplyFile{ApplyFile: file, growth: r.filesystem.growth, read: &r.filesystem.read}, nil
+	return &countingApplyFile{ApplyFile: file, growth: r.filesystem.growth, filesystem: r.filesystem}, nil
 }
 
 func (f *countingApplyFile) Read(buffer []byte) (int, error) {
+	if len(buffer) > f.filesystem.requested {
+		f.filesystem.requested = len(buffer)
+	}
 	read, err := f.ApplyFile.Read(buffer)
-	*f.read += int64(read)
+	f.filesystem.read += int64(read)
 	if !errors.Is(err, io.EOF) {
 		return read, err
 	}
@@ -167,7 +171,7 @@ func (f *countingApplyFile) Read(buffer []byte) (int, error) {
 		buffer[index] = 'g'
 	}
 	f.growth -= extra
-	*f.read += int64(extra)
+	f.filesystem.read += int64(extra)
 	return extra, nil
 }
 
@@ -206,6 +210,72 @@ func TestDeleteFileRechecksExpectedPreimageBeforeRemove(t *testing.T) {
 	var precondition *PreconditionError
 	require.ErrorAs(t, err, &precondition)
 	assert.Equal(t, []byte("editor save"), readFileForApplyTest(t, path))
+}
+
+func TestReplaceFileReadsAStatedPreimageSizeExactly(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	before := []byte("before")
+	after := []byte("after")
+	require.NoError(t, os.WriteFile(path, before, 0o600))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem()}
+	expected := ExpectedPreimage{Exists: true, Digest: applyDigestHex(before), Mode: 0o600, Size: uint64(len(before))}
+	require.NoError(t, ReplaceFile(counter, root, "file", after, 0o600, expected))
+	assert.Equal(t, after, readFileForApplyTest(t, path))
+	assert.Equal(t, int64(len(before)), counter.read)
+	assert.Equal(t, len(before)+1, counter.requested, "the read request is the stated size plus one probe byte")
+}
+
+func TestReplaceFileWithoutAStatedSizeReadsTheWholePreimage(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	before := []byte("before")
+	require.NoError(t, os.WriteFile(path, before, 0o600))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem()}
+	expected := ExpectedPreimage{Exists: true, Digest: applyDigestHex(before), Mode: 0o600}
+	require.NoError(t, ReplaceFile(counter, root, "file", []byte("after"), 0o600, expected))
+	assert.Equal(t, []byte("after"), readFileForApplyTest(t, path))
+	assert.Equal(t, int64(len(before)), counter.read)
+	assert.Greater(t, counter.requested, len(before)+1)
+}
+
+func TestReplaceFileRefusesAPreimageThatGrewBeyondTheStatedSize(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	before := []byte("before")
+	current := []byte("before and then an editor appends more")
+	require.NoError(t, os.WriteFile(path, current, 0o600))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem()}
+	expected := ExpectedPreimage{Exists: true, Digest: applyDigestHex(before), Mode: 0o600, Size: uint64(len(before))}
+	err := ReplaceFile(counter, root, "file", []byte("after"), 0o600, expected)
+	var precondition *PreconditionError
+	require.ErrorAs(t, err, &precondition)
+	assert.Equal(t, expected, precondition.Expected)
+	var oversized *ObservationLimitError
+	assert.NotErrorAs(t, err, &oversized)
+	assert.Equal(t, int64(len(before)+1), counter.read)
+	assert.Equal(t, len(before)+1, counter.requested)
+	assert.Equal(t, current, readFileForApplyTest(t, path))
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "file", entries[0].Name())
+}
+
+func TestDeleteFileRefusesAPresentPreimageWithinOneStatedByte(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file")
+	current := []byte("unexpected content")
+	require.NoError(t, os.WriteFile(path, current, 0o600))
+	counter := &countingApplyFileSystem{ApplyFileSystem: DefaultApplyFileSystem()}
+	err := DeleteFile(counter, root, "file", ExpectedPreimage{})
+	var precondition *PreconditionError
+	require.ErrorAs(t, err, &precondition)
+	var oversized *ObservationLimitError
+	assert.NotErrorAs(t, err, &oversized)
+	assert.Equal(t, int64(2), counter.read, "one content byte plus one probe byte")
+	assert.Equal(t, 2, counter.requested, "one content byte plus one probe byte")
+	assert.Equal(t, current, readFileForApplyTest(t, path))
 }
 
 func TestApplyFilesystemDoesNotFallbackAfterRenameError(t *testing.T) {

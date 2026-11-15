@@ -632,7 +632,7 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	if err := publicationApplyContainment(operation.anchor, written.DestinationDir, written.DestinationPath); err != nil {
 		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonContainment, err))
 	}
-	expected := files.ExpectedPreimage{Exists: operation.captured.present, Digest: hex.EncodeToString(operation.captured.digest[:]), Mode: operation.captured.mode}
+	expected := files.ExpectedPreimage{Exists: operation.captured.present, Digest: hex.EncodeToString(operation.captured.digest[:]), Mode: operation.captured.mode, Size: preimage.Size}
 	if operation.kind == PublicationApplyDelete {
 		err = files.DeleteFile(bound, operation.root, operation.key, expected)
 	} else {

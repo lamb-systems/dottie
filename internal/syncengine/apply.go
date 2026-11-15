@@ -235,7 +235,7 @@ func Apply(ctx context.Context, store *state.Store, request ApplyRequest) error 
 		if err := verifyRootIdentity(filesystem, operation.rootPath, operation.rootDevice, operation.rootInode); err != nil {
 			return applyFailure(applied, operation, failApply(ctx, store, operation, state.JournalStagePrecondition, err))
 		}
-		expected := files.ExpectedPreimage{Exists: current.Exists, Digest: current.Digest, Mode: current.Mode}
+		expected := files.ExpectedPreimage{Exists: current.Exists, Digest: current.Digest, Mode: current.Mode, Size: uint64(len(current.Data))}
 		if operation.operation == "delete" {
 			err = files.DeleteFile(filesystem, operation.root, operation.entry.Key.FilePath, expected)
 		} else {

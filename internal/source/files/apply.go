@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,7 @@ type ExpectedPreimage struct {
 	Exists bool
 	Digest string
 	Mode   uint32
+	Size   uint64
 }
 
 type PreconditionError struct {
@@ -295,12 +297,18 @@ func DeleteFile(filesystem ApplyFileSystem, targetRoot, key string, expected Exp
 }
 
 func verifyExpectedPreimage(location applyLocation, key string, expected ExpectedPreimage) error {
-	observed, err := observeApplyLocation(location, key, 0)
+	limit := int64(0)
+	if !expected.Exists {
+		limit = 1
+	} else if expected.Size > 0 {
+		limit = int64(min(expected.Size, math.MaxInt64))
+	}
+	observed, err := observeApplyLocation(location, key, limit)
 	if err != nil {
 		return &PreconditionError{Path: key, Expected: expected}
 	}
 	actual := ExpectedPreimage{Exists: observed.Exists, Digest: observed.Digest, Mode: observed.Mode}
-	if expected.Exists && actual != expected || !expected.Exists && actual.Exists {
+	if expected.Exists != actual.Exists || expected.Exists && (expected.Digest != actual.Digest || expected.Mode != actual.Mode) {
 		return &PreconditionError{Path: key, Expected: expected, Actual: actual}
 	}
 	return nil

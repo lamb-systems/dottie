@@ -196,7 +196,10 @@ remove. A mismatch returns `ErrPreconditionChanged` and leaves the destination a
 untouched. For replacement, this moves the check past temporary-file writing and fsync, shrinking the
 race window from that whole interval to the final stat-to-rename instant; deletion has the equivalent
 stat-to-remove interval. These are check-then-mutate operations, not atomic conditional writes: they cannot prevent a
-concurrent edit in the final syscall window.
+concurrent edit in the final syscall window. The recheck states the preimage size the engine observed, so a
+destination that grew after that observation is refused after one byte past the observed size instead of
+being read in full; the engine's own observations and a recheck whose expected preimage states no size
+remain unbounded.
 Each file operation records a pending state row and an immutable backup before touching the
 destination. The journal stores the resolved destination directory and its device/inode identity, so
 recovery does not re-resolve a target from changed configuration. Replacements use same-directory

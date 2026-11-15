@@ -535,6 +535,9 @@ func backupMatchesPreimage(backup []byte, preimage state.Fingerprint) bool {
 
 func restorePreimage(filesystem files.ApplyFileSystem, entry state.JournalEntry, backup []byte) error {
 	expected := files.ExpectedPreimage{Exists: entry.Postimage.State == string(model.FilePresent), Digest: entry.Postimage.Digest, Mode: entry.Postimage.Mode}
+	if expected.Exists && entry.Postimage.Size > 0 {
+		expected.Size = uint64(entry.Postimage.Size)
+	}
 	if entry.Preimage.State == string(model.FileDeleted) {
 		return files.DeleteFile(filesystem, entry.RootPath, entry.DestinationPath, expected)
 	}
