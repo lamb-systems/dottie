@@ -474,3 +474,18 @@ func openPublicationPushSources(ctx context.Context, command *urfave.Command, se
 		}, nil
 	}
 }
+
+func renderPush(status service.StatusState) string {
+	return "push: " + escapeField(string(status)) + "\n"
+}
+
+func pushExit(status service.StatusState) error {
+	switch status {
+	case service.StatusCommitted, service.StatusNoOp:
+		return nil
+	case service.StatusRejected, service.StatusConflicted:
+		return urfave.Exit("push refused", 3)
+	default:
+		return urfave.Exit("push did not complete", 4)
+	}
+}

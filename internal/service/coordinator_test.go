@@ -140,21 +140,6 @@ func TestStatusReturnsSortedTargetsWithoutRemoteAccess(t *testing.T) {
 	assert.Equal(t, "z-target", status.Targets[1].ID)
 }
 
-func TestPullRefusesWithoutSelectionOrLocalCheckpoint(t *testing.T) {
-	store := openCoordinatorState(t)
-	coordinator, err := NewCoordinator(Dependencies{
-		Config: &memoryConfig{value: config.Default()}, State: store, Trust: emptyTrust{}, Session: unavailableSession{}, Remote: unavailableRemote{},
-	})
-	require.NoError(t, err)
-	_, err = coordinator.Pull(context.Background(), VaultSelection{})
-	assert.ErrorIs(t, err, ErrNoVaultSelection)
-
-	selection := state.VaultSelection{Vault: [32]byte{1}, DeviceID: "device-a", RecordedAt: 123}
-	require.NoError(t, store.PutVaultSelection(context.Background(), selection))
-	_, err = coordinator.Pull(context.Background(), VaultSelection{})
-	assert.ErrorIs(t, err, ErrNoCheckpoint)
-}
-
 func TestVaultSelectionRequiresExplicitChoiceWhenAmbiguous(t *testing.T) {
 	store := openCoordinatorState(t)
 	coordinator, err := NewCoordinator(Dependencies{Config: &memoryConfig{value: config.Default()}, State: store})

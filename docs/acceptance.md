@@ -6,6 +6,15 @@ limits below. Real-data use of this build is permitted under those limits. Accep
 remove the limits. A future change that invalidates a row must not assume
 this acceptance still applies.
 
+> **Retirement note, added 2026-11-15 (v1 kit retirement).** `recover`, `export`, `import`, `prune`,
+> `history`, `devices list`, `devices enroll`, `devices revoke`, `account enroll`, `account import-bundle`,
+> `account recovery` and `account verify` were removed, together with the v1 encrypted read-and-publish
+> engine and its audit harness. The owner retired cross-machine recovery without a live PDS: v2 publication
+> replaces it. Rows below that name those commands, kits, archives, retention sweeps, device administration
+> or history summaries describe the retired path and are no longer exercised; they are retained unchanged
+> as historical evidence and must not be read as coverage of the current tree. In particular the v1
+> publication-privacy audit and the live archive gate no longer run, and no v2 equivalent exists yet.
+
 > **Retirement note, added 2026-11-15.** `dottie preview` and `dottie restore` were removed with the
 > v1 read and apply authority, so the rows below that name `TestRestoreMilestoneOfflineTwoHomeAndRecovery`,
 > `TestLiveRestoreMilestoneTwoHome`, `TestRestoreMilestoneGNOMEKeyfileTwoHome` or

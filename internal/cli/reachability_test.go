@@ -35,6 +35,85 @@ var removedV1ApplySymbols = map[string]bool{
 	"UnsupportedApplyEntryError":  true,
 }
 
+var removedV1Commands = []string{
+	"recover", "export", "import", "prune", "history", "devices", "recoverCommand",
+}
+
+var removedV1ServiceSymbols = map[string]bool{
+	"Enroll":           true,
+	"Revoke":           true,
+	"RevokeApproval":   true,
+	"RecordCheckpoint": true,
+	"PrepareArchive":   true,
+	"ValidateArchive":  true,
+}
+
+func TestRetiredV1CommandsAreGone(t *testing.T) {
+	root := filepath.Join("..", "..")
+	files, err := filepath.Glob(filepath.Join(root, "internal", "cli", "*.go"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+
+	present := make([]string, 0)
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsed, parseErr := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		require.NoError(t, parseErr)
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil {
+				return true
+			}
+			for _, retired := range removedV1Commands {
+				if value == retired {
+					present = append(present, filepath.Base(file)+": "+retired)
+				}
+			}
+			return true
+		})
+	}
+	assert.Empty(t, present, "a retired command name is still registered")
+}
+
+func TestRetiredV1ServiceSymbolsHaveNoCaller(t *testing.T) {
+	root := filepath.Join("..", "..")
+	directories := []string{
+		filepath.Join(root, "internal", "cli"),
+		filepath.Join(root, "internal", "service"),
+		filepath.Join(root, "cmd"),
+	}
+
+	references := make([]string, 0)
+	for _, directory := range directories {
+		entries, err := os.ReadDir(directory)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			path := filepath.Join(directory, entry.Name())
+			parsed, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			require.NoError(t, parseErr)
+			ast.Inspect(parsed, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok || removedV1ServiceSymbols[selector.Sel.Name] {
+					if ok {
+						references = append(references, entry.Name()+": "+selector.Sel.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	assert.Empty(t, references, "a retired service entry point still has a production caller")
+}
+
 func TestRemovedV1ApplyEngineHasNoProductionReference(t *testing.T) {
 	root := filepath.Join("..", "..")
 

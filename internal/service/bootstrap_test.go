@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -58,6 +59,20 @@ type bootstrapTestRemoteReader struct {
 func (reader *bootstrapTestRemoteReader) Read(context.Context, atproto.ReadRequest) (atproto.ReadResult, error) {
 	reader.calls++
 	return atproto.ReadResult{}, errors.New("unexpected provider read")
+}
+
+const pushTestDID = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
+
+type pushTestSession struct {
+	did     string
+	methods []atproto.VerificationMethod
+}
+
+func (session pushTestSession) ReadRequest(_ context.Context, _ VaultSelection, _ vault.DeviceMaterial, _ [32]byte, previousPolicy, previousControl []byte) (atproto.ReadRequest, error) {
+	return atproto.ReadRequest{
+		DID: session.did, DIDDocumentID: session.did, VerificationMethods: session.methods,
+		PreviousPolicy: bytes.Clone(previousPolicy), PreviousControl: bytes.Clone(previousControl),
+	}, nil
 }
 
 type bootstrapTestGenesisPort struct {

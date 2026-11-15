@@ -217,6 +217,14 @@ func openAccountOAuthClient(openKeyring accountKeyringFactory, options accountSe
 	return client, keyring, nil
 }
 
+func newAuthorizedAccountClient(keyring accountKeyring, env func(string) string) (*atproto.Client, error) {
+	store, ok := keyring.(atproto.SessionStore)
+	if !ok {
+		return nil, errors.New("keyring cannot load account sessions")
+	}
+	return atproto.NewClient(accountClientID, store, atproto.WithSessionLock(accountFileSessionLock(env)))
+}
+
 func accountFileSessionLock(env func(string) string) atproto.SessionLockFunc {
 	return func(_ context.Context, _ string) (func() error, error) {
 		lock, err := platform.LockFile(platform.SessionLockPath(env))

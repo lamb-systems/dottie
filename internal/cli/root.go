@@ -20,24 +20,14 @@ Usage:
   dottie plan --from FILE [--json]
   dottie status
   dottie position status --did DID --vault HEX
-  dottie history [--did DID | --handle HANDLE] [--vault HEX] [--device-id ID]
-  dottie prune --plan|--apply [--confirm] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
-  dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
-  dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
   dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]
   dottie pull --did DID [--vault HEX] [--confirm HEX]
   dottie sync --did DID [--vault HEX] [--confirm HEX]
-  dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
-  dottie devices enroll --request FILE --kit-file FILE --bundle-out FILE [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
-  dottie devices revoke --device-id ID --kit-file FILE [--confirm HEX] [--bundle-out FILE] [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
-  dottie recover
   dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
   dottie account status (--did DID | --handle HANDLE) [--refresh]
   dottie account logout (--did DID | --handle HANDLE) [--remote]
   dottie account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)
   dottie account finalize --vault HEX (--did DID | --handle HANDLE)
-  dottie account enroll --vault HEX --device-id ID --role publisher|restore_only [--confirm HEX] [--request FILE]
-  dottie account import-bundle --bundle FILE --anchor HEX [--vault HEX]
 
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
@@ -48,31 +38,29 @@ Sync is the reconciled path: it prints the pull apply plan, prepares the push ha
 binds both into one confirmation token. The unconfirmed run changes nothing. The confirmed run applies and accepts
 the pull half first, then recomposes the push candidate from the accepted floor; a changed candidate, review or
 provider view refuses before anything is published. Pull refusals stop sync before any publication, and a push
-refusal after a successful pull half exits 4 with the files applied and the floor advanced. For push, pull, sync
-and device operations, exit codes are:
+refusal after a successful pull half exits 4 with the files applied and the floor advanced. For push, pull and
+sync, exit codes are:
 0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
-indeterminate publication as success. History is local-only without --did/--handle; with an account selector it attempts a verified read and reports unavailable or auth-expired distinctly while still succeeding. History output is redacted and contains no content or absolute paths.
-Export writes a complete ciphertext-only archive atomically through the guarded writer; an existing output requires --overwrite. Export authenticates its checkpoint with a regular owner-only kit file decoding to exactly 32 bytes; the kit is cleared and never stored or archived. Export completeness requires retained authenticated history on the exporting machine; v1 count-only attestations with nonzero recovery-point counts cannot be enumerated and refuse export. Import requires independent --vault, --anchor and kit inputs and is validation-only; it changes no state or preferences. Import validates ciphertext without decrypting content or establishing global freshness.
-Prune requires exactly one of --plan or --apply; --apply also requires --confirm. It reports recovery, confidentiality and unknown holding floors plus exact candidate references and reasons. Prune is foreground-only: there is no scheduled or automatic garbage collection. The retained-point cap limits selected epochs, not disk growth; staged, orphaned and unknown material may remain. Export/onboarding fetch required snapshot bodies by CID, so a body not available from the remote refuses those workflows.
-Device enrollment/revocation require the selected root device and a 32-byte
-recovery kit in a regular, user-only-readable --kit-file (use chmod 600); the kit is never saved by Dottie. Revocation
-requires a second invocation with the fingerprint-bound --confirm printed by its verified-read transcript. Bundle
-outputs are public, refuse overwrite unless --overwrite is supplied, and do not contain the recovery kit. Revocation
-cannot erase historical ciphertext. Import requires an independently supplied --anchor and the first pull
-re-authenticates the imported chain.
+indeterminate publication as success.
 
-Local status, history, recovery and archive validation operations are coordinated with local state. They require a
-locally recorded vault selection and trust checkpoint; remote reads are refused unless the checkpoint is current or
-a verified descendant. Recovery resolves interrupted journal entries and is the only command in this group that
-writes to target files.
-Account bootstrap generates a fresh recovery kit and vault on every invocation; it is not idempotent.
-Explicit --vault selection is required when more than one local vault is configured. Remote reads do not establish
-global freshness; unverifiable state is inspection-only.
+Status is local-only and writes nothing: it reports each selected target with its journal item count and state.
 
 Position status inspects the local publication position store and is read-only: it prints the accepted floor or an
 empty marker, refuses an absent or unsafe store, and never prints the account DID, vault, repository, CIDs, absolute
 paths, counts, tokens or payload bytes. Refusals exit 3; exit 2 is usage only.
+
+Account login, status and logout manage the OAuth session in the desktop Secret Service keyring; they never touch
+target data. Account bootstrap requires a signed-in account and a verified empty repository, mints device keys and a
+recovery kit, stores the keys in Secret Service, prints and flushes the kit exactly once before publication, and
+records trust atomically after verified publication. Account finalize verifies the published position with the
+retained device keys and records local trust when bootstrap could not. An account can hold only one published Dottie
+vault because genesis requires an empty repository.
+
+This tree has no cross-machine recovery path: recovering a vault on another machine without a live PDS is not
+supported, and the printed recovery kit is not an archive, a backup or an offline restore input. V2 publication
+through push, pull and sync is the supported path, and a publication position store must already exist because the
+legacy bootstrap creates v1 material that the v2 profile rejects.
 
 See README.md for build instructions and current status.
 `
@@ -88,16 +76,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPosition(args[1:], stdout, stderr, os.Getenv)
 	}
 	switch args[0] {
-	case "status", "history", "recover", "export", "import":
-		return runManual(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
+	case "status":
+		return runManual(args, stdout, stderr, os.Getenv)
 	case "pull":
 		return runPull(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "push":
 		return runPush(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "sync":
 		return runSync(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
-	case "prune", "devices":
-		return runOrchestration(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	}
 	if args[0] == "plan" {
 		return runPlan(args[1:], stdout, stderr)

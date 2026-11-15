@@ -8,11 +8,11 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,113 +26,51 @@ func runManualCommandForTest(command *urfave.Command, exitCode *int, args ...str
 	return *exitCode
 }
 
-func TestManualReadRefusalUsesDistinctExitCodeAndEscapesControls(t *testing.T) {
-	factory := func(context.Context, *urfave.Command, bool) (*service.Coordinator, service.VaultSelection, func(), error) {
-		return nil, service.VaultSelection{}, func() {}, errors.New("unsafe\nrefusal")
+func TestManualStatusRefusalUsesDistinctExitCodeAndEscapesControls(t *testing.T) {
+	factory := func() (*service.Coordinator, func(), error) {
+		return nil, func() {}, errors.New("unsafe\nrefusal")
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newManualCommand(&stdout, &stderr, &code, factory)
-	code = runManualCommandForTest(command, &code, "pull", "--did", "did:plc:example")
+	code = runManualCommandForTest(command, &code, "status")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
 	assert.NotContains(t, stderr.String(), "unsafe\nrefusal")
 	assert.Contains(t, stderr.String(), "unsafe\\x0Arefusal")
 }
 
-func TestManualRecoverInvokesCoordinatorSettingsBackend(t *testing.T) {
-	store, settings, backend := manualRecoveryFixture(t)
-	if productionSettings := manualGNOMESettings(); productionSettings != nil {
-		settings.source = productionSettings
-	}
-	stdout := runManualRecoverForTest(t, store, settings)
-	assert.Equal(t, 1, settings.backendRequests)
-	assert.Equal(t, 1, backend.observations)
-	assert.Contains(t, stdout, "failed")
-	entries, err := store.JournalEntriesAll(context.Background())
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "failed", entries[0].State)
-}
-
-func runManualRecoverForTest(t *testing.T, store *state.Store, settings *manualRecoverySettings) string {
-	t.Helper()
-	factory := func(_ context.Context, _ *urfave.Command, needsRemote bool) (*service.Coordinator, service.VaultSelection, func(), error) {
-		require.False(t, needsRemote)
-		coordinator, err := service.NewCoordinator(service.Dependencies{State: store, Settings: settings})
-		return coordinator, service.VaultSelection{}, func() {}, err
-	}
-	var stdout, stderr bytes.Buffer
-	code := 0
-	command := newManualCommand(&stdout, &stderr, &code, factory)
-	code = runManualCommandForTest(command, &code, "recover")
-	require.Equal(t, 0, code)
-	assert.Empty(t, stderr.String())
-	return stdout.String()
-}
-
-type manualRecoverySettings struct {
-	source          service.SettingsPort
-	backend         *manualRecoveryBackend
-	backendRequests int
-}
-
-func (settings *manualRecoverySettings) Resolve(ctx context.Context, targetID, schemaID, path string) (string, error) {
-	if settings.source != nil {
-		return settings.source.Resolve(ctx, targetID, schemaID, path)
-	}
-	return "", errors.New("unexpected settings resolution")
-}
-
-func (settings *manualRecoverySettings) Capture(ctx context.Context, targetID string, refs []service.SettingRef) (service.SettingsCapture, error) {
-	if settings.source != nil {
-		return settings.source.Capture(ctx, targetID, refs)
-	}
-	return service.SettingsCapture{}, errors.New("unexpected settings capture")
-}
-
-func (settings *manualRecoverySettings) Backend() syncengine.SettingsBackend {
-	settings.backendRequests++
-	return settings.backend
-}
-
-type manualRecoveryBackend struct {
-	observations int
-}
-
-func (backend *manualRecoveryBackend) Observe(context.Context, model.EntryKey) (syncengine.SettingValue, error) {
-	backend.observations++
-	return syncengine.SettingValue{Present: true, Writable: true, Type: "s", Text: "'before'"}, nil
-}
-
-func (*manualRecoveryBackend) Canonicalize(context.Context, model.EntryKey, string, string) (syncengine.SettingValue, error) {
-	return syncengine.SettingValue{}, errors.New("unexpected setting canonicalization")
-}
-
-func (*manualRecoveryBackend) Set(context.Context, model.EntryKey, string, string) error {
-	return errors.New("unexpected setting write")
-}
-
-func (*manualRecoveryBackend) Reset(context.Context, model.EntryKey) error {
-	return errors.New("unexpected setting reset")
-}
-
-func manualRecoveryFixture(t *testing.T) (*state.Store, *manualRecoverySettings, *manualRecoveryBackend) {
-	t.Helper()
+func TestManualStatusReportsSelectedTargetsWithoutJournalRows(t *testing.T) {
 	root := t.TempDir()
 	paths := platform.Paths{Home: root + "/home", StateHome: root + "/state", CacheHome: root + "/cache"}
 	store, err := state.Open(paths)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{ID: "desktop", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: "review", CreatedAt: 1}))
-	identity := model.EntryKey{TargetID: "desktop", Source: model.SourceGNOME, SchemaID: "org.example.Desktop", SettingsPath: "/org/example/", SettingKey: "theme"}
-	preimage := state.NewSettingFingerprint(model.SettingPresent, "s", "'before'")
-	postimage := state.NewSettingFingerprint(model.SettingPresent, "s", "'after'")
-	_, err = store.AppendJournal(context.Background(), state.JournalEntry{
-		ID: "pending-setting", Operation: "setting-set", State: "pending", Stage: state.JournalStagePending,
-		Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1,
-	}, []byte("s\x00'before'"))
-	require.NoError(t, err)
-	backend := &manualRecoveryBackend{}
-	return store, &manualRecoverySettings{backend: backend}, backend
+	configuration := config.Default()
+	configuration.Targets = []config.Target{{ID: "prefs", Source: model.SourceFiles, Mode: config.Review, Root: &config.Root{Base: model.RootHome, Path: "prefs", Kind: model.SelectionDirectory}}}
+	factory := func() (*service.Coordinator, func(), error) {
+		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: configuration}, State: store})
+		return coordinator, func() {}, err
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newManualCommand(&stdout, &stderr, &code, factory)
+	code = runManualCommandForTest(command, &code, "status")
+	require.Equal(t, 0, code)
+	assert.Empty(t, stderr.String())
+	assert.Contains(t, stdout.String(), "prefs\tfiles\treview\tunknown\titems=0")
+}
+
+type statusTestConfig struct {
+	value config.Config
+}
+
+func (port statusTestConfig) Load(context.Context) (config.Config, error) { return port.value, nil }
+
+func (statusTestConfig) Snapshot(context.Context) (config.Snapshot, error) {
+	return config.Snapshot{}, errors.New("unexpected config snapshot")
+}
+
+func (statusTestConfig) Update(context.Context, config.Token, func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+	return config.Snapshot{}, errors.New("unexpected config update")
 }

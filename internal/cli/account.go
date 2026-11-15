@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -12,12 +11,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	urfave "github.com/urfave/cli/v3"
 
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
+	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -57,18 +58,10 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 		sessionOptions.env = os.Getenv
 	}
 	return newAccountCommandWithFactories(stdout, stderr, openKeyring, exitCode, sessionOptions,
-		productionOrchestrationFactory(openKeyring, sessionOptions.env), productionBootstrapFactory(openKeyring, sessionOptions.env))
-}
-
-func newAccountCommandWithImportFactory(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions, importFactory orchestrationFactory) *urfave.Command {
-	if sessionOptions.env == nil {
-		sessionOptions.env = os.Getenv
-	}
-	return newAccountCommandWithFactories(stdout, stderr, openKeyring, exitCode, sessionOptions, importFactory,
 		productionBootstrapFactory(openKeyring, sessionOptions.env))
 }
 
-func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions, importFactory orchestrationFactory, bootstrapFactory bootstrapFactory) *urfave.Command {
+func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions, bootstrapFactory bootstrapFactory) *urfave.Command {
 	if sessionOptions.env == nil {
 		sessionOptions.env = os.Getenv
 	}
@@ -204,106 +197,6 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 		},
 	})
 
-	roleFlag := &urfave.StringFlag{Name: "role", Usage: "requested role (publisher or restore_only)", OnlyOnce: true}
-	vaultFlag := &urfave.StringFlag{Name: "vault", Usage: "vault fingerprint (64 hexadecimal characters)", OnlyOnce: true}
-	confirmFlag := &urfave.StringFlag{Name: "confirm", Usage: "expected transcript fingerprint", OnlyOnce: true}
-	requestFlag := &urfave.StringFlag{Name: "request", Usage: "write public enrollment request JSON after confirmation", OnlyOnce: true}
-	enroll := configure(&urfave.Command{
-		Name:  "enroll",
-		Flags: []urfave.Flag{vaultFlag, deviceIDFlag, roleFlag, confirmFlag, requestFlag},
-		Action: func(ctx context.Context, command *urfave.Command) error {
-			if command.NArg() != 0 || command.String("vault") == "" || command.String("device-id") == "" || command.String("role") == "" {
-				return usageExit("account enroll requires --vault, --device-id and --role")
-			}
-			if command.IsSet("request") && command.String("request") == "" {
-				return usageExit("--request requires a file path")
-			}
-			vaultID, err := parseVaultFingerprint(command.String("vault"))
-			if err != nil {
-				return usageExit("--vault must be a 32-byte hexadecimal fingerprint")
-			}
-			role, err := parseEnrollmentRole(command.String("role"))
-			if err != nil {
-				return usageExit("--role must be publisher or restore_only")
-			}
-			keyring, err := openKeyring()
-			if err != nil {
-				return urfave.Exit(keyringError(err), 1)
-			}
-			defer keyring.Close()
-			material, err := keyring.LoadDeviceKeys(ctx, vaultID, command.String("device-id"))
-			if errors.Is(err, platform.ErrKeyringItemNotFound) {
-				signing, recipient, generateErr := vault.GenerateDeviceKeys()
-				if generateErr != nil {
-					return urfave.Exit("cannot generate device keys", 1)
-				}
-				material = vault.DeviceMaterial{
-					DeviceID: command.String("device-id"),
-					KeyID:    deviceKeyID(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient,
-				}
-				if err := keyring.StoreDeviceKeys(ctx, vaultID, material); err != nil {
-					return urfave.Exit(keyringError(err), 1)
-				}
-			} else if err != nil {
-				return urfave.Exit(keyringError(err), 1)
-			}
-			if material.Recipient == nil || len(material.Signing) != ed25519.PrivateKeySize {
-				return urfave.Exit("device key item is invalid", 1)
-			}
-			output, fingerprint := enrollmentTranscript(vaultID, material, role)
-			if command.IsSet("confirm") {
-				confirmation, err := parseTranscriptFingerprint(command.String("confirm"))
-				if err != nil || !bytes.Equal(confirmation, fingerprint[:]) {
-					if writeErr := writeCommandOutput(command, output); writeErr != nil {
-						return writeErr
-					}
-					return urfave.Exit("transcript fingerprint confirmation mismatch", 1)
-				}
-				if command.IsSet("request") {
-					requestBytes, _, requestErr := makeEnrollmentRequest(vaultID, material, role)
-					if requestErr != nil {
-						return urfave.Exit("cannot prepare public enrollment request", 1)
-					}
-					defer clear(requestBytes)
-					if writeErr := writePublicRequestFile(command.String("request"), requestBytes); writeErr != nil {
-						return urfave.Exit(escapeErrorMessage(writeErr.Error()), 1)
-					}
-					output += "public enrollment request: written\n"
-				}
-				if err := recordVaultSelection(ctx, sessionOptions.env, vaultID, material.DeviceID); err != nil {
-					return urfave.Exit("device keys were prepared but local vault selection could not be recorded", 1)
-				}
-				output += "transcript confirmed; no certificate or remote operation was performed\n"
-			} else {
-				if err := writeCommandOutput(command, output); err != nil {
-					return err
-				}
-				return urfave.Exit("transcript fingerprint confirmation required; repeat with --confirm=<transcript-fingerprint>", 1)
-			}
-			return writeCommandOutput(command, output)
-		},
-	})
-
-	importBundle := configure(&urfave.Command{
-		Name: "import-bundle", Flags: importBundleFlags(), Action: importBundleAction(importFactory),
-	})
-
-	recovery := configure(&urfave.Command{
-		Name:  "recovery",
-		Flags: []urfave.Flag{&urfave.StringFlag{Name: "vault-name", Usage: "vault name", OnlyOnce: true}, &urfave.StringFlag{Name: "checkpoint", Usage: "local signed checkpoint object", OnlyOnce: true}},
-		Action: func(_ context.Context, command *urfave.Command) error {
-			return runAccountRecovery(command)
-		},
-	})
-
-	verify := configure(&urfave.Command{
-		Name:  "verify",
-		Flags: []urfave.Flag{&urfave.StringFlag{Name: "bundle", Usage: "local verification bundle path", OnlyOnce: true}, &urfave.StringFlag{Name: "trust-anchor", Usage: "operator-supplied 32-byte hexadecimal root fingerprint when no local checkpoint exists", OnlyOnce: true}, &urfave.BoolFlag{Name: "record", Usage: "advance the local checkpoint after current or descendant verification", OnlyOnce: true}, &urfave.BoolFlag{Name: "consent", Usage: "confirm inspection/export-only continuation for unverifiable state", OnlyOnce: true}},
-		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runAccountVerify(ctx, command)
-		},
-	})
-
 	sessionCommands := accountSessionCommands(openKeyring, sessionOptions)
 	for _, command := range sessionCommands {
 		configure(command)
@@ -311,9 +204,9 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 
 	root := configure(&urfave.Command{
 		Name:     "account",
-		Commands: append([]*urfave.Command{bootstrap, finalize, enroll, importBundle, recovery, verify}, sessionCommands...),
+		Commands: append([]*urfave.Command{bootstrap, finalize}, sessionCommands...),
 		Action: func(_ context.Context, _ *urfave.Command) error {
-			return usageExit("expected login, logout, status, bootstrap, finalize, enroll, import-bundle, recovery or verify")
+			return usageExit("expected login, logout, status, bootstrap or finalize")
 		},
 		Writer: stdout, ErrWriter: stderr,
 	})
@@ -334,6 +227,131 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 		*exitCode = code
 	}
 	return root
+}
+
+func productionBootstrapFactory(openKeyring accountKeyringFactory, env func(string) string) bootstrapFactory {
+	return func(ctx context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
+		paths, err := platform.Resolve(env)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		store, err := state.Open(paths)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		keyring, err := openKeyring()
+		if err != nil {
+			_ = store.Close()
+			return nil, func() {}, err
+		}
+		closeResources := func() { _ = keyring.Close(); _ = store.Close() }
+		client, err := newAuthorizedAccountClient(keyring, env)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		var identity atproto.Identity
+		if command.IsSet("handle") {
+			identity, err = client.Discover(ctx, command.String("handle"))
+		} else {
+			var session *atproto.Session
+			session, err = client.LoadSession(ctx, command.String("did"))
+			if err == nil {
+				identity, err = client.Discover(ctx, session.Handle)
+				if err == nil && identity.DID != command.String("did") {
+					err = errors.New("discovered identity differs from requested DID")
+				}
+			}
+		}
+		if err != nil || identity.DID == "" {
+			closeResources()
+			if err == nil {
+				err = errors.New("account identity is unavailable")
+			}
+			return nil, func() {}, err
+		}
+		session, err := client.LoadSession(ctx, identity.DID)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session)
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		transport := atproto.NewATClientTransport(api)
+		port := sessionGenesisPort{identity: identity, transport: transport, observations: store}
+		coordinator, err := service.NewCoordinator(service.Dependencies{
+			State: store, DeviceKeys: keyring, Genesis: port,
+			Trust:   service.StateTrustSource{State: store, Keyring: keyring},
+			Session: manualReadSession{identity: identity},
+			Remote:  service.VaultReader{Reader: atproto.VaultReader{Transport: transport, ObservationStore: store, Budgets: atproto.DefaultBudgets(), Clock: time.Now}},
+			Clock:   time.Now,
+		})
+		if err != nil {
+			closeResources()
+			return nil, func() {}, err
+		}
+		return coordinator, closeResources, nil
+	}
+}
+
+type sessionGenesisPort struct {
+	identity     atproto.Identity
+	transport    atproto.Transport
+	observations atproto.PublicationObservationStore
+}
+
+func (port sessionGenesisPort) Preflight(ctx context.Context) error {
+	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil {
+		return errors.New("authenticated genesis provider wiring is unavailable")
+	}
+	return atproto.CheckGenesisRepositoryEmpty(ctx, atproto.RevisionReader{
+		Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
+		VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
+	}, port.transport, port.identity.DID)
+}
+
+func (port sessionGenesisPort) BlobUploadLimit(ctx context.Context) (int64, error) {
+	limit, err := atproto.DescribeBlobUploadLimit(ctx, port.transport)
+	if err != nil {
+		return 0, err
+	}
+	if limit > int64(vault.MaxEnvelopeBytes) {
+		limit = int64(vault.MaxEnvelopeBytes)
+	}
+	return limit, nil
+}
+
+func (port sessionGenesisPort) CommitGenesis(ctx context.Context, blobLimit int64, kit []byte, root vault.DeviceMaterial, genesis vault.Genesis) (atproto.GenesisCommitResult, error) {
+	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil || port.observations == nil {
+		return atproto.GenesisCommitResult{}, errors.New("authenticated genesis provider wiring is unavailable")
+	}
+	return atproto.CommitGenesis(ctx, atproto.GenesisIO{
+		Reader: atproto.RevisionReader{
+			Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
+			VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
+		},
+		Transport: port.transport, BlobUploadLimit: blobLimit, DID: port.identity.DID,
+		ObservationStore: port.observations, Clock: time.Now,
+	}, kit, root, genesis)
+}
+
+type manualReadSession struct {
+	identity atproto.Identity
+}
+
+func (session manualReadSession) ReadRequest(_ context.Context, selection service.VaultSelection, device vault.DeviceMaterial, anchor [32]byte, previousPolicy, previousControl []byte) (atproto.ReadRequest, error) {
+	if session.identity.DID == "" || session.identity.DIDDocumentID == "" || len(session.identity.VerificationMethods) == 0 {
+		return atproto.ReadRequest{}, errors.New("discovered account verification evidence is unavailable")
+	}
+	return atproto.ReadRequest{
+		DID: session.identity.DID, DIDDocumentID: session.identity.DIDDocumentID,
+		VerificationMethods: append([]atproto.VerificationMethod(nil), session.identity.VerificationMethods...),
+		Vault:               selection.Vault, TrustAnchor: anchor, PreviousPolicy: append([]byte(nil), previousPolicy...),
+		PreviousControl: append([]byte(nil), previousControl...), DeviceKeyID: append([]byte(nil), device.KeyID...), DeviceKey: device.Recipient,
+	}, nil
 }
 
 func writeAndFlushKit(command *urfave.Command, output string) error {
@@ -412,51 +430,12 @@ func parseVaultFingerprint(value string) ([32]byte, error) {
 	return fingerprint, nil
 }
 
-func parseTranscriptFingerprint(value string) ([]byte, error) {
+func decodeFixedHex(value string, length int) ([]byte, error) {
 	decoded, err := hex.DecodeString(value)
-	if err != nil || len(decoded) != sha256.Size {
-		return nil, errors.New("invalid transcript fingerprint")
+	if err != nil || len(decoded) != length {
+		return nil, errors.New("invalid hexadecimal value")
 	}
 	return decoded, nil
-}
-
-func parseEnrollmentRole(value string) (vault.Role, error) {
-	switch value {
-	case "publisher":
-		return vault.RolePublisher, nil
-	case "restore_only":
-		return vault.RoleRestoreOnly, nil
-	default:
-		return 0, errors.New("invalid enrollment role")
-	}
-}
-
-func enrollmentTranscript(vaultID [32]byte, material vault.DeviceMaterial, role vault.Role) (string, [32]byte) {
-	signingPublic := material.Signing.Public().(ed25519.PublicKey)
-	recipientPublic := material.Recipient.PublicKey().Bytes()
-	fingerprint := vault.EnrollmentTranscriptFingerprint(vaultID, material.DeviceID, material.KeyID, role, signingPublic, recipientPublic)
-	signingFingerprint := sha256.Sum256(signingPublic)
-	recipientFingerprint := sha256.Sum256(recipientPublic)
-	var output strings.Builder
-	fmt.Fprintf(&output, "vault: %x\n", vaultID)
-	fmt.Fprintf(&output, "device id: %s\n", escapeField(material.DeviceID))
-	fmt.Fprintf(&output, "key id: %x\n", material.KeyID)
-	fmt.Fprintf(&output, "requested role: %s\n", roleName(role))
-	fmt.Fprintf(&output, "signing public key fingerprint: %x\n", signingFingerprint)
-	fmt.Fprintf(&output, "recipient public key fingerprint: %x\n", recipientFingerprint)
-	fmt.Fprintf(&output, "transcript fingerprint: %x\n", fingerprint)
-	return output.String(), fingerprint
-}
-
-func roleName(role vault.Role) string {
-	switch role {
-	case vault.RolePublisher:
-		return "publisher"
-	case vault.RoleRestoreOnly:
-		return "restore_only"
-	default:
-		return "invalid"
-	}
 }
 
 func keyringError(err error) string {

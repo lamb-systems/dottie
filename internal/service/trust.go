@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ipfs/go-cid"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
+	"github.com/multiformats/go-multihash"
 )
 
 type DeviceKeySource interface {
@@ -91,4 +93,39 @@ func (coordinator *Coordinator) ResolveSelection(ctx context.Context, requested 
 	}
 	defer coordinator.mu.Unlock()
 	return coordinator.selectVault(ctx, requested)
+}
+
+func rawVaultCID(data []byte) []byte {
+	digest, err := multihash.Sum(data, multihash.SHA2_256, -1)
+	if err != nil {
+		return nil
+	}
+	return cid.NewCidV1(cid.Raw, digest).Bytes()
+}
+
+func validateImportedCheckpointPredecessor(trust TrustMaterial) error {
+	if !trust.ImportedCheckpoint || len(trust.Held.Policy) == 0 || len(trust.Held.Control) == 0 || trust.Checkpoint.Epoch == 0 {
+		return ErrMissingPredecessorEvidence
+	}
+	policy, err := vault.DecodePolicy(trust.Held.Policy)
+	if err != nil {
+		return err
+	}
+	control, err := vault.DecodeControl(trust.Held.Control)
+	if err != nil || policy.Vault != trust.Selection.Vault || control.Vault != trust.Selection.Vault || policy.EpochSeq+1 != trust.Checkpoint.Epoch || control.EpochSeq != policy.EpochSeq {
+		return ErrOnboardingChain
+	}
+	checkpointControl, err := vault.DecodeControl(trust.Checkpoint.ControlBytes)
+	if err != nil || checkpointControl.Vault != trust.Selection.Vault || checkpointControl.EpochSeq != trust.Checkpoint.Epoch || checkpointControl.PolicyDigest != trust.Checkpoint.PolicyDigest || !bytes.Equal(checkpointControl.PrevControlCID, rawVaultCID(trust.Held.Control)) || !bytes.Equal(checkpointControl.HeadSnapshotCID, trust.Checkpoint.SnapshotCID) || !bytes.Equal(trust.Checkpoint.ControlCID, rawVaultCID(trust.Checkpoint.ControlBytes)) {
+		return ErrOnboardingChain
+	}
+	trusted := vault.NewTrustedContext(trust.Selection.Vault, trust.Anchor)
+	if err := trusted.SetHeldCheckpoint(trust.Held); err != nil {
+		return err
+	}
+	result, err := vault.VerifyControlState(trusted, vault.VerificationRequest{Supplied: trust.Held})
+	if err != nil || result.Outcome != vault.CheckpointCurrent {
+		return ErrOnboardingChain
+	}
+	return nil
 }

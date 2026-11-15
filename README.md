@@ -3,19 +3,20 @@
 Directory-first preference synchronization for Linux and GNOME, using an existing
 Atmosphere account and its PDS.
 
-**Status: v2 publication privacy, transport failure, confirmed pull apply with a durable apply
-journal and accepted-floor advance, recovery, ciphertext export/validation, device administration and
-history summaries are implemented. `dottie pull --confirm` is the only apply path: `preview` and
-`restore` were retired with the v1 read and apply authority, so a v1 candidate can neither be printed
-nor applied. The live publication and archive gates have run against a disposable account and the
-owner accepted [`docs/acceptance.md`](docs/acceptance.md) on 2026-11-05; the rows that name retired
-restore tests are historical evidence, not coverage of the current tree. Real-data use is permitted
-under the residual limits recorded there: kit custody, no global freshness, one published vault per
-account, and provider-held records and ciphertext that cannot be deleted. The plaintext v2 publication
-profile adds one disclosed residual: the packed snapshot is uploaded before its record batch, so a
-rejected or ambiguous batch can leave an unattached plaintext blob retrievable at the provider.
-Dottie never surfaces candidate bytes for a publication that did not succeed; the provider-side blob is
-accepted as a recorded limit.**
+**Status: v2 publication is the product. `dottie push`, `dottie pull` and `dottie sync` publish,
+inspect, apply and advance the accepted floor through the packed-plaintext v2 profile, with a durable
+apply journal and recovery proven against real process death. `dottie pull --confirm` is the only
+apply path. The v1 encrypted read-and-apply authority, the recovery-kit cross-machine workflow and
+every command that served them were retired: `preview`, `restore`, `recover`, `export`, `import`,
+`prune`, `history`, `devices *`, `account enroll`, `account import-bundle`, `account recovery` and
+`account verify` no longer exist. Cross-machine recovery without a live PDS is not supported and is
+not planned; v2 publication replaces it. Real-data use is permitted under the residual limits in
+[`docs/acceptance.md`](docs/acceptance.md): no global freshness, one published vault per account, and
+provider-held records that cannot be deleted. The plaintext profile adds one disclosed residual: the
+packed snapshot is uploaded before its record batch, so a rejected or ambiguous batch can leave an
+unattached plaintext blob retrievable at the provider. Dottie never surfaces candidate bytes for a
+publication that did not succeed. The live gates in that document ran against a disposable account on
+2026-11-05 and describe the retired v1 path; they are historical evidence, not coverage of this tree.**
 Use `dottie account login`, `status` and `logout` for account authorization;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME
@@ -30,49 +31,9 @@ publication, then records trust atomically after verified publication. An accoun
 one published Dottie vault because genesis requires an empty repository. Multi-vault selection
 refers only to locally recorded vaults, not multiple published vaults on one account.
 
-`dottie history` reports local journal/applied-base summaries and checkpoint metadata without
-content, settings values, absolute paths or secrets. Without `--did`/`--handle` it runs
-offline. With one account selector, it attempts a verified read, distinguishes `unavailable` from
-`auth-expired`, and still exits 0. `dottie export --out FILE --kit-file FILE
-(--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]` writes a complete
-ciphertext-only archive through the coordinator's guarded atomic writer (0600). Export refuses existing
-outputs unless `--overwrite` is explicit. Export authenticates its checkpoint
-with the supplied regular kit file, which must have no group/world access and decode to exactly
-32 bytes; the kit is cleared and never stored or archived. Export is complete only for its
-required authenticated closure. The exporting machine must have retained the
-authenticated history needed to prove every required predecessor. An onboarding device that
-has not observed prior publication heads can refuse export even when the current snapshot is
-available. Version-1 count-only attestations with nonzero retained-point counts cannot be
-enumerated and refuse export; no archive is written on refusal. Export and onboarding fetch required
-snapshot bodies by CID through the verified remote reader; unavailable bodies refuse the workflow.
-Losing all device keys without an independent complete export is data loss. `dottie prune --plan` inspects retention candidates and separate recovery/confidentiality/unknown
-holding floors; `dottie prune --apply --confirm` is the explicit foreground deletion path. Apply
-without `--confirm` refuses without deletion. There is no scheduled or automatic garbage collection.
-The retained-point cap limits selected epochs, not disk growth, and staged, orphaned or unknown-epoch
-material may remain. `dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX`
-requires independent expected vault and anchor inputs plus the kit. It validates the archive in the defined refusal order without changing any state, configuration, target or preference. Validation does not decrypt the snapshot or establish global freshness.
-
-The command exit codes are 0 for success (including history with remote unavailable), 2 for
-usage error, 3 for refusal/conflict/rejection, and 4 for queued, starved, fence-lost,
-superseded, unavailable or another partial/indeterminate push/sync/device outcome. Export
-succeeds with a complete required closure or refuses; it does not report a partial archive as
-success. Push never applies downloaded files or settings; `pull --confirm` and the pull half of
-`sync` apply the reviewed v2 plan. Prune
-returns 0 for a plan or successful apply, 2 for usage, 3 for refusal (including missing confirmation,
-incomplete inventory or an invalid boundary/live-head check), and 4 for partial or indeterminate
-apply. The recovery floor is the oldest complete inventory; the confidentiality floor is the oldest surviving
-known material. Unknown-epoch holdings make the confidentiality floor unknown. The cap bounds retained
-epochs, not payload-directory growth. Signed retention attestations use schema version 2 to enumerate ordered recovery points while
-preserving version-1 count-only decoding. Offline publication, renderer, source-loss archive, apply and
-rollback tests use synthetic records and temporary homes. They do not establish provider compatibility,
-hosted-log visibility or production desktop behavior. The retained journaled apply engine is exercised only by package tests under
-`internal/syncengine`; the GNOME settings backend is exercised by the tagged keyfile gate under
-`make test-gnome`. No production command reaches that engine any more, so those are engine evidence,
-not command evidence. The live
-publication-privacy gate requires a pristine disposable repository because that gate tests genesis, and the
-read-only live archive gate needs explicit disposable-account authorization. A skipped gate is not provider
-evidence. Real user data is permitted only under the residual limits in `docs/acceptance.md`, which the owner
-accepted on 2026-11-05.
+The retired commands are gone rather than deprecated: there is no kit generation to consume, no
+ciphertext archive to export or validate, no retention sweep and no device administration surface.
+`position status` is the one publication-position read, and `status` remains local-only.
 
 ## Target design
 
@@ -141,7 +102,7 @@ offline with `--did`; `--refresh` is explicit. Local logout removes the local se
 request was accepted. Account sessions require Secret Service and never fall back to
 files. These commands do not touch target data.
 
-Use `./bin/dottie push --did DID` to review one publication proposal, then `./bin/dottie push --did DID --confirm HEX` to publish exactly that proposal; `--discard` abandons a retained pre-submission attempt. Push never applies downloads. `pull --did DID --vault HEX` compares the provider's validated position with the locally accepted floor, prints one finding and one apply plan, and changes nothing until it is repeated with the `--confirm` token it printed; a confirmed pull applies the plan, then advances the accepted floor. The reconciled `sync` command does the same for its pull half and recomposes the push half afterwards. Use `./bin/dottie prune --plan --did DID` to inspect retention candidates, then `./bin/dottie prune --apply --confirm --did DID` to delete eligible payloads and aged backups. Pruning is manual and foreground-only; no automatic GC or scheduling is enabled. Push/device command exit 0 is committed/no-op, 2 usage error, 3 refusal/conflict/rejection, and 4 queued or other partial/indeterminate non-success. `devices list`, root-only `devices enroll`/`revoke`, and newcomer `account import-bundle` transfer only public onboarding evidence. Recovery kit files must be regular files, decode to 32 bytes, and have group/world permissions removed (`chmod 600 FILE`); Dottie never stores the kit. See the CLI README for command flags and disclosures.
+Use `./bin/dottie push --did DID` to review one publication proposal, then `./bin/dottie push --did DID --confirm HEX` to publish exactly that proposal; a pre-submission failure abandons its own attempt without a flag. Push never applies downloads. `pull --did DID [--vault HEX]` compares the provider's validated position with the locally accepted floor, prints one finding and one apply plan, and changes nothing until it is repeated with the `--confirm` token it printed; a confirmed pull applies the plan, then advances the accepted floor. The reconciled `sync --did DID` command does the same for its pull half, recomposes the push half from the post-pull state and requires it to match what was printed before publishing. Exit codes are 0 success or no-op, 2 usage error, 3 local refusal, and 4 indeterminate or partially completed remote work. See the CLI README for command flags and disclosures.
 
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
 `./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.
@@ -156,33 +117,20 @@ runs each target for five seconds and is reserved for non-required scheduled/man
 exploration. Fuzz seeds run as part of ordinary `go test` without time-bounded
 exploration.
 
-## Publication privacy and archive recovery gates
+## Publication privacy gates
 
-`go test -count=1 ./tests/integration` runs the offline publication audit against a synthetic
-`MemoryPDS`: it scans repository and blob surfaces for plaintext/credential canaries, inventories
-recursive record keys, checks typed blob references and models publication failure outcomes. The
-source-loss archive test exports through the coordinator, removes the synthetic source records and
-blobs, checks that the online read refuses without changing local application state, validates the
-archive offline, and opens the archived current snapshot with a retained recipient key in a fresh
-temporary home. `go test -count=1 ./internal/cli` exercises the package-internal renderer privacy
-contract. These tests use synthetic data only.
+The v1 encrypted publication audit and the source-loss archive gate were retired with the commands they
+served. **Their coverage is not currently owned by anything:** the v2 publication path has no offline
+gate that scans the repository and blob surfaces for plaintext or credential canaries and inventories
+recursive record keys, and no live privacy gate either. `tests/local/publication_*` and
+`tests/integration/publication_v2_*` cover v2 publication mechanics and the two-machine apply path, but
+they do not assert payload-privacy properties. Building that gate on the v2 plaintext profile is the
+next named slice; until it exists, payload privacy is a designed property with an accepted residual, not
+a tested one. The rows in [`docs/acceptance.md`](docs/acceptance.md) that name the retired gates are
+historical evidence for the removed path, not coverage of this tree.
 
-The live publication-privacy gate skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
-allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization; before writing the
-manifest or records, it checks `com.atproto.repo.describeRepo` and skips repositories with any collections.
-That gate tests genesis and therefore requires a pristine disposable repository. Production bootstrap checks
-emptiness before minting and again immediately before publication; a race can leave an unreferenced staged
-blob after a definite refusal. The gate writes synthetic canary records and cannot remove provider blobs.
-
-The read-only live archive gate requires `DOTTIE_LIVE_ARCHIVE=1`, an allowlisted `DOTTIE_HANDLE`, and
-`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world permission bits that decodes
-to 32 kit bytes, plus explicit disposable-account authorization. It uses an existing local vault selection
-and checkpoint, writes its archive only under a temporary path, and blocks repository write endpoints.
-
-There is no live two-home restore gate any more: it drove the retired v1 restore command, and its recorded
-result in `docs/acceptance.md` is historical evidence for that removed path. All live gates are opt-in; a
-skipped gate is not provider evidence. Hosted provider logs and server-side storage are not observable from a
-client.
+`go test -count=1 ./internal/cli` still exercises the package-internal renderer privacy contract against
+synthetic data.
 
 ## Two-machine publication apply gate
 

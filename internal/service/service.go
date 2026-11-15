@@ -75,10 +75,6 @@ type RemoteReadPort interface {
 	Read(context.Context, atproto.ReadRequest) (atproto.ReadResult, error)
 }
 
-type PublicationIOPort interface {
-	PublicationIO(context.Context, VaultSelection, TrustMaterial, ReadOutcome) (atproto.ATProtoPublicationIO, error)
-}
-
 type GenesisPort interface {
 	Preflight(context.Context) error
 	BlobUploadLimit(context.Context) (int64, error)
@@ -125,7 +121,6 @@ type Dependencies struct {
 	Trust      TrustSource
 	Session    SessionPort
 	Remote     RemoteReadPort
-	Publisher  PublicationIOPort
 	Genesis    GenesisPort
 	Clock      func() time.Time
 	Filesystem files.ApplyFileSystem
@@ -167,50 +162,4 @@ type TargetStatus struct {
 	State  StatusState
 	Reason string
 	Items  int
-}
-
-type ReadOutcome struct {
-	Snapshot         model.Snapshot
-	VerifiedSnapshot model.Snapshot
-	Read             atproto.ReadResult
-	Currency         vault.VerificationResult
-	Freshness        atproto.FreshnessStatus
-	InspectOnly      bool
-	Untracked        []model.EntryKey
-	Retention        RetentionReport
-}
-
-type EnrollRequest struct {
-	Selection           VaultSelection
-	Device              vault.PublicDeviceInput
-	Role                vault.Role
-	ApprovalFingerprint [32]byte
-	Kit                 []byte
-}
-
-type RevokeRequest struct {
-	Selection           VaultSelection
-	DeviceID            string
-	Kit                 []byte
-	ApprovalFingerprint [32]byte
-}
-
-type RevokeApprovalTranscript struct {
-	Vault                    [32]byte
-	DeviceID                 string
-	Role                     vault.Role
-	SigningKeyFingerprint    [32]byte
-	RecipientKeyFingerprint  [32]byte
-	CurrentEpoch             uint64
-	SuccessorEpoch           uint64
-	KitSigningKeyFingerprint [32]byte
-	ApprovalFingerprint      [32]byte
-}
-
-type AdministrativeResult struct {
-	Status            StatusState
-	TransitionOutcome atproto.TransitionOutcome
-	Bundle            vault.OnboardingBundle
-	EncodedBundle     []byte
-	Retention         RetentionReport
 }

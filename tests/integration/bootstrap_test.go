@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +22,63 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type publicationKeyring struct {
+	devices map[string]vault.DeviceMaterial
+}
+
+func (keyring *publicationKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+	device, ok := keyring.devices[deviceID]
+	if vaultID == ([32]byte{}) {
+		return vault.DeviceMaterial{}, errors.New("synthetic device key is unavailable")
+	}
+	if !ok {
+		return vault.DeviceMaterial{}, platform.ErrKeyringItemNotFound
+	}
+	return device, nil
+}
+
+func (keyring *publicationKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, device vault.DeviceMaterial) error {
+	if vaultID == ([32]byte{}) || device.DeviceID == "" {
+		return errors.New("invalid synthetic device keys")
+	}
+	if _, exists := keyring.devices[device.DeviceID]; exists {
+		return errors.New("synthetic device keys already exist")
+	}
+	keyring.devices[device.DeviceID] = device
+	return nil
+}
+
+func (keyring *publicationKeyring) LoadDeviceKeysForVault(_ context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+	if vaultID == ([32]byte{}) || len(keyring.devices) == 0 {
+		return nil, platform.ErrKeyringItemNotFound
+	}
+	materials := make([]vault.DeviceMaterial, 0, len(keyring.devices))
+	for _, device := range keyring.devices {
+		materials = append(materials, device)
+	}
+	return materials, nil
+}
+
+func (keyring *publicationKeyring) DeleteDeviceKeys(_ context.Context, _ [32]byte, deviceID string) error {
+	delete(keyring.devices, deviceID)
+	return nil
+}
+
+const publicationAuditDID = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+
+type publicationReadSession struct {
+	did     string
+	methods []atproto.VerificationMethod
+}
+
+func (session publicationReadSession) ReadRequest(_ context.Context, selection service.VaultSelection, device vault.DeviceMaterial, anchor [32]byte, previousPolicy, previousControl []byte) (atproto.ReadRequest, error) {
+	return atproto.ReadRequest{
+		DID: session.did, DIDDocumentID: session.did, VerificationMethods: session.methods,
+		Vault: selection.Vault, TrustAnchor: anchor, DeviceKeyID: bytes.Clone(device.KeyID), DeviceKey: device.Recipient,
+		PreviousPolicy: bytes.Clone(previousPolicy), PreviousControl: bytes.Clone(previousControl),
+	}, nil
+}
 
 type bootstrapGenesisPort struct {
 	identity     atproto.Identity
@@ -60,7 +118,7 @@ func (port bootstrapGenesisPort) CommitGenesis(ctx context.Context, limit int64,
 	return result, err
 }
 
-func TestCoordinatorBootstrapFinalizesTrustForHistoryPullExportAndPush(t *testing.T) {
+func TestCoordinatorBootstrapFinalizesTrust(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	paths := platform.Paths{
@@ -89,20 +147,12 @@ func TestCoordinatorBootstrapFinalizesTrustForHistoryPullExportAndPush(t *testin
 	writeIntegrationConfig(t, paths, config.Default())
 	order := make([]string, 0, 4)
 	port := bootstrapGenesisPort{identity: identity, transport: pds, observations: store, order: &order}
-	reader := atproto.RevisionReader{
-		Transport: pds, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID,
-		VerificationMethods: identity.VerificationMethods,
-	}
-	publicationIO := atproto.ATProtoPublicationIO{
-		Reader: reader, Transport: pds, BlobUploadLimit: 1 << 20, DID: identity.DID,
-		ObservationStore: store, Clock: func() time.Time { return now },
-	}
 	coordinator, err := service.NewCoordinator(service.Dependencies{
 		Config: service.FileConfigPort{Paths: paths}, State: store, DeviceKeys: keyring,
-		Trust:     service.StateTrustSource{State: store, Keyring: keyring},
-		Session:   publicationReadSession{did: identity.DID, methods: identity.VerificationMethods},
-		Remote:    service.VaultReader{Reader: atproto.VaultReader{Transport: pds, ObservationStore: store, Clock: func() time.Time { return now }}},
-		Publisher: publicationPublisher{io: publicationIO}, Genesis: port, Clock: func() time.Time { return now },
+		Trust:   service.StateTrustSource{State: store, Keyring: keyring},
+		Session: publicationReadSession{did: identity.DID, methods: identity.VerificationMethods},
+		Remote:  service.VaultReader{Reader: atproto.VaultReader{Transport: pds, ObservationStore: store, Clock: func() time.Time { return now }}},
+		Genesis: port, Clock: func() time.Time { return now },
 	})
 	require.NoError(t, err)
 	kit, err := vault.GenerateRecoveryKit()
@@ -124,32 +174,12 @@ func TestCoordinatorBootstrapFinalizesTrustForHistoryPullExportAndPush(t *testin
 	require.NoError(t, err)
 	require.Equal(t, service.BootstrapVerifiedCommit, result.Outcome)
 	assert.Equal(t, []string{"preflight", "kit-delivered", "blob-limit", "publication"}, order)
-	selection := service.VaultSelection{Vault: result.Bootstrap.Vault, DeviceID: device.DeviceID}
 	assert.Equal(t, device.DeviceID, keyring.devices[device.DeviceID].DeviceID)
 
-	history, err := coordinator.History(ctx, selection, false)
+	checkpoint, err := store.VaultCheckpoint(ctx, result.Bootstrap.Vault)
 	require.NoError(t, err)
-	require.Len(t, history.Checkpoints, 1)
-	assert.Equal(t, uint64(0), history.Checkpoints[0].Epoch)
-
-	pulled, err := coordinator.Pull(ctx, selection)
-	require.NoError(t, err)
-	assert.Zero(t, pulled.Read.PublicationCount)
-	assert.Empty(t, pulled.Snapshot.Entries)
-
-	archivePath := filepath.Join(paths.CacheHome, "bootstrap-export.tar")
-	exported, err := coordinator.Export(ctx, service.ExportRequest{
-		Selection: selection, ExpectedVault: result.Bootstrap.Vault, ExpectedAnchor: result.Bootstrap.Anchor,
-		Kit: kit, Path: archivePath,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, result.Bootstrap.Vault, exported.VaultID)
-	assert.FileExists(t, archivePath)
-
-	pushed, err := coordinator.Push(ctx, selection)
-	require.NoError(t, err)
-	assert.Equal(t, service.StatusNoOp, pushed.Status)
-	assert.True(t, pushed.NoOp)
+	assert.Equal(t, uint64(0), checkpoint.Epoch)
+	assert.Equal(t, result.Bootstrap.Anchor, checkpoint.Anchor)
 }
 
 type bootstrapRecoveryFixture struct {
