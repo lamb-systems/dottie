@@ -25,8 +25,8 @@ Usage:
   dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
   dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
   dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]
-  dottie pull (refused: deferred to C3)
-  dottie sync (refused: deferred to C3)
+  dottie pull --did DID --vault HEX
+  dottie sync (refused: needs decision D11)
   dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie devices enroll --request FILE --kit-file FILE --bundle-out FILE [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
   dottie devices revoke --device-id ID --kit-file FILE [--confirm HEX] [--bundle-out FILE] [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
@@ -44,8 +44,12 @@ Usage:
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
 with --confirm HEX to publish exactly that reviewed proposal. --discard abandons a retained pre-submission attempt.
-The reconciled pull/sync path is deferred to C3: dottie sync and dottie pull refuse without contacting the provider,
-and downloads are inspected with preview and applied with restore. For push and device operations, exit codes are:
+Pull is a read-only inspection: it authenticates the session and the v2 publication scope before any discovery,
+compares the provider's validated position with the locally recorded accepted floor, and prints one line — pull:
+matches, pull: absent, pull: diverges (reason) or pull: unreadable (reason). It writes nothing: no apply, no
+reconciliation, no base establishment and no position-store open. The reconciled apply path and sync are deferred
+to decision D11: dottie sync refuses without contacting the provider, and downloads are inspected with preview and
+applied with restore. For push and device operations, exit codes are:
 0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success. History is local-only without --did/--handle; with an account selector it attempts a verified read and reports unavailable or auth-expired distinctly while still succeeding. History output is redacted and contains no content or absolute paths.
@@ -86,7 +90,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "status", "history", "preview", "restore", "recover", "export", "import":
 		return runManual(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "pull":
-		return deferredPublicationExit("pull", stdout, stderr)
+		return runPull(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "push":
 		return runPush(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "prune", "sync", "devices":
@@ -121,16 +125,10 @@ type deferredPublicationRefusal struct {
 }
 
 func (refusal *deferredPublicationRefusal) Error() string {
-	return refusal.command + " refused: the reconciled pull and sync path is deferred to C3 for the v2 publication profile; pull and sync contact no provider in this build; publish with dottie push and review downloads with dottie restore"
+	return refusal.command + " refused: the reconciled apply path needs a crash-safe v2 apply journal, which is decision D11; sync contacts no provider in this build; inspect the provider position with dottie pull and apply downloads with dottie restore"
 }
 
 func (refusal *deferredPublicationRefusal) ExitCode() int { return 3 }
-
-func deferredPublicationExit(command string, stdout, stderr io.Writer) int {
-	refusal := &deferredPublicationRefusal{command: command}
-	fmt.Fprintf(stderr, "dottie: %s\n", escapeErrorMessage(refusal.Error()))
-	return refusal.ExitCode()
-}
 
 func printOutput(stdout, stderr io.Writer, text string) int {
 	if _, err := io.WriteString(stdout, text); err != nil {

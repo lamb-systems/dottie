@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -216,4 +217,60 @@ func readStoredFloor(ctx context.Context, conn *sql.Conn) ([]byte, bool, error) 
 		return nil, false, classified(ErrSchema, StageInspect, ReasonCorrupt)
 	}
 	return encoded, true, nil
+}
+
+func ReadBinding(directory string) (Binding, error) {
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return Binding{}, classified(ErrInvalid, StageInspect, ReasonBinding)
+	}
+	if _, err := os.Lstat(directory); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Binding{}, classified(ErrSchema, StageInspect, ReasonPositionAbsent)
+		}
+		return Binding{}, classified(ErrStorage, StageInspect, ReasonIO)
+	}
+	if err := checkPrivateDirectory(directory); err != nil {
+		return Binding{}, classified(ErrStorage, StageInspect, ReasonIO)
+	}
+	databasePath := filepath.Join(directory, "publication.db")
+	if _, err := os.Lstat(databasePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Binding{}, classified(ErrSchema, StageInspect, ReasonPositionAbsent)
+		}
+		return Binding{}, classified(ErrStorage, StageInspect, ReasonIO)
+	}
+	if err := preflightFile(databasePath); err != nil {
+		return Binding{}, classified(ErrStorage, StageInspect, ReasonIO)
+	}
+	db, err := sql.Open("sqlite", dbImmutableDSN(databasePath))
+	if err != nil {
+		return Binding{}, classified(ErrStorage, StageInspect, ReasonIO)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+	raw, err := readValueBoundedInspection(ctx, db, "binding")
+	if err != nil {
+		return Binding{}, classified(ErrSchema, StageInspect, ReasonSchema)
+	}
+	var wire bindingWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return Binding{}, classified(ErrSchema, StageInspect, ReasonSchema)
+	}
+	binding, err := bindingFromWire(wire)
+	if err != nil || validateBinding(binding) != nil {
+		return Binding{}, classified(ErrSchema, StageInspect, ReasonSchema)
+	}
+	return binding, nil
+}
+
+func readValueBoundedInspection(ctx context.Context, q queryer, key string) ([]byte, error) {
+	var value any
+	if err := q.QueryRowContext(ctx, "SELECT value FROM store_meta WHERE key=?", key).Scan(&value); err != nil {
+		return nil, err
+	}
+	data, ok := rawBytes(value)
+	if !ok || len(data) == 0 || len(data) > 16384 {
+		return nil, errors.New("stored value")
+	}
+	return data, nil
 }

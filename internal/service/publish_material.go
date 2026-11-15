@@ -536,7 +536,7 @@ var (
 	ErrPublicationProposalAbsent     = errors.New("no retained publication proposal matches the reviewed confirmation")
 	ErrPublicationProposalConsumed   = errors.New("the retained publication proposal was already consumed; re-run dottie push without --confirm to review a new proposal")
 	ErrPublicationProposalStale      = errors.New("the publication proposal is stale; state changed since review, re-run dottie push")
-	ErrPublicationProposalActive     = errors.New("a publication attempt is already active; re-run dottie push --discard to abandon it before preparing again")
+	ErrPublicationProposalActive     = errors.New("a publication attempt is already active past submission and is unresolved; resolve it before preparing again")
 	ErrPublicationProposalUnresolved = errors.New("the publication attempt passed submission and has an unresolved outcome; there is no abandonment and no retry; resolve it through the publication store readback")
 )
 
@@ -704,6 +704,7 @@ func (coordinator *Coordinator) ConfirmPublicationPush(ctx context.Context, requ
 	}
 	result, err := coordinator.PublishMaterial(ctx, preparation.Proposal, confirmation)
 	if err != nil {
+		coordinator.cleanStrandedPublication(ctx, request, preparation.Proposal.PublicationID)
 		return result, err
 	}
 	if err := request.Records.Delete(ctx, preparation.Proposal.PublicationID); err != nil {
@@ -745,6 +746,25 @@ func (coordinator *Coordinator) AbandonPublicationPush(ctx context.Context, requ
 		return attempt, err
 	}
 	return attempt, request.Records.Delete(ctx, request.PublicationID)
+}
+
+func (coordinator *Coordinator) cleanStrandedPublication(ctx context.Context, request PublicationPushRequest, publicationID [16]byte) {
+	active, present, activeErr := request.Store.ActiveAttempt(ctx)
+	if activeErr != nil || !present || active.ID != publicationID {
+		return
+	}
+	if active.Lifecycle != publicationstate.AttemptPrepared && active.Lifecycle != publicationstate.AttemptUploadStarted {
+		return
+	}
+	proposal, abandonErr := request.Store.PrepareAbandon(ctx, publicationID, nil)
+	if abandonErr != nil {
+		return
+	}
+	if _, abandonErr := request.Store.AbandonAttempt(ctx, publicationID, proposal.StateToken, nil, proposal.Confirmation); abandonErr != nil {
+		return
+	}
+	_ = request.Records.Consume(ctx, publicationID)
+	_ = request.Records.Delete(ctx, publicationID)
 }
 
 func (coordinator *Coordinator) preparePublicationPushNoOp(ctx context.Context, request PublicationPushRequest, preparation PublicationPushPreparation) (PublicationPushPreparation, error) {

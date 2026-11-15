@@ -76,7 +76,6 @@ func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
 			&urfave.StringFlag{Name: "handle", Usage: "signed-in account handle", OnlyOnce: true},
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier review", OnlyOnce: true},
-			&urfave.BoolFlag{Name: "discard", Usage: "abandon the retained proposal before submission", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runPushCommand(ctx, command, sessions, sources)
@@ -140,16 +139,13 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if err != nil {
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	}
-	retained, err := selectPublicationProposal(records, ports.Binding, command.IsSet("confirm"), confirmation, command.Bool("discard"))
+	retained, err := selectPublicationProposal(records, ports.Binding, command.IsSet("confirm"), confirmation)
 	if err != nil {
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	}
 	publicationID := [16]byte{}
 	if retained != nil {
 		publicationID = retained.PublicationID
-	}
-	if command.Bool("discard") {
-		return runPushDiscard(ctx, command, ports, publicationID)
 	}
 	if !command.IsSet("confirm") && retained == nil {
 		if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
@@ -201,35 +197,7 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	return pushExit(status)
 }
 
-func runPushDiscard(ctx context.Context, command *urfave.Command, ports publicationPushSources, publicationID [16]byte) error {
-	if publicationID == ([16]byte{}) {
-		return urfave.Exit("push refused: no retained publication proposal is available to discard", 3)
-	}
-	attempt, err := ports.Coordinator.AbandonPublicationPush(ctx, service.PublicationPushRequest{
-		Store: ports.Store, Records: ports.Records, Binding: ports.Binding, PublicationID: publicationID,
-	})
-	if err != nil {
-		if errors.Is(err, service.ErrPublicationProposalUnresolved) {
-			if writeErr := writeCommandOutput(command, "push: unavailable\n"); writeErr != nil {
-				return writeErr
-			}
-			return urfave.Exit("push is partial or indeterminate: the attempt passed submission and is unresolved; there is no abandonment and no retry", 4)
-		}
-		return urfave.Exit("push refused: the retained proposal cannot be discarded", 3)
-	}
-	var output strings.Builder
-	output.WriteString("push: discarded\n")
-	if attempt.ID != ([16]byte{}) {
-		fmt.Fprintf(&output, "attempt: abandoned lifecycle=%s outcome=%s\n", escapeField(string(attempt.Lifecycle)), escapeField(string(attempt.Outcome)))
-	} else {
-		output.WriteString("attempt: none was created\n")
-	}
-	output.WriteString("ownership, active pointer, pending genesis and reservations released\n")
-	output.WriteString("payload files are not unlinked and published history is not rewritten\n")
-	return writeCommandOutput(command, output.String())
-}
-
-func selectPublicationProposal(records []service.PublicationProposalRecord, binding publicationstate.Binding, confirmed bool, confirmation [32]byte, discard bool) (*service.PublicationProposalRecord, error) {
+func selectPublicationProposal(records []service.PublicationProposalRecord, binding publicationstate.Binding, confirmed bool, confirmation [32]byte) (*service.PublicationProposalRecord, error) {
 	if confirmed {
 		var retained *service.PublicationProposalRecord
 		matches := 0
@@ -238,7 +206,7 @@ func selectPublicationProposal(records []service.PublicationProposalRecord, bind
 			if record.Binding != binding {
 				continue
 			}
-			if record.Consumed && !discard {
+			if record.Consumed {
 				return nil, service.ErrPublicationProposalConsumed
 			}
 			matches++
@@ -257,7 +225,7 @@ func selectPublicationProposal(records []service.PublicationProposalRecord, bind
 		if record.Binding != binding {
 			continue
 		}
-		if record.Consumed && !discard {
+		if record.Consumed {
 			continue
 		}
 		candidates = append(candidates, record)

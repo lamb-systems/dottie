@@ -291,7 +291,7 @@ func TestPushCoordinatorErrorsMapToDistinctOutcomes(t *testing.T) {
 	}
 }
 
-func TestSyncRefusesWithTheC3NamingAndNeverReachesTheV1Factory(t *testing.T) {
+func TestSyncRefusesWithTheD11NamingAndNeverReachesTheV1Factory(t *testing.T) {
 	calls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
@@ -299,7 +299,8 @@ func TestSyncRefusesWithTheC3NamingAndNeverReachesTheV1Factory(t *testing.T) {
 	code = runOrchestrationForTest(command, &code, "sync", "--did", "did:plc:example")
 	require.Equal(t, 3, code)
 	assert.Zero(t, calls, "sync reached the v1 orchestration factory")
-	assert.Contains(t, stderr.String(), "C3")
+	assert.Contains(t, stderr.String(), "D11")
+	assert.NotContains(t, stderr.String(), "C3")
 	assert.Empty(t, stdout.String())
 
 	var refusal *deferredPublicationRefusal
@@ -310,11 +311,11 @@ func TestSyncRefusesWithTheC3NamingAndNeverReachesTheV1Factory(t *testing.T) {
 	assert.Equal(t, 3, refusal.ExitCode())
 }
 
-func TestPullIsInterceptedInRootDispatchWithTheC3Refusal(t *testing.T) {
+func TestPullIsRoutedToTheReadOnlyInspectionBeforeAnyAccountWork(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"pull", "--did", "did:plc:example"}, &stdout, &stderr)
-	require.Equal(t, 3, code)
-	assert.Contains(t, stderr.String(), "C3")
+	code := Run([]string{"pull"}, &stdout, &stderr)
+	require.Equal(t, 2, code)
+	assert.Contains(t, stderr.String(), "pull requires --did DID")
 	assert.NotContains(t, stderr.String(), "keyring")
 	assert.NotContains(t, stderr.String(), "account session")
 	assert.Empty(t, stdout.String())
@@ -712,7 +713,7 @@ func TestRootHelpIncludesOrchestrationCommandsAndPolicies(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"help"}, &stdout, &stderr)
 	require.Equal(t, 0, code)
-	for _, text := range []string{"dottie push", "dottie sync", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "--confirm HEX", "deferred to C3", "chmod 600"} {
+	for _, text := range []string{"dottie push", "dottie pull", "dottie sync", "devices list", "devices enroll", "devices revoke", "account import-bundle", "exit 4", "--confirm HEX", "D11", "chmod 600"} {
 		assert.Contains(t, stdout.String(), text)
 	}
 	assert.Empty(t, stderr.String())

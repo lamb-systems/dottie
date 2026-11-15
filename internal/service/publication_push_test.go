@@ -243,7 +243,7 @@ func TestPreparePublicationPushSurfacesAnActiveAttemptAndRefusesAbandonmentPastS
 	assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, active.Lifecycle, "the unresolved attempt was abandoned")
 }
 
-func TestAbandonPublicationPushReleasesAPreSubmissionAttempt(t *testing.T) {
+func TestConfirmPublicationPushCleansUpAPreSubmissionFailure(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
@@ -251,22 +251,14 @@ func TestAbandonPublicationPushReleasesAPreSubmissionAttempt(t *testing.T) {
 	fixture.transport.setPrepareError(errMaterialTestBatchShape)
 	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
 	require.Error(t, err)
-	active, has, activeErr := fixture.store.ActiveAttempt(ctx)
-	require.NoError(t, activeErr)
-	require.True(t, has)
-	require.Equal(t, publicationstate.AttemptUploadStarted, active.Lifecycle)
 
-	abandoned, err := fixture.coordinator.AbandonPublicationPush(ctx, fixture.request(fixture.publicationID, nil))
-	require.NoError(t, err)
-	assert.Equal(t, publicationstate.AttemptRetiredAbandoned, abandoned.Lifecycle)
-	assert.Equal(t, publicationstate.OutcomeNotSubmitted, abandoned.Outcome)
-	_, has, activeErr = fixture.store.ActiveAttempt(ctx)
+	_, has, activeErr := fixture.store.ActiveAttempt(ctx)
 	require.NoError(t, activeErr)
-	assert.False(t, has, "abandonment released the active attempt pointer")
+	assert.False(t, has, "a pre-submission failure left a stranded active attempt")
 	_, found := fixture.records.has(fixture.publicationID)
-	assert.False(t, found, "abandonment left the retained record behind")
+	assert.False(t, found, "a pre-submission failure left the retained record behind")
+	assert.Equal(t, 0, fixture.transport.sendCount())
 }
-
 func TestAbandonPublicationPushWithoutAnAttemptOnlyConsumesTheRecord(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)

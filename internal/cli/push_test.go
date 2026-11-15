@@ -529,7 +529,7 @@ func TestPushRefusesAConfirmationWhenNoProposalWasRetained(t *testing.T) {
 	assert.Empty(t, records, "a confirmation-only invocation issued a proposal")
 }
 
-func TestPushSurfacesAnActiveAttemptWithDiscardGuidance(t *testing.T) {
+func TestPushClearsAStrandedPreSubmissionAttemptWithoutAFlag(t *testing.T) {
 	fixture := newPublicationPushTestFixture(t)
 	var stdout, stderr bytes.Buffer
 	code := 0
@@ -553,11 +553,12 @@ func TestPushSurfacesAnActiveAttemptWithDiscardGuidance(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	blocked := newPushCommand(&stdout, &stderr, &code, sessions, sources)
-	code = runPushForTest(blocked, &code, "push", "--did", fixture.binding.AccountDID)
+	again := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(again, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
-	assert.Contains(t, stderr.String(), "already active")
-	assert.Contains(t, stderr.String(), "--discard")
+	assert.Contains(t, stdout.String(), "review required")
+	assert.NotContains(t, stderr.String(), "already active")
+	assert.NotContains(t, stderr.String(), "--discard")
 }
 
 func TestPushRefusesAConsumedRecordBeforeConfirmation(t *testing.T) {
@@ -633,70 +634,6 @@ func TestPushRequiresTheDIDSelector(t *testing.T) {
 		require.Equal(t, 2, code, "args %v", args)
 		assert.Contains(t, stderr.String(), "usage:")
 	}
-}
-
-func TestPushDiscardAbandonsAPreSubmissionAttemptAndSaysWhatItKeeps(t *testing.T) {
-	fixture := newPublicationPushTestFixture(t)
-	var stdout, stderr bytes.Buffer
-	code := 0
-	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
-	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
-		return fixture.sources(), nil
-	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
-	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
-	require.Equal(t, 3, code)
-	confirmation := confirmationFromOutput(t, stdout.String())
-	fixture.transport.prepareErr = errors.New("synthetic transport refused write preparation")
-	stdout.Reset()
-	stderr.Reset()
-	code = 0
-	failed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
-	code = runPushForTest(failed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
-	require.Equal(t, 4, code)
-	active, has, err := fixture.position.ActiveAttempt(context.Background())
-	require.NoError(t, err)
-	require.True(t, has)
-	require.Equal(t, publicationstate.AttemptUploadStarted, active.Lifecycle)
-	retained, err := fixture.records.List(context.Background())
-	require.NoError(t, err)
-	require.Len(t, retained, 1)
-	assert.True(t, retained[0].Consumed, "the record was not consumed before the publication boundary")
-
-	fixture.transport.prepareErr = nil
-	stdout.Reset()
-	stderr.Reset()
-	code = 0
-	discarded := newPushCommand(&stdout, &stderr, &code, sessions, sources)
-	code = runPushForTest(discarded, &code, "push", "--did", fixture.binding.AccountDID, "--discard")
-	require.Equal(t, 0, code)
-	assert.Contains(t, stdout.String(), "push: discarded")
-	assert.Contains(t, stdout.String(), "abandoned")
-	assert.Contains(t, stdout.String(), "payload files are not unlinked")
-	assert.Contains(t, stdout.String(), "history is not rewritten")
-	_, has, err = fixture.position.ActiveAttempt(context.Background())
-	require.NoError(t, err)
-	assert.False(t, has)
-	records, err := fixture.records.List(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, records)
-}
-
-func TestPushDiscardRefusesWhenNothingWasPlanned(t *testing.T) {
-	fixture := newPublicationPushTestFixture(t)
-	var stdout, stderr bytes.Buffer
-	code := 0
-	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
-	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
-		return fixture.sources(), nil
-	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
-	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID, "--discard")
-	require.Equal(t, 3, code)
-	assert.Contains(t, stderr.String(), "no retained publication proposal")
-	_, has, err := fixture.position.ActiveAttempt(context.Background())
-	require.NoError(t, err)
-	assert.False(t, has, "a discard created an attempt")
 }
 
 func TestPushNoOpAfterTheSameSnapshotIsAccepted(t *testing.T) {

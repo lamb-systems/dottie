@@ -2,7 +2,7 @@
 
 ## Manual coordinator workflows
 
-`dottie status` is local-only. `dottie pull` is deferred to C3: root dispatch refuses it with a typed message naming C3, contacts no provider and reads nothing. The legacy v1 read path that this command used to describe is retained only for commands that still require it and is not reachable through `pull`. Without a vault override, the command requires exactly one local `(vault, device)` selection; otherwise it refuses and instructs the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
+`dottie status` is local-only. `dottie pull` is a read-only inspection of the v2 publication position, described with the push and sync commands below; it is not the legacy read path and never applies, reconciles or establishes a base. Without a vault override, the manual read, preview, restore and recovery commands require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
 
 `dottie preview --target ID ...` prints names, action/reason, sizes and a candidate digest, never file contents or GSettings values. The digest covers the verified remote snapshot, local target policy/selection, captured observations, reconciliation decisions and resulting action set. It changes when any same-size candidate content or intended postimage changes. `dottie restore --target ID [--confirm DIGEST] ...` reads and recomputes the candidate before mutation. `backup-only` refuses; `review` requires a matching `--confirm`; `auto-apply` still re-verifies. Apply is limited to current/verified-descendant checkpoints, prepared roots and journaled syncengine operations. Pending journals are recovered before apply. A failed operation reports the applied prefix, failed item and untouched suffix. `dottie recover` runs journal recovery without a remote session.
 
@@ -43,7 +43,7 @@ and this command never exits 4.
 
 ## Push, sync, devices and onboarding
 
-`dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]` publishes the reconciled
+`dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]` publishes the reconciled
 snapshot of every configured target through the v2 publication profile. It is a two-invocation command.
 The first invocation acquires the stored account session for `--did`, validates that the grant covers the
 v2 publication collections before any discovery or provider contact, composes exactly one candidate from
@@ -65,17 +65,10 @@ The service owns the retained proposal at `$XDG_STATE_HOME/dottie/publication-st
 it is written with mode 0600, it is marked consumed before the first durable publication write, and it is
 deleted only after the attempt reaches a terminal state. The command reads it and never rewrites it. A
 consumed record refuses `--confirm` with the instruction to re-run `dottie push` without `--confirm`; an
-already active attempt refuses with `--discard` guidance; a proposal whose planned attempt identity is
+attempt that has not passed submission is abandoned automatically during the failed run, so the next run
+prepares cleanly without an extra flag; a proposal whose planned attempt identity is
 already retired refuses as stale and marks the record consumed; and a creation that reports
 `commit_unknown` keeps the record and exits 4 instead of inferring absence.
-
-`dottie push --did DID --discard` abandons a retained attempt that has not passed submission. It releases
-the attempt's ownership, active pointer, pending genesis and reservation rows, marks the record consumed
-and deletes it, and it says so: charged payload files are not unlinked and published history is not
-rewritten. Without a planned attempt it only discards the retained record. An attempt that already passed
-submission is unresolved: `--discard` refuses with exit 4, there is no abandonment and no retry, and the
-operator resolves the outcome through the publication store readback path. `push` requires `--did`
-because a handle would have to be resolved through discovery before the local scope check.
 
 Exit codes: 0 committed or no-op, 2 usage (missing or invalid flags, malformed confirmation), 3 refusal
 (session or scope, unusable or consumed or foreign or stale proposal, config drift before submission,
@@ -86,11 +79,25 @@ A queued or indeterminate publication is never reported as success. The command 
 provisioned v2 position store; an absent store refuses with exit 3 and no substitute setup path is
 offered, because the legacy bootstrap creates v1 material that the v2 profile rejects.
 
-`dottie sync` refuses. The reconciled pull-then-push path is deferred to C3 and the code charged with it,
-so `sync` prints a typed refusal naming C3, contacts no provider and never reaches the legacy
-orchestration. `dottie pull` is intercepted in root dispatch with the same C3 refusal, so downloads are
-inspected with `preview` and applied with `restore`. `restore`, `preview`, `status`, `history`, `prune`,
-`recover`, the export/import commands and the device commands keep their existing paths.
+`dottie sync` refuses. The reconciled pull-then-push path needs a crash-safe v2 apply journal, which is the
+open owner decision D11; `sync` prints a typed refusal naming D11, contacts no provider and never reaches the
+legacy orchestration. Downloads are reviewed with `preview` and applied with `restore`.
+
+`dottie pull --did DID --vault HEX` is a read-only inspection of the v2 publication position. It acquires the
+stored account session and validates the publication scope before any discovery or provider contact, takes the
+vault from `--vault` instead of resolving a v1 selection, refuses `--handle` for the same reason `push` does, and
+compares the provider's validated view with the locally recorded accepted floor. It prints exactly one line:
+`pull: matches`; `pull: absent` when the provider holds no v2 records; `pull: diverges (record_cid)` or
+`pull: diverges (payload_size)`; or `pull: unreadable (reason)` with the typed reason (`position_absent`,
+`floor_absent`, `binding`, `locked`, `io`, `schema`, `upgrade_required`, `corrupt`, `record` or the reader's view
+reason). The comparison reads the position through the authenticated `PublicationReader.ReadView` and the local
+floor through the immutable `publicationstate.Inspect`: it never opens the position store, never takes its
+lifetime lock, never fetches the payload blob, applies and reconciles nothing, establishes no base and writes no
+file, row or WAL. Divergence is a finding, not a failure, so a completed comparison exits 0; exit 2 is usage,
+exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, no accepted floor,
+unreadable or invalid position, invalid provider view) and exit 4 is an indeterminate provider read. Output never
+contains the vault, account DID, absolute paths, tokens or payload bytes. `restore`, `preview`, `status`,
+`history`, `prune`, `recover`, the export/import commands and the device commands keep their existing paths.
 
 `dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]` uses a verified read and lists device ID, role, current epoch, revoked status and a SHA-256 fingerprint of the public recipient key when present. It does not print keys, secrets or absolute paths.
 
