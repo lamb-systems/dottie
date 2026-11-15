@@ -651,8 +651,9 @@ vault authorization and decryption. `ErrRevisionMoving`, `ErrUntrustedCar` and
 `ErrUnprovenMembership` remain the repository-proof failures. Tests use synthetic signed fixtures
 and a fake transport only; they make no live or network requests.
 
-The Linux `gsettings` two-machine gate in `tests/local/manual_sync_linux_test.go` drives one shared
-`atprototest.MemoryPDS` through real genesis, ordinary publication, enrollment and revocation
-compositions, with the real `VaultReader` reading each signed revision. It proves coordinator-level
-two-machine behavior only; it is not a provider-compatibility result and does not execute the CLI
-binary sequence. Full CLI-binary acceptance remains deferred to a later CLI acceptance.
+The Linux `gsettings` two-machine gate that drove one shared `atprototest.MemoryPDS` through real
+genesis, ordinary publication, enrollment and revocation compositions was deleted with the retired v1
+read/preview/restore command surface. `atprototest.MemoryPDS` and the real `VaultReader` are still
+exercised by the single-machine coordinator and CLI suites; no two-machine run covers them any more, and
+reinstating one on the v2 apply path is an open follow-up. Full CLI-binary acceptance remains deferred to
+a later CLI acceptance.

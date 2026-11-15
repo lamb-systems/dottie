@@ -1,5 +1,19 @@
 # Three-way reconciliation
 
+## Reachability
+
+No production path in this tree reaches `Apply`, `ApplyRequest`, `Postimage`, `SettingPostimage`,
+`ModePolicy`, `PartialApplyError` or `RollbackApplied`. `dottie preview` and `dottie restore` were the
+last commands that composed them, and both were retired: `syncengine.Apply` is unreachable dead code
+retained only because tests still drive it — `internal/syncengine/apply_test.go`,
+`internal/syncengine/rollback_test.go`, `tests/local/restore_gate_test.go`,
+`tests/local/gnome_restore_linux_test.go` and the `tests/local/publication_reconcile_*` suites. The
+retained apply path is `service.ApplyPublication` over `publicationstate`, which consumes only
+`Reconcile`, `BuildPreview` and `PreviewEntry` from this package. `go test ./internal/cli -run
+TestRemovedV1ApplyEngineHasNoProductionReference` fails if any non-test file under `cmd/`,
+`internal/cli` or `internal/service` references `syncengine.Apply` again. Retiring this engine without
+losing those assertions is the next slice's work.
+
 `Reconcile` is a pure, deterministic decision function. It takes an explicit `BaseView`, a
 `LocalView`, remote entries, and caller-supplied validated target bindings. It performs no I/O,
 uses no clock or randomness, and starts no goroutines. The result is a preview/decision plan. The

@@ -68,19 +68,6 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 		Untracked: []model.EntryKey{fileEntry.Identity(), settingEntry.Identity()},
 	}
 
-	candidate := service.Candidate{
-		Digest: "candidate-digest", TargetID: targetID,
-		Preview: syncengine.Preview{Complete: true, Targets: []syncengine.PreviewTarget{{ID: targetID, Entries: []syncengine.PreviewEntry{
-			{Key: fileEntry.Identity(), Action: syncengine.PreviewAction("download"), Reason: syncengine.PreviewReasonEqual, Size: int64(len(fileContent)), Detail: canaryPayload},
-			{Key: settingEntry.Identity(), Action: syncengine.PreviewAction("download"), Reason: syncengine.PreviewReasonEqual, Size: int64(len(settingValue)), Detail: canaryPayload},
-		}}}},
-	}
-	restore := service.RestoreReport{
-		CandidateDigest: "candidate-digest",
-		Items:           []service.RestoreItem{{Key: fileEntry.Identity(), Status: "file-applied"}, {Key: settingEntry.Identity(), Status: "setting-applied"}},
-		Applied:         []syncengine.JournalResult{{FilePath: relativeFilePath, Reason: canaryPayload}},
-	}
-
 	retentionReferences := []string{
 		filepath.Join(stateRoot, "payloads", "synthetic-payload-reference"),
 		filepath.Join(stateRoot, "backups", "synthetic-backup-reference"),
@@ -109,7 +96,6 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 	table := []struct {
 		name                 string
 		output               string
-		relativeLocators     []string
 		requireTargetID      bool
 		targetIDPolicy       string
 		requireDeviceID      bool
@@ -125,8 +111,6 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 		{name: "revoke-approval-transcript", output: renderRevokeApprovalTranscript(revokeTranscript), targetIDPolicy: "not-rendered", requireDeviceID: true, checkAbsoluteTokens: true},
 		{name: "history", output: renderHistory(history), targetIDPolicy: "visible-local-target-summary", requireTargetID: true, checkAbsoluteTokens: true},
 		{name: "export-report", output: renderExportReport(exportReport), targetIDPolicy: "not-rendered", checkAbsoluteTokens: true},
-		{name: "candidate-consent", output: renderCandidate(candidate), relativeLocators: []string{relativeFilePath, settingLocator}, requireTargetID: true, targetIDPolicy: "each-preview-target"},
-		{name: "restore-consent", output: renderRestore(restore), relativeLocators: []string{relativeFilePath, settingLocator}, targetIDPolicy: "single-target-fixed-by-invocation", requireItemStatus: []string{"file-applied", "setting-applied"}},
 		{name: "pull", output: renderPull(readOutcome), targetIDPolicy: "not-rendered", checkAbsoluteTokens: true},
 		{name: "manual-status", output: renderManualStatus(manualStatus), targetIDPolicy: "visible-local-target-summary", requireTargetID: true, checkAbsoluteTokens: true},
 		{name: "recovery", output: renderRecovery(recovery), targetIDPolicy: "not-rendered", checkAbsoluteTokens: true},
@@ -147,14 +131,8 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 			for _, status := range surface.requireItemStatus {
 				assert.Contains(t, surface.output, status)
 			}
-			if len(surface.relativeLocators) != 0 {
-				for _, locator := range surface.relativeLocators {
-					assert.Contains(t, strings.Fields(surface.output), locator, "consent surface %s did not show the exact relative locator", surface.name)
-				}
-			} else {
-				assert.NotContains(t, surface.output, relativeFilePath, "routine renderer %s exposed a relative entry path", surface.name)
-				assert.NotContains(t, surface.output, settingLocator, "routine renderer %s exposed a setting locator", surface.name)
-			}
+			assert.NotContains(t, surface.output, relativeFilePath, "renderer %s exposed a relative entry path", surface.name)
+			assert.NotContains(t, surface.output, settingLocator, "renderer %s exposed a setting locator", surface.name)
 			if surface.checkAbsoluteTokens {
 				allowedAbsoluteTokens := make(map[string]bool, len(surface.allowedStateRefs))
 				for _, reference := range surface.allowedStateRefs {

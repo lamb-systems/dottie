@@ -27,10 +27,8 @@ test fails if any unlisted key is added.
 
 Dottie has no log facility; the CLI/coordinator reports routine output.
 Routine status, read, push, history, export, recovery, device and administrative output omits relative
-entry locators. Candidate preview intentionally shows each target id and relative file path or setting
-schema/path/key so a user can give informed per-file consent. Restore output shows each relative entry
-locator and status; it omits target id because `restore --target ID` is single-target and the invocation
-already fixes that target. Both consent surfaces omit file content and setting values. Retention-prune
+entry locators. The retired v1 candidate/restore consent surfaces, which showed per-file relative paths,
+no longer exist: `pull` prints counts and findings, not entry locators. Retention-prune
 output may show local payload/backup references; any absolute reference is confined to the state
 directory. All these renderers must exclude file contents, setting values, kit bytes, private keys,
 session material and absolute home/config/cache/data/temp roots.
@@ -47,26 +45,26 @@ observations do not establish provider compatibility.
 
 ## Archive recovery boundary
 
-Export produces a ciphertext-only archive. `dottie import --archive` and `ImportExportArchive` validate it without decrypting or changing application state. `dottie restore --archive FILE --kit-file FILE --anchor HEX --target ID` uses the ordinary preview, review-mode digest confirmation, journaled apply and rollback path. Its candidate comes only from the archive's kit-signed checkpoint position. It makes no provider call. Positions above that checkpoint are lineage, not permission to restore them; the archive may not be the newest state.
+Export produces a ciphertext-only archive. `dottie import --archive` and `ImportExportArchive` validate it without decrypting or changing application state. Restoring files from an archive was part of the retired v1 apply path (`dottie restore --archive`): a kit-signed checkpoint was never permission to apply anything above it, and no command in this tree now applies archive contents.
 
-The checkpoint signature authenticates that position, not global freshness. The snapshot still requires a compatible surviving device recipient private key; the kit verifies/authorizes the checkpoint but cannot decrypt. The offline source-loss and archive-restore tests use synthetic archives and temporary homes. Archive member SHA-256 digests are a layered integrity check; the tamper test proves refusal of a modified archive rather than isolating that check.
+The checkpoint signature authenticates that position, not global freshness. The snapshot still requires a compatible surviving device recipient private key; the kit verifies/authorizes the checkpoint but cannot decrypt. The offline source-loss archive tests use synthetic archives and temporary homes. Archive member SHA-256 digests are a layered integrity check; the tamper test proves refusal of a modified archive rather than isolating that check.
 
 ## Present and target, stated separately
 
 | Capability | Present | Target |
 | --- | --- | --- |
 | Directory selection and consent | yes, `targets` and preset onboarding | — |
-| Filesystem capture with containment | yes, `status`, `preview`, `pull`, `restore` | — |
+| Filesystem capture with containment | yes, `status`, `pull`, `push`, `sync` | — |
 | Bounded snapshots | yes, encrypted envelopes | — |
 | OAuth account authorization and local session management | yes, `account login`, `status`, `logout`; live providers not tested | live provider validation |
 | Blob lifecycle and fenced publication | yes, `push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
-| Encryption and signatures | yes, wired into publication and restore; live provider not tested | live provider validation |
+| Encryption and signatures | yes, wired into publication; live provider not tested | live provider validation |
 | Device roles, revocation, epochs | yes, public-key `devices enroll`/`revoke` and `account bootstrap`; synthetic transitions only | live provider validation |
-| Recovery kit and checkpoints | yes, `account recovery`/`verify`; restore proven synthetically | live provider validation |
-| Vault export, import and archive restore | yes, `export`, validation-only `import`, and checkpoint-only `restore --archive` | live archive-to-files restore is unrun |
+| Recovery kit and checkpoints | yes, `account recovery`/`verify`; archive restore retired with the v1 apply path | live provider validation |
+| Vault export and import | yes, `export` and validation-only `import`; applying an archive has no command | archive-to-files apply is unimplemented |
 | Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
 | Retention and manual pruning | yes, per-point inventories and `prune --plan|--apply --confirm`; no automatic GC | scheduled maintenance (B09) |
-| GNOME settings capture and apply | selected-key capture, apply and the category matrix, wired to CLI targets; real desktop not validated | real desktop validation (R03) |
+| GNOME settings capture and apply | selected-key capture and the category matrix are wired to CLI targets; settings apply has no production path since the v1 restore command was retired; real desktop not validated | real desktop validation (R03) |
 
 The opt-in GNOME boundary reads only explicitly selected keys and never copies a dconf database
 wholesale. Its library-level settings apply adapter uses the journaled schema/path/key identity, observes only
@@ -85,7 +83,7 @@ follow the existing bounded rollback-material and backup-retention policy; backu
 associated retained journal values. This library boundary does not change account authority or grant remote
 configuration access to local settings.
 
-The CLI exposes target and preset onboarding, `status`, `preview`, `pull`, `push`, `sync`, `restore` (including `restore --archive`),
+The CLI exposes target and preset onboarding, `status`, `pull`, `push`, `sync`,
 `recover`, `devices`, `history`, `export`, validation-only `import`, and confirmed `prune`. Account commands
 manage OAuth authorization and local device keys; they do not capture target data by themselves. All
 application-data and retention mutations route through the coordinator and its journal; the CLI does not edit
@@ -335,11 +333,11 @@ history for lineage rather than on ciphertext kept in evidence.
 
 ## Freshness-unverified inspection policy
 
-Authenticated content and global freshness are distinct. If freshness/currency cannot be verified against a local checkpoint, restore refuses with `ErrFreshnessUnverified`; no risk flag or consent bypass grants apply authority. The operator may use the existing consent path to inspect the candidate or continue an export/verification workflow, but that path does not mutate target data, advance the checkpoint or create an apply journal. Invalid signatures, wrong keys and failed policy checks remain unconditional refusals.
+Authenticated content and global freshness are distinct. If freshness/currency cannot be verified against a local checkpoint, an apply refuses in the publication-apply path; no risk flag or consent bypass grants apply authority. The operator may use the existing consent path to inspect a position or continue an export/verification workflow, but that path does not mutate target data, advance the checkpoint or create an apply journal. Invalid signatures, wrong keys and failed policy checks remain unconditional refusals.
 
-## First restore
+## First use
 
-A device restoring onto a machine with no prior state has no local checkpoint, so the supplied kit-signed checkpoint is its trust anchor and state below it is rejected. Archive restore is restricted to that signed checkpoint position; it does not contact a provider or prove that no newer state exists. Applying archived plaintext still requires a compatible recipient private key held by the selected device. A recovery kit without that key authorizes but cannot decrypt.
+A device with no prior local state has no local checkpoint, so a supplied kit-signed checkpoint is its trust anchor and state below it is rejected. Applying archived plaintext would still require a compatible recipient private key held by the selected device, and the retired archive-restore path never contacted a provider or proved that no newer state existed. A recovery kit without a recipient key authorizes but cannot decrypt.
 
 Regaining authorization is not regaining data. A kit cannot retrieve bytes the provider no longer holds. All-devices-lost without an independent complete export is data loss; an archive also requires a compatible surviving recipient private key. A repository CAR alone is not a complete blob backup.
 

@@ -24,14 +24,12 @@ Usage:
   dottie prune --plan|--apply [--confirm] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie export --out FILE --kit-file FILE (--did DID | --handle HANDLE) [--vault HEX] [--anchor HEX] [--overwrite]
   dottie import --archive FILE --kit-file FILE --anchor HEX --vault HEX
-  dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX] [--discard]
-  dottie pull --did DID --vault HEX
+  dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]
+  dottie pull --did DID [--vault HEX] [--confirm HEX]
   dottie sync --did DID [--vault HEX] [--confirm HEX]
   dottie devices list (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie devices enroll --request FILE --kit-file FILE --bundle-out FILE [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
   dottie devices revoke --device-id ID --kit-file FILE [--confirm HEX] [--bundle-out FILE] [--vault HEX] [--root-device-id ID] (--did DID | --handle HANDLE) [--overwrite]
-  dottie preview --target ID (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
-  dottie restore --target ID [--confirm DIGEST] (--did DID | --handle HANDLE) [--vault HEX] [--device-id ID]
   dottie recover
   dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
   dottie account status (--did DID | --handle HANDLE) [--refresh]
@@ -43,7 +41,7 @@ Usage:
 
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
-with --confirm HEX to publish exactly that reviewed proposal. --discard abandons a retained pre-submission attempt.
+with --confirm HEX to publish exactly that reviewed proposal; a pre-submission failure abandons its own attempt automatically.
 Pull authenticates the session and the v2 publication scope before any discovery, compares the provider's validated
 position with the locally recorded accepted floor, prints one finding, and optionally applies one reviewed plan.
 Sync is the reconciled path: it prints the pull apply plan, prepares the push half from the post-pull state, and
@@ -62,12 +60,13 @@ recovery kit in a regular, user-only-readable --kit-file (use chmod 600); the ki
 requires a second invocation with the fingerprint-bound --confirm printed by its verified-read transcript. Bundle
 outputs are public, refuse overwrite unless --overwrite is supplied, and do not contain the recovery kit. Revocation
 cannot erase historical ciphertext. Import requires an independently supplied --anchor and the first pull
-re-authenticates the imported chain. Restore remains explicit.
+re-authenticates the imported chain.
 
-Manual read, preview, restore and recovery operations are coordinated with local state and journaled apply.
-They require a locally recorded vault selection and trust checkpoint; remote apply is refused unless the
-checkpoint is current or a verified descendant. Review-mode restore requires the candidate digest printed by
-preview. Account bootstrap generates a fresh recovery kit and vault on every invocation; it is not idempotent.
+Local status, history, recovery and archive validation operations are coordinated with local state. They require a
+locally recorded vault selection and trust checkpoint; remote reads are refused unless the checkpoint is current or
+a verified descendant. Recovery resolves interrupted journal entries and is the only command in this group that
+writes to target files.
+Account bootstrap generates a fresh recovery kit and vault on every invocation; it is not idempotent.
 Explicit --vault selection is required when more than one local vault is configured. Remote reads do not establish
 global freshness; unverifiable state is inspection-only.
 
@@ -89,7 +88,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runPosition(args[1:], stdout, stderr, os.Getenv)
 	}
 	switch args[0] {
-	case "status", "history", "preview", "restore", "recover", "export", "import":
+	case "status", "history", "recover", "export", "import":
 		return runManual(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
 	case "pull":
 		return runPull(args, stdout, stderr, func() (accountKeyring, error) { return platform.NewKeyring() }, os.Getenv)
@@ -109,7 +108,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		})
 	}
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "dottie: expected one command; run 'dottie help'")
+		switch args[0] {
+		case "help", "--help", "-h", "version", "--version":
+			fmt.Fprintln(stderr, "dottie: expected one command; run 'dottie help'")
+		default:
+			fmt.Fprintf(stderr, "dottie: unsupported command %q; run 'dottie help'\n", args[0])
+		}
 		return 2
 	}
 

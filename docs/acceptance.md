@@ -6,6 +6,15 @@ limits below. Real-data use of this build is permitted under those limits. Accep
 remove the limits. A future change that invalidates a row must not assume
 this acceptance still applies.
 
+> **Retirement note, added 2026-11-15.** `dottie preview` and `dottie restore` were removed with the
+> v1 read and apply authority, so the rows below that name `TestRestoreMilestoneOfflineTwoHomeAndRecovery`,
+> `TestLiveRestoreMilestoneTwoHome`, `TestRestoreMilestoneGNOMEKeyfileTwoHome` or
+> `TestRestoreFromArchiveAppliesOnlyKitCheckpointThroughSharedApply` record the evidence behind the
+> 2026-11-05 decision, not coverage of the current tree: those tests no longer exist and the live gate is
+> unreproducible. Archive contents can still be validated with `dottie import --archive` but cannot be
+> applied by any command. The decision itself is unchanged; a row whose mechanism is gone must not be read
+> as coverage of this build.
+
 ## Requirement evidence matrix
 
 Live evidence comes from the 2026-11-05 runs against the owner-authorized disposable identity. The P07

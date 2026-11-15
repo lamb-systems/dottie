@@ -24,15 +24,7 @@ var (
 	ErrDeviceKeyMissing                 = errors.New("device keyring item is missing")
 	ErrTrustEvidenceInvalid             = errors.New("local trust evidence is invalid")
 	ErrCheckpointNotCurrent             = errors.New("remote checkpoint is not current or a verified descendant")
-	ErrFreshnessUnverified              = errors.New("freshness is unverifiable; inspection/export-only continuation requires --consent; no data is applied")
-	ErrApplyNotPermitted                = errors.New("local consent does not permit apply")
 	ErrBaseRecordingFailed              = errors.New("applied-base recording failed")
-	ErrCandidateChanged                 = errors.New("restore candidate digest changed")
-	ErrUnknownTarget                    = errors.New("unknown target")
-	ErrCandidateIncomplete              = errors.New("restore candidate is incomplete or contains unresolved items")
-	ErrPendingJournal                   = errors.New("restore is blocked by a pending journal")
-	ErrPendingJournalRecoveryFailed     = errors.New("pending journal recovery failed")
-	ErrPendingJournalRemains            = errors.New("pending journal entries remain after recovery")
 	ErrGNOMEReapproval                  = errors.New("GNOME category approval requires re-approval")
 	ErrUnapprovedEntry                  = errors.New("remote or base entry is not approved by local target policy")
 	ErrAdministrativeRootRequired       = errors.New("administrative operation requires the selected root device")
@@ -186,51 +178,6 @@ type ReadOutcome struct {
 	InspectOnly      bool
 	Untracked        []model.EntryKey
 	Retention        RetentionReport
-}
-
-type Candidate struct {
-	Preview       syncengine.Preview
-	Digest        string
-	Actions       []syncengine.PreviewEntry
-	TargetID      string
-	Freshness     atproto.FreshnessStatus
-	Currency      vault.CheckpointOutcome
-	InspectOnly   bool
-	Untracked     []model.EntryKey
-	Retention     *state.RetentionBinding
-	plan          syncengine.Plan
-	observations  []model.Observation
-	configuration config.Config
-	localEntries  []model.Entry
-	baseEntries   []model.Entry
-	remoteEntries []model.Entry
-	archive       bool
-	positionEpoch uint64
-}
-
-type RestoreReport struct {
-	CandidateDigest       string
-	Source                string
-	PositionEpoch         uint64
-	ProviderContacted     bool
-	ArchiveMayNotBeNewest bool
-	Applied               []syncengine.JournalResult
-	Failed                *syncengine.JournalResult
-	Untouched             []syncengine.PreviewEntry
-	NoActions             bool
-	BaseRecordingFailed   bool
-	Items                 []RestoreItem
-}
-
-type RestoreItem struct {
-	Key    model.EntryKey
-	Status string
-}
-
-type RestoreRequest struct {
-	Selection VaultSelection
-	TargetID  string
-	Confirm   string
 }
 
 type EnrollRequest struct {

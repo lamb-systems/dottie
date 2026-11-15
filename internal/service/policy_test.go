@@ -94,21 +94,3 @@ func TestApprovedSettingsRefusesPendingMatrixDriftAndDigestDrift(t *testing.T) {
 	_, err = approvedSettings(context.Background(), policySettings{}, digestDrift)
 	assert.ErrorIs(t, err, ErrGNOMEReapproval)
 }
-
-func TestCandidateDigestBindsSameSizeVerifiedRemoteContent(t *testing.T) {
-	target := config.Target{ID: "files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "prefs", Kind: model.SelectionDirectory}}
-	portable, err := target.Model()
-	require.NoError(t, err)
-	remote := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: []model.Entry{{
-		TargetID: target.ID, File: &model.FileEntry{Path: "settings.ini", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("aaaa"), Mode: 0o600},
-	}}}
-	preview := syncengine.Preview{Targets: []syncengine.PreviewTarget{{ID: target.ID}}}
-	first, err := candidateDigest(remote, target, config.Review, syncengine.Plan{}, nil, preview)
-	require.NoError(t, err)
-	remote.Entries[0].File.Content = []byte("bbbb")
-	second, err := candidateDigest(remote, target, config.Review, syncengine.Plan{}, nil, preview)
-	require.NoError(t, err)
-	assert.NotEqual(t, first, second)
-	assert.Len(t, first, 64)
-	assert.Len(t, second, 64)
-}

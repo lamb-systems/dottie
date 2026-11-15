@@ -22,23 +22,22 @@ All payloads, homes, credentials and provider state in these cases are synthetic
 
 Offline command and renderer checks cover the output available without a remote account. The
 renderer test checks the per-surface disclosure contract: routine status/read/push/history/export/
-recovery/device/administrative output excludes relative entry locators; candidate preview displays
-target ids and the relative file or setting locator needed for user consent; restore displays each
-relative locator and status but omits target id because `restore --target ID` is single-target. Neither
-consent surface prints file content or setting values. Retention output may display local payload or
-backup references, with absolute references confined to the state directory.
+recovery/device/administrative output excludes relative entry locators, and the retired v1 candidate
+and restore consent renderers are gone with their commands. No retained renderer prints file content or
+setting values. Retention output may display local payload or backup references, with absolute
+references confined to the state directory.
 
 ## Archive recovery boundary
 
 `TestArchiveRecoveryAfterSourceLoss` exports through the service coordinator to a fixture cache path,
-then removes the synthetic source repository records and all source blobs. It checks that online read
-and restore refuse without changing local application state, the validated archive imports with the
+then removes the synthetic source repository records and all source blobs. It checks that the online
+read refuses without changing local application state, the validated archive imports with the
 independently supplied vault/anchor/kit, and the parsed archive alone supplies the current policy,
 control, certificates and envelope used to recover the exact published plaintext with the retained
 recipient private key in a fresh temporary home. It also checks wrong-kit, wrong-anchor, missing-blob
 (no archive file written) and tampered-member refusals.
 
-`TestArchiveRecoveryAfterSourceLoss` is archive-to-plaintext recovery, not destination restoration. A retained recipient key is required; kit-only decryption is impossible by design. `internal/service/archive_restore_test.go` test `TestRestoreFromArchiveAppliesOnlyKitCheckpointThroughSharedApply` proves checkpoint-only selection and no provider calls; `tests/integration/restore_milestone_test.go` test `TestRestoreMilestoneOfflineTwoHomeAndRecovery` applies an archive into a fresh home after deleting the synthetic source repository and blobs, then rolls back while preserving a newer edit. Archive validation authenticates the archive but does not establish global freshness.
+`TestArchiveRecoveryAfterSourceLoss` is archive-to-plaintext recovery, not destination restoration. A retained recipient key is required; kit-only decryption is impossible by design. Applying an archive into a home was the retired v1 restore path; its `TestRestoreFromArchiveAppliesOnlyKitCheckpointThroughSharedApply` and `TestRestoreMilestoneOfflineTwoHomeAndRecovery` cases were deleted with that command, so nothing here applies archive contents to a destination. Archive validation authenticates the archive but does not establish global freshness.
 
 ## Opt-in live gates
 
@@ -77,26 +76,7 @@ A skipped live gate is not provider evidence. Hosted provider logs and server-si
 observable from a client. No real account, provider, desktop session or user dotfiles are used by the
 default suite.
 
-`TestLiveRestoreMilestoneTwoHome` is a separate opt-in live publication-and-restore gate. It requires
-`DOTTIE_LIVE_MILESTONE=1`, an allowlisted disposable identity in `DOTTIE_HANDLE`,
-`DOTTIE_RECOVERY_KIT_FILE` naming a private regular file with no group/world access that decodes to 32
-bytes and authenticates the selected checkpoint, an authorized live account session, an existing local
-vault selection/checkpoint and incumbent root device key in Secret Service, plus a live repository that
-already authenticates as that Dottie vault.
-The test refuses an absent/unreadable remote vault, missing local trust/key material, or a current snapshot
-containing any application entries; it never invokes genesis. It copies only trust metadata into temporary
-state, creates synthetic file and settings targets in a temporary incumbent home, publishes them, enrolls
-a restore-only newcomer, imports the public bundle into a blank temporary home, pulls/previews/restores,
-and verifies exact bytes and setting values. The test transport blocks every write endpoint except the
-intended `repo.uploadBlob` and `repo.applyWrites` calls, asserts exactly one publication and one enrollment
-batch, and audits current head/snapshot/blob linkage plus the fenced write batches. It does not delete any
-records or blobs; the uploaded ciphertext and new repository records remain, including a public enrollment
-for an ephemeral test device whose private key is not retained. The test writes a redacted artifact containing
-only outcome, counts, position epoch, content-match status and standing limits at
-`DOTTIE_LIVE_ARTIFACT_DIR/restore-milestone.json` (or the chosen temporary artifact directory). The kit
-is an authorization input, not a decryption key; same-host kit use is not independent custody. Skipping
-this test is not evidence.
-
-`make test-gnome` also runs `TestRestoreMilestoneGNOMEKeyfileTwoHome` from `tests/local`. That tagged
-twin uses the real keyfile backend, synthetic compiled schemas and temporary homes; it demonstrates the
-checkpoint-backed incumbent/newcomer restore without network access or a desktop profile.
+The opt-in live publication-and-restore milestone gate and its tagged keyfile twin were deleted with the
+retired v1 restore command. Their recorded 2026-11-05 results remain in `docs/acceptance.md` as historical
+evidence; no test in this tree reproduces them, and the deleted two-machine pull-apply gate has no
+replacement yet.

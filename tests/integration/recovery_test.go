@@ -82,8 +82,6 @@ func TestArchiveRecoveryAfterSourceLoss(t *testing.T) {
 	require.NoError(t, err)
 	_, err = fixture.coordinator.Pull(ctx, fixture.selection)
 	require.Error(t, err, "online read must refuse after source records and blobs are destroyed")
-	_, err = fixture.coordinator.Restore(ctx, service.RestoreRequest{Selection: fixture.selection, TargetID: publicationAuditFileTargetID})
-	require.Error(t, err, "online restore must refuse after source records and blobs are destroyed")
 	assert.Equal(t, beforeApplication, fixture.applicationStateDigest())
 	assert.Equal(t, beforeHome, fixture.homeTreeDigest())
 	afterFile, err := os.ReadFile(fixture.filePath)

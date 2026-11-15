@@ -51,6 +51,21 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRemovedPreviewAndRestoreAreUnknownCommands(t *testing.T) {
+	for _, name := range []string{"preview", "restore"} {
+		for _, args := range [][]string{{name}, {name, "--target", "prefs"}, {name, "--did", "did:plc:example", "--target", "prefs"}} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+				code := Run(args, &stdout, &stderr)
+				require.Equal(t, 2, code, "usage-class refusal")
+				assert.Empty(t, stdout.String(), "a retired command must not claim success")
+				assert.Equal(t, fmt.Sprintf("dottie: unsupported command %q; run 'dottie help'\n", name), stderr.String(), "unknown command refusal")
+			})
+		}
+		assert.NotContains(t, help, "dottie "+name+" ", "help must not advertise a retired command: %s", name)
+	}
+}
+
 func TestRunRootHelpAndVersionOutput(t *testing.T) {
 	tests := []struct {
 		name string
