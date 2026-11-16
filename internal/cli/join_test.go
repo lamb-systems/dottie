@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -86,6 +87,8 @@ type joinGate struct {
 	keyring  *joinGateKeyring
 	a        *joinGateMachine
 	b        *joinGateMachine
+
+	vaultReads int
 }
 
 func newJoinGate(t *testing.T) *joinGate {
@@ -310,6 +313,17 @@ func (gate *joinGate) push(t *testing.T, machine *joinGateMachine, args ...strin
 	return code, stdout.String(), stderr.String()
 }
 
+func (gate *joinGate) pullVaults(ctx context.Context, _ *urfave.Command, session pushSession) ([32]byte, error) {
+	gate.vaultReads++
+	head, err := service.ReadPublishedHead(ctx, service.PublicationHeadConfig{
+		DID: joinGateDID, Session: session.Session, Reader: gate.revisionReader(),
+	})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return head.Vault, nil
+}
+
 func (gate *joinGate) pull(t *testing.T, machine *joinGateMachine, args ...string) (int, string, string) {
 	t.Helper()
 	machine.setEnvironment(t)
@@ -318,7 +332,7 @@ func (gate *joinGate) pull(t *testing.T, machine *joinGateMachine, args ...strin
 	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
 		return pushSession{Session: gate.session()}, nil
 	}
-	command := newPullCommand(&stdout, &stderr, &code, sessions, gate.pullRemotes, productionPullApplySourcesFactory(os.Getenv), pushTestDIDs(gate.session().DID), os.Getenv)
+	command := newPullCommand(&stdout, &stderr, &code, sessions, gate.pullRemotes, gate.pullVaults, productionPullApplySourcesFactory(os.Getenv), pushTestDIDs(gate.session().DID), os.Getenv)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "pull"}, args...)); err != nil && code == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -380,4 +394,148 @@ func TestJoinGateBootstrapPushAndNewcomerPull(t *testing.T) {
 	unchanged, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
 	require.NoError(t, err)
 	assert.Equal(t, adopted.Floor, unchanged.Floor, "the second pull moved the adopted floor")
+}
+
+func (gate *joinGate) publish(t *testing.T) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(gate.a.trackedPath(), []byte(joinGateContent), 0o600))
+	code, stdout, stderr := gate.push(t, gate.a, "--did", joinGateDID)
+	require.Equal(t, 3, code, stderr+"\n"+stdout)
+	code, stdout, stderr = gate.push(t, gate.a, "--did", joinGateDID, "--confirm", confirmationFromOutput(t, stdout))
+	require.Equal(t, 0, code, stderr+"\n"+stdout)
+	require.Contains(t, stdout, "push: committed")
+}
+
+func (gate *joinGate) provisionStore(t *testing.T, machine *joinGateMachine, binding publicationstate.Binding) {
+	t.Helper()
+	machine.setEnvironment(t)
+	require.NoError(t, os.MkdirAll(machine.paths.PublicationStateDir(), 0o700))
+	require.NoError(t, os.Chmod(machine.paths.PublicationStateDir(), 0o700))
+	store, err := publicationstate.Open(machine.paths.PublicationStateDir(), binding)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+}
+
+func joinGateForeignVault() [32]byte {
+	return [32]byte{0x91, 0x92, 0x93}
+}
+
+func joinGateForeignVaultHex() string {
+	vault := joinGateForeignVault()
+	return hex.EncodeToString(vault[:])
+}
+
+func TestJoinGateNewcomerPullsWithoutBeingToldTheVault(t *testing.T) {
+	gate := newJoinGate(t)
+	vaultHex := gate.bootstrap(t, gate.a)
+	gate.publish(t)
+	_, statErr := os.Lstat(gate.b.paths.PublicationStateDir())
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the newcomer started with a publication position store")
+
+	code, stdout, stderr := gate.pull(t, gate.b, "--did", joinGateDID)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "vault: "+vaultHex+" (adopted from the published position at self)\n")
+	assert.Contains(t, stdout, "pull: first-use\n")
+	assert.Contains(t, stdout, fmt.Sprintf("apply: write init.lua size=%d\n", len(joinGateContent)))
+	assert.Contains(t, stdout, "pull: plan only; nothing was applied; repeat with --confirm ")
+	assert.Equal(t, 1, gate.vaultReads, "the pull did not resolve the published vault")
+
+	info, err := os.Stat(gate.b.paths.PublicationStateDir())
+	require.NoError(t, err, "the unconfirmed newcomer pull did not provision the position store")
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	stored, err := publicationstate.ReadBinding(gate.b.paths.PublicationStateDir())
+	require.NoError(t, err)
+	assert.Equal(t, joinGateBinding(t, vaultHex), stored, "the adopted binding was not recorded")
+	inspection, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), stored)
+	require.NoError(t, err)
+	assert.False(t, inspection.Present, "the unconfirmed newcomer pull accepted a floor")
+	_, payloadErr := os.Lstat(filepath.Join(gate.b.paths.PublicationStateDir(), "payloads"))
+	assert.ErrorIs(t, payloadErr, os.ErrNotExist, "the unconfirmed newcomer pull retained accepted material")
+	_, statErr = os.Lstat(gate.b.trackedPath())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull applied a target file")
+}
+
+func TestJoinGateNewcomerConfirmsTheFirstUseJoin(t *testing.T) {
+	gate := newJoinGate(t)
+	vaultHex := gate.bootstrap(t, gate.a)
+	gate.publish(t)
+
+	code, stdout, stderr := gate.pull(t, gate.b, "--did", joinGateDID)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "vault: "+vaultHex+" (adopted from the published position at self)\n")
+	token := pullTestConfirmation(t, stdout)
+
+	code, stdout, stderr = gate.pull(t, gate.b, "--did", joinGateDID, "--confirm", token)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "vault: "+vaultHex+" (resolved from the recorded binding)\n")
+	assert.NotContains(t, stdout, "adopted from the published position")
+	assert.Contains(t, stdout, "pull: first-use\n")
+	assert.Contains(t, stdout, fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(joinGateContent)))
+	assert.Contains(t, stdout, "floor: revision=1 generation=1 sequence=0\n")
+	applied, err := os.ReadFile(gate.b.trackedPath())
+	require.NoError(t, err)
+	assert.Equal(t, joinGateContent, string(applied))
+	joined, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	require.NoError(t, err)
+	require.True(t, joined.Present)
+	assert.Equal(t, uint64(1), joined.Floor.Revision)
+	assert.Equal(t, publicationstate.ProvenanceFirst, joined.Floor.Provenance)
+
+	code, stdout, stderr = gate.pull(t, gate.b, "--did", joinGateDID)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: matches\n")
+	unchanged, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	require.NoError(t, err)
+	assert.Equal(t, joined.Floor, unchanged.Floor, "the second pull moved the joined floor")
+}
+
+func TestJoinGateExplicitVaultOverridesThePublishedHead(t *testing.T) {
+	gate := newJoinGate(t)
+	gate.bootstrap(t, gate.a)
+	gate.publish(t)
+
+	code, stdout, stderr := gate.pull(t, gate.b, "--did", joinGateDID, "--vault", joinGateForeignVaultHex())
+	require.Equal(t, 3, code)
+	assert.Equal(t, "pull: unreadable (vault)\n", stdout)
+	assert.Contains(t, stderr, "the provider position cannot be read or validated")
+	assert.Zero(t, gate.vaultReads, "an explicit --vault still read the published vault")
+	_, statErr := os.Lstat(gate.b.trackedPath())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refused pull applied a target file")
+}
+
+func TestJoinGateNewcomerRefusesAnAccountWithNoPublication(t *testing.T) {
+	gate := newJoinGate(t)
+	gate.bootstrap(t, gate.a)
+
+	code, stdout, stderr := gate.pull(t, gate.b, "--did", joinGateDID)
+	require.Equal(t, 3, code)
+	assert.Equal(t, "pull: no-publication\n", stdout)
+	assert.Contains(t, stderr, "the account publishes no v2 position record at self")
+	assert.Contains(t, stderr, "pass --vault to name the vault this command acts on")
+	_, statErr := os.Lstat(gate.b.paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the position store")
+	_, statErr = os.Lstat(gate.b.trackedPath())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal applied a target file")
+}
+
+func TestJoinGateStoredBindingThatDiffersFromThePublishedHeadRefuses(t *testing.T) {
+	gate := newJoinGate(t)
+	vaultHex := gate.bootstrap(t, gate.a)
+	gate.publish(t)
+	wrong := joinGateBinding(t, vaultHex)
+	wrong.Vault = joinGateForeignVault()
+	gate.provisionStore(t, gate.b, wrong)
+
+	code, stdout, stderr := gate.pull(t, gate.b, "--did", joinGateDID)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stdout, "vault: "+joinGateForeignVaultHex()+" (resolved from the recorded binding)\n")
+	assert.Contains(t, stdout, "pull: unreadable (vault)\n")
+	assert.Contains(t, stderr, "the provider position cannot be read or validated")
+	assert.Zero(t, gate.vaultReads, "a recorded binding still read the published vault")
+	inspection, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), wrong)
+	require.NoError(t, err)
+	assert.False(t, inspection.Present, "the refused pull adopted the published floor")
+	assert.NotEqual(t, wrong, joinGateBinding(t, vaultHex), "the fixture wrote the published vault instead of the differing one")
+	_, statErr := os.Lstat(gate.b.trackedPath())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refused pull applied a target file")
 }

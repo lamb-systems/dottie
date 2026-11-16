@@ -263,28 +263,59 @@ func (transport *ATProtoMaterialTransport) ReadView(ctx context.Context) (public
 	return transport.view(revision)
 }
 
-func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (publicationstate.SuppliedRepositoryView, error) {
+func atprotoMaterialHead(revision *atproto.Revision) (publication.HeadRecord, []byte, bool, error) {
 	membership := revision.Membership()
 	records := revision.Records()
 	headKey := atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}
 	headPresent := false
-	snapshotKeys := make([]string, 0, len(membership))
 	for key := range membership {
 		if _, legacy := atprotoMaterialLegacyCollections[key.Collection]; legacy {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "legacy_profile", nil)
+			return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "legacy_profile", nil)
 		}
-		switch key.Collection {
-		case publication.HeadNSID:
-			if key.RKey != materialHeadKey {
-				return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head_key", nil)
-			}
-			headPresent = true
-		case publication.SnapshotNSID:
-			if _, err := publication.ParseSequenceKey(key.RKey); err != nil {
-				return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "record_key", nil)
-			}
-			snapshotKeys = append(snapshotKeys, key.RKey)
+		if key.Collection != publication.HeadNSID {
+			continue
 		}
+		if key.RKey != materialHeadKey {
+			return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "head_key", nil)
+		}
+		headPresent = true
+	}
+	if !headPresent {
+		return publication.HeadRecord{}, nil, false, nil
+	}
+	proven, found := records[headKey]
+	if !found {
+		return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "head", nil)
+	}
+	if err := atprotoMaterialRoundTrip(proven, membership[headKey]); err != nil {
+		return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "round_trip", err)
+	}
+	head, err := publication.DecodeHead(proven.Data)
+	if err != nil {
+		return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "head", err)
+	}
+	return head, bytes.Clone(proven.Data), true, nil
+}
+
+func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (publicationstate.SuppliedRepositoryView, error) {
+	membership := revision.Membership()
+	records := revision.Records()
+	head, headRaw, headPresent, err := atprotoMaterialHead(revision)
+	if err != nil {
+		return publicationstate.SuppliedRepositoryView{}, err
+	}
+	if headPresent && head.Vault != transport.binding.Vault {
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "vault", nil)
+	}
+	snapshotKeys := make([]string, 0, len(membership))
+	for key := range membership {
+		if key.Collection != publication.SnapshotNSID {
+			continue
+		}
+		if _, err := publication.ParseSequenceKey(key.RKey); err != nil {
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "record_key", nil)
+		}
+		snapshotKeys = append(snapshotKeys, key.RKey)
 	}
 	sort.Strings(snapshotKeys)
 	view := publicationstate.SuppliedRepositoryView{
@@ -294,25 +325,6 @@ func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (pub
 			RepositoryDigest:   []byte(revision.CommitCID()),
 		},
 		Snapshots: []publicationstate.SnapshotBlock{},
-	}
-	var headRaw []byte
-	var head publication.HeadRecord
-	if headPresent {
-		proven, found := records[headKey]
-		if !found {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head", nil)
-		}
-		if err := atprotoMaterialRoundTrip(proven, membership[headKey]); err != nil {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "round_trip", err)
-		}
-		decoded, err := publication.DecodeHead(proven.Data)
-		if err != nil {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head", err)
-		}
-		if decoded.Vault != transport.binding.Vault {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "vault", nil)
-		}
-		head, headRaw = decoded, bytes.Clone(proven.Data)
 	}
 	if len(snapshotKeys) == 0 {
 		if headPresent {

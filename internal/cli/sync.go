@@ -376,7 +376,7 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	code := 0
 	command := newSyncCommand(stdout, stderr, &code,
 		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env),
-		productionPullApplySourcesFactory(env), productionSyncPushPreviewFactory(env),
+		productionPullVaultFactory(openKeyring, env), productionPullApplySourcesFactory(env), productionSyncPushPreviewFactory(env),
 		productionPushSourcesFactory(openKeyring, env), productionSessionDIDSource(openKeyring, env))
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
@@ -386,7 +386,7 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
+func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -406,7 +406,7 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier sync plan", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runSyncCommand(ctx, command, sessions, remotes, applySources, previews, pushes, dids, os.Getenv)
+			return runSyncCommand(ctx, command, sessions, remotes, vaults, applySources, previews, pushes, dids, os.Getenv)
 		},
 	})
 	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{sync}, Writer: stdout, ErrWriter: stderr})
@@ -427,7 +427,7 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource, env func(string) string) error {
+func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource, env func(string) string) error {
 	if command.NArg() != 0 {
 		return usageExit("sync takes no positional arguments")
 	}
@@ -454,19 +454,13 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if err != nil {
 		return urfave.Exit("sync refused: the local publication state location is unavailable", 3)
 	}
-	vault := [32]byte{}
+	override := [32]byte{}
 	if command.IsSet("vault") {
 		parsed, parseErr := parseVaultFingerprint(command.String("vault"))
 		if parseErr != nil || parsed == [32]byte{} {
 			return usageExit("--vault must be a 32-byte hexadecimal identifier")
 		}
-		vault = parsed
-	} else {
-		stored, bindingErr := publicationstate.ReadBinding(paths.PublicationStateDir())
-		if bindingErr != nil {
-			return syncUnreadableExit(command, pullStoreReason(bindingErr))
-		}
-		vault = stored.Vault
+		override = parsed
 	}
 	session, err := sessions(ctx, command)
 	if err != nil {
@@ -478,9 +472,16 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if session.Session.DID != did.String() {
 		return urfave.Exit("sync refused: the authorized account differs from the --did publication binding; account "+escapeField(did.String())+" is unchanged", 3)
 	}
+	vault, err := resolvePublicationVault(ctx, command, "sync", vaults, session, override, paths.PublicationStateDir())
+	if err != nil {
+		return err
+	}
+	if err := writeResolvedVault(command, vault); err != nil {
+		return err
+	}
 	binding := publicationstate.Binding{
 		AccountDID: did.String(), Backend: publicationstate.BackendPublicRepo,
-		Repository: "at://" + did.String(), Vault: vault,
+		Repository: "at://" + did.String(), Vault: vault.Vault,
 	}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
@@ -509,7 +510,7 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return urfave.Exit("sync refused: the provider position holds no records to reconcile; nothing was changed", 3)
 	}
 	planRequest := pullApplyPlanRequest{
-		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor, Present: inspection.Present,
+		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
 		RemoteOnly: true, Label: "sync",
 	}
@@ -876,10 +877,7 @@ func syncRemoteFailure(err error) string {
 }
 
 func syncUnreadableExit(command *urfave.Command, reason string) error {
-	if err := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason})); err != nil {
-		return err
-	}
-	return urfave.Exit("sync refused: the local position store cannot be inspected read-only; nothing was changed", 3)
+	return unreadablePositionExit(command, "sync", reason)
 }
 
 func syncFindingExit(command *urfave.Command, finding pullFinding) error {

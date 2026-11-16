@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	pullFindingMatches    = "matches"
-	pullFindingAbsent     = "absent"
-	pullFindingDiverges   = "diverges"
-	pullFindingFirstUse   = "first-use"
-	pullFindingUnreadable = "unreadable"
+	pullFindingMatches       = "matches"
+	pullFindingAbsent        = "absent"
+	pullFindingDiverges      = "diverges"
+	pullFindingFirstUse      = "first-use"
+	pullFindingNoPublication = "no-publication"
+	pullFindingUnreadable    = "unreadable"
 )
 
 const (
@@ -42,6 +43,7 @@ const (
 	pullReasonPosition    = "position"
 	pullReasonRecord      = "record"
 	pullReasonView        = "view"
+	pullReasonHead        = "head"
 )
 
 type pullFinding struct {
@@ -87,7 +89,8 @@ type pullViewReasoner interface {
 func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyringFactory, env func(string) string) int {
 	code := 0
 	command := newPullCommand(stdout, stderr, &code,
-		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env), productionPullApplySourcesFactory(env),
+		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env),
+		productionPullVaultFactory(openKeyring, env), productionPullApplySourcesFactory(env),
 		productionSessionDIDSource(openKeyring, env), env)
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
@@ -97,7 +100,7 @@ func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) *urfave.Command {
+func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -118,7 +121,7 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier apply plan", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runPullCommand(ctx, command, sessions, remotes, applySources, dids, env)
+			return runPullCommand(ctx, command, sessions, remotes, vaults, applySources, dids, env)
 		},
 	})
 	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{pull}, Writer: stdout, ErrWriter: stderr})
@@ -139,7 +142,7 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) error {
+func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) error {
 	if command.NArg() != 0 {
 		return usageExit("pull takes no positional arguments")
 	}
@@ -169,19 +172,13 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if err != nil {
 		return urfave.Exit("pull refused: the local publication state location is unavailable", 3)
 	}
-	vault := [32]byte{}
+	override := [32]byte{}
 	if command.IsSet("vault") {
 		parsed, parseErr := parseVaultFingerprint(command.String("vault"))
 		if parseErr != nil || parsed == [32]byte{} {
 			return usageExit("--vault must be a 32-byte hexadecimal identifier")
 		}
-		vault = parsed
-	} else {
-		stored, bindingErr := publicationstate.ReadBinding(paths.PublicationStateDir())
-		if bindingErr != nil {
-			return pullUnreadableExit(command, pullStoreReason(bindingErr))
-		}
-		vault = stored.Vault
+		override = parsed
 	}
 	session, err := sessions(ctx, command)
 	if err != nil {
@@ -193,9 +190,16 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if session.Session.DID != did.String() {
 		return urfave.Exit("pull refused: the authorized account differs from the --did publication binding; account "+escapeField(did.String())+" is unchanged", 3)
 	}
+	vault, err := resolvePublicationVault(ctx, command, "pull", vaults, session, override, paths.PublicationStateDir())
+	if err != nil {
+		return err
+	}
+	if err := writeResolvedVault(command, vault); err != nil {
+		return err
+	}
 	binding := publicationstate.Binding{
 		AccountDID: did.String(), Backend: publicationstate.BackendPublicRepo,
-		Repository: "at://" + did.String(), Vault: vault,
+		Repository: "at://" + did.String(), Vault: vault.Vault,
 	}
 	store, err := openPublicationPositionStore(paths.PublicationStateDir(), binding)
 	if err != nil {
@@ -233,7 +237,7 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return nil
 	}
 	planRequest := pullApplyPlanRequest{
-		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor, Present: inspection.Present,
+		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
 	}
 	return runPullApply(ctx, planRequest, applySources)
@@ -280,10 +284,7 @@ func pullFindingExit(command *urfave.Command, finding pullFinding) error {
 }
 
 func pullUnreadableExit(command *urfave.Command, reason string) error {
-	if err := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason})); err != nil {
-		return err
-	}
-	return urfave.Exit("pull refused: the local position store cannot be inspected read-only; nothing was changed", 3)
+	return unreadablePositionExit(command, "pull", reason)
 }
 
 func pullProvisionRefusal(command *urfave.Command, err error) error {
@@ -706,38 +707,23 @@ func pullRemoteFailure(err error) string {
 
 func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(string) string) pullRemoteFactory {
 	return func(ctx context.Context, _ *urfave.Command, session pushSession, binding publicationstate.Binding) (pullRemote, error) {
-		keyring, err := openKeyring()
+		identity, transport, reader, closeResources, err := openAuthorizedPublicationReader(ctx, openKeyring, env, session)
 		if err != nil {
 			return pullRemote{}, err
 		}
 		fail := func(err error) (pullRemote, error) {
-			_ = keyring.Close()
+			closeResources()
 			return pullRemote{}, err
 		}
-		client, err := newAuthorizedAccountClient(keyring, env)
-		if err != nil {
-			return fail(err)
-		}
-		identity, err := client.Discover(ctx, session.Session.Handle)
-		if err != nil || identity.DID != session.Session.DID || identity.DIDDocumentID == "" || len(identity.VerificationMethods) == 0 {
-			return fail(errors.New("account identity is unavailable"))
-		}
-		api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session.Session)
-		if err != nil {
-			return fail(err)
-		}
-		transport := atproto.NewATClientTransport(api)
 		adapter, err := service.NewATProtoMaterialTransport(service.ATProtoMaterialConfig{
-			Binding: binding, DID: identity.DID,
-			Reader:          atproto.RevisionReader{Transport: transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID, VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...)},
-			Transport:       transport,
+			Binding: binding, DID: identity.DID, Reader: reader, Transport: transport,
 			BlobUploadLimit: int64(publication.MaxBlobBytes),
 		})
 		if err != nil {
 			return fail(err)
 		}
 		blobs := atproto.VaultReader{Transport: transport, Budgets: atproto.DefaultBudgets()}
-		reader, err := service.NewPublicationReader(service.PublicationReaderConfig{
+		publicationReader, err := service.NewPublicationReader(service.PublicationReaderConfig{
 			Binding: binding, DID: identity.DID, Session: session.Session, Adapter: adapter,
 			Blobs: blobs,
 		})
@@ -747,6 +733,35 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 		blob := func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
 			return blobs.FetchBlob(ctx, identity.DID, record.Blob.CID, int64(record.Blob.Size))
 		}
-		return pullRemote{Reader: reader, Blob: blob, Close: func() { _ = keyring.Close() }}, nil
+		return pullRemote{Reader: publicationReader, Blob: blob, Close: closeResources}, nil
 	}
+}
+
+func openAuthorizedPublicationReader(ctx context.Context, openKeyring accountKeyringFactory, env func(string) string, session pushSession) (atproto.Identity, atproto.Transport, atproto.RevisionReader, func(), error) {
+	keyring, err := openKeyring()
+	if err != nil {
+		return atproto.Identity{}, nil, atproto.RevisionReader{}, func() {}, err
+	}
+	fail := func(err error) (atproto.Identity, atproto.Transport, atproto.RevisionReader, func(), error) {
+		_ = keyring.Close()
+		return atproto.Identity{}, nil, atproto.RevisionReader{}, func() {}, err
+	}
+	client, err := newAuthorizedAccountClient(keyring, env)
+	if err != nil {
+		return fail(err)
+	}
+	identity, err := client.Discover(ctx, session.Session.Handle)
+	if err != nil || identity.DID != session.Session.DID || identity.DIDDocumentID == "" || len(identity.VerificationMethods) == 0 {
+		return fail(errors.New("account identity is unavailable"))
+	}
+	api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session.Session)
+	if err != nil {
+		return fail(err)
+	}
+	transport := atproto.NewATClientTransport(api)
+	reader := atproto.RevisionReader{
+		Transport: transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID,
+		VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...),
+	}
+	return identity, transport, reader, func() { _ = keyring.Close() }, nil
 }

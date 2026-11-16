@@ -43,10 +43,12 @@ load with the unchanged refusal.
 `dottie position status [--did DID] [--vault HEX]` inspects the local publication position store under
 `$XDG_STATE_HOME/dottie/publication-state` and prints one `position:` line: `position: revision=N generation=N
 provenance=first|replace sequence=N`, or `position: empty` when the store is recognized but holds no accepted
-floor. `--vault` is optional: without it the command resolves the vault from the stored publication binding, exactly
-as `pull` does, and with it the supplied fingerprint is an override that must match the stored binding. Resolving a
+floor. `--vault` is optional: without it the command resolves the vault from the stored publication binding, and
+with it the supplied fingerprint is an override that must match the stored binding. Resolving a
 binding recorded for a different account than `--did` therefore refuses `invalid/inspect/binding` instead of reading
-another account's position.
+another account's position. Unlike `pull` and `sync`, this command never asks the provider for the vault: a provider
+read would give it an account session and a network dependency, so a home with no stored binding must pass `--vault`
+here and gets the unchanged `position_absent` refusal otherwise.
 Inspection is read-only: it never creates, upgrades, repairs, unlinks or checkpoints anything, and it never
 takes the store's lifetime lock. It refuses an absent store (`position_absent`), a directory that is not an owned
 `0700` non-symlink directory, a foreign binding, a schema that is not the current schema 3 (`upgrade_required` for
@@ -119,7 +121,8 @@ owned by the current user` before any account work, and an existing store whose 
 bytes are unusable refuses with exit 3 naming its typed reason. Provisioning establishes no accepted floor; the
 first publication still needs the reviewed confirmation.
 
-`dottie sync [--did DID] [--vault HEX] [--confirm TOKEN]` is the reconciled path: it prepares the pull half, prepares
+`dottie sync [--did DID] [--vault HEX] [--confirm TOKEN]` is the reconciled path: it resolves the vault in the
+same order `pull` does, so a machine with no stored binding adopts the published vault and prints it; it prepares the pull half, prepares
 the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
 binding, the pull plan digest, the staged accept state token, the observation digest, the provider view digest and
 the post-pull push identity (payload digest and size, review selection and approval digests with revisions).
@@ -132,13 +135,21 @@ issued and consumed inside the confirmed run, so an unconfirmed sync leaves none
 do and the floor already matches the provider head, `sync` is a plain push with the same token shape.
 
 `dottie pull [--did DID] [--vault HEX]` provisions and then inspects the v2 publication position. It acquires the
-stored account session and validates the publication scope before any discovery or provider contact, takes the
-vault from `--vault` instead of resolving a v1 selection, refuses `--handle` for the same reason `push` does, and
-compares the provider's validated view with the locally recorded accepted floor. Before the comparison it
-provisions the position store exactly as `push` does, and it never recreates or repairs an existing one: an
-unusable directory refuses `pull: unreadable (unsafe)` and an unusable store refuses with its typed reason. A
-vault that is neither passed nor readable from the store refuses `pull: unreadable (position_absent)` without
-creating anything, because no binding can be derived. It prints one finding line: `pull: matches`; `pull: absent`
+stored account session and validates the publication scope before any discovery or provider contact, refuses
+`--handle` for the same reason `push` does, and compares the provider's validated view with the locally recorded
+accepted floor. The vault it acts on is resolved in one order: an explicit `--vault`, then the stored publication
+binding, then the vault named by the account's published `vaultHeadV2` record at `self`. The provider step runs
+after the session, scope and account checks, reads the head record through the same authenticated repository read
+that `PublicationReader.ReadView` uses, and requires that record to be proven present in the signed commit, to
+round-trip to its proven CID and to decode canonically; the adopted vault is then validated by reading the whole
+position under it. A vault the command resolved rather than received is printed as its own line:
+`vault: HEX (resolved from the recorded binding)` or `vault: HEX (adopted from the published position at self)`; a
+`--vault` value is never echoed. An explicit or recorded vault is never replaced by the provider: when the published
+head names a different vault the validated read refuses `pull: unreadable (vault)` instead of adopting either side.
+An account that publishes no head record refuses `pull: no-publication` with exit 3 and suggests `--vault`; that
+refusal provisions nothing. Before the comparison `pull` provisions the position store exactly as `push` does, and
+it never recreates or repairs an existing one: an unusable directory refuses `pull: unreadable (unsafe)` and an
+unusable store refuses with its typed reason. It prints one finding line: `pull: matches`; `pull: absent`
 when the provider holds no v2 records; `pull: first-use` when the store holds no accepted floor and the provider
 holds records; `pull: diverges (record_cid)` or `pull: diverges (payload_size)`; or `pull: unreadable (reason)`
 with the typed reason (`position_absent`, `unsafe`, `binding`, `locked`, `io`, `schema`, `upgrade_required`,
@@ -175,8 +186,10 @@ new.
 
 Divergence, `first-use` and an empty plan are findings, not failures, so a completed comparison exits 0; exit 2 is
 usage, exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, unreadable or
-invalid position, invalid provider view) and exit 4 is an indeterminate provider read. Output never
-contains the vault, account DID, absolute paths, tokens or payload bytes. `status`, `history`, `prune`,
+invalid position, invalid provider view, no published position) and exit 4 is an indeterminate provider read.
+Output never contains the account DID, absolute paths, tokens or payload bytes, and never echoes a `--vault`
+value; the vault appears only in the line that reports a vault the command resolved itself, so the operator can
+see what was adopted. `status`, `history`, `prune`,
 `status` and `position status` are the only local inspection commands that remain.
 
 `dottie account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)` requires a signed-in account and refuses an account that already holds a Dottie publication. It preflights that before minting device keys, stores root keys in Secret Service, and records the local vault selection; it writes no repository record and publishes nothing. Records from other applications, including `app.bsky.actor.profile`, do not block bootstrap: an account that any other app has already used is a valid bootstrap target. It mints no recovery kit, prints no secret and flushes nothing. A keyring or local selection failure exits 3 with `bootstrap: not-recorded`, publishes nothing and deletes the pending keys best-effort. An existing Dottie publication refuses with exit 3 before any local or remote write. Success exits 0 and prints `bootstrap: local-identity-recorded` with the vault fingerprint; the account repository still holds no Dottie publication at that point. One account supports one published Dottie vault because bootstrap refuses an account that already holds one; multi-vault selection refers only to locally recorded vaults. V2 publication through `push`, `pull` and `sync` is the only publication path: the first `push` publishes the vault's head and snapshot records under AT Protocol account authority, and a bootstrapped repository also keeps whatever other applications wrote. Bootstrap opens no second state store and provisions no publication position store.

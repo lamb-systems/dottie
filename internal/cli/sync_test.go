@@ -192,6 +192,10 @@ func (fixture *syncTestFixture) session() pushSession {
 	return pushSession{Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()}}
 }
 
+func (fixture *syncTestFixture) pullVaults(context.Context, *urfave.Command, pushSession) ([32]byte, error) {
+	return fixture.binding.Vault, nil
+}
+
 func (fixture *syncTestFixture) blob(_ context.Context, record publication.SnapshotRecord) ([]byte, error) {
 	return fixture.transport.blob(context.Background(), record.Blob)
 }
@@ -411,7 +415,7 @@ func runSyncForTestWithDIDs(t *testing.T, fixture *syncTestFixture, hooks syncTe
 			Configuration: fixture.configuration, Close: func() {},
 		}, nil
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes, dids)
+	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, fixture.pullVaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, dids)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "sync"}, args...)); err != nil && exitCode == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -873,7 +877,7 @@ func TestSyncRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return publicationPushSources{}, errors.New("the push sources must not be constructed")
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
+	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, fixture.pullVaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
 	args := []string{"dottie", "sync", "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex()}
 	if err := command.Run(context.Background(), args); err != nil && exitCode == 0 {
 		command.ExitErrHandler(context.Background(), command, err)
@@ -881,4 +885,35 @@ func TestSyncRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	require.Equal(t, 3, exitCode)
 	assert.Empty(t, stdout.String())
 	assert.Equal(t, "dottie: sync refused: account session is unavailable\n", stderr.String())
+}
+
+func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.setEnvironment(t)
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	vaultCalls := 0
+	vaults := func(context.Context, *urfave.Command, pushSession) ([32]byte, error) {
+		vaultCalls++
+		return fixture.binding.Vault, nil
+	}
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return fixture.session(), nil }
+	remotes := func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error) {
+		return pullRemote{}, errors.New("the provider reader must not be constructed")
+	}
+	previews := func(context.Context, *urfave.Command, publicationstate.Binding) (syncPushPreviewSources, error) {
+		return syncPushPreviewSources{}, errors.New("the preview must not be constructed")
+	}
+	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return publicationPushSources{}, errors.New("the push sources must not be constructed")
+	}
+	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, vaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
+	ctx := context.Background()
+	if err := command.Run(ctx, []string{"dottie", "sync", "--did", fixture.binding.AccountDID}); err != nil && exitCode == 0 {
+		command.ExitErrHandler(ctx, command, err)
+	}
+	require.Equal(t, 3, exitCode)
+	assert.Equal(t, 1, vaultCalls, "the sync did not resolve the published vault exactly once")
+	assert.Equal(t, "vault: "+pullTestVaultHex()+" (adopted from the published position at self)\npull: unreadable (position_absent)\n", stdout.String())
+	assert.Equal(t, "dottie: sync refused: the local position store cannot be inspected read-only; nothing was changed\n", stderr.String())
 }

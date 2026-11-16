@@ -51,8 +51,13 @@ The retired commands are gone rather than deprecated: there is no kit generation
 ciphertext archive to export or validate, no retention sweep and no device administration surface.
 `position status` is the one publication-position read, and `status` remains local-only. `status` prints the
 locally recorded vault fingerprint and device id, so the recorded vault can be found without prior knowledge of it;
-when no selection is recorded it says so instead of printing a zero value. `position status` takes `--vault` only as
-an override: without it the vault comes from the stored publication binding, as it already does for `pull`.
+when no selection is recorded it says so instead of printing a zero value. `pull` and `sync` resolve the vault they
+act on without being told it: `--vault` is an override, then the stored publication binding, then the vault named by
+the account's published `vaultHeadV2` record at `self`, read through the same validated reader that reads the
+position. An account that publishes nothing refuses with a typed `no-publication` reason. A vault the command
+resolved rather than received is printed, so a fresh machine can join a published position without knowing its
+fingerprint first. `position status` resolves the vault from `--vault` or the stored binding only, because a
+provider read would give that local inspection an account session and a network dependency it does not have.
 
 ## Target design
 
@@ -120,7 +125,7 @@ offline with `--did`; `--refresh` is explicit. Local logout removes the local se
 request was accepted. Account sessions require Secret Service and never fall back to
 files. These commands do not touch target data.
 
-Use `./bin/dottie push --did DID` to review one publication proposal, then `./bin/dottie push --did DID --confirm HEX` to publish exactly that proposal; a pre-submission failure abandons its own attempt without a flag. Push never applies downloads. `pull --did DID [--vault HEX]` compares the provider's validated position with the locally accepted floor, prints one finding and one apply plan, and changes nothing until it is repeated with the `--confirm` token it printed; a confirmed pull applies the plan, then advances the accepted floor. The reconciled `sync --did DID` command does the same for its pull half, recomposes the push half from the post-pull state and requires it to match what was printed before publishing. Exit codes are 0 success or no-op, 2 usage error, 3 local refusal, and 4 indeterminate or partially completed remote work. See the CLI README for command flags and disclosures.
+Use `./bin/dottie push --did DID` to review one publication proposal, then `./bin/dottie push --did DID --confirm HEX` to publish exactly that proposal; a pre-submission failure abandons its own attempt without a flag. Push never applies downloads. `pull --did DID [--vault HEX]` compares the provider's validated position with the locally accepted floor, prints one finding and one apply plan, and changes nothing until it is repeated with the `--confirm` token it printed; a confirmed pull applies the plan, then advances the accepted floor. Without `--vault` and without a stored binding, `pull` adopts the vault the account publishes at `self` and prints it, so a new machine joins a published position without being told the vault; a stored binding is used as recorded and the validated read refuses a provider head that names a different vault. The reconciled `sync --did DID` command does the same for its pull half, recomposes the push half from the post-pull state and requires it to match what was printed before publishing. Exit codes are 0 success or no-op, 2 usage error, 3 local refusal, and 4 indeterminate or partially completed remote work. See the CLI README for command flags and disclosures.
 
 To remove a target whose ID begins with `-`, use `--` to end flag parsing, for example
 `./bin/dottie targets remove -- -custom`. Other unimplemented commands return a nonzero status.

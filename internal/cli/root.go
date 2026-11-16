@@ -31,8 +31,9 @@ Usage:
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
 with --confirm HEX to publish exactly that reviewed proposal; a pre-submission failure abandons its own attempt automatically.
-Pull authenticates the session and the v2 publication scope before any discovery, compares the provider's validated
-position with the locally recorded accepted floor, prints one finding, and optionally applies one reviewed plan.
+Pull authenticates the session and the v2 publication scope before any discovery, resolves the vault it acts on
+from --vault, then the recorded binding, then the vault the account publishes at self, prints one finding, and
+optionally applies one reviewed plan; a resolved vault is printed so a fresh machine can join without being told it.
 Sync is the reconciled path: it prints the pull apply plan, prepares the push half from the post-pull state, and
 binds both into one confirmation token. The unconfirmed run changes nothing. The confirmed run applies and accepts
 the pull half first, then recomposes the push candidate from the accepted floor; a changed candidate, review or
@@ -70,7 +71,8 @@ This tree has no cross-machine recovery path and no offline anchor: recovering a
 live PDS is not supported, bootstrap mints no recovery kit, and nothing Dottie writes can restore data without a
 surviving device key. Authenticity is repo-scoped through the account's own AT Protocol repository; Dottie adds no
 vault signature over a published position. V2 publication through push, pull and sync is the only publication
-path, and a publication position store must already exist because bootstrap provisions no publication state.
+path; bootstrap provisions no publication state, so the first pull provisions the position store from the position
+the account publishes.
 
 See README.md for build instructions and current status.
 `
