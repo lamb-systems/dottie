@@ -934,3 +934,22 @@ func (e publicationStageTestError) Error() string  { return "synthetic staged fa
 func (e publicationStageTestError) Stage() string  { return e.stage }
 func (e publicationStageTestError) Reason() string { return e.reason }
 func (e publicationStageTestError) Unwrap() error  { return e.cause }
+
+func TestPublicationFailureDetailReportsTheProviderReason(t *testing.T) {
+	cause := cliProviderTestError{class: service.ErrATProtoMaterialProvider, reason: "upload_rejected"}
+	staged := publicationStageTestError{stage: "upload", reason: "upload_failed", cause: cause}
+
+	detail := publicationFailureDetail(staged)
+	assert.Contains(t, detail, "stage=upload")
+	assert.Contains(t, detail, "reason=upload_failed")
+	assert.Contains(t, detail, "provider=upload_rejected")
+}
+
+type cliProviderTestError struct {
+	class  error
+	reason string
+}
+
+func (e cliProviderTestError) Error() string  { return "synthetic provider failure" }
+func (e cliProviderTestError) Class() error   { return e.class }
+func (e cliProviderTestError) Reason() string { return e.reason }

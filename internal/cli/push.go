@@ -511,7 +511,21 @@ func publicationFailureDetail(err error) string {
 	if class := publicationFailureClass(err); class != "" {
 		fields = append(fields, "class="+class)
 	}
+	if provider := publicationFailureProvider(err); provider != "" {
+		fields = append(fields, "provider="+provider)
+	}
 	return strings.Join(fields, " ")
+}
+
+func publicationFailureProvider(err error) string {
+	var refused interface {
+		Class() error
+		Reason() string
+	}
+	if !errors.As(err, &refused) {
+		return ""
+	}
+	return escapeField(refused.Reason())
 }
 
 func publicationFailureClass(err error) string {
