@@ -398,15 +398,11 @@ func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks,
 		if hooks.push != nil {
 			hooks.push(fixture)
 		}
-		position, err := publicationstate.Open(fixture.paths.PublicationStateDir(), fixture.binding)
-		if err != nil {
-			return publicationPushSources{}, err
-		}
 		return publicationPushSources{
-			Paths: fixture.paths, Binding: fixture.binding, Coordinator: fixture.coordinator, Store: position,
+			Paths: fixture.paths, Binding: fixture.binding, Coordinator: fixture.coordinator,
 			Reader: pushTestAcceptedSource{transport: fixture.transport}, Transport: fixture.transport,
 			Reviews: fixture.reviews, Records: newPublicationProposalStore(fixture.paths.PublicationStateDir()),
-			Configuration: fixture.configuration, Close: func() { _ = position.Close() },
+			Configuration: fixture.configuration, Close: func() {},
 		}, nil
 	}
 	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes)

@@ -72,9 +72,15 @@ Exit codes: 0 committed or no-op, 2 usage (missing or invalid flags, malformed c
 store mismatch), 4 partial or indeterminate (unresolved submission, commit-unknown,
 queued/starved/fence-lost/unavailable outcomes, and a rendering failure after a committed publication,
 which is stated as committed on stderr).
-A queued or indeterminate publication is never reported as success. The command requires an already
-provisioned v2 position store; an absent store refuses with exit 3 and no substitute setup path is
-offered, because the legacy bootstrap creates v1 material that the v2 profile rejects.
+A queued or indeterminate publication is never reported as success. `push` provisions the v2 position store on
+first use: when `$XDG_STATE_HOME/dottie/publication-state` is absent it creates the directory and any parent with
+mode `0700`, verifies the mode afterwards, and opens the store for the binding derived from the session DID and
+the resolved vault; `account bootstrap` and `sync` create nothing there. Provisioning is for absence only.
+An existing store is never recreated or repaired: a directory that is not a private `0700` non-symlink directory
+owned by the current user refuses with exit 3 as `the publication position store is not a private 0700 directory
+owned by the current user` before any account work, and an existing store whose binding, schema, lifetime lock or
+bytes are unusable refuses with exit 3 naming its typed reason. Provisioning establishes no accepted floor; the
+first publication still needs the reviewed confirmation.
 
 `dottie sync --did DID [--vault HEX] [--confirm TOKEN]` is the reconciled path: it prepares the pull half, prepares
 the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
@@ -88,17 +94,22 @@ submits; a direction conflict refuses at planning and `sync` never chooses a sid
 issued and consumed inside the confirmed run, so an unconfirmed sync leaves none. When the pull half has nothing to
 do and the floor already matches the provider head, `sync` is a plain push with the same token shape.
 
-`dottie pull --did DID --vault HEX` is a read-only inspection of the v2 publication position. It acquires the
+`dottie pull --did DID [--vault HEX]` provisions and then inspects the v2 publication position. It acquires the
 stored account session and validates the publication scope before any discovery or provider contact, takes the
 vault from `--vault` instead of resolving a v1 selection, refuses `--handle` for the same reason `push` does, and
-compares the provider's validated view with the locally recorded accepted floor. It prints exactly one line:
-`pull: matches`; `pull: absent` when the provider holds no v2 records; `pull: diverges (record_cid)` or
-`pull: diverges (payload_size)`; or `pull: unreadable (reason)` with the typed reason (`position_absent`,
-`floor_absent`, `binding`, `locked`, `io`, `schema`, `upgrade_required`, `corrupt`, `record` or the reader's view
-reason). The comparison reads the position through the authenticated `PublicationReader.ReadView` and the local
-floor through the immutable `publicationstate.Inspect`: the comparison never opens the position store, never takes
-its lifetime lock, never fetches the payload blob, applies and reconciles nothing, establishes no base and writes
-no file, row or WAL.
+compares the provider's validated view with the locally recorded accepted floor. Before the comparison it
+provisions the position store exactly as `push` does, and it never recreates or repairs an existing one: an
+unusable directory refuses `pull: unreadable (unsafe)` and an unusable store refuses with its typed reason. A
+vault that is neither passed nor readable from the store refuses `pull: unreadable (position_absent)` without
+creating anything, because no binding can be derived. It prints one finding line: `pull: matches`; `pull: absent`
+when the provider holds no v2 records; `pull: first-use` when the store holds no accepted floor and the provider
+holds records; `pull: diverges (record_cid)` or `pull: diverges (payload_size)`; or `pull: unreadable (reason)`
+with the typed reason (`position_absent`, `unsafe`, `binding`, `locked`, `io`, `schema`, `upgrade_required`,
+`corrupt`, `record` or the reader's view reason). The comparison reads the position through
+the authenticated `PublicationReader.ReadView` and the local floor through the immutable
+`publicationstate.Inspect`: the comparison never takes the store's lifetime lock, never fetches the payload blob,
+applies and reconciles nothing, establishes no base and writes no file, row or WAL. Provisioning creates or
+initializes the store directory only; it accepts no floor and applies nothing.
 
 After the comparison, `pull` composes the apply plan for the configured files targets from the authenticated base
 snapshot at the accepted floor and the provider's terminal view. It never applies without confirmation: a
@@ -113,7 +124,11 @@ and backup-only refusals the engine enforces, and a backup-only selection always
 A confirmed run applies the plan first and accepts the material second, never one transaction for both. After a
 fully applied plan it re-validates that the accepted floor revision is still the one the plan used, then accepts
 the applied material into the position store with mode `advance` when a floor exists and `first-use` only when the
-store reports none; a replacement floor is never offered by `pull`. The run prints the new `floor:` revision, so
+store reports none; a replacement floor is never offered by `pull`. The first-use case is a newcomer joining a
+published vault: the plan is composed against a missing base, so every provider entry is a download, and the
+accepted floor is established at the provider's terminal record only by the confirmed run. An unconfirmed
+newcomer run provisions the store and prints the plan and token, and it accepts nothing, so `position status`
+still reports `position: empty`. The run prints the new `floor:` revision, so
 the next `pull` reports `matches` instead of re-planning the same apply. A refusal at accept leaves the applied
 files and the unchanged floor behind, prints `pull: applied but not accepted` with the typed reason and exits 3; an
 accept whose outcome cannot be proven exits 4 without claiming success. Exit 2 is usage, exit 3 is a local refusal
@@ -121,9 +136,9 @@ accept whose outcome cannot be proven exits 4 without claiming success. Exit 2 i
 provider read or an unproven acceptance. `pull` takes `--did`, optional `--vault` and `--confirm`; no other flag is
 new.
 
-Divergence is a finding, not a failure, so a completed comparison exits 0; exit 2 is usage,
-exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, no accepted floor,
-unreadable or invalid position, invalid provider view) and exit 4 is an indeterminate provider read. Output never
+Divergence, `first-use` and an empty plan are findings, not failures, so a completed comparison exits 0; exit 2 is
+usage, exit 3 is refusal (session, scope, account or store binding mismatch, unusable local store, unreadable or
+invalid position, invalid provider view) and exit 4 is an indeterminate provider read. Output never
 contains the vault, account DID, absolute paths, tokens or payload bytes. `status`, `history`, `prune`,
 `status` and `position status` are the only local inspection commands that remain.
 

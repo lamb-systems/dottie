@@ -505,7 +505,7 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return urfave.Exit("sync refused: the provider position holds no records to reconcile; nothing was changed", 3)
 	}
 	planRequest := pullApplyPlanRequest{
-		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor,
+		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
 		RemoteOnly: true, Label: "sync",
 	}
@@ -565,7 +565,12 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 		}
 		return urfave.Exit("sync refused: the push half resolved a different publication binding; nothing was published", 4)
 	}
-	floor, present, err := sources.Store.Load(ctx)
+	position, err := publicationstate.Open(sources.Paths.PublicationStateDir(), binding)
+	if err != nil {
+		return syncPushRefusal(command, output, "the local publication position store is unusable", "post_pull_store")
+	}
+	defer func() { _ = position.Close() }()
+	floor, present, err := position.Load(ctx)
 	if err != nil || !present {
 		return syncPushRefusal(command, output, "the post-pull accepted floor cannot be read", "post_pull_floor")
 	}
@@ -582,7 +587,7 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	if err := syncViewMatchesFloor(floor, accepted.View); err != nil {
 		return syncPushRefusal(command, output, "the provider position no longer matches the accepted floor", "post_pull_provider_moved")
 	}
-	material, err := sources.Store.ReadAcceptedMaterial(ctx, binding, floor)
+	material, err := position.ReadAcceptedMaterial(ctx, binding, floor)
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be read", "post_pull_floor")
 	}
@@ -616,7 +621,7 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 		return syncPushRefusal(command, output, "the review identity changed after the sync plan was prepared", "post_pull_review_mismatch")
 	}
 	request := service.PublicationPushRequest{
-		Store: sources.Store, Transport: sources.Transport, Reader: sources.Reader, Records: sources.Records,
+		Store: position, Transport: sources.Transport, Reader: sources.Reader, Records: sources.Records,
 		Binding: binding, Configuration: sources.Configuration, Reviews: sources.Reviews,
 		PublicationID: publicationID,
 	}
@@ -643,7 +648,11 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	if status == service.StatusCommitted {
 		output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", result.Floor.Revision, result.Floor.Generation, result.Floor.Sequence)
 	}
-	output += renderPush(status)
+	if publishErr != nil {
+		output += renderPushFailure(status, publishErr)
+	} else {
+		output += renderPush(status)
+	}
 	if writeErr := writeCommandOutput(command, output); writeErr != nil {
 		if status == service.StatusCommitted {
 			return urfave.Exit("publication committed but its output could not be written", 4)

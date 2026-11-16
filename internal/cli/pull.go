@@ -26,6 +26,7 @@ const (
 	pullFindingMatches    = "matches"
 	pullFindingAbsent     = "absent"
 	pullFindingDiverges   = "diverges"
+	pullFindingFirstUse   = "first-use"
 	pullFindingUnreadable = "unreadable"
 )
 
@@ -36,6 +37,8 @@ const (
 
 const (
 	pullReasonFloorAbsent = "floor_absent"
+	pullReasonStoreUnsafe = "unsafe"
+	pullReasonIO          = "io"
 	pullReasonPosition    = "position"
 	pullReasonRecord      = "record"
 	pullReasonView        = "view"
@@ -189,12 +192,16 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		AccountDID: did.String(), Backend: publicationstate.BackendPublicRepo,
 		Repository: "at://" + did.String(), Vault: vault,
 	}
+	store, err := openPublicationPositionStore(paths.PublicationStateDir(), binding)
+	if err != nil {
+		return pullProvisionRefusal(command, err)
+	}
+	if err := store.Close(); err != nil {
+		return pullProvisionRefusal(command, err)
+	}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
 		return pullUnreadableExit(command, pullStoreReason(err))
-	}
-	if !inspection.Present {
-		return pullUnreadableExit(command, pullReasonFloorAbsent)
 	}
 	remote, err := remotes(ctx, command, session, binding)
 	if err != nil {
@@ -205,7 +212,12 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if err != nil {
 		return pullViewFailure(command, err)
 	}
-	finding := comparePullPosition(inspection.Floor, view)
+	finding := pullFinding{Kind: pullFindingFirstUse}
+	if inspection.Present {
+		finding = comparePullPosition(inspection.Floor, view)
+	} else if len(view.Snapshots) == 0 {
+		finding = pullFinding{Kind: pullFindingAbsent}
+	}
 	if finding.Kind == pullFindingUnreadable {
 		return pullFindingExit(command, finding)
 	}
@@ -216,7 +228,7 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return nil
 	}
 	planRequest := pullApplyPlanRequest{
-		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor,
+		Command: command, Binding: binding, Vault: vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
 	}
 	return runPullApply(ctx, planRequest, applySources)
@@ -269,6 +281,25 @@ func pullUnreadableExit(command *urfave.Command, reason string) error {
 	return urfave.Exit("pull refused: the local position store cannot be inspected read-only; nothing was changed", 3)
 }
 
+func pullProvisionRefusal(command *urfave.Command, err error) error {
+	reason := pullReasonPosition
+	switch {
+	case errors.Is(err, errPublicationStoreUnsafe):
+		reason = pullReasonStoreUnsafe
+	case errors.Is(err, errPublicationStoreCreation):
+		reason = pullReasonIO
+	default:
+		var storeFailure publicationStoreFailure
+		if errors.As(err, &storeFailure) {
+			reason = string(storeFailure.Reason())
+		}
+	}
+	if writeErr := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason})); writeErr != nil {
+		return writeErr
+	}
+	return urfave.Exit("pull refused: the local position store is unusable and was neither created nor repaired; nothing was changed", 3)
+}
+
 func pullViewFailure(command *urfave.Command, err error) error {
 	finding := pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonView}
 	var reasoned pullViewReasoner
@@ -302,6 +333,7 @@ type pullApplyPlanRequest struct {
 	Binding      publicationstate.Binding
 	Vault        [32]byte
 	Floor        publicationstate.Floor
+	Present      bool
 	View         publicationstate.SuppliedRepositoryView
 	Remote       pullRemote
 	Confirmation [32]byte
@@ -347,7 +379,7 @@ func preparePullApply(ctx context.Context, input pullApplyPlanRequest, applySour
 	if err != nil {
 		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed", 3)
 	}
-	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor)
+	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor, input.Present)
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
@@ -382,7 +414,7 @@ func preparePullApply(ctx context.Context, input pullApplyPlanRequest, applySour
 
 func applyPullPreparation(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation, output string) (publicationstate.Floor, string, error) {
 	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
-	if err != nil || !current.Present || current.Floor.Revision != input.Floor.Revision {
+	if err != nil || current.Present != input.Present || current.Floor.Revision != input.Floor.Revision {
 		return publicationstate.Floor{}, output, urfave.Exit(input.label()+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+input.label(), 3)
 	}
 	journal, err := publicationstate.OpenJournal(preparation.Sources.Paths.PublicationStateDir())
@@ -463,7 +495,7 @@ func pullApplyRoots(configuration config.Config, paths platform.Paths) (map[stri
 	return roots, nil
 }
 
-func pullApplySnapshots(ctx context.Context, remote pullRemote, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor) (pullApplyMaterial, error) {
+func pullApplySnapshots(ctx context.Context, remote pullRemote, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor, present bool) (pullApplyMaterial, error) {
 	if len(view.Snapshots) == 0 || remote.Blob == nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
@@ -478,6 +510,9 @@ func pullApplySnapshots(ctx context.Context, remote pullRemote, view publication
 	remoteSnapshot, err := publication.DecodePayload(payload, terminal.Blob)
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
+	}
+	if !present {
+		return pullApplyMaterial{Base: model.Snapshot{Version: model.SnapshotVersion}, Remote: remoteSnapshot, Payload: payload}, nil
 	}
 	if floor.Sequence >= uint64(len(view.Snapshots)) {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved

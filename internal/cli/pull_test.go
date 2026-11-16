@@ -480,8 +480,28 @@ func TestPullRefusesAnAccountThatDiffersFromTheDIDBinding(t *testing.T) {
 	assert.Contains(t, stderr.String(), "differs from the --did publication binding")
 }
 
-func TestPullRefusesAnAbsentPositionStoreWithoutCreatingIt(t *testing.T) {
+func TestPullWithoutAVaultRefusesAnAbsentPositionStoreWithoutCreatingIt(t *testing.T) {
 	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{}
+	factoryCalls := 0
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls)
+	code = runPullForTest(command, &code, "--did", pullTestDID)
+	require.Equal(t, 3, code)
+	assert.Equal(t, "pull: unreadable (position_absent)\n", stdout.String())
+	assert.Contains(t, stderr.String(), "pull refused")
+	assert.Zero(t, reader.count(), "a pull without a vault still contacted the provider")
+	assert.Zero(t, factoryCalls, "a pull without a vault still reached discovery")
+	_, statErr := os.Lstat(fixture.paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the position store directory")
+}
+
+func TestPullRefusesAnUnsafePositionStoreWithoutRecreatingIt(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	directory := fixture.paths.PublicationStateDir()
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	require.NoError(t, os.Chmod(directory, 0o755))
 	reader := &pullTestReader{}
 	factoryCalls := 0
 	var stdout, stderr bytes.Buffer
@@ -489,27 +509,87 @@ func TestPullRefusesAnAbsentPositionStoreWithoutCreatingIt(t *testing.T) {
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code)
-	assert.Equal(t, "pull: unreadable (position_absent)\n", stdout.String())
-	assert.Contains(t, stderr.String(), "pull refused")
+	assert.Equal(t, "pull: unreadable (unsafe)\n", stdout.String())
+	assert.Contains(t, stderr.String(), "neither created nor repaired")
 	assert.Zero(t, reader.count(), "an unusable local store still contacted the provider")
 	assert.Zero(t, factoryCalls, "an unusable local store still reached discovery")
-	_, statErr := os.Lstat(fixture.paths.PublicationStateDir())
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "the inspection created the position store directory")
+	info, err := os.Stat(directory)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "the refused store directory was repaired")
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the refused store directory was populated")
 }
 
-func TestPullReportsAStoreWithoutAnAcceptedFloor(t *testing.T) {
+func TestPullProvisionsAnAbsentPositionStoreAndAdoptsOnlyOnConfirm(t *testing.T) {
 	fixture := newPullTestFixture(t)
-	fixture.emptyStore(t)
-	before := pullTestDirectoryState(t, fixture.paths.PublicationStateDir())
-	reader := &pullTestReader{}
+	fixture.configure(t, "")
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
-	require.Equal(t, 3, code)
-	assert.Equal(t, "pull: unreadable (floor_absent)\n", stdout.String())
-	assert.Zero(t, reader.count())
-	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.PublicationStateDir()))
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "pull: first-use\n")
+	assert.Contains(t, stdout.String(), "apply: changes=1 unchanged=0\n")
+	assert.Contains(t, stdout.String(), fmt.Sprintf("apply: write init.lua size=%d\n", len(pullTestBaseContent)))
+	assert.Contains(t, stdout.String(), "pull: plan only; nothing was applied; repeat with --confirm ")
+	assert.NotContains(t, stdout.String(), "pull: applied")
+	info, err := os.Stat(fixture.paths.PublicationStateDir())
+	require.NoError(t, err, "the unconfirmed newcomer pull did not provision the position store")
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	assert.False(t, inspection.Present, "the unconfirmed newcomer pull accepted a floor")
+	_, statErr := os.Lstat(fixture.targetPath("init.lua"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull wrote a target file")
+	token := pullTestConfirmation(t, stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "pull: first-use\n")
+	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestBaseContent)))
+	assert.Contains(t, stdout.String(), "floor: revision=1 generation=1 sequence=0\n")
+	assert.NotContains(t, stdout.String(), "pull: applied but not accepted")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err, "the confirmed newcomer pull did not apply the remote snapshot")
+	assert.Equal(t, pullTestBaseContent, string(content))
+	target, err := os.Stat(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), target.Mode().Perm())
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, uint64(1), accepted.Revision)
+	assert.Equal(t, uint64(1), accepted.Generation)
+	assert.Equal(t, uint64(0), accepted.Sequence)
+	assert.Equal(t, publicationstate.ProvenanceFirst, accepted.Provenance)
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: matches\n", stdout.String())
+	assert.Equal(t, accepted.Revision, fixture.acceptedFloor(t).Revision)
+}
+
+func TestPullReportsAnEmptyProviderPositionWithoutAdoptingAnything(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+	reader := &pullTestReader{view: publicationstate.SuppliedRepositoryView{}}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: absent\n", stdout.String())
+	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	assert.False(t, inspection.Present)
 }
 
 func TestPullReportsAHeldStoreAsUnreadableAndTouchesNothing(t *testing.T) {

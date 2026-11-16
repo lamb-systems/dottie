@@ -211,7 +211,6 @@ func (reviews pushTestReviews) Acquire(context.Context) (publicationstate.LocalR
 type publicationPushTestFixture struct {
 	paths         platform.Paths
 	binding       publicationstate.Binding
-	position      *publicationstate.Store
 	records       publicationProposalStore
 	transport     *pushTestTransport
 	coordinator   *service.Coordinator
@@ -241,12 +240,9 @@ func newPublicationPushTestFixture(t *testing.T) *publicationPushTestFixture {
 	require.NoError(t, err)
 	binding := publicationstate.Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
 	binding.Repository = "at://" + binding.AccountDID
-	position, err := publicationstate.Open(paths.PublicationStateDir(), binding)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, position.Close()) })
 	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x63}, SelectionRevision: 1, ApprovalDigest: [32]byte{0x64}, ApprovalRevision: 1}
 	return &publicationPushTestFixture{
-		paths: paths, binding: binding, position: position,
+		paths: paths, binding: binding,
 		records: newPublicationProposalStore(paths.PublicationStateDir()), transport: newPushTestTransport(binding),
 		coordinator: coordinator, reviews: pushTestReviews{review: review},
 		configuration: config.Config{Version: config.Version, Targets: []config.Target{{
@@ -258,7 +254,7 @@ func newPublicationPushTestFixture(t *testing.T) *publicationPushTestFixture {
 
 func (fixture *publicationPushTestFixture) sources() publicationPushSources {
 	return publicationPushSources{
-		Paths: fixture.paths, Binding: fixture.binding, Coordinator: fixture.coordinator, Store: fixture.position,
+		Paths: fixture.paths, Binding: fixture.binding, Coordinator: fixture.coordinator,
 		Reader: pushTestAcceptedSource{transport: fixture.transport}, Transport: fixture.transport,
 		Reviews: fixture.reviews, Records: fixture.records, Configuration: fixture.configuration,
 		Close: func() {},
@@ -690,9 +686,9 @@ func TestPushNoOpAfterTheSameSnapshotIsAccepted(t *testing.T) {
 	assert.Empty(t, records)
 }
 
-func TestPushRefusesAnUnprovisionedPositionStoreBeforeAnyAccountWork(t *testing.T) {
-	root := t.TempDir()
-	env := func(key string) string {
+func pushTestEnv(t *testing.T, root string) func(string) string {
+	t.Helper()
+	return func(key string) string {
 		switch key {
 		case "HOME":
 			return root
@@ -708,10 +704,107 @@ func TestPushRefusesAnUnprovisionedPositionStoreBeforeAnyAccountWork(t *testing.
 			return ""
 		}
 	}
+}
+
+func TestPushRefusesAnUnsafePositionStoreBeforeAnyAccountWork(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "state", "dottie", "publication-state")
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	require.NoError(t, os.Chmod(directory, 0o755))
 	_, err := productionPushSourcesFactory(func() (accountKeyring, error) {
 		return nil, errors.New("the keyring must not be opened")
-	}, env)(context.Background(), &urfave.Command{}, pushTestSession(t))
-	require.ErrorIs(t, err, errPublicationStoreAbsent)
+	}, pushTestEnv(t, root))(context.Background(), &urfave.Command{}, pushTestSession(t))
+	require.ErrorIs(t, err, errPublicationStoreUnsafe)
+	info, statErr := os.Stat(directory)
+	require.NoError(t, statErr)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "the refused store directory was repaired")
+}
+
+func TestPushProvisionsAnAbsentPositionStoreAndPublishes(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	require.NoError(t, os.RemoveAll(fixture.paths.PublicationStateDir()))
+	_, statErr := os.Lstat(fixture.paths.PublicationStateDir())
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code, stderr.String())
+	confirmation := confirmationFromOutput(t, stdout.String())
+	info, err := os.Stat(fixture.paths.PublicationStateDir())
+	require.NoError(t, err, "push did not provision the publication position store")
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(confirmed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "push: committed")
+	assert.Contains(t, stdout.String(), "floor: revision=1 generation=1 sequence=0")
+	uploads, sends := fixture.transport.counts()
+	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 1, sends)
+	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	assert.True(t, inspection.Present)
+}
+
+func TestPushRefusesAnUnsafeExistingPositionStoreWithoutRepairingIt(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	directory := fixture.paths.PublicationStateDir()
+	require.NoError(t, os.Chmod(directory, 0o755))
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "not a private 0700 directory owned by the current user")
+	assert.Empty(t, stdout.String())
+	info, err := os.Stat(directory)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "the refused store directory was repaired")
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads, "a refused local store uploaded a payload")
+	assert.Zero(t, sends, "a refused local store dispatched writes")
+}
+
+func TestPushRefusesAPositionStoreBoundToAnotherVaultWithoutRebindingIt(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	foreign := fixture.binding
+	foreign.Vault = [32]byte{0x63}
+	foreignStore, err := publicationstate.Open(fixture.paths.PublicationStateDir(), foreign)
+	require.NoError(t, err)
+	require.NoError(t, foreignStore.Close())
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "unusable (binding)")
+	assert.Empty(t, stdout.String())
+	recorded, err := publicationstate.ReadBinding(fixture.paths.PublicationStateDir())
+	require.NoError(t, err)
+	assert.Equal(t, foreign, recorded, "the refusal rebound the existing store")
+	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	require.Error(t, err, "the existing store was reopened for the pushing account")
+	assert.False(t, inspection.Present)
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads, "a foreign-bound local store uploaded a payload")
+	assert.Zero(t, sends, "a foreign-bound local store dispatched writes")
 }
 
 func TestPublicationProposalStoreRejectsForeignFilePermissions(t *testing.T) {
@@ -815,3 +908,29 @@ func TestPushReportsACommittedPublicationWhoseOutputFailed(t *testing.T) {
 	_, sends := fixture.transport.counts()
 	assert.Equal(t, 1, sends, "the committed publication was not dispatched")
 }
+
+func TestPublicationFailureDetailNamesTheStageReasonAndClass(t *testing.T) {
+	plain := errors.New("synthetic failure")
+	assert.Equal(t, "", publicationFailureDetail(plain), "a plain error must not fabricate a stage or reason")
+
+	staged := publicationStageTestError{stage: "submission", reason: "confirmation_mismatch", cause: atproto.ErrInsufficientPublicationScope}
+	detail := publicationFailureDetail(staged)
+	assert.Contains(t, detail, "stage=submission")
+	assert.Contains(t, detail, "reason=confirmation_mismatch")
+	assert.Contains(t, detail, "class=insufficient_publication_scope")
+
+	rendered := renderPushFailure(service.StatusUnavailable, staged)
+	assert.Contains(t, rendered, "push: unavailable")
+	assert.Contains(t, rendered, "stage=submission")
+}
+
+type publicationStageTestError struct {
+	stage  string
+	reason string
+	cause  error
+}
+
+func (e publicationStageTestError) Error() string  { return "synthetic staged failure" }
+func (e publicationStageTestError) Stage() string  { return e.stage }
+func (e publicationStageTestError) Reason() string { return e.reason }
+func (e publicationStageTestError) Unwrap() error  { return e.cause }
