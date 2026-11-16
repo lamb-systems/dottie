@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/lamb-systems/dottie/internal/service"
@@ -125,7 +126,7 @@ type injectedBootstrapPreflight struct {
 }
 
 func (port injectedBootstrapPreflight) Preflight(ctx context.Context) error {
-	return atproto.CheckGenesisRepositoryEmpty(ctx, port.reader, port.transport, port.did)
+	return atproto.CheckNoDottiePublication(ctx, port.reader, port.transport, port.did)
 }
 
 func TestAccountBootstrapCommandRecordsLocalIdentityWithoutPublishing(t *testing.T) {
@@ -241,6 +242,74 @@ func TestAccountKeyringFactoryErrorDoesNotExposeDetails(t *testing.T) {
 	code := runAccount([]string{"bootstrap", "--vault-name", "vault", "--device-id", "root", "--did", "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"}, &stdout, &stderr, open)
 	require.Equal(t, 1, code, "keyring error exit code")
 	assert.NotContains(t, stderr.String(), "synthetic backend detail", "keyring detail leaked")
+}
+
+func TestAccountBootstrapRefusesAccountHoldingADottiePublication(t *testing.T) {
+	root := t.TempDir()
+	paths := platform.Paths{
+		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+	}
+	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
+		require.NoError(t, os.MkdirAll(directory, 0o700))
+	}
+	const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+	repositoryKey, err := atprototest.NewSigningKey()
+	require.NoError(t, err)
+	pds, err := atprototest.NewMemoryPDS(did, repositoryKey)
+	require.NoError(t, err)
+	method := pds.VerificationMethod()
+	reader := atproto.RevisionReader{Transport: pds, DIDDocumentID: did, VerificationMethods: []atproto.VerificationMethod{{
+		ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
+	}}}
+	seed := []byte(`{"repo":"` + did + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[` +
+		`{"$type":"com.atproto.repo.applyWrites#create","collection":"app.bsky.actor.profile","rkey":"self","value":{"$type":"app.bsky.actor.profile","probe":"bootstrap"}},` +
+		`{"$type":"com.atproto.repo.applyWrites#create","collection":"` + publication.HeadNSID + `","rkey":"self","value":{"$type":"` + publication.HeadNSID + `","schemaVersion":2}}]}`)
+	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, seed, "application/json")
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
+	before, err := reader.Read(context.Background(), did)
+	require.NoError(t, err)
+	require.Len(t, before.Membership(), 2)
+	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}
+	factory := func(ctx context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
+		if command.String("did") != did {
+			return nil, func() {}, errors.New("unexpected authenticated identity")
+		}
+		store, err := state.Open(paths)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		coordinator, err := service.NewCoordinator(service.Dependencies{
+			State: store, DeviceKeys: keyring,
+			GenesisPreflight: injectedBootstrapPreflight{transport: pds, reader: reader, did: did},
+		})
+		if err != nil {
+			_ = store.Close()
+			return nil, func() {}, err
+		}
+		return coordinator, func() { _ = store.Close() }, nil
+	}
+	open := func() (accountKeyring, error) { return keyring, nil }
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newAccountCommandWithFactories(&stdout, &stderr, open, &code,
+		accountSessionOptions{env: func(string) string { return "" }}, factory)
+	code = runAccountCommandForAccountTest(command, &code, "bootstrap", "--vault-name", "personal", "--device-id", "root-device", "--did", did)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "no existing Dottie publication")
+	assert.Empty(t, keyring.items)
+	assert.Zero(t, keyring.storeCalls)
+	store, err := state.Open(paths)
+	require.NoError(t, err)
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, selections)
+	require.NoError(t, store.Close())
+	after, err := reader.Read(context.Background(), did)
+	require.NoError(t, err)
+	assert.Len(t, after.Membership(), 2)
+	assert.Equal(t, before.CommitCID(), after.CommitCID())
 }
 
 func runAccountCommandForAccountTest(root *urfave.Command, exitCode *int, args ...string) int {

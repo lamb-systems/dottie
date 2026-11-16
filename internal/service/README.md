@@ -2,7 +2,7 @@
 
 The coordinator owns local configuration mutations, the local vault selection, bootstrap identity custody, v2 publication planning/apply, base recording and journal recovery. CLI commands provide inputs and render redacted results; they do not run a local apply path or modify config/state directly. Target add/remove/mode are serialized through coordinator entry points.
 
-Explicit dependency ports cover configuration, state, file capture, GNOME settings resolution/capture, keyring-backed device keys, the genesis emptiness preflight, clock and apply filesystem. The v2 material transport and publication reader own the provider surface for push and pull; tests can inject deterministic transports and fake keyring ports without bypassing cryptographic verification.
+Explicit dependency ports cover configuration, state, file capture, GNOME settings resolution/capture, keyring-backed device keys, the genesis preflight that refuses an account already holding a Dottie publication, clock and apply filesystem. The v2 material transport and publication reader own the provider surface for push and pull; tests can inject deterministic transports and fake keyring ports without bypassing cryptographic verification.
 
 A vault selection is the only local vault state a v2 command needs: `ResolveSelection` reads the recorded selection set, and `push`/`pull`/`sync` bind their publication work to it. The coordinator performs no v1 verified read and stores no v1 trust checkpoint; the accepted publication position is the v2 floor in `internal/publicationstate`. Authenticity is repo-scoped through AT Protocol account authority: the reader verifies the packed record set, chain and head binding, not a vault signature or an offline anchor.
 
@@ -20,8 +20,9 @@ The v2 apply path is covered single-machine by `internal/service/publication_app
 
 `Coordinator.PlanPrune` and `ApplyPrune` anchor pruning to the held checkpoint's exact epoch, snapshot CID, policy digest and control CID, require that position to be the oldest declared recovery point, require a strictly later authenticated live epoch and complete revalidated inventories, and delegate all reference selection/deletion to state. The CLI requires explicit `--confirm` for apply. The plan reports the recovery floor (oldest complete inventory), confidentiality floor (oldest surviving known material, including protected backups) and unknown holdings separately. A payload or backup still associated with a retained point is protected at every age; an aged backup associated with a point evicted below the boundary may be pruned; a bound backup with no association and a migrated legacy-unbound backup remain protected. Floors can remain below policy or unknown while staged, orphaned or unknown-epoch payloads survive; the retained-point cap limits selected epochs, not on-disk growth. Pruning is foreground-only: B09 scheduling/automatic GC is outside scope, and no background deletion is wired. Evidence records do not cache ciphertext.
 
-`PreflightVault` verifies repository emptiness through the `GenesisPreflightPort`; bootstrap refuses a
-non-empty repository before it mints anything. `InitializeVault` derives the vault identity from the
+`PreflightVault` verifies through the `GenesisPreflightPort` that the account repository holds no
+Dottie publication; bootstrap refuses such an account before it mints anything. Records from other
+applications do not refuse. `InitializeVault` derives the vault identity from the
 vault name and the root device key, stores the device keys in Secret Service, and records the local
 vault selection. It writes no repository record, uploads no blob, and records no vault checkpoint:
 v2 publication through `PreparePublicationPush`/`ConfirmPublicationPush` is the only publication

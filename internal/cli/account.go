@@ -97,10 +97,10 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 			}
 			defer closeResources()
 			if err := coordinator.PreflightVault(ctx); err != nil {
-				if errors.Is(err, atproto.ErrGenesisRepositoryNotEmpty) {
-					return urfave.Exit("genesis requires an empty verified repository; this account already contains repository records", 3)
+				if errors.Is(err, atproto.ErrDottiePublicationPresent) {
+					return urfave.Exit("account bootstrap requires an account with no existing Dottie publication; this account already holds one", 3)
 				}
-				return urfave.Exit("genesis preflight could not verify an empty repository", 3)
+				return urfave.Exit("account bootstrap could not verify whether the account holds a Dottie publication", 3)
 			}
 			signing, recipient, err := vault.GenerateDeviceKeys()
 			if err != nil {
@@ -233,7 +233,7 @@ func (port sessionGenesisPreflight) Preflight(ctx context.Context) error {
 	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil {
 		return errors.New("authenticated genesis provider wiring is unavailable")
 	}
-	return atproto.CheckGenesisRepositoryEmpty(ctx, atproto.RevisionReader{
+	return atproto.CheckNoDottiePublication(ctx, atproto.RevisionReader{
 		Transport: port.transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: port.identity.DIDDocumentID,
 		VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
 	}, port.transport, port.identity.DID)

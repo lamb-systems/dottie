@@ -98,7 +98,7 @@ type bootstrapGatePreflight struct {
 }
 
 func (port bootstrapGatePreflight) Preflight(ctx context.Context) error {
-	return atproto.CheckGenesisRepositoryEmpty(ctx, port.reader, port.transport, port.did)
+	return atproto.CheckNoDottiePublication(ctx, port.reader, port.transport, port.did)
 }
 
 type bootstrapGateReviews struct {
@@ -194,6 +194,10 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 		Paths:            source.paths, Clock: clock,
 	})
 	require.NoError(t, err)
+	seedBootstrapGateRecord(t, pds, "app.bsky.actor.profile", "self")
+	seeded, err := reader.Read(ctx, bootstrapGateDID)
+	require.NoError(t, err)
+	require.Contains(t, seeded.Membership(), atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"})
 	require.NoError(t, coordinator.PreflightVault(ctx))
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
@@ -205,7 +209,9 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 
 	bootstrapped, err := reader.Read(ctx, bootstrapGateDID)
 	require.NoError(t, err)
-	require.Empty(t, bootstrapped.Membership(), "bootstrap must publish no repository record")
+	assert.Len(t, bootstrapped.Membership(), 1, "bootstrap must publish no repository record")
+	assert.Contains(t, bootstrapped.Membership(), atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"}, "bootstrap must leave the account's other records untouched")
+	assert.Equal(t, seeded.CommitCID(), bootstrapped.CommitCID(), "bootstrap must not change the repository")
 	selections, err := stateStore.VaultSelections(ctx)
 	require.NoError(t, err)
 	require.Len(t, selections, 1)
@@ -254,12 +260,20 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 
 	publishedRevision, err := reader.Read(ctx, bootstrapGateDID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{publication.HeadNSID, publication.SnapshotNSID}, bootstrapGateCollections(t, publishedRevision))
+	assert.Equal(t, []string{"app.bsky.actor.profile", publication.HeadNSID, publication.SnapshotNSID}, bootstrapGateCollections(t, publishedRevision))
 	view, err := adapter.ReadView(ctx)
 	require.NoError(t, err)
 	assert.NotErrorIs(t, err, service.ErrATProtoMaterialView)
 	assert.Len(t, view.Snapshots, 2)
 	assert.NotEmpty(t, view.Head)
+}
+
+func seedBootstrapGateRecord(t *testing.T, pds *atprototest.MemoryPDS, collection, rkey string) {
+	t.Helper()
+	body := []byte(`{"repo":"` + bootstrapGateDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap gate"}}]}`)
+	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+	require.NoError(t, err)
+	require.Equal(t, 200, status)
 }
 
 func newBootstrapGateHome(t *testing.T, root, name string, content, sentinel []byte) *bootstrapGateHome {

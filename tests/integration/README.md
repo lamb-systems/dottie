@@ -6,7 +6,7 @@ keyring service, GNOME session or real account.
 
 ## Genesis bootstrap
 
-`bootstrap_test.go` drives `Coordinator.PreflightVault` and `Coordinator.InitializeVault` over an empty synthetic `MemoryPDS`. It asserts that bootstrap publishes no repository record: the verified revision is byte-identical before and after, device keys are stored in the injected keyring, and the local vault selection is the only trust state written (no vault checkpoint). It also asserts the empty-repository preflight refuses a repository that already holds a record, and that the refusal writes no selection. Bootstrap mints no recovery kit and prints no secret, and the account CLI path is tested separately with an injected authenticated provider. The end-to-end gate that bootstraps an account, publishes through v2 and pulls into a second home lives in `tests/local/bootstrap_publication_gate_test.go`. No live PDS, real keyring, network, GNOME session or real home is used.
+`bootstrap_test.go` drives `Coordinator.PreflightVault` and `Coordinator.InitializeVault` over an empty synthetic `MemoryPDS`. It asserts that bootstrap publishes no repository record: the verified revision is byte-identical before and after, device keys are stored in the injected keyring, and the local vault selection is the only trust state written (no vault checkpoint). It also asserts that bootstrap succeeds on a repository that already holds an `app.bsky.actor.profile` record and a third-party record, that the preflight refuses a repository holding a v2 Dottie collection, and that the refusal writes no selection, stores no device key and leaves the repository unchanged. Bootstrap mints no recovery kit and prints no secret, and the account CLI path is tested separately with an injected authenticated provider. The end-to-end gate that bootstraps a used account, publishes through v2 and pulls into a second home lives in `tests/local/bootstrap_publication_gate_test.go`. No live PDS, real keyring, network, GNOME session or real home is used.
 
 ## Publication privacy and failure coverage
 
@@ -66,10 +66,10 @@ data loss.
 `TestLivePublicationPrivacy` skips by default. It requires `DOTTIE_LIVE_PUBLICATION_PRIVACY=1`, an
 allowlisted disposable identity in `DOTTIE_HANDLE`, and explicit authorization. Before writing its
 manifest or any record, it calls `com.atproto.repo.describeRepo` and skips if the repository has any
-collections. The live publication gate requires a pristine disposable repository because genesis refuses
-a non-empty repository. A previous owner-authorized attempt on a used disposable account stopped at this
-genesis precondition. A used account, including one carrying ordinary `app.bsky.*` records, is an
-environment limitation, not a privacy result. The corrected gate creates synthetic canary records and
+collections, so a used account, including one carrying ordinary `app.bsky.*` records, is an
+environment limitation for this gate, not a privacy result: this skip precondition is stricter than
+the bootstrap preflight, which accepts an account holding other applications' records. The gate
+creates synthetic canary records and
 attempts cleanup of records. A successful live privacy run leaves its uploaded ciphertext blobs on the
 provider permanently because the provider exposes no blob delete; this is expected and recorded in the
 run manifest rather than cleaned. The run manifest is written atomically with mode 0600 and records each

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/lamb-systems/dottie/internal/service"
@@ -72,7 +73,7 @@ type bootstrapPreflightPort struct {
 
 func (port bootstrapPreflightPort) Preflight(ctx context.Context) error {
 	*port.order = append(*port.order, "preflight")
-	return atproto.CheckGenesisRepositoryEmpty(ctx, atproto.RevisionReader{
+	return atproto.CheckNoDottiePublication(ctx, atproto.RevisionReader{
 		Transport: port.transport, DIDDocumentID: port.identity.DIDDocumentID,
 		VerificationMethods: append([]atproto.VerificationMethod(nil), port.identity.VerificationMethods...),
 	}, port.transport, port.identity.DID)
@@ -164,15 +165,55 @@ func TestCoordinatorBootstrapRecordsLocalIdentityAndPublishesNoRecord(t *testing
 	assert.Equal(t, before.CommitCID(), after.CommitCID())
 }
 
-func TestCoordinatorBootstrapPreflightRefusesANonEmptyRepository(t *testing.T) {
-	ctx := context.Background()
-	fixture := newBootstrapFixture(t)
-	body := []byte(`{"repo":"` + publicationAuditDID + `","swapCommit":"` + fixture.pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + atproto.VaultHeadNSID + `","rkey":"self","value":{"$type":"` + atproto.VaultHeadNSID + `","schemaVersion":1}}]}`)
-	status, _, err := fixture.pds.Do(ctx, "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+func seedBootstrapRepositoryRecord(t *testing.T, pds *atprototest.MemoryPDS, collection, rkey string) {
+	t.Helper()
+	body := []byte(`{"repo":"` + publicationAuditDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap"}}]}`)
+	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
-	require.ErrorIs(t, fixture.coordinator.PreflightVault(ctx), atproto.ErrGenesisRepositoryNotEmpty)
+}
+
+func TestCoordinatorBootstrapSucceedsOnRepositoryHoldingOtherApplicationsRecords(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBootstrapFixture(t)
+	seedBootstrapRepositoryRecord(t, fixture.pds, "app.bsky.actor.profile", "self")
+	seedBootstrapRepositoryRecord(t, fixture.pds, "com.example.thirdparty.note", "3foreignrecord")
+	before, err := fixture.reader.Read(ctx, publicationAuditDID)
+	require.NoError(t, err)
+	require.Len(t, before.Membership(), 2)
+	require.NoError(t, fixture.coordinator.PreflightVault(ctx))
+	result, err := fixture.coordinator.InitializeVault(ctx, service.BootstrapRequest{
+		VaultName: "used account bootstrap", Device: fixture.device,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, service.BootstrapLocalIdentityRecorded, result.Outcome)
+	assert.Equal(t, fixture.device.DeviceID, fixture.keyring.devices[fixture.device.DeviceID].DeviceID)
+	selections, err := fixture.store.VaultSelections(ctx)
+	require.NoError(t, err)
+	require.Len(t, selections, 1)
+	assert.Equal(t, result.Bootstrap.Vault, selections[0].Vault)
+	after, err := fixture.reader.Read(ctx, publicationAuditDID)
+	require.NoError(t, err)
+	assert.Contains(t, after.Membership(), atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"})
+	assert.Contains(t, after.Membership(), atproto.RecordKey{Collection: "com.example.thirdparty.note", RKey: "3foreignrecord"})
+	assert.Equal(t, before.CommitCID(), after.CommitCID())
+}
+
+func TestCoordinatorBootstrapPreflightRefusesAnExistingDottiePublication(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBootstrapFixture(t)
+	seedBootstrapRepositoryRecord(t, fixture.pds, "app.bsky.actor.profile", "self")
+	seedBootstrapRepositoryRecord(t, fixture.pds, publication.HeadNSID, "self")
+	before, err := fixture.reader.Read(ctx, publicationAuditDID)
+	require.NoError(t, err)
+	require.Len(t, before.Membership(), 2)
+	require.ErrorIs(t, fixture.coordinator.PreflightVault(ctx), atproto.ErrDottiePublicationPresent)
 	selections, err := fixture.store.VaultSelections(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, selections)
+	assert.Empty(t, fixture.keyring.devices)
+	after, err := fixture.reader.Read(ctx, publicationAuditDID)
+	require.NoError(t, err)
+	assert.Len(t, after.Membership(), 2)
+	assert.Equal(t, before.CommitCID(), after.CommitCID())
 }

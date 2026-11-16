@@ -209,15 +209,20 @@ A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is n
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
 
-## Genesis emptiness preflight
+## Genesis preflight
 
-`CheckGenesisRepositoryEmpty` is the only genesis-time provider operation this package offers. It
-requires an authenticated revision reader bound to the same DID and refuses any repository whose
-verified membership is not empty (`ErrGenesisRepositoryNotEmpty`); an unreadable or moving revision is
+`CheckNoDottiePublication` is the only genesis-time provider operation this package offers. It
+requires an authenticated revision reader bound to the same DID and refuses an account whose verified
+membership already holds a record from a Dottie collection
+(`ErrDottiePublicationPresent`): the v2 `systems.lamb.dottie.vaultSnapshotV2` and
+`systems.lamb.dottie.vaultHeadV2` collections, and the retired v1 `vaultHead`, `vaultControl`,
+`vaultSnapshot`, `vaultPolicy`, `vaultCertificate`, `vaultCheckpoint` and `vaultAttestation`
+collections, so a v1 repository is refused rather than adopted. Records from every other collection,
+`app.bsky.*` and third-party applications included, are allowed: an account that any client has
+already touched is a valid bootstrap target. An unreadable or moving revision is
 `ErrGenesisPreflightUnavailable`. Bootstrap writes no repository record, so there is no genesis
-publication, no genesis read-back and no genesis record set here: the six v1 collections
-(`vaultHead`, `vaultControl`, `vaultSnapshot`, `vaultPolicy`, `vaultCertificate`, `vaultCheckpoint`)
-and `vaultAttestation` are refused by the v2 transport as `legacy_profile`, and `CommitGenesis` was
+publication, no genesis read-back and no genesis record set here: the seven v1 collections are also
+refused by the v2 transport as `legacy_profile`, and `CommitGenesis` was
 deleted with the v1 publication path. V2 publication through `push` is the only way a vault reaches a
 repository.
 

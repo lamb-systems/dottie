@@ -30,13 +30,14 @@ verified reads, content-free publication planning, v2 pull apply, recovery, loca
 push/sync, device administration, history summaries, export and archive validation. GNOME settings
 capture for publication requires a build with the `gsettings` tag and an available settings backend.
 `account bootstrap` requires a
-verified empty repository and a signed-in account. It checks repository emptiness before minting
-keys, stores root device keys in Secret Service, and records the local vault selection. Bootstrap
-writes no repository record and publishes no vault: v2 publication through `push`, `pull` and `sync`
-is the only publication path, and the first push is what makes a bootstrapped account's vault
-visible to another machine. An account can hold only one published Dottie vault because bootstrap
-requires an empty repository. Multi-vault selection refers only to locally recorded vaults, not
-multiple published vaults on one account.
+signed-in account and refuses an account that already holds a Dottie publication. It verifies that
+before minting keys, stores root device keys in Secret Service, and records the local vault
+selection. Records from other applications, ordinary `app.bsky.*` records included, do not block
+bootstrap. Bootstrap writes no repository record and publishes no vault: v2 publication through
+`push`, `pull` and `sync` is the only publication path, and the first push is what makes a
+bootstrapped account's vault visible to another machine. An account can hold only one published
+Dottie vault because bootstrap refuses an account that already holds one. Multi-vault selection
+refers only to locally recorded vaults, not multiple published vaults on one account.
 
 Authenticity is repo-scoped through AT Protocol account authority: the records live in the
 account's own repository, signed by the account's repository key, and writing them requires an

@@ -50,11 +50,12 @@ empty marker, refuses an absent or unsafe store, and never prints the account DI
 paths, counts, tokens or payload bytes. Refusals exit 3; exit 2 is usage only.
 
 Account login, status and logout manage the OAuth session in the desktop Secret Service keyring; they never touch
-target data. Account bootstrap requires a signed-in account and a verified empty repository, mints device keys,
-stores them in Secret Service, prints no secret, and records the local vault selection. Bootstrap writes no
+target data. Account bootstrap requires a signed-in account that holds no Dottie publication, mints device keys,
+stores them in Secret Service, prints no secret, and records the local vault selection. Records from other
+applications do not block bootstrap. Bootstrap writes no
 repository record: the first v2 push is the only publication path, so a bootstrapped account publishes and pulls
-through the v2 profile. An account can hold only one published Dottie vault because bootstrap requires an empty
-repository.
+through the v2 profile. An account can hold only one published Dottie vault because bootstrap refuses an account
+that already holds one.
 
 This tree has no cross-machine recovery path and no offline anchor: recovering a vault on another machine without a
 live PDS is not supported, bootstrap mints no recovery kit, and nothing Dottie writes can restore data without a
