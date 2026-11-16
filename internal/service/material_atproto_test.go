@@ -296,7 +296,9 @@ func (repository *atprotoMaterialRepository) Do(ctx context.Context, method, end
 			"$type": atprotoMaterialBlobType, "ref": map[string]string{"$link": blob.CID.String()},
 			"mimeType": publication.BlobMIMEType, "size": int64(len(body)),
 		}
-		if repository.uploadMIMEType != "" {
+		if repository.uploadMIMEType == "!empty!" {
+			delete(reference, "mimeType")
+		} else if repository.uploadMIMEType != "" {
 			reference["mimeType"] = repository.uploadMIMEType
 		}
 		if repository.uploadCID != "" {
@@ -696,7 +698,7 @@ func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
 	require.ErrorIs(t, sendErr, atproto.ErrCandidateMayBeDisclosed)
 	var refusal *atprotoMaterialError
 	require.ErrorAs(t, sendErr, &refusal)
-	assert.Equal(t, "dispatch_rejected", refusal.Reason())
+	assert.Contains(t, refusal.Reason(), "dispatch_rejected:")
 	assert.False(t, outcome.Committed)
 	assert.Equal(t, appliesBefore+1, fixture.repository.applyCount())
 	assert.Equal(t, doBefore+1, fixture.repository.doCount())
@@ -799,15 +801,13 @@ func TestMaterialATProtoRefusesUploadReferenceMismatch(t *testing.T) {
 	require.NoError(t, err)
 	cases := []struct {
 		name      string
+		reason    string
 		configure func(*atprotoMaterialRepository)
 	}{
-		{name: "mime-type", configure: func(repository *atprotoMaterialRepository) {
-			repository.overrideUpload("text/plain", "", nil)
-		}},
-		{name: "cid", configure: func(repository *atprotoMaterialRepository) {
+		{name: "cid", reason: "upload_reference_cid", configure: func(repository *atprotoMaterialRepository) {
 			repository.overrideUpload("", other.String(), nil)
 		}},
-		{name: "size", configure: func(repository *atprotoMaterialRepository) {
+		{name: "size", reason: "upload_reference_size", configure: func(repository *atprotoMaterialRepository) {
 			size := int64(len(payload) + 1)
 			repository.overrideUpload("", "", &size)
 		}},
@@ -819,12 +819,37 @@ func TestMaterialATProtoRefusesUploadReferenceMismatch(t *testing.T) {
 			transport := newATProtoMaterialTransport(t, binding, atprotoMaterialDID, repository)
 			testCase.configure(repository)
 			_, uploadErr := transport.UploadPayload(ctx, payload)
-			requireATProtoMaterialRefusal(t, uploadErr, ErrATProtoMaterialProvider, "upload_reference")
+			requireATProtoMaterialRefusal(t, uploadErr, ErrATProtoMaterialProvider, testCase.reason)
 			require.ErrorIs(t, uploadErr, atproto.ErrCandidateMayBeDisclosed)
 			assert.Equal(t, 1, repository.uploadCount())
 			assert.Equal(t, 0, repository.applyCount())
 		})
 	}
+
+	t.Run("accepts-a-canonicalised-media-type", func(t *testing.T) {
+		binding := atprotoMaterialBinding(atprotoMaterialDID)
+		repository := newATProtoMaterialRepository(t, atprotoMaterialDID)
+		repository.overrideUpload("application/x-tar", "", nil)
+		transport := newATProtoMaterialTransport(t, binding, atprotoMaterialDID, repository)
+
+		reference, uploadErr := transport.UploadPayload(ctx, payload)
+		require.NoError(t, uploadErr)
+		assert.Equal(t, uint64(len(payload)), reference.Size)
+
+		expected, cidErr := publication.RawPayloadCID(payload)
+		require.NoError(t, cidErr)
+		assert.Equal(t, expected, reference.CID)
+	})
+
+	t.Run("refuses-an-empty-media-type", func(t *testing.T) {
+		binding := atprotoMaterialBinding(atprotoMaterialDID)
+		repository := newATProtoMaterialRepository(t, atprotoMaterialDID)
+		repository.overrideUpload("!empty!", "", nil)
+		transport := newATProtoMaterialTransport(t, binding, atprotoMaterialDID, repository)
+
+		_, uploadErr := transport.UploadPayload(ctx, payload)
+		requireATProtoMaterialRefusal(t, uploadErr, ErrATProtoMaterialProvider, "upload_reference_mime:empty")
+	})
 
 	t.Run("provider-rejection", func(t *testing.T) {
 		binding := atprotoMaterialBinding(atprotoMaterialDID)
@@ -1059,12 +1084,14 @@ func TestMaterialATProtoClassifiesDispatchOutcomes(t *testing.T) {
 			} else {
 				fixture.repository.rejectNextApply(testCase.status, testCase.code)
 			}
-			reason := testCase.reason
-			if reason == "" {
-				reason = "dispatch_rejected"
-			}
 			outcome, sendErr := fixture.transport.SendWrites(ctx, prepared)
-			requireATProtoMaterialRefusal(t, sendErr, ErrATProtoMaterialProvider, reason)
+			if testCase.reason != "" {
+				requireATProtoMaterialRefusal(t, sendErr, ErrATProtoMaterialProvider, testCase.reason)
+			} else {
+				var refusal *atprotoMaterialError
+				require.ErrorAs(t, sendErr, &refusal)
+				assert.Contains(t, refusal.Reason(), "dispatch_rejected:")
+			}
 			for _, expected := range testCase.expected {
 				require.ErrorIs(t, sendErr, expected)
 			}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -180,9 +181,17 @@ func (transport *ATProtoMaterialTransport) UploadPayload(ctx context.Context, pa
 		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_ambiguous",
 			errors.Join(atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed, err))
 	}
-	if reference.mimeType != publication.BlobMIMEType || reference.size != uint64(len(payload)) || !bytes.Equal(reference.cid, payloadCID) {
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference",
-			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference does not describe the uploaded payload")))
+	if reference.mimeType == "" {
+		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_mime:empty",
+			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference reports no media type")))
+	}
+	if reference.size != uint64(len(payload)) {
+		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_size",
+			errors.Join(atproto.ErrCandidateMayBeDisclosed, fmt.Errorf("provider blob reference reports %d bytes for a %d byte payload", reference.size, len(payload))))
+	}
+	if !bytes.Equal(reference.cid, payloadCID) {
+		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_cid",
+			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference CID does not match the uploaded payload CID")))
 	}
 	return publication.BlobReference{CID: reference.cid, Size: reference.size}, nil
 }
@@ -222,12 +231,12 @@ func (transport *ATProtoMaterialTransport) SendWrites(ctx context.Context, prepa
 	status, response, err := transport.transport.Do(ctx, "POST", atprotoMaterialApplyEndpoint, nil, body, "application/json")
 	if err != nil {
 		if status >= 400 && status < 500 {
-			return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_rejected", atprotoMaterialApplyStatus(status, response))
+			return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, atprotoMaterialDispatchReason(status, response), atprotoMaterialApplyStatus(status, response))
 		}
 		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_ambiguous", atprotoMaterialAmbiguous(ctx))
 	}
 	if status < 200 || status >= 300 {
-		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_rejected", atprotoMaterialApplyStatus(status, response))
+		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, atprotoMaterialDispatchReason(status, response), atprotoMaterialApplyStatus(status, response))
 	}
 	if err := atprotoMaterialCommitReference(response); err != nil {
 		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_ambiguous",
@@ -578,6 +587,14 @@ func atprotoMaterialCommitReference(response []byte) error {
 		return errors.New("applyWrites commit CID is not canonical")
 	}
 	return atprotoMaterialCommitCID(identifier)
+}
+
+func atprotoMaterialDispatchReason(status int, response []byte) string {
+	code := atprotoMaterialSafeCode(response)
+	if code == "" {
+		return fmt.Sprintf("dispatch_rejected:%d", status)
+	}
+	return fmt.Sprintf("dispatch_rejected:%d:%s", status, code)
 }
 
 func atprotoMaterialApplyStatus(status int, response []byte) error {
