@@ -10,15 +10,36 @@ keyring service, GNOME session or real account.
 
 ## Publication privacy and failure coverage
 
-`pds_audit_harness_test.go` and `pds_publication_test.go` build a real coordinator-backed synthetic
-vault, publish canary-bearing file and settings snapshots, and inspect the anonymous repository and
-blob surfaces. The audit covers the bounded repository CAR and individual blocks, `repo.listRecords`
-projections, blob enumeration and body reads. It checks raw and reversible canary encodings, bounded
-compressed-body scans, recursive record-key inventories, and the distinct retained, referenced and
-publicly retrievable blob sets. Positive controls seed plaintext records/blobs, compressed content, an
-orphan and an exposed orphan. Publication cases exercise malformed authenticated content, wrong roles,
-missing data, quota rejection, auth expiry and the modeled post-blob-processing disclosure window.
-All payloads, homes, credentials and provider state in these cases are synthetic.
+`publication_v2_privacy_test.go` is the v2 payload-privacy gate. It publishes through the real coordinator
+path (`PreparePublicationPush`, `ConfirmPublicationPush`) to an in-memory `MemoryPDS` and then scans every
+repository record twice, once as the stored DAG-CBOR bytes and once as the `repo.listRecords` JSON
+projection, for canaries generated per run: the plaintext of the published target file, a credential-shaped
+string, an absolute local path, the account DID and the local review approval digest that stands in for the
+retired recovery anchor. Records must contain none of them. The gate also pins a recursive record-key
+inventory for both collections, checks that only `systems.lamb.dottie.vaultSnapshotV2` and
+`systems.lamb.dottie.vaultHeadV2` are written at the expected record keys and that no
+`systems.lamb.dottie.vault*` v1 collection appears, and resolves every `$type: blob` reference plus the
+head's `snapshotCid` and `blobCid` against the blobs the publish actually uploaded, so no record points at
+a blob that does not exist.
+
+The blob is deliberately not asserted canary-free: the v2 profile publishes packed plaintext, so the payload
+is expected to hold the file's bytes and the credential string. The gate instead proves the blob is the
+canonical packed payload — the provider returns exactly the published blob size, `VerifyPayload` matches its
+CID, and re-packing the decoded snapshot reproduces the stored bytes, so the blob carries no trailing bytes
+and no extra members.
+
+Failure cases inject a provider failure at the blob upload, at the record batch, in the modeled
+post-blob-processing window, and after the batch commit with a lost response. Each asserts the typed
+refusal (`service.ErrPublishMaterial` with its stage and reason), the provider state that remains, the
+attempt lifecycle and the unchanged accepted floor, and that no error text carries candidate bytes. The
+batch rejection is where the disclosed residual is measured: the plaintext blob is uploaded before its
+record batch, so it stays at the provider with no record referencing it, and in the post-processing window
+the modeled provider serves it. A scan control injects a canary into a head record through a wrapping test
+transport and requires the same scan to report it, so the gate cannot pass by finding nothing.
+
+The retired v1 audit harness is gone; this gate replaces the repository- and blob-surface canary scan,
+recursive record-key inventory and publication failure modelling that it provided. All payloads, homes,
+credentials and provider state in these cases are synthetic.
 
 Offline command and renderer checks cover the output available without a remote account. The
 renderer test checks the per-surface disclosure contract: routine status/read/push/history/export/

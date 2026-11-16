@@ -130,14 +130,21 @@ exploration.
 ## Publication privacy gates
 
 The v1 encrypted publication audit and the source-loss archive gate were retired with the commands they
-served. **Their coverage is not currently owned by anything:** the v2 publication path has no offline
-gate that scans the repository and blob surfaces for plaintext or credential canaries and inventories
-recursive record keys, and no live privacy gate either. `tests/local/publication_*` and
-`tests/integration/publication_v2_*` cover v2 publication mechanics and the two-machine apply path, but
-they do not assert payload-privacy properties. Building that gate on the v2 plaintext profile is the
-next named slice; until it exists, payload privacy is a designed property with an accepted residual, not
-a tested one. The rows in [`docs/acceptance.md`](docs/acceptance.md) that name the retired gates are
-historical evidence for the removed path, not coverage of this tree.
+served. Payload privacy on the v2 plaintext profile is tested offline by
+[`tests/integration/publication_v2_privacy_test.go`](tests/integration/publication_v2_privacy_test.go):
+it publishes through the real coordinator path to an in-memory provider, then scans every repository
+record and its `listRecords` projection for per-run canaries (the published file's plaintext, a
+credential-shaped string, an absolute local path, the account DID and the local review approval digest),
+inventories the recursive record keys and the written collections, resolves every typed blob reference
+against the blobs the publish actually uploaded, and models the upload, record-batch, post-processing and
+lost-response failures through their typed outcomes.
+
+The exact limit: repository records are asserted canary-free, the blob is not, because this profile
+publishes packed plaintext. The packed snapshot is uploaded before its record batch, so a rejected or
+ambiguous batch leaves an unattached plaintext blob retrievable at the provider; the gate asserts that
+residual instead of denying it. There is still no live privacy gate: the rows in
+[`docs/acceptance.md`](docs/acceptance.md) that name the retired gates are historical evidence for the
+removed path, not coverage of this tree.
 
 `go test -count=1 ./internal/cli` still exercises the package-internal renderer privacy contract against
 synthetic data.
