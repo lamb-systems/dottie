@@ -22,12 +22,13 @@ import (
 var _ MaterialTransport = (*ATProtoMaterialTransport)(nil)
 
 var (
-	ErrATProtoMaterialIdentity = errors.New("AT Protocol material refuses the bound identity")
-	ErrATProtoMaterialBatch    = errors.New("AT Protocol material refuses the write batch")
-	ErrATProtoMaterialPayload  = errors.New("AT Protocol material refuses the payload")
-	ErrATProtoMaterialPrepared = errors.New("AT Protocol material holds no dispatchable write for that value")
-	ErrATProtoMaterialView     = errors.New("AT Protocol material refuses the repository view")
-	ErrATProtoMaterialProvider = errors.New("AT Protocol material provider outcome was not a commit")
+	ErrATProtoMaterialIdentity    = errors.New("AT Protocol material refuses the bound identity")
+	ErrATProtoMaterialBatch       = errors.New("AT Protocol material refuses the write batch")
+	ErrATProtoMaterialPayload     = errors.New("AT Protocol material refuses the payload")
+	ErrATProtoMaterialPrepared    = errors.New("AT Protocol material holds no dispatchable write for that value")
+	ErrATProtoMaterialView        = errors.New("AT Protocol material refuses the repository view")
+	ErrATProtoMaterialProvider    = errors.New("AT Protocol material provider outcome was not a commit")
+	ErrMaterialSubmissionRejected = errors.New("the provider definitively refused the submission batch and committed no record")
 )
 
 const (
@@ -193,7 +194,7 @@ func (transport *ATProtoMaterialTransport) UploadPayload(ctx context.Context, pa
 		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_cid",
 			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference CID does not match the uploaded payload CID")))
 	}
-	return publication.BlobReference{CID: reference.cid, Size: reference.size}, nil
+	return publication.BlobReference{CID: reference.cid, Size: reference.size, MIMEType: reference.mimeType}, nil
 }
 
 func (transport *ATProtoMaterialTransport) PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error) {
@@ -590,14 +591,66 @@ func atprotoMaterialCommitReference(response []byte) error {
 }
 
 func atprotoMaterialDispatchReason(status int, response []byte) string {
-	code := atprotoMaterialSafeCode(response)
+	code := atprotoMaterialProviderCode(response)
 	if code == "" {
 		return fmt.Sprintf("dispatch_rejected:%d", status)
 	}
 	return fmt.Sprintf("dispatch_rejected:%d:%s", status, code)
 }
 
+func atprotoMaterialProviderCode(body []byte) string {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Error == "" || len(response.Error) > 64 {
+		return ""
+	}
+	for _, character := range response.Error {
+		switch {
+		case character >= 'A' && character <= 'Z', character >= 'a' && character <= 'z',
+			character >= '0' && character <= '9', character == '_':
+		default:
+			return ""
+		}
+	}
+	return response.Error
+}
+
 func atprotoMaterialApplyStatus(status int, response []byte) error {
+	failure := atprotoMaterialApplyRejection(status, response)
+	if atprotoMaterialDefiniteRejection(status, response) {
+		return errors.Join(failure, ErrMaterialSubmissionRejected)
+	}
+	return failure
+}
+
+func atprotoMaterialDefiniteRejection(status int, response []byte) bool {
+	if status < 400 || status >= 500 || status == 401 || status == 403 {
+		return false
+	}
+	return atprotoMaterialXRPCErrorName(response) != ""
+}
+
+func atprotoMaterialXRPCErrorName(body []byte) string {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return ""
+	}
+	name := response.Error
+	if len(name) == 0 || len(name) > 64 {
+		return ""
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return ""
+		}
+	}
+	return name
+}
+
+func atprotoMaterialApplyRejection(status int, response []byte) error {
 	code := atprotoMaterialSafeCode(response)
 	statusError := atprotoMaterialProviderStatus(status, response)
 	switch {

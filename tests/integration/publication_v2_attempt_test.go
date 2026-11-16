@@ -22,7 +22,7 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 	blobCID, err := publication.RawPayloadCID(packed.Payload)
 	require.NoError(t, err)
 	publicationID := [16]byte{0x31}
-	snapshotBytes, err := publication.EncodeSnapshot(publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}})
+	snapshotBytes, err := publication.EncodeSnapshot(publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotBytes)
 	require.NoError(t, err)

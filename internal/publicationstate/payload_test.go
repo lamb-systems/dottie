@@ -15,7 +15,7 @@ func TestMatchingCIDMalformedPayloadCannotProduceProposalOrFloor(t *testing.T) {
 	malformed := []byte{0xa0, 0x01, 0x02}
 	blobCID, err := publication.RawPayloadCID(malformed)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(malformed))}}
+	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(malformed)), MIMEType: publication.SnapshotBlobMIMEType}}
 	record.PublicationID[15] = 0x71
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

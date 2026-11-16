@@ -193,6 +193,13 @@ func BuildBlob(data []byte) (Blob, error) {
 	}, nil
 }
 
+func canonicalBlobMIMEType(data []byte) string {
+	if len(data) >= 265 && string(data[257:262]) == "ustar" {
+		return "application/x-tar"
+	}
+	return "application/octet-stream"
+}
+
 func BuildSignedRevision(did string, signingKey *atcrypto.PrivateKeyP256, records []Record) (SignedRevision, error) {
 	parsedDID, err := syntax.ParseDID(did)
 	if err != nil || parsedDID.String() != did || signingKey == nil {

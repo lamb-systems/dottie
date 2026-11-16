@@ -719,7 +719,7 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if !ok || size <= 0 || uint64(size) != stored.core.BlobSize {
 		return CandidateMaterial{}, classified(ErrSchema, StageCustody, ReasonCorrupt)
 	}
-	blob := publication.BlobReference{CID: bytes.Clone(stored.core.BlobCID), Size: stored.core.BlobSize}
+	blob := blobReference(stored.core.SnapshotRecord)
 	data, err := s.inspectPayloadFile(basename, nil, blob)
 	if err != nil {
 		return CandidateMaterial{}, classifyCandidateRead(err, StageCustody)
@@ -1240,7 +1240,7 @@ func countEventKind(kinds []string, target string) uint32 {
 	return count
 }
 
-var attemptEventKinds = [...]string{"created", "upload-started", "may-have-submitted", "blocked-floor-replaced", "retired-success", "retired-abandoned", "outcome-observed-absent-unresolved", "outcome-observed-current", "outcome-committed-superseded", "outcome-lost-fence", "outcome-unresolved", "outcome-not-submitted"}
+var attemptEventKinds = [...]string{"created", "upload-started", "may-have-submitted", "blocked-floor-replaced", "retired-success", "retired-abandoned", "outcome-observed-absent-unresolved", "outcome-observed-current", "outcome-committed-superseded", "outcome-lost-fence", "outcome-provider-rejected", "outcome-unresolved", "outcome-not-submitted"}
 
 func validAttemptEventKind(kind string) bool {
 	for _, candidate := range attemptEventKinds {

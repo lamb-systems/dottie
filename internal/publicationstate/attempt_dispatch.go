@@ -113,7 +113,7 @@ func (s *Store) BeginUpload(ctx context.Context, id [16]byte, expectedToken [32]
 		return UploadMaterial{}, err
 	}
 	s.attemptMutationRevision = nextMutation
-	return UploadMaterial{AttemptID: id, Payload: bytes.Clone(candidate.Payload), Blob: publication.BlobReference{CID: bytes.Clone(stored.core.BlobCID), Size: stored.core.BlobSize}}, nil
+	return UploadMaterial{AttemptID: id, Payload: bytes.Clone(candidate.Payload), Blob: blobReference(stored.core.SnapshotRecord)}, nil
 }
 
 func (s *Store) BeginSubmission(ctx context.Context, id [16]byte, expectedToken [32]byte, view SuppliedRepositoryView, review LocalReviewContext, confirmation [32]byte) (SubmissionMaterial, error) {
@@ -285,7 +285,7 @@ func (s *Store) readCandidateUnlocked(ctx context.Context, stored storedAttempt,
 	if !ok || size <= 0 || uint64(size) != stored.core.BlobSize {
 		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	blob := publication.BlobReference{CID: bytes.Clone(stored.core.BlobCID), Size: stored.core.BlobSize}
+	blob := blobReference(stored.core.SnapshotRecord)
 	payload, err := s.inspectPayloadFile(basename, nil, blob)
 	if err != nil {
 		return CandidateMaterial{}, classifyCandidateRead(err, stage)

@@ -126,7 +126,7 @@ func (fixture *publicationReaderFixture) records(t *testing.T, payload []byte, d
 	require.NoError(t, err)
 	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault, PublicationID: [16]byte{0x62, 0x01},
-		PublicationSeq: 0, Blob: publication.BlobReference{CID: blobCID, Size: declaredSize},
+		PublicationSeq: 0, Blob: publication.BlobReference{CID: blobCID, Size: declaredSize, MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)

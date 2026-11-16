@@ -1379,7 +1379,7 @@ func incomingMaterialPublicFixtureCandidate(t *testing.T, ctx context.Context, s
 		return candidate
 	}
 	require.NoError(t, err)
-	expected := CandidateMaterial{AttemptID: attempt.ID, SnapshotKey: core.SnapshotKey, SnapshotRecord: core.SnapshotRecord, HeadRecord: core.HeadRecord, Payload: payload.bytes, Blob: publication.BlobReference{CID: core.BlobCID, Size: core.BlobSize}}
+	expected := CandidateMaterial{AttemptID: attempt.ID, SnapshotKey: core.SnapshotKey, SnapshotRecord: core.SnapshotRecord, HeadRecord: core.HeadRecord, Payload: payload.bytes, Blob: blobReference(core.SnapshotRecord)}
 	require.Equal(t, expected, candidate)
 	require.Equal(t, uint64(3072), candidate.Blob.Size)
 	require.NoError(t, publication.VerifyPayload(candidate.Payload, candidate.Blob))

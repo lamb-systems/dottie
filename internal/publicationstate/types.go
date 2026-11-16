@@ -80,6 +80,7 @@ const (
 	StageResolve           Stage  = "resolve"
 	StageFinalize          Stage  = "finalize"
 	StageAbandon           Stage  = "abandon"
+	StageReject            Stage  = "reject"
 	ReasonBinding          Reason = "binding"
 	ReasonContext          Reason = "context"
 	ReasonRecordSet        Reason = "record_set"

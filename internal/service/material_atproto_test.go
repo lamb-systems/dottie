@@ -294,7 +294,7 @@ func (repository *atprotoMaterialRepository) Do(ctx context.Context, method, end
 		repository.blobs[blob.CID.String()] = bytes.Clone(body)
 		reference := map[string]any{
 			"$type": atprotoMaterialBlobType, "ref": map[string]string{"$link": blob.CID.String()},
-			"mimeType": publication.BlobMIMEType, "size": int64(len(body)),
+			"mimeType": publication.SnapshotBlobMIMEType, "size": int64(len(body)),
 		}
 		if repository.uploadMIMEType == "!empty!" {
 			delete(reference, "mimeType")
@@ -718,13 +718,15 @@ func TestMaterialATProtoRecordsProviderExposureOnRejectedBatch(t *testing.T) {
 	proposal := fixture.prepare(t)
 
 	result, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
-	requireMaterialRefusal(t, err, "submission", "submission_unresolved")
+	requireMaterialRefusal(t, err, "submission", "submission_rejected")
+	require.ErrorIs(t, err, ErrMaterialSubmissionRejected)
 	require.ErrorIs(t, err, atproto.ErrPublicationQuota)
 	require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
 	assert.NotContains(t, err.Error(), marker)
 	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
 	require.NoError(t, loadErr)
-	assert.Equal(t, publicationstate.OutcomeUnresolved, attempt.Outcome)
+	assert.Equal(t, publicationstate.OutcomeRejected, attempt.Outcome)
+	assert.Equal(t, publicationstate.AttemptRetiredAbandoned, attempt.Lifecycle)
 	assert.Equal(t, result.Attempt.ID, attempt.ID)
 
 	assert.Equal(t, 1, fixture.repository.applyCount())
@@ -737,9 +739,13 @@ func TestMaterialATProtoRecordsProviderExposureOnRejectedBatch(t *testing.T) {
 	_, present, loadErr := fixture.store.Load(ctx)
 	require.NoError(t, loadErr)
 	assert.False(t, present)
-	retained, readErr := fixture.store.ReadCandidate(ctx, proposal.Proposal.AttemptID)
-	require.NoError(t, readErr)
-	assert.Equal(t, proposal.Candidate.Payload, retained.Payload)
+	_, active, activeErr := fixture.store.ActiveAttempt(ctx)
+	require.NoError(t, activeErr)
+	assert.False(t, active, "a definite provider refusal left the attempt blocking")
+	_, readErr := fixture.store.ReadCandidate(ctx, proposal.Proposal.AttemptID)
+	var custody *publicationstate.Error
+	require.ErrorAs(t, readErr, &custody)
+	assert.Equal(t, publicationstate.ReasonCandidateMissing, custody.Reason())
 }
 
 func TestMaterialATProtoResolvesAmbiguousDispatchWithoutRetry(t *testing.T) {
@@ -835,6 +841,7 @@ func TestMaterialATProtoRefusesUploadReferenceMismatch(t *testing.T) {
 		reference, uploadErr := transport.UploadPayload(ctx, payload)
 		require.NoError(t, uploadErr)
 		assert.Equal(t, uint64(len(payload)), reference.Size)
+		assert.Equal(t, "application/x-tar", reference.MIMEType, "the provider's canonicalised media type must travel with the reference")
 
 		expected, cidErr := publication.RawPayloadCID(payload)
 		require.NoError(t, cidErr)

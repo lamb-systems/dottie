@@ -11,11 +11,8 @@ func (s *Store) validateAttemptEvidenceWire(attempt storedAttempt, databaseRole 
 	if wire.AttemptedKey != attempt.core.SnapshotKey || !validAttemptEvidenceRole(databaseRole, wire.Role) {
 		return errors.New("evidence role")
 	}
-	if wire.Role == "retirement" && len(wire.ViewDigest) == 0 {
-		if !bytes.Equal(wire.AttemptedRecord, attempt.core.SnapshotRecord) || len(wire.Suffix) != 0 {
-			return errors.New("retirement evidence")
-		}
-		return nil
+	if len(wire.ViewDigest) == 0 {
+		return validateViewlessAttemptEvidence(attempt, wire)
 	}
 	if len(wire.ViewDigest) != 32 {
 		return errors.New("view digest")
@@ -128,6 +125,8 @@ func (s *Store) validateAttemptEvidenceWire(attempt storedAttempt, databaseRole 
 				return errors.New("lost fence predecessor")
 			}
 		}
+	case OutcomeRejected:
+		return errors.New("rejection evidence with a view")
 	case OutcomeNotSubmitted:
 		if len(wire.AttemptedRecord) > 0 {
 			if _, err := publication.DecodeSnapshot(wire.AttemptedRecord); err != nil || len(wire.Suffix) == 0 || !bytes.Equal(wire.AttemptedRecord, wire.Suffix[0].Raw) {
@@ -141,6 +140,29 @@ func (s *Store) validateAttemptEvidenceWire(attempt storedAttempt, databaseRole 
 		}
 	}
 	return nil
+}
+
+func validateViewlessAttemptEvidence(attempt storedAttempt, wire attemptEvidenceWire) error {
+	switch wire.Role {
+	case "retirement":
+		if !bytes.Equal(wire.AttemptedRecord, attempt.core.SnapshotRecord) || len(wire.Suffix) != 0 {
+			return errors.New("retirement evidence")
+		}
+		return nil
+	case "outcome":
+		if wire.Outcome != string(OutcomeRejected) || len(wire.AttemptedRecord) != 0 || len(wire.Suffix) != 0 || len(wire.Head) != 0 {
+			return errors.New("rejection evidence")
+		}
+		if attempt.core.Kind == string(AttemptSuccessor) && !bytes.Equal(wire.PredecessorRecord, attempt.core.PredecessorRecord) {
+			return errors.New("rejection predecessor")
+		}
+		if attempt.core.Kind == string(AttemptGenesis) && len(wire.PredecessorRecord) != 0 {
+			return errors.New("rejection genesis predecessor")
+		}
+		return nil
+	default:
+		return errors.New("view digest")
+	}
 }
 
 func validAttemptEvidenceRole(databaseRole, wireRole string) bool {

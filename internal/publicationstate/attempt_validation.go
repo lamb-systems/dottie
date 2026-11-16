@@ -444,7 +444,7 @@ func cloneSnapshotBlocks(blocks []SnapshotBlock) []SnapshotBlock {
 }
 
 func attemptPayloadReference(candidate validatedCandidate) publication.BlobReference {
-	return publication.BlobReference{CID: bytes.Clone(candidate.blobCID), Size: candidate.snapshot.Blob.Size}
+	return publication.BlobReference{CID: bytes.Clone(candidate.blobCID), Size: candidate.snapshot.Blob.Size, MIMEType: candidate.snapshot.Blob.MIMEType}
 }
 
 func validLifecycle(value AttemptLifecycle) bool {
@@ -458,7 +458,7 @@ func validLifecycle(value AttemptLifecycle) bool {
 
 func validOutcome(value AttemptOutcome) bool {
 	switch value {
-	case OutcomeNotSubmitted, OutcomeUnresolved, OutcomeAbsentUnresolved, OutcomeCurrent, OutcomeSuperseded, OutcomeLostFence:
+	case OutcomeNotSubmitted, OutcomeUnresolved, OutcomeAbsentUnresolved, OutcomeCurrent, OutcomeSuperseded, OutcomeLostFence, OutcomeRejected:
 		return true
 	default:
 		return false

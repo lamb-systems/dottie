@@ -96,7 +96,15 @@ refuses a mismatch or a stale proposal before any durable write or transport cal
 
 The complete immutable batch, including both collections and keys, the expected snapshot CID, the
 create flags, the expected predecessor and the expected supplied context, is built and validated
-before the submission boundary. After the payload upload, and still before `BeginSubmission`, the
+before the submission boundary. `encodePublicationCandidate` is also where the snapshot record's blob
+descriptor gets its media type: it declares `publication.SnapshotBlobMIMEType` (`application/x-tar`),
+the USTAR archive `vault.Pack` emits. `publication.BlobMIMEType` is only the upload request
+`Content-Type`; it is never asserted against a provider answer. Because the reviewed record is sealed
+with its CID in the attempt before any disclosure, the record cannot adopt the provider's answer after
+the fact — so the provider's answer is verified instead: `UploadPayload` returns the media type the
+provider reported, and `PublishMaterial` refuses `upload/blob_mismatch` (nothing written, no candidate
+bytes surfaced, attempt left at `upload-started`) when it differs from the type decoded out of the
+sealed snapshot record. After the payload upload, and still before `BeginSubmission`, the
 orchestration calls the non-network `PrepareWrites` with that batch and keeps the returned
 `MaterialPreparedWrites`. That value is opaque: it carries an adapter-owned secret and a dispatch count
 and no request bytes, so the service can neither construct nor edit a wire request. A preparation
@@ -108,7 +116,13 @@ single-use in the orchestration: the dispatch consumes it before the transport c
 of the same value refuses typed without dispatching, and a transport error cannot be retried. A
 transport error or an ambiguous outcome returns a typed unresolved result with no retry, no
 abandonment, no finalization and no rollback claim; a later explicit `ResolveAttempt` and
-`FinalizeAttempt` classify the outcome. Those two calls use different token domains: the attempt's
+`FinalizeAttempt` classify the outcome. A definite provider refusal is the one exception, and the
+adapter decides it: a 4xx `applyWrites` answer that carries a recognised provider error code and is not
+401/403 means the batch was not committed. That path retires the attempt through `RejectAttempt` with the
+terminal `provider-rejected` outcome, keeps `ErrCandidateMayBeDisclosed` attached because the uploaded blob
+may still be retrievable by CID, and returns a typed `submission`/`submission_rejected` result that still
+reports the provider status and code. A 5xx, a transport error, an unparseable body, an unrecognised code
+and 401/403 stay ambiguous and stay blocking. Those two calls use different token domains: the attempt's
 state digest resolves, and the resolution's digest finalizes; dispatch tokens are never reusable as
 digests. Accepted-material ownership is not created here — the orchestration finalizes the attempt and
 lets the store's own floor acceptance stand, and `AcceptMaterial` remains a separate receive-side path.
@@ -168,4 +182,6 @@ write, and deletion follows only a terminal publication. `--discard` abandons on
 `upload-started` attempt: it releases ownership, the active pointer, pending genesis and reservations,
 does not unlink charged payload files and does not rewrite published history. A `may-have-submitted`
 attempt is unresolved: there is no abandonment, no retry and no fabricated absence, and the operator
-resolves it through the store readback path.
+resolves it through the store readback path. The exception is a definite provider refusal recorded by the
+adapter at submission, which retires that attempt as `provider-rejected` so the next review is not blocked;
+the retained record stays consumed and the next unconfirmed `push` issues a fresh one.

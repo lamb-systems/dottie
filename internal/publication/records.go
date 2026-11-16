@@ -13,16 +13,19 @@ import (
 )
 
 const (
-	SnapshotNSID      = "systems.lamb.dottie.vaultSnapshotV2"
-	HeadNSID          = "systems.lamb.dottie.vaultHeadV2"
-	SchemaVersion     = int64(2)
-	MaxSequence       = uint64(9007199254740991)
-	MaxRecordBytes    = 2048
-	MaxCIDBytes       = 128
-	MaxBlobBytes      = uint64(402653184)
-	BlobMIMEType      = "application/octet-stream"
-	SequenceKeyLength = 16
+	SnapshotNSID         = "systems.lamb.dottie.vaultSnapshotV2"
+	HeadNSID             = "systems.lamb.dottie.vaultHeadV2"
+	SchemaVersion        = int64(2)
+	MaxSequence          = uint64(9007199254740991)
+	MaxRecordBytes       = 2048
+	MaxCIDBytes          = 128
+	MaxBlobBytes         = uint64(402653184)
+	BlobMIMEType         = "application/octet-stream"
+	SnapshotBlobMIMEType = "application/x-tar"
+	SequenceKeyLength    = 16
 )
+
+const legacySnapshotBlobMIMEType = BlobMIMEType
 
 var (
 	ErrInvalidRecord = errors.New("invalid publication record")
@@ -50,8 +53,9 @@ func (e *Violation) Field() string { return e.field }
 func (e *Violation) Reason() string { return e.reason }
 
 type BlobReference struct {
-	CID  []byte
-	Size uint64
+	CID      []byte
+	Size     uint64
+	MIMEType string
 }
 
 type SnapshotRecord struct {
@@ -115,7 +119,7 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 		"parent":         parent,
 		"blob": atdata.Blob{
 			Ref:      atdata.CIDLink(blobCID),
-			MimeType: BlobMIMEType,
+			MimeType: record.Blob.MIMEType,
 			Size:     int64(record.Blob.Size),
 		},
 	}
@@ -164,7 +168,7 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 	if !ok {
 		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob", "type")
 	}
-	if blob.MimeType != BlobMIMEType {
+	if blob.MimeType != SnapshotBlobMIMEType && blob.MimeType != legacySnapshotBlobMIMEType {
 		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
 	}
 	if blob.Size <= 0 || uint64(blob.Size) > MaxBlobBytes {
@@ -180,7 +184,7 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 	copy(record.PublicationID[:], publicationBytes)
 	record.PublicationSeq = sequence
 	record.Parent = bytes.Clone(parent)
-	record.Blob = BlobReference{CID: blobCID.Bytes(), Size: uint64(blob.Size)}
+	record.Blob = BlobReference{CID: blobCID.Bytes(), Size: uint64(blob.Size), MIMEType: blob.MimeType}
 	if err := validateSnapshot(record); err != nil {
 		return SnapshotRecord{}, err
 	}
@@ -479,6 +483,9 @@ func validateSnapshot(record SnapshotRecord) error {
 	}
 	if record.Blob.Size == 0 || record.Blob.Size > MaxBlobBytes {
 		return violation(ErrInvalidRecord, "blob.size", "range")
+	}
+	if record.Blob.MIMEType != SnapshotBlobMIMEType && record.Blob.MIMEType != legacySnapshotBlobMIMEType {
+		return violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
 	}
 	if _, err := castCID(record.Blob.CID, cid.Raw, "blob.ref"); err != nil {
 		return err

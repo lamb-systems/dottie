@@ -67,19 +67,19 @@ func TestIndependentAtdataMapsMatchFixedCanonicalGoldens(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: 7,
 		Parent:         parentCID,
-		Blob:           BlobReference{CID: blobCID, Size: uint64(len(payload))},
+		Blob:           BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType},
 	}
 	independentSnapshot := independentSnapshotBytes(t, snapshot)
 	encodedSnapshot, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
 	assert.Equal(t, independentSnapshot, encodedSnapshot)
-	assert.Equal(t, "a764626c6f62a463726566d82a5825000155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6473697a65181a65247479706564626c6f62686d696d655479706578186170706c69636174696f6e2f6f637465742d73747265616d652474797065782373797374656d732e6c616d622e646f747469652e7661756c74536e617073686f745632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2066706172656e74582401711220f8f289c4277230fcf5fd392e9d286653d691cfff61136b0fd9aa550802e3fe386d7075626c69636174696f6e496450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedSnapshot))
+	assert.Equal(t, "a764626c6f62a463726566d82a5825000155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6473697a65181a65247479706564626c6f62686d696d6554797065716170706c69636174696f6e2f782d746172652474797065782373797374656d732e6c616d622e646f747469652e7661756c74536e617073686f745632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2066706172656e74582401711220f8f289c4277230fcf5fd392e9d286653d691cfff61136b0fd9aa550802e3fe386d7075626c69636174696f6e496450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedSnapshot))
 	decodedSnapshot, err := DecodeSnapshot(independentSnapshot)
 	require.NoError(t, err)
 	assert.Equal(t, snapshot, decodedSnapshot)
 	recordCID, err := RecordCID(independentSnapshot)
 	require.NoError(t, err)
-	assert.Equal(t, "bafyreieevsp4xc7nore7zzo5roo3gj67ypurlzfjuoq65lexnm6d3ieh2m", cid.NewCidV1(cid.DagCBOR, mustHash(t, independentSnapshot)).String())
+	assert.Equal(t, "bafyreibd57swutju74skdhzkzwstffd4jgdd5emdj3hmacqijvgka4c2ui", cid.NewCidV1(cid.DagCBOR, mustHash(t, independentSnapshot)).String())
 	blobIdentifier, err := cid.Cast(blobCID)
 	require.NoError(t, err)
 	assert.Equal(t, "bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm", blobIdentifier.String())
@@ -95,7 +95,7 @@ func TestIndependentAtdataMapsMatchFixedCanonicalGoldens(t *testing.T) {
 	encodedHead, err := EncodeHead(head)
 	require.NoError(t, err)
 	assert.Equal(t, independentHead, encodedHead)
-	assert.Equal(t, "a6652474797065781f73797374656d732e6c616d622e646f747469652e7661756c74486561645632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2067626c6f6243696458240155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6b736e617073686f7443696458240171122084ac9fcb8bed7449fce5dd8b9db327dfc3e915e4a9a3a1eeac976b3c3da087d36d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedHead))
+	assert.Equal(t, "a6652474797065781f73797374656d732e6c616d622e646f747469652e7661756c74486561645632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2067626c6f6243696458240155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6b736e617073686f7443696458240171122023efe56a4d34ff24a19f2acda532947c49863e91834ecec00a084d4ca0705aa26d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedHead))
 	decodedHead, err := DecodeHead(independentHead)
 	require.NoError(t, err)
 	assert.Equal(t, head, decodedHead)
@@ -103,7 +103,7 @@ func TestIndependentAtdataMapsMatchFixedCanonicalGoldens(t *testing.T) {
 	require.NoError(t, err)
 	headCIDValue, err := cid.Cast(headCID)
 	require.NoError(t, err)
-	assert.Equal(t, "bafyreighqowweveosjsytnjw5437sm66vxhe4xnhbyjk7stbov7ll43u3u", headCIDValue.String())
+	assert.Equal(t, "bafyreibepzxugserdcxjnhvjmaue7dfzh4bnez4vak24umpozuzua5gja4", headCIDValue.String())
 	assert.Equal(t, head.SnapshotCID, recordCID)
 }
 
@@ -305,7 +305,7 @@ func TestIndependentMalformedCBORIsRejectedWithoutPartialRecords(t *testing.T) {
 			value["blob"].(map[string]any)["ref"] = map[string]any{"$link": blobCIDText.String()}
 		}), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
 		{name: "legacy blob map", encoded: independentRecordMutation(t, base, func(value map[string]any) {
-			value["blob"] = map[string]any{"mimeType": BlobMIMEType, "cid": blobCIDText.String()}
+			value["blob"] = map[string]any{"mimeType": SnapshotBlobMIMEType, "cid": blobCIDText.String()}
 		}), want: ErrInvalidRecord, field: "blob.size", reason: "range"},
 		{name: "trailing item", encoded: append(independentSnapshotBytes(t, fixtureSnapshotValue(t)), 0x00), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
 		{name: "indefinite map", encoded: independentIndefiniteSnapshot(t, base), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
@@ -480,7 +480,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	}
 	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(16), "maxLength": float64(16)}, snapshot.Defs["main"].Record.Properties["publicationId"])
 	assert.Equal(t, map[string]any{"type": "bytes", "maxLength": float64(MaxCIDBytes)}, snapshot.Defs["main"].Record.Properties["parent"])
-	assert.Equal(t, map[string]any{"type": "blob", "accept": []any{BlobMIMEType}, "maxSize": float64(MaxBlobBytes)}, snapshot.Defs["main"].Record.Properties["blob"])
+	assert.Equal(t, map[string]any{"type": "blob", "accept": []any{SnapshotBlobMIMEType}, "maxSize": float64(MaxBlobBytes)}, snapshot.Defs["main"].Record.Properties["blob"])
 	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)}, head.Defs["main"].Record.Properties["snapshotCid"])
 	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)}, head.Defs["main"].Record.Properties["blobCid"])
 	assert.NotContains(t, strings.ToLower(string(mustReadFile(t, paths))), "example.")
@@ -532,13 +532,13 @@ func fixtureSnapshotValue(t testing.TB) SnapshotRecord {
 	t.Helper()
 	payload := []byte("fixture payload")
 	blobCID := independentCID(t, payload, cid.Raw)
-	return SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload))}}
+	return SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType}}
 }
 
 func fixtureSnapshot(t testing.TB, payload []byte, sequence uint64, parent []byte, publicationByte byte) (SnapshotRecord, []byte) {
 	t.Helper()
 	blobCID := independentCID(t, payload, cid.Raw)
-	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload))}}
+	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType}}
 	record.PublicationID[15] = publicationByte
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -565,7 +565,7 @@ func independentSnapshotBytes(t testing.TB, record SnapshotRecord) []byte {
 	t.Helper()
 	ref, err := cid.Cast(record.Blob.CID)
 	require.NoError(t, err)
-	blob := atdata.Blob{Ref: atdata.CIDLink(ref), MimeType: BlobMIMEType, Size: int64(record.Blob.Size)}
+	blob := atdata.Blob{Ref: atdata.CIDLink(ref), MimeType: record.Blob.MIMEType, Size: int64(record.Blob.Size)}
 	parent := bytes.Clone(record.Parent)
 	if parent == nil {
 		parent = []byte{}
@@ -652,7 +652,7 @@ func independentSnapshotValue(t testing.TB, record SnapshotRecord) map[string]an
 		"publicationId": bytes.Clone(record.PublicationID[:]), "publicationSeq": int64(record.PublicationSeq),
 		"parent": parent, "blob": map[string]any{
 			"$type": "blob", "ref": testTag{number: 42, value: append([]byte{0}, ref.Bytes()...)},
-			"mimeType": BlobMIMEType, "size": int64(record.Blob.Size),
+			"mimeType": record.Blob.MIMEType, "size": int64(record.Blob.Size),
 		},
 	}
 }
@@ -871,4 +871,39 @@ func testCBORHead(major uint8, value uint64) []byte {
 	default:
 		return []byte{prefix | 27, byte(value >> 56), byte(value >> 48), byte(value >> 40), byte(value >> 32), byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
 	}
+}
+
+func TestSnapshotRecordCarriesThePackedPayloadMediaType(t *testing.T) {
+	payload := []byte("carried media type payload")
+	snapshot, encoded := fixtureSnapshot(t, payload, 0, nil, 1)
+	require.Equal(t, SnapshotBlobMIMEType, snapshot.Blob.MIMEType)
+
+	decoded, err := DecodeSnapshot(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, snapshot, decoded)
+	assert.Equal(t, SnapshotBlobMIMEType, decoded.Blob.MIMEType)
+
+	value, err := RecordToJSON(encoded)
+	require.NoError(t, err)
+	assert.Contains(t, string(value), `"mimeType":"`+SnapshotBlobMIMEType+`"`)
+}
+
+func TestSnapshotRecordPreservesAPreCorrectionDeclaredMediaType(t *testing.T) {
+	payload := []byte("legacy media type payload")
+	snapshot, _ := fixtureSnapshot(t, payload, 0, nil, 1)
+	snapshot.Blob.MIMEType = BlobMIMEType
+	encoded, err := EncodeSnapshot(snapshot)
+	require.NoError(t, err)
+
+	decoded, err := DecodeSnapshot(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, BlobMIMEType, decoded.Blob.MIMEType)
+
+	reencoded, err := EncodeSnapshot(decoded)
+	require.NoError(t, err)
+	assert.Equal(t, encoded, reencoded)
+
+	value, err := RecordToJSON(encoded)
+	require.NoError(t, err)
+	assert.Contains(t, string(value), `"mimeType":"`+BlobMIMEType+`"`)
 }

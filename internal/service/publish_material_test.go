@@ -58,10 +58,12 @@ type materialTestTransport struct {
 	preparedSecret   *string
 	preparedDispatch *int
 	prepareErr       error
+	sendErr          error
 	prepareHook      func()
 	sendHook         func()
 	applied          []MaterialWriteBatch
 	uploadErr        error
+	uploadMIME       string
 	uploadCID        []byte
 	writeOnUpload    bool
 	failBeforeCommit bool
@@ -81,6 +83,13 @@ func materialTestContext(sequence int) publicationstate.SuppliedContext {
 		RepositoryRevision: fmt.Sprintf("synthetic-revision-%d", sequence),
 		RepositoryDigest:   []byte{byte(sequence + 1), 0x5a},
 	}
+}
+
+func (transport *materialTestTransport) uploadMIMEType() string {
+	if transport.uploadMIME != "" {
+		return transport.uploadMIME
+	}
+	return publication.SnapshotBlobMIMEType
 }
 
 func (transport *materialTestTransport) UploadPayload(ctx context.Context, payload []byte) (publication.BlobReference, error) {
@@ -103,9 +112,9 @@ func (transport *materialTestTransport) UploadPayload(ctx context.Context, paylo
 		transport.advanceContextLocked()
 	}
 	if len(transport.uploadCID) != 0 {
-		return publication.BlobReference{CID: bytes.Clone(transport.uploadCID), Size: uint64(len(payload))}, nil
+		return publication.BlobReference{CID: bytes.Clone(transport.uploadCID), Size: uint64(len(payload)), MIMEType: transport.uploadMIMEType()}, nil
 	}
-	return publication.BlobReference{CID: cid, Size: uint64(len(payload))}, nil
+	return publication.BlobReference{CID: cid, Size: uint64(len(payload)), MIMEType: transport.uploadMIMEType()}, nil
 }
 
 func (transport *materialTestTransport) PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error) {
@@ -160,6 +169,9 @@ func (transport *materialTestTransport) SendWrites(ctx context.Context, prepared
 	}
 	transport.applies++
 	transport.applied = append(transport.applied, cloneMaterialWriteBatch(batch))
+	if transport.sendErr != nil {
+		return MaterialWriteOutcome{}, transport.sendErr
+	}
 	if transport.failBeforeCommit {
 		return MaterialWriteOutcome{}, errMaterialTestBeforeCommit
 	}
@@ -421,6 +433,12 @@ func (transport *materialTestTransport) setUploadCID(cid []byte) {
 	transport.uploadCID = bytes.Clone(cid)
 }
 
+func (transport *materialTestTransport) setUploadMIME(mimeType string) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.uploadMIME = mimeType
+}
+
 func (transport *materialTestTransport) setWriteOnUpload() {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
@@ -431,6 +449,12 @@ func (transport *materialTestTransport) setFailBeforeCommit() {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.failBeforeCommit = true
+}
+
+func (transport *materialTestTransport) setSendError(err error) {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	transport.sendErr = err
 }
 
 func (transport *materialTestTransport) setCommitThenFail() {
@@ -573,7 +597,7 @@ func materialTestCandidate(t *testing.T, binding publicationstate.Binding, publi
 	require.NoError(t, err)
 	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload))},
+		PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)
@@ -1466,4 +1490,42 @@ func TestPublishMaterialDispatchConsumesPreparedWrites(t *testing.T) {
 	require.ErrorIs(t, transportReplay, errMaterialTestReplayed)
 	assert.Equal(t, 1, fixture.transport.sendCount())
 	assert.Equal(t, 1, fixture.transport.applyCount())
+}
+
+func TestPublishMaterialDeclaresAndVerifiesTheProviderBlobMediaType(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("declares-the-packed-payload-media-type", func(t *testing.T) {
+		fixture := newMaterialPublishFixture(t)
+		proposal, result := fixture.publish(t)
+
+		sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+		require.NoError(t, err)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, sealed.Blob.MIMEType)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, proposal.Blob.MIMEType)
+		assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
+		assert.Equal(t, 1, fixture.transport.applyCount())
+
+		committed, err := publication.DecodeSnapshot(fixture.transport.committed(proposal.Batch.SnapshotKey))
+		require.NoError(t, err)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, committed.Blob.MIMEType)
+	})
+
+	t.Run("refuses-a-provider-media-type-that-differs", func(t *testing.T) {
+		fixture := newMaterialPublishFixture(t)
+		fixture.transport.setUploadMIME(publication.BlobMIMEType)
+		proposal := fixture.prepare(t)
+
+		_, publishErr := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+		requireMaterialRefusal(t, publishErr, "upload", "blob_mismatch")
+		assert.Equal(t, 0, fixture.transport.applyCount())
+		assert.Nil(t, fixture.transport.committed(proposal.Batch.SnapshotKey))
+
+		attempt, err := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+		require.NoError(t, err)
+		assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle)
+		_, present, err := fixture.store.Load(ctx)
+		require.NoError(t, err)
+		assert.False(t, present)
+	})
 }

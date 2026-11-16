@@ -72,6 +72,22 @@ Exit codes: 0 committed or no-op, 2 usage (missing or invalid flags, malformed c
 store mismatch), 4 partial or indeterminate (unresolved submission, commit-unknown,
 queued/starved/fence-lost/unavailable outcomes, and a rendering failure after a committed publication,
 which is stated as committed on stderr).
+
+A provider answer that definitely refuses the submission is reported as a refusal, not as an unknown
+outcome. AT Protocol `applyWrites` is atomic, so a 4xx answer carrying a recognised provider error code
+(other than 401/403) means no record was written: `push` prints `push: rejected` with
+`stage=submission`, `reason=submission_rejected` and `provider=dispatch_rejected:<status>:<code>`, states
+that the candidate payload may still be retrievable by CID, retires the local attempt so the next review is
+not blocked, and exits 4. Nothing is retried; the next plain `dottie push` prints a fresh review. A 5xx, a
+transport error, an unparseable body, an unrecognised code and 401/403 stay indeterminate and are reported
+as such without retiring anything.
+
+An attempt that is still unresolved past submission blocks preparation. `push` then prints the local state
+directory, states that the local state cannot prove whether that attempt published a record, and gives the
+local recovery: deleting that directory clears the blocking attempt, retracts nothing at the provider,
+discards the pending review, the accepted position and the attempt history held there, and is followed by
+`dottie pull` to re-record the provider position and then `dottie push` to review again. This is local, not
+provider, surgery, and the refusal exits 3.
 A queued or indeterminate publication is never reported as success. `push` provisions the v2 position store on
 first use: when `$XDG_STATE_HOME/dottie/publication-state` is absent it creates the directory and any parent with
 mode `0700`, verifies the mode afterwards, and opens the store for the binding derived from the session DID and

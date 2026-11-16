@@ -143,7 +143,7 @@ func pullTestSnapshot(t *testing.T, binding publicationstate.Binding, payload []
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
 		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload))},
+		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)

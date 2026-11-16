@@ -185,7 +185,7 @@ func publicationPreviewGenesisMaterialForTest(t *testing.T, binding publications
 	require.NoError(t, err)
 	record, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	return record, bytes.Clone(packed.Payload)

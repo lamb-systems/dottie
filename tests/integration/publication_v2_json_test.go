@@ -34,7 +34,7 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x51},
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	genesisCID, err := publication.RecordCID(genesisRecord)
@@ -61,7 +61,7 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x52},
 		PublicationSeq: 1,
 		Parent:         genesisCID,
-		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	successorCID, err := publication.RecordCID(successorRecord)

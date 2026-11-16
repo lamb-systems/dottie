@@ -14,7 +14,9 @@ and blob CID.
 
 The `vaultSnapshotV2` NSID pins plaintext payload Version 1 with CodecNone: the current canonical
 USTAR container and JSON manifest, without an envelope or compression. The blob MIME type is fixed
-as `application/octet-stream`, and the size is bounded by the schema and codec. Another payload
+as `application/x-tar` (the USTAR archive the packer emits), and the size is bounded by the schema and
+codec. Records written before this correction declared `application/octet-stream`; they still decode, but
+the lexicon describes only what the current packer produces. Another payload
 format requires a separately reviewed profile and NSID.
 
 `DecodePayload` verifies the referenced blob's exact size and raw CID before calling the bounded
@@ -48,4 +50,6 @@ authentication, request construction, provider compatibility or Spaces readiness
 
 The production fetched-payload decoder exists, but remote fetch, publication-state and restore CLI
 wiring remain deferred. The synthetic integration composition also exercises `DecodePayload` directly.
-Transport conformance for provider handling of the fixed MIME type is deferred.
+Provider handling of the declared media type is verified at publish time: the upload reference the
+provider returns must report exactly the type the record declares, otherwise the publication is refused
+before the write batch is sent.

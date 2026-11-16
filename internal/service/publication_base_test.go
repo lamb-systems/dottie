@@ -533,7 +533,7 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 	require.NoError(t, err)
 	blobCID, err := publication.RawPayloadCID(packed.Payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: [16]byte{0x25, 0x71}, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}}
+	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: [16]byte{0x25, 0x71}, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordRaw)

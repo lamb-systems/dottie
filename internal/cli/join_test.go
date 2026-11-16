@@ -94,6 +94,7 @@ func newJoinGate(t *testing.T) *joinGate {
 	require.NoError(t, err)
 	pds, err := atprototest.NewMemoryPDS(joinGateDID, key)
 	require.NoError(t, err)
+	pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
 	method := pds.VerificationMethod()
 	identity := atproto.Identity{
 		DID: joinGateDID, DIDDocumentID: joinGateDID, Handle: "join.example.test",

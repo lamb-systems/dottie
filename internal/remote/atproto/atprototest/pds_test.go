@@ -1,6 +1,7 @@
 package atprototest
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -315,4 +316,63 @@ func uploadPDSBlob(t *testing.T, pds *MemoryPDS, data []byte) atdata.Blob {
 	require.NoError(t, json.Unmarshal(response, &result))
 	require.True(t, result.Blob.Ref.IsDefined())
 	return result.Blob
+}
+
+func TestMemoryPDSCanonicalizedBlobMIMETypeMustMatchTheRecordBlob(t *testing.T) {
+	ctx := context.Background()
+	pds := newMemoryPDS(t)
+	pds.SetHooks(MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
+	archive := memoryPDSTarArchive(t)
+
+	blob := uploadPDSBlob(t, pds, archive)
+	assert.Equal(t, "application/x-tar", blob.MimeType)
+
+	mismatched := atdata.Blob{Ref: blob.Ref, MimeType: "application/octet-stream", Size: blob.Size}
+	value, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": mismatched})
+	require.NoError(t, err)
+	status, body, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "mismatched", value)
+	require.NoError(t, err)
+	assert.Equal(t, 400, status)
+	assert.JSONEq(t, `{"error":"InvalidMimeType"}`, string(body))
+	_, exists := pds.Record("systems.example.blobRecord", "mismatched")
+	assert.False(t, exists)
+
+	matched := atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size}
+	value, err = json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": matched})
+	require.NoError(t, err)
+	status, body, err = applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "matched", value)
+	require.NoError(t, err)
+	require.Equal(t, 200, status, string(body))
+	_, exists = pds.Record("systems.example.blobRecord", "matched")
+	assert.True(t, exists)
+	assert.True(t, pds.BlobIsLive(blob.Ref.CID().String()))
+}
+
+func TestMemoryPDSKeepsTheDeclaredBlobMIMETypeWithoutCanonicalization(t *testing.T) {
+	ctx := context.Background()
+	pds := newMemoryPDS(t)
+	archive := memoryPDSTarArchive(t)
+
+	blob := uploadPDSBlob(t, pds, archive)
+	assert.Equal(t, "application/octet-stream", blob.MimeType)
+
+	value, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size}})
+	require.NoError(t, err)
+	status, body, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "unchecked", value)
+	require.NoError(t, err)
+	require.Equal(t, 200, status, string(body))
+	_, exists := pds.Record("systems.example.blobRecord", "unchecked")
+	assert.True(t, exists)
+}
+
+func memoryPDSTarArchive(t *testing.T) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	content := []byte("synthetic archive member\n")
+	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "member.txt", Mode: 0o600, Size: int64(len(content)), Typeflag: tar.TypeReg}))
+	_, err := writer.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return archive.Bytes()
 }

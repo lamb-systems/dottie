@@ -44,6 +44,7 @@ type pushTestTransport struct {
 	staleWrite bool
 	viewErr    error
 	uploadErr  error
+	sendErr    error
 }
 
 func newPushTestTransport(binding publicationstate.Binding) *pushTestTransport {
@@ -72,7 +73,7 @@ func (transport *pushTestTransport) UploadPayload(ctx context.Context, payload [
 		return publication.BlobReference{}, err
 	}
 	transport.blobs[string(cid)] = bytes.Clone(payload)
-	return publication.BlobReference{CID: cid, Size: uint64(len(payload))}, nil
+	return publication.BlobReference{CID: cid, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType}, nil
 }
 
 func (transport *pushTestTransport) PrepareWrites(ctx context.Context, batch service.MaterialWriteBatch) (service.MaterialPreparedWrites, error) {
@@ -101,6 +102,9 @@ func (transport *pushTestTransport) SendWrites(ctx context.Context, prepared ser
 	}
 	transport.dispatched[prepared.Secret] = true
 	transport.sends++
+	if transport.sendErr != nil {
+		return service.MaterialWriteOutcome{}, transport.sendErr
+	}
 	if transport.staleWrite || !samePushTestContext(batch.ExpectedContext, transport.context) {
 		return service.MaterialWriteOutcome{}, errors.New("synthetic transport refused a write with a stale expected context")
 	}
@@ -686,6 +690,16 @@ func TestPushNoOpAfterTheSameSnapshotIsAccepted(t *testing.T) {
 	assert.Empty(t, records)
 }
 
+func (fixture *publicationPushTestFixture) localActiveAttempt(t *testing.T) (publicationstate.Attempt, bool) {
+	t.Helper()
+	store, err := publicationstate.Open(fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	attempt, active, err := store.ActiveAttempt(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	return attempt, active
+}
+
 func pushTestEnv(t *testing.T, root string) func(string) string {
 	t.Helper()
 	return func(key string) string {
@@ -880,6 +894,7 @@ func TestPushMaterialStatusSeparatesRefusalsFromIndeterminateOutcomes(t *testing
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(service.ErrPublicationProposalStale))
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(service.ErrPublicationProposalConsumed))
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrPublicationProposalActive)))
+	assert.Equal(t, service.StatusRejected, pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrMaterialSubmissionRejected)))
 	assert.Equal(t, service.StatusFenceLost, pushMaterialStatus(fmt.Errorf("wrapped: %w", atproto.ErrFenceLost)))
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonConfirmation}))
 	assert.Equal(t, service.StatusUnavailable, pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonCommitUnknown}))
@@ -953,3 +968,118 @@ type cliProviderTestError struct {
 func (e cliProviderTestError) Error() string  { return "synthetic provider failure" }
 func (e cliProviderTestError) Class() error   { return e.class }
 func (e cliProviderTestError) Reason() string { return e.reason }
+
+func pushTestDefiniteRejection() error {
+	return fmt.Errorf("wrapped: %w", errors.Join(
+		service.ErrMaterialSubmissionRejected,
+		atproto.ErrCandidateMayBeDisclosed,
+		atproto.ErrPublicationQuota,
+		cliProviderTestError{class: service.ErrATProtoMaterialProvider, reason: "dispatch_rejected:400:QuotaExceeded"},
+	))
+}
+
+func TestPushReportsADefiniteSubmissionRejectionAndReviewsAgain(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	confirmation := confirmationFromOutput(t, stdout.String())
+
+	fixture.transport.sendErr = pushTestDefiniteRejection()
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	refused := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(refused, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
+	require.Equal(t, 4, code, stderr.String())
+	output := stdout.String()
+	assert.Contains(t, output, "push: rejected (stage=submission reason=submission_rejected")
+	assert.Contains(t, output, "provider=dispatch_rejected:400:QuotaExceeded")
+	assert.Contains(t, output, "the provider refused the submission and wrote no record")
+	assert.Contains(t, output, "retired locally and no longer blocks a review")
+	assert.NotContains(t, output, hex.EncodeToString(fixture.binding.Vault[:]))
+	assert.Contains(t, stderr.String(), "the provider refused the submission")
+	uploads, sends := fixture.transport.counts()
+	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 1, sends, "a refused submission dispatched writes twice")
+	_, active := fixture.localActiveAttempt(t)
+	assert.False(t, active, "a definite rejection left the attempt blocking")
+
+	fixture.transport.sendErr = nil
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	review := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(review, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code, stderr.String())
+	assert.Contains(t, stdout.String(), "push: review required")
+	assert.NotEqual(t, confirmation, confirmationFromOutput(t, stdout.String()), "the retired review was reissued")
+	assert.NotContains(t, stderr.String(), "unresolved publication attempt")
+	uploads, _ = fixture.transport.counts()
+	assert.Equal(t, 1, uploads, "the re-review uploaded a payload")
+}
+
+func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	confirmation := confirmationFromOutput(t, stdout.String())
+
+	fixture.transport.staleWrite = true
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	ambiguous := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(ambiguous, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
+	require.Equal(t, 4, code, stderr.String())
+	assert.NotContains(t, stdout.String(), "retired locally")
+
+	fixture.transport.staleWrite = false
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	blocked := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	code = runPushForTest(blocked, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	hint := stderr.String()
+	assert.Contains(t, hint, "a publication attempt is unresolved past submission")
+	assert.Contains(t, hint, fixture.paths.PublicationStateDir())
+	assert.Contains(t, hint, "local state: ")
+	assert.Contains(t, hint, "deleting that directory clears the blocking attempt")
+	assert.Contains(t, hint, "retracts nothing at the provider")
+	assert.Contains(t, hint, "discards the pending review")
+	assert.Contains(t, hint, "after deleting it, run dottie pull")
+	assert.Contains(t, hint, "already active")
+	_, active := fixture.localActiveAttempt(t)
+	assert.True(t, active, "the ambiguous attempt was retired without evidence")
+	_, sends := fixture.transport.counts()
+	assert.Equal(t, 1, sends, "the blocked review dispatched writes")
+}
+
+func TestSelectPublicationProposalIgnoresConsumedRecords(t *testing.T) {
+	binding := publicationstate.Binding{AccountDID: "did:plc:synthetic", Repository: "at://did:plc:synthetic", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{1}}
+	consumed := service.PublicationProposalRecord{Binding: binding, Consumed: true, PublicationID: [16]byte{1}}
+	live := service.PublicationProposalRecord{Binding: binding, PublicationID: [16]byte{2}}
+
+	selected, err := selectPublicationProposal([]service.PublicationProposalRecord{consumed, live}, binding, true, [32]byte{})
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, [16]byte{2}, selected.PublicationID, "the live proposal must be selected beside a consumed one")
+
+	_, err = selectPublicationProposal([]service.PublicationProposalRecord{consumed}, binding, true, [32]byte{})
+	assert.ErrorIs(t, err, service.ErrPublicationProposalConsumed)
+}

@@ -193,6 +193,7 @@ func TestPublicationStateUpgradeFromBaselineSchemaOneFixturePreservesRawRows(t *
 	require.NoError(t, err)
 
 	f := newFixture(t, BackendPublicRepo)
+	f.recordMIMEType = publication.BlobMIMEType
 	f.appendRecord(t, 0)
 	f.appendRecord(t, 1)
 	f.appendRecord(t, 2)

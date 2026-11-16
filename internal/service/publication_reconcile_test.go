@@ -55,7 +55,7 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob:          publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Blob:          publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

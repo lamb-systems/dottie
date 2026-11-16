@@ -196,6 +196,10 @@ func preserveTerminalOutcome(stored storedAttempt, next AttemptOutcome, evidence
 		if next != OutcomeLostFence {
 			return classified(ErrContinuity, StageResolve, ReasonCorrupt)
 		}
+	case OutcomeRejected:
+		if next != OutcomeRejected {
+			return classified(ErrContinuity, StageResolve, ReasonCorrupt)
+		}
 	}
 	if !terminalEvidenceExtends(stored.terminal, evidence) {
 		return classified(ErrContinuity, StageResolve, ReasonCorrupt)
@@ -215,7 +219,7 @@ func (s *Store) validateAttemptPolicy(core attemptCoreWire, context SuppliedCont
 }
 
 func terminalOutcome(outcome AttemptOutcome) bool {
-	return outcome == OutcomeCurrent || outcome == OutcomeSuperseded || outcome == OutcomeLostFence
+	return outcome == OutcomeCurrent || outcome == OutcomeSuperseded || outcome == OutcomeLostFence || outcome == OutcomeRejected
 }
 
 func terminalEvidenceExtends(old, next []byte) bool {

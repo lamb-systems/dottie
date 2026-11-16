@@ -125,7 +125,7 @@ func encodePublicationReconcileMaterial(t *testing.T, binding publicationstate.B
 	recordRaw, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
 		PublicationSeq: sequence, Parent: bytes.Clone(parent),
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordRaw)

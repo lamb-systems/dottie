@@ -312,7 +312,7 @@ func syncTestRecord(t *testing.T, binding publicationstate.Binding, payload []by
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
 		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload))},
+		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+7)
 	raw, err := publication.EncodeSnapshot(record)
@@ -610,6 +610,27 @@ func TestSyncPushRefusalAfterThePullHalfLeavesThePullApplied(t *testing.T) {
 	_, sends := fixture.transport.counts()
 	assert.Zero(t, sends, "a refused push half dispatched writes")
 	assert.Zero(t, fixture.proposalCount(t), "a refused push half left a retained record")
+}
+
+func TestSyncPushHalfReportsADefiniteProviderRefusalWithoutPublishing(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	before := fixture.readFloor(t)
+	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	token := syncTestToken(t, stdout)
+
+	code, confirmed, stderr := runSyncForTest(t, fixture, syncTestHooks{push: func(fixture *syncTestFixture) {
+		fixture.transport.sendErr = pushTestDefiniteRejection()
+	}}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 4, code, stderr)
+	assert.Contains(t, confirmed, "push: rejected")
+	assert.Contains(t, stderr, "the push half did not commit")
+	assert.Contains(t, stderr, "nothing was published")
+	assert.Equal(t, syncTestRemoteA, readSyncFile(t, fixture, "a.txt"), "the pull half did not stay applied")
+	assert.Equal(t, before.Revision+1, fixture.readFloor(t).Revision, "the refused push half advanced the accepted floor")
+	_, sends := fixture.transport.counts()
+	assert.Equal(t, 1, sends, "the refused push half dispatched writes twice")
 }
 
 func TestSyncRefusesWhenThePostPullCandidateChangesDuringApply(t *testing.T) {

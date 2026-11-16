@@ -100,7 +100,7 @@ func encodePublicationCandidate(binding publicationstate.Binding, snapshot model
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 	}
-	blob := publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}
+	blob := publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}
 	var sequence uint64
 	parent := []byte{}
 	if present {

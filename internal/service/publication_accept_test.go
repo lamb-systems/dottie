@@ -70,7 +70,7 @@ func (fixture *publicationAcceptFixture) append(t *testing.T, content string) pu
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
 		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))},
+		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	}
 	record.PublicationID[15] = byte(sequence + 1)
 	raw, err := publication.EncodeSnapshot(record)

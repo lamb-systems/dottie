@@ -523,7 +523,7 @@ func publicationPreviewAcceptSuccessor(t *testing.T, fixture acceptedMaterialTes
 	old.PublicationSeq++
 	old.Parent = bytes.Clone(parentCID)
 	old.PublicationID[15]++
-	old.Blob = publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}
+	old.Blob = publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}
 	record, err := publication.EncodeSnapshot(old)
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(record)

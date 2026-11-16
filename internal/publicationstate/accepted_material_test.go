@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -339,4 +340,28 @@ func assertPayloadDirectoryPresent(directory string) error {
 		return errors.New("payload path is not a directory")
 	}
 	return nil
+}
+
+func TestPublicationAcceptedMaterialKeepsTheDeclaredBlobMediaType(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, BackendSpaces)
+	f.appendRecord(t, 0)
+	store, _ := newStore(t, f)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+	candidate := attemptCandidate(f, 0)
+	review := attemptReview()
+	attempt := createAndSubmitGenesis(t, store, f, attemptView(f, f.observation(1), true), candidate, review)
+	current := attemptView(f, f.observation(1), false)
+	loaded, err := store.LoadAttempt(ctx, attempt.ID)
+	require.NoError(t, err)
+	resolution, err := store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, current)
+	require.NoError(t, err)
+	finalized, err := store.FinalizeAttempt(ctx, attempt.ID, resolution.Attempt.StateDigest, current)
+	require.NoError(t, err)
+
+	material, err := store.ReadAcceptedMaterial(ctx, f.binding, finalized.Floor)
+	require.NoError(t, err)
+	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
+	require.NoError(t, err)
+	assert.Equal(t, publication.SnapshotBlobMIMEType, record.Blob.MIMEType)
 }

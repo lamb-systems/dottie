@@ -20,10 +20,11 @@ import (
 const testDID = "did:plc:abcdefghijklmnopqrstuvwx"
 
 type fixture struct {
-	t       testing.TB
-	binding Binding
-	payload []byte
-	blocks  []SnapshotBlock
+	t              testing.TB
+	binding        Binding
+	payload        []byte
+	blocks         []SnapshotBlock
+	recordMIMEType string
 }
 
 func newFixture(t *testing.T, backend Backend) fixture {
@@ -41,7 +42,7 @@ func newFixture(t *testing.T, backend Backend) fixture {
 	}
 	binding := Binding{AccountDID: testDID, Backend: backend, Repository: repository}
 	binding.Vault[0] = 9
-	return fixture{t: t, binding: binding, payload: bytes.Clone(blob.Payload)}
+	return fixture{t: t, binding: binding, payload: bytes.Clone(blob.Payload), recordMIMEType: publication.SnapshotBlobMIMEType}
 }
 
 func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
@@ -55,7 +56,7 @@ func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
 	}
 	blobCID, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload))}}
+	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload)), MIMEType: f.recordMIMEType}}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

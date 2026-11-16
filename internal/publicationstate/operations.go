@@ -1234,7 +1234,7 @@ func buildFloor(dbid [32]byte, binding Binding, observation validatedObservation
 
 func blobReference(raw []byte) publication.BlobReference {
 	record, _ := publication.DecodeSnapshot(raw)
-	return publication.BlobReference{CID: bytes.Clone(record.Blob.CID), Size: record.Blob.Size}
+	return publication.BlobReference{CID: bytes.Clone(record.Blob.CID), Size: record.Blob.Size, MIMEType: record.Blob.MIMEType}
 }
 
 func cloneFloor(floor Floor) Floor {

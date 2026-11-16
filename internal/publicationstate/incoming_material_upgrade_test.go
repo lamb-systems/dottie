@@ -538,6 +538,7 @@ func incomingMaterialUpgradeCopyV1(t *testing.T) (fixture, string, map[string]st
 	require.Len(t, companionRows, 6)
 
 	f := newFixture(t, BackendPublicRepo)
+	f.recordMIMEType = publication.BlobMIMEType
 	f.appendRecord(t, 0)
 	f.appendRecord(t, 1)
 	f.appendRecord(t, 2)
@@ -829,6 +830,7 @@ func incomingMaterialUpgradeIncomingTableRows(t *testing.T, ctx context.Context,
 func incomingMaterialUpgradePopulatedSource(t *testing.T, ctx context.Context) (fixture, *Store, Attempt, Finalization) {
 	t.Helper()
 	f := newFixture(t, BackendPublicRepo)
+	f.recordMIMEType = publication.BlobMIMEType
 	f.appendRecord(t, 0)
 	f.appendRecord(t, 1)
 	store, _ := newSchema2UnitStore(t, f)

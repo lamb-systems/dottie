@@ -114,7 +114,7 @@ func fixtureRecord(t *testing.T, f fixture, sequence uint64, parent []byte, pubI
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload))}}
+	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload)), MIMEType: publication.SnapshotBlobMIMEType}}
 	record.PublicationID[15] = pubID
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

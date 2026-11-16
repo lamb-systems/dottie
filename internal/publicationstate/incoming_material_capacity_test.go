@@ -26,7 +26,7 @@ func incomingCapacityAppendDistinctRecord(t *testing.T, f *fixture, sequence uin
 	payload := packFixtureContent(t, f.payload, content)
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload))}}
+	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType}}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

@@ -87,7 +87,7 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 			"parent":         atdata.Bytes(cloneRecordBytes(record.Parent)),
 			"blob": atdata.Blob{
 				Ref:      atdata.CIDLink(blobCID),
-				MimeType: BlobMIMEType,
+				MimeType: record.Blob.MIMEType,
 				Size:     int64(record.Blob.Size),
 			},
 		}, nil

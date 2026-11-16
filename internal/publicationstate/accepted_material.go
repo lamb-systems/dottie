@@ -240,7 +240,7 @@ func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, f
 	if err != nil || !validPayloadBasename(basename) || basename != wantedBasename {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return basename, record.raw, publication.BlobReference{CID: bytes.Clone(floor.BlobCID), Size: floor.BlobSize}, nil
+	return basename, record.raw, blobReference(record.raw), nil
 }
 
 func (s *Store) incomingAcceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
@@ -281,7 +281,7 @@ func (s *Store) incomingAcceptedMaterialOwner(ctx context.Context, q queryer, fl
 	if err != nil || !validPayloadBasename(basename) {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return basename, record.raw, publication.BlobReference{CID: bytes.Clone(floor.BlobCID), Size: floor.BlobSize}, nil
+	return basename, record.raw, blobReference(record.raw), nil
 }
 
 func classifyAcceptedMaterialDirectory(err error, stage Stage) error {

@@ -269,7 +269,7 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		malformed := []byte("synthetic malformed packed payload bytes\n")
 		blobCID, err := publication.RawPayloadCID(malformed)
 		require.NoError(t, err)
-		blob := publication.BlobReference{CID: blobCID, Size: uint64(len(malformed))}
+		blob := publication.BlobReference{CID: blobCID, Size: uint64(len(malformed)), MIMEType: publication.SnapshotBlobMIMEType}
 		require.NoError(t, publication.VerifyPayload(malformed, blob), "the malformed bytes must be referenced exactly by the record")
 		record, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 			SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault,

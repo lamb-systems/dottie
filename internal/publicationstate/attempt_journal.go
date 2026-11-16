@@ -26,7 +26,7 @@ func validateAttemptJournalProjection(kinds []string, stored storedAttempt, stag
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.blocked = "blocked-floor-replaced"
-		case "outcome-observed-absent-unresolved", "outcome-observed-current", "outcome-committed-superseded", "outcome-lost-fence":
+		case "outcome-observed-absent-unresolved", "outcome-observed-current", "outcome-committed-superseded", "outcome-lost-fence", "outcome-provider-rejected":
 			if projection.lifecycle != AttemptMayHaveSubmitted {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
@@ -83,6 +83,8 @@ func attemptOutcomeForEvent(kind string) (AttemptOutcome, bool) {
 		return OutcomeSuperseded, true
 	case "outcome-lost-fence":
 		return OutcomeLostFence, true
+	case "outcome-provider-rejected":
+		return OutcomeRejected, true
 	default:
 		return "", false
 	}
@@ -94,7 +96,7 @@ func attemptOutcomeTransitionAllowed(previous, next AttemptOutcome) bool {
 	}
 	switch previous {
 	case OutcomeUnresolved, OutcomeAbsentUnresolved:
-		return next == OutcomeAbsentUnresolved || next == OutcomeCurrent || next == OutcomeSuperseded || next == OutcomeLostFence
+		return next == OutcomeAbsentUnresolved || next == OutcomeCurrent || next == OutcomeSuperseded || next == OutcomeLostFence || next == OutcomeRejected
 	case OutcomeCurrent:
 		return next == OutcomeSuperseded
 	default:

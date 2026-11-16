@@ -50,18 +50,20 @@ type MemoryPDSHooks struct {
 	RejectNextApplyWritesAfterBlobProcessingCode   string
 	RejectNextApplyWritesAfterBlobProcessingStatus int
 	GetBlobStatus                                  int
+	CanonicalizeBlobMIMEType                       bool
 }
 
 type MemoryPDS struct {
-	mu      sync.Mutex
-	did     string
-	key     *atcrypto.PrivateKeyP256
-	current SignedRevision
-	records map[string]Record
-	blobs   map[string][]byte
-	exposed map[string]bool
-	hooks   MemoryPDSHooks
-	calls   []string
+	mu            sync.Mutex
+	did           string
+	key           *atcrypto.PrivateKeyP256
+	current       SignedRevision
+	records       map[string]Record
+	blobs         map[string][]byte
+	blobMIMETypes map[string]string
+	exposed       map[string]bool
+	hooks         MemoryPDSHooks
+	calls         []string
 }
 
 type applyWrite struct {
@@ -94,7 +96,7 @@ func NewMemoryPDS(did string, signingKey *atcrypto.PrivateKeyP256) (*MemoryPDS, 
 	}
 	return &MemoryPDS{
 		did: did, key: signingKey, current: initial,
-		records: make(map[string]Record), blobs: make(map[string][]byte), exposed: make(map[string]bool),
+		records: make(map[string]Record), blobs: make(map[string][]byte), blobMIMETypes: make(map[string]string), exposed: make(map[string]bool),
 	}, nil
 }
 
@@ -159,6 +161,7 @@ func (p *MemoryPDS) RemoveBlob(blobCID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.blobs, blobCID)
+	delete(p.blobMIMETypes, blobCID)
 }
 
 func (p *MemoryPDS) RemoveRecord(collection, rkey string) error {
@@ -294,6 +297,10 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 			return errorResponse(400, "InvalidBlob")
 		}
 		p.blobs[blob.CID.String()] = bytes.Clone(body)
+		if p.hooks.CanonicalizeBlobMIMEType {
+			blob.Reference.MimeType = canonicalBlobMIMEType(body)
+			p.blobMIMETypes[blob.CID.String()] = blob.Reference.MimeType
+		}
 		return jsonResponse(200, map[string]any{"blob": blob.Reference})
 	case "com.atproto.repo.applyWrites":
 		if method != "POST" || contentType != "application/json" {
@@ -401,6 +408,12 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 			value, err := atdata.UnmarshalJSON(write.Value)
 			if err != nil || value["$type"] != write.Collection {
 				return errorResponse(400, "InvalidRecord")
+			}
+			for _, blob := range atdata.ExtractBlobs(value) {
+				storedMIMEType, tracked := p.blobMIMETypes[cid.Cid(blob.Ref).String()]
+				if tracked && blob.MimeType != storedMIMEType {
+					return errorResponse(400, "InvalidMimeType")
+				}
 			}
 			encoded, err := atdata.MarshalCBOR(value)
 			if err != nil || len(encoded) > maxRecordBytes {

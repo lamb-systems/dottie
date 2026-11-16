@@ -40,7 +40,7 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 		PublicationID:  publicationID,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob:           publication.BlobReference{CID: payloadCID, Size: uint64(len(payload))},
+		Blob:           publication.BlobReference{CID: payloadCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
 	}
 	snapshotBytes, err := publication.EncodeSnapshot(snapshotRecord)
 	require.NoError(t, err)

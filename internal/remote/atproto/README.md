@@ -659,5 +659,10 @@ The Linux `gsettings` two-machine gate that drove one shared `atprototest.Memory
 genesis, ordinary publication, enrollment and revocation compositions was deleted with the retired v1
 read/preview/restore command surface. `atprototest.MemoryPDS` and the real `VaultReader` are still
 exercised by the single-machine coordinator and CLI suites; no two-machine run covers them any more, and
-reinstating one on the v2 apply path is an open follow-up. Full CLI-binary acceptance remains deferred to
+reinstating one on the v2 apply path is an open follow-up. `MemoryPDS` models a real provider's blob
+canonicalisation only behind the `MemoryPDSHooks.CanonicalizeBlobMIMEType` hook, which the v2
+publication suites enable: with it on, `uploadBlob` reports the media type it derives from the stored
+bytes (a USTAR archive is `application/x-tar`) and `applyWrites` refuses a record whose blob descriptor
+declares anything else with `400 InvalidMimeType`. With it off the double keeps its older, more
+permissive single `application/octet-stream` answer so the legacy v1 suites still describe v1 behaviour. Full CLI-binary acceptance remains deferred to
 a later CLI acceptance.

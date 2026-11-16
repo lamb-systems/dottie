@@ -156,6 +156,7 @@ func newPublicationPrivacyFixture(t *testing.T, reviewAnchor []byte, control *pu
 	require.NoError(t, err)
 	pds, err := atprototest.NewMemoryPDS(publicationPrivacyDID, repositoryKey)
 	require.NoError(t, err)
+	pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
 	var transport atproto.Transport = pds
 	if control != nil {
 		transport = publicationPrivacyLeakingTransport{base: pds, control: *control}
@@ -255,6 +256,34 @@ func (fixture *publicationPrivacyFixture) publish(t *testing.T) (service.Materia
 	require.False(t, preparation.NoOp)
 	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, request, preparation, preparation.Proposal.Confirmation)
 	return result, preparation, err
+}
+
+func (fixture *publicationPrivacyFixture) publishCandidatePayload(t *testing.T) []byte {
+	t.Helper()
+	_, preparation, err := fixture.prepareOnly(t)
+	require.NoError(t, err)
+	return bytes.Clone(preparation.Proposal.Candidate.Payload)
+}
+
+func (fixture *publicationPrivacyFixture) prepareOnly(t *testing.T) (service.PublicationPushRequest, service.PublicationPushPreparation, error) {
+	t.Helper()
+	request := fixture.request()
+	preparation, err := fixture.coordinator.PreparePublicationPush(context.Background(), request)
+	if err != nil {
+		return request, preparation, err
+	}
+	require.False(t, preparation.NoOp)
+	return request, preparation, nil
+}
+
+func (fixture *publicationPrivacyFixture) publishRejected(t *testing.T) (service.MaterialPublishResult, []byte, error) {
+	t.Helper()
+	ctx := context.Background()
+	request, preparation, err := fixture.prepareOnly(t)
+	require.NoError(t, err)
+	payload := bytes.Clone(preparation.Proposal.Candidate.Payload)
+	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, request, preparation, preparation.Proposal.Confirmation)
+	return result, payload, err
 }
 
 func (fixture *publicationPrivacyFixture) record(t *testing.T, collection, rkey string) []byte {
@@ -382,7 +411,7 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{RejectNextUploadBlobStatus: 413, RejectNextUploadBlobCode: "BlobTooLarge"})
+		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextUploadBlobStatus: 413, RejectNextUploadBlobCode: "BlobTooLarge"})
 
 		result, _, err := fixture.publish(t)
 		require.Error(t, err, "a rejected blob upload must refuse the publication")
@@ -404,30 +433,40 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{RejectNextApplyWritesStatus: 400, RejectNextApplyWritesCode: "InvalidRecord"})
+		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesStatus: 400, RejectNextApplyWritesCode: "InvalidRecord"})
 
-		result, _, err := fixture.publish(t)
+		result, candidatePayload, err := fixture.publishRejected(t)
 		require.Error(t, err, "a rejected record batch must refuse the publication")
-		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_unresolved")
+		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_rejected")
+		assert.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
+		assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
+		assert.NotErrorIs(t, err, atproto.ErrAmbiguousTransport)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 
-		candidate, err := fixture.store.ReadCandidate(context.Background(), result.Attempt.ID)
+		candidateBlobCID, err := publication.RawPayloadCID(candidatePayload)
 		require.NoError(t, err)
 		stored := fixture.pds.StoredBlobCIDs()
 		require.Len(t, stored, 1)
-		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidate.Blob.CID)}, stored)
-		assert.True(t, bytes.Contains(candidate.Payload, canaries.plaintext), "the retained provider blob is not the candidate payload")
+		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidateBlobCID)}, stored)
+		assert.True(t, bytes.Contains(candidatePayload, canaries.plaintext), "the retained provider blob is not the candidate payload")
 		assert.False(t, fixture.pds.BlobIsLive(stored[0]), "the retained plaintext blob must be unattached")
 		assert.False(t, fixture.pds.PubliclyRetrievable(stored[0]), "the synthetic provider serves only referenced blobs")
-		_, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidate.Blob.CID, int64(candidate.Blob.Size))
+		_, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidateBlobCID, int64(len(candidatePayload)))
 		assert.ErrorIs(t, fetchErr, atproto.ErrReadBlobMissing)
 
 		assert.Empty(t, fixture.pds.CurrentRevision().Records, "a rejected batch must leave no record behind")
 		require.Empty(t, publicationPrivacyScan(t, fixture, canaries.allCanaries))
 		assert.False(t, fixture.floorPresent(t), "a rejected batch must not advance the accepted floor")
 		attempt := fixture.attempt(t, result.Attempt.ID)
-		assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, attempt.Lifecycle)
-		assert.Equal(t, publicationstate.OutcomeUnresolved, attempt.Outcome)
+		assert.Equal(t, publicationstate.AttemptRetiredAbandoned, attempt.Lifecycle)
+		assert.Equal(t, publicationstate.OutcomeRejected, attempt.Outcome)
+		_, active, activeErr := fixture.store.ActiveAttempt(context.Background())
+		require.NoError(t, activeErr)
+		assert.False(t, active, "a definite provider refusal left the attempt blocking")
+		_, custodyErr := fixture.store.ReadCandidate(context.Background(), result.Attempt.ID)
+		var custodyState *publicationstate.Error
+		require.ErrorAs(t, custodyErr, &custodyState)
+		assert.Equal(t, publicationstate.ReasonCandidateMissing, custodyState.Reason())
 	})
 
 	t.Run("record batch rejected after blob processing", func(t *testing.T) {
@@ -435,29 +474,31 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{RejectNextApplyWritesAfterBlobProcessing: true})
+		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesAfterBlobProcessing: true})
 
-		result, _, err := fixture.publish(t)
+		result, candidatePayload, err := fixture.publishRejected(t)
 		require.Error(t, err, "a rejected record batch must refuse the publication")
-		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_unresolved")
+		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_rejected")
 		assert.ErrorIs(t, err, atproto.ErrPublicationQuota)
+		assert.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
+		assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 
-		candidate, err := fixture.store.ReadCandidate(context.Background(), result.Attempt.ID)
+		candidateBlobCID, err := publication.RawPayloadCID(candidatePayload)
 		require.NoError(t, err)
 		stored := fixture.pds.StoredBlobCIDs()
 		require.Len(t, stored, 1)
-		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidate.Blob.CID)}, stored)
+		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidateBlobCID)}, stored)
 		assert.False(t, fixture.pds.BlobIsLive(stored[0]))
 		assert.True(t, fixture.pds.PubliclyRetrievable(stored[0]), "the modeled post-processing window must expose the unattached plaintext blob")
-		retrieved, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidate.Blob.CID, int64(candidate.Blob.Size))
+		retrieved, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidateBlobCID, int64(len(candidatePayload)))
 		require.NoError(t, fetchErr)
-		assert.True(t, bytes.Equal(candidate.Payload, retrieved))
+		assert.True(t, bytes.Equal(candidatePayload, retrieved))
 		assert.Empty(t, fixture.pds.CurrentRevision().Records, "a rejected batch must leave no record behind")
 		assert.False(t, fixture.floorPresent(t), "a rejected batch must not advance the accepted floor")
 		attempt := fixture.attempt(t, result.Attempt.ID)
-		assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, attempt.Lifecycle)
-		assert.Equal(t, publicationstate.OutcomeUnresolved, attempt.Outcome)
+		assert.Equal(t, publicationstate.AttemptRetiredAbandoned, attempt.Lifecycle)
+		assert.Equal(t, publicationstate.OutcomeRejected, attempt.Outcome)
 	})
 
 	t.Run("ambiguous commit response", func(t *testing.T) {
@@ -465,7 +506,7 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{LoseNextApplyWritesResponse: true})
+		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, LoseNextApplyWritesResponse: true})
 
 		result, _, err := fixture.publish(t)
 		require.Error(t, err, "a lost commit response must not be reported as a success")

@@ -62,6 +62,7 @@ const (
 	publishMaterialReasonSubmission     publishMaterialReason = "submission_mismatch"
 	publishMaterialReasonUpload         publishMaterialReason = "upload_failed"
 	publishMaterialReasonUnresolved     publishMaterialReason = "submission_unresolved"
+	publishMaterialReasonRejected       publishMaterialReason = "submission_rejected"
 	publishMaterialReasonOutcome        publishMaterialReason = "outcome_not_current"
 	publishMaterialReasonReview         publishMaterialReason = "review_changed"
 	publishMaterialReasonReviewMismatch publishMaterialReason = "review_mismatch"
@@ -234,6 +235,10 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	if err != nil || !bytes.Equal(payloadCID, proposal.Blob.CID) || uint64(len(proposal.Candidate.Payload)) != proposal.Blob.Size {
 		return MaterialPublishResult{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBlob, err)
 	}
+	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+	if err != nil || sealed.Blob.MIMEType != proposal.Blob.MIMEType {
+		return MaterialPublishResult{}, publishMaterialFailure(ctx, publishMaterialStageBatch, publishMaterialReasonBlob, err)
+	}
 	observation, err := proposal.Transport.ReadView(ctx)
 	if err != nil {
 		return MaterialPublishResult{}, publishMaterialFailure(ctx, publishMaterialStageView, publishMaterialReasonView, err)
@@ -265,7 +270,7 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 	if err != nil {
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageUpload, publishMaterialReasonUpload, err)
 	}
-	if !sameMaterialBlob(uploaded, proposal.Blob) {
+	if !sameMaterialBlob(uploaded, proposal.Blob) || uploaded.MIMEType != sealed.Blob.MIMEType {
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageUpload, publishMaterialReasonBlob, nil)
 	}
 	review, configToken, guard, err := proposal.Reviews.Acquire(ctx)
@@ -299,7 +304,10 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 		return MaterialPublishResult{Attempt: attempt}, publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonSubmission, nil)
 	}
 	if _, err := dispatch.send(ctx, proposal.Transport); err != nil {
-		return MaterialPublishResult{Attempt: attempt}, err
+		if !errors.Is(err, ErrMaterialSubmissionRejected) {
+			return MaterialPublishResult{Attempt: attempt}, err
+		}
+		return coordinator.retireRejectedMaterialSubmission(ctx, proposal, attempt, err)
 	}
 	resolved, err := proposal.Transport.ReadView(ctx)
 	if err != nil {
@@ -321,6 +329,19 @@ func (coordinator *Coordinator) PublishMaterial(ctx context.Context, proposal Ma
 		return MaterialPublishResult{Attempt: resolution.Attempt, Outcome: resolution.Outcome}, err
 	}
 	return MaterialPublishResult{Floor: finalization.Floor, Attempt: finalization.Attempt, Outcome: resolution.Outcome}, nil
+}
+
+func (coordinator *Coordinator) retireRejectedMaterialSubmission(ctx context.Context, proposal MaterialPublishProposal, attempt publicationstate.Attempt, cause error) (MaterialPublishResult, error) {
+	refusal := publishMaterialFailure(ctx, publishMaterialStageSubmission, publishMaterialReasonRejected, cause)
+	submitted, err := proposal.Store.LoadAttempt(ctx, attempt.ID)
+	if err != nil {
+		return MaterialPublishResult{Attempt: attempt}, errors.Join(refusal, err)
+	}
+	rejected, err := proposal.Store.RejectAttempt(ctx, submitted.ID, submitted.StateDigest)
+	if err != nil {
+		return MaterialPublishResult{Attempt: submitted}, errors.Join(refusal, err)
+	}
+	return MaterialPublishResult{Attempt: rejected, Outcome: publicationstate.OutcomeRejected}, refusal
 }
 
 func newMaterialWriteBatch(binding publicationstate.Binding, captured *publicationstate.Floor, view publicationstate.SuppliedRepositoryView, candidate publicationstate.CandidateInput) (MaterialWriteBatch, error) {
@@ -505,7 +526,7 @@ func validMaterialPublishProposal(proposal MaterialPublishProposal) bool {
 	if len(proposal.Batch.SnapshotRecord) == 0 || len(proposal.Batch.ExpectedSnapshotCID) == 0 || len(proposal.Batch.HeadRecord) == 0 {
 		return false
 	}
-	return len(proposal.Blob.CID) != 0 && proposal.Blob.Size != 0
+	return len(proposal.Blob.CID) != 0 && proposal.Blob.Size != 0 && proposal.Blob.MIMEType != ""
 }
 
 func validMaterialBinding(binding publicationstate.Binding) bool {

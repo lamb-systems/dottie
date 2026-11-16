@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A v2 publication pointer to one plaintext snapshot payload. The payload profile is vault Version 1 with CodecNone: canonical uncompressed USTAR and JSON manifest. The blob is application/octet-stream and is limited to 402653184 bytes inclusive. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
+      "description": "A v2 publication pointer to one plaintext snapshot payload. The payload profile is vault Version 1 with CodecNone: canonical uncompressed USTAR and JSON manifest. The blob is the USTAR archive the packer emits (application/x-tar) and is limited to 402653184 bytes inclusive. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
       "key": "any",
       "record": {
         "type": "object",
@@ -43,7 +43,7 @@
           "blob": {
             "type": "blob",
             "accept": [
-              "application/octet-stream"
+              "application/x-tar"
             ],
             "maxSize": 402653184
           }

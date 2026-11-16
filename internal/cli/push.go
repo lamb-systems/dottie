@@ -160,7 +160,7 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	}
 	preparation, err := ports.Coordinator.PreparePublicationPush(ctx, request)
 	if err != nil {
-		return pushPreparationFailure(command, err)
+		return pushPreparationFailure(command, ports.Paths, err)
 	}
 	if preparation.NoOp {
 		output := "push: no-op\nnothing to publish; the accepted position already holds the reviewed snapshot\n"
@@ -189,6 +189,9 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	}
 	if publishErr != nil {
 		output += renderPushFailure(status, publishErr)
+		if errors.Is(publishErr, service.ErrMaterialSubmissionRejected) {
+			output += renderPushRejection(result)
+		}
 	} else {
 		output += renderPush(status)
 	}
@@ -199,6 +202,9 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		}
 		return err
 	}
+	if publishErr != nil && errors.Is(publishErr, service.ErrMaterialSubmissionRejected) {
+		return urfave.Exit("push did not publish: the provider refused the submission and no record was written", 4)
+	}
 	return pushExit(status)
 }
 
@@ -206,13 +212,15 @@ func selectPublicationProposal(records []service.PublicationProposalRecord, bind
 	if confirmed {
 		var retained *service.PublicationProposalRecord
 		matches := 0
+		consumed := 0
 		for index := range records {
 			record := records[index]
 			if record.Binding != binding {
 				continue
 			}
 			if record.Consumed {
-				return nil, service.ErrPublicationProposalConsumed
+				consumed++
+				continue
 			}
 			matches++
 			if matches > 1 {
@@ -221,6 +229,9 @@ func selectPublicationProposal(records []service.PublicationProposalRecord, bind
 			retained = &records[index]
 		}
 		if retained == nil {
+			if consumed > 0 {
+				return nil, service.ErrPublicationProposalConsumed
+			}
 			return nil, service.ErrPublicationProposalAbsent
 		}
 		return retained, nil
@@ -275,11 +286,12 @@ func pushStoreFailure(err error) string {
 	return "push refused: the local publication position store cannot be opened; it was left unchanged"
 }
 
-func pushPreparationFailure(command *urfave.Command, err error) error {
+func pushPreparationFailure(command *urfave.Command, paths platform.Paths, err error) error {
 	switch {
 	case errors.Is(err, service.ErrPublicationProposalConsumed):
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
-	case errors.Is(err, service.ErrPublicationProposalActive):
+	case errors.Is(err, service.ErrPublicationProposalActive), errors.Is(err, service.ErrPublicationProposalUnresolved):
+		writeUnresolvedAttemptHint(command, paths.PublicationStateDir())
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	case errors.Is(err, service.ErrPublicationProposalStale):
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
@@ -307,6 +319,9 @@ type materialSubmissionFailure interface {
 func pushMaterialStatus(err error) service.StatusState {
 	if err == nil {
 		return service.StatusCommitted
+	}
+	if errors.Is(err, service.ErrMaterialSubmissionRejected) {
+		return service.StatusRejected
 	}
 	var submissionFailure materialSubmissionFailure
 	if errors.As(err, &submissionFailure) && submissionFailure.Stage() == "submission" {
@@ -483,6 +498,24 @@ func openPublicationPushSources(ctx context.Context, command *urfave.Command, se
 			Configuration: loaded, Close: closeResources,
 		}, nil
 	}
+}
+
+func renderPushRejection(result service.MaterialPublishResult) string {
+	rendered := "push: the provider refused the submission and wrote no record; the candidate payload may still be retrievable by CID\n"
+	if result.Attempt.Lifecycle == publicationstate.AttemptRetiredAbandoned {
+		return rendered + "push: the unresolved attempt was retired locally and no longer blocks a review; re-run dottie push to review again\n"
+	}
+	return rendered + "push: the unresolved attempt was left active and still blocks a review; re-run dottie push for the recovery steps\n"
+}
+
+func writeUnresolvedAttemptHint(command *urfave.Command, directory string) {
+	writer := command.Root().ErrWriter
+	fmt.Fprintln(writer, "dottie: push: a publication attempt is unresolved past submission and blocks this review")
+	fmt.Fprintf(writer, "dottie: local state: %s\n", escapeField(directory))
+	fmt.Fprintln(writer, "dottie: the local state cannot prove whether that attempt published a record; its provider outcome is unknown")
+	fmt.Fprintln(writer, "dottie: local, not provider, surgery: deleting that directory clears the blocking attempt and retracts nothing at the provider")
+	fmt.Fprintln(writer, "dottie: it discards the pending review, the accepted position and the attempt history held there")
+	fmt.Fprintln(writer, "dottie: after deleting it, run dottie pull to re-record the provider position, then dottie push to review a fresh candidate")
 }
 
 func renderPush(status service.StatusState) string {

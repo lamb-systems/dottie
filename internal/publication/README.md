@@ -37,8 +37,15 @@ Snapshot records use 16-digit zero-padded ASCII decimal sequence keys and sequen
 9007199254740991. A sequence-zero parent is an empty byte string; later snapshots must name the exact
 previous snapshot record CID. Head binding compares vault, sequence, snapshot key, snapshot record
 CID, and payload CID. Record CIDs are CIDv1 DAG-CBOR/SHA2-256/32-byte digest; payload CIDs are CIDv1
-raw/SHA2-256/32-byte digest. The blob MIME type is `application/octet-stream`, and the payload size
-is positive and at most 402653184 bytes.
+raw/SHA2-256/32-byte digest. The record's blob descriptor declares the media type the packer
+produces, `application/x-tar`, and the payload size is positive and at most 402653184 bytes.
+`BlobMIMEType` (`application/octet-stream`) remains only the request `Content-Type` for the upload; it
+is never asserted against a provider answer. Records written before this correction declared
+`application/octet-stream` and still decode and re-encode byte-for-byte, because the declared type is
+carried in the record rather than re-derived from a constant. The encoder writes the record's own
+value, and both the encode-side validation and the decoder accept exactly the supported set
+(`application/x-tar`, plus the pre-correction `application/octet-stream`); nothing re-derives the type
+from a constant when re-encoding a record or converting it to JSON.
 
 The snapshot NSID pins the payload profile to `vault.Version` 1 and `vault.CodecNone`: canonical
 uncompressed USTAR and JSON-manifest Pack output, without a DTE envelope. A different payload format
@@ -59,4 +66,8 @@ membership, authorship, global freshness, privacy, or provider behavior. The unw
 validating a candidate. Remote fetch, service coordination and CLI integration remain unwired, and
 this use does not change the package's authentication boundary. Its v2 attempt layer's first-conflict
 retention also preserves caller-supplied structural evidence only; it is not provider-authenticated.
-Provider conformance for the fixed MIME type is deferred to transport work.
+Provider conformance is not assumed: `ATProtoMaterialTransport.UploadPayload` returns the media type the
+provider reported for the uploaded blob, and `PublishMaterial` refuses the publication
+(`upload/blob_mismatch`, nothing written, no candidate bytes surfaced) when that answer differs from the
+type the reviewed record declares. A provider that canonicalises the packed archive differently is
+therefore refused locally instead of failing later at `applyWrites`.

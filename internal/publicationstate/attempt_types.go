@@ -80,6 +80,7 @@ const (
 	OutcomeCurrent            AttemptOutcome      = "observed-current"
 	OutcomeSuperseded         AttemptOutcome      = "committed-superseded"
 	OutcomeLostFence          AttemptOutcome      = "lost-fence"
+	OutcomeRejected           AttemptOutcome      = "provider-rejected"
 	AvailabilityUnchecked     AttemptAvailability = "unchecked"
 	AvailabilityAvailable     AttemptAvailability = "available-and-decoded"
 	AvailabilityMissing       AttemptAvailability = "missing"

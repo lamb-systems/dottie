@@ -22,7 +22,7 @@ func TestPublicationV2StatePersistsOnlyAcceptedPositionEvidence(t *testing.T) {
 	binding.Vault[0] = 0x52
 	blobCID, err := publication.RawPayloadCID(packed.Payload)
 	require.NoError(t, err)
-	recordBytes, err := publication.EncodeSnapshot(publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: [16]byte{0x31}, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload))}})
+	recordBytes, err := publication.EncodeSnapshot(publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: [16]byte{0x31}, PublicationSeq: 0, Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordBytes)
 	require.NoError(t, err)
