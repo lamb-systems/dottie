@@ -87,7 +87,8 @@ type pullViewReasoner interface {
 func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyringFactory, env func(string) string) int {
 	code := 0
 	command := newPullCommand(stdout, stderr, &code,
-		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env), productionPullApplySourcesFactory(env), env)
+		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env), productionPullApplySourcesFactory(env),
+		productionSessionDIDSource(openKeyring, env), env)
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
 	if err := command.Run(ctx, arguments); err != nil && code == 0 {
@@ -96,7 +97,7 @@ func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, env func(string) string) *urfave.Command {
+func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -117,7 +118,7 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier apply plan", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runPullCommand(ctx, command, sessions, remotes, applySources, env)
+			return runPullCommand(ctx, command, sessions, remotes, applySources, dids, env)
 		},
 	})
 	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{pull}, Writer: stdout, ErrWriter: stderr})
@@ -138,15 +139,19 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, env func(string) string) error {
+func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) error {
 	if command.NArg() != 0 {
 		return usageExit("pull takes no positional arguments")
 	}
-	if command.String("did") == "" {
-		return usageExit("pull requires --did DID")
-	}
 	if command.IsSet("handle") {
 		return usageExit("pull requires --did; a handle cannot be resolved before the publication scope check")
+	}
+	resolved, err := resolveAccountDID(ctx, command, dids)
+	if err != nil {
+		return accountDIDRefusal("pull", err)
+	}
+	if err := writeResolvedAccount(command, resolved); err != nil {
+		return err
 	}
 	var confirmation [32]byte
 	if command.IsSet("confirm") {

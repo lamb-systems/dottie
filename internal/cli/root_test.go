@@ -25,7 +25,7 @@ func TestRun(t *testing.T) {
 		{name: "short help", args: []string{"-h"}, code: 0, out: "Usage:"},
 		{name: "version", args: []string{"version"}, code: 0, out: "dottie dev (scaffold)"},
 		{name: "version flag", args: []string{"--version"}, code: 0, out: "dottie dev (scaffold)"},
-		{name: "sync requires the did selector", args: []string{"sync"}, code: 2, err: "sync requires --did DID"},
+		{name: "sync rejects an unknown handle flag", args: []string{"sync", "--handle", "example.test"}, code: 2, err: "flag provided but not defined"},
 		{name: "unimplemented daemon", args: []string{"serve"}, code: 2, err: "unsupported command"},
 		{name: "unimplemented login", args: []string{"login"}, code: 2, err: "unsupported command"},
 		{name: "unknown", args: []string{"unknown"}, code: 2, err: "unsupported command"},

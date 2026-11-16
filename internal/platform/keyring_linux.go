@@ -133,6 +133,21 @@ func (k *Keyring) DeleteDeviceKeys(ctx context.Context, vaultID [32]byte, device
 	return k.Delete(ctx, deviceKeyringItemName(vaultID, deviceID))
 }
 
+func (k *Keyring) ListItems(ctx context.Context, prefix string) ([]string, error) {
+	if k == nil || k.backend == nil || prefix == "" {
+		return nil, ErrKeyringUnavailable
+	}
+	lister, ok := k.backend.(keyringItemLister)
+	if !ok {
+		return nil, ErrKeyringUnavailable
+	}
+	names, err := lister.ListItems(ctx, prefix)
+	if err != nil {
+		return nil, classifyKeyringError(err)
+	}
+	return append([]string(nil), names...), nil
+}
+
 func (k *Keyring) LoadDeviceKeysForVault(ctx context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
 	if k == nil || k.backend == nil || vaultID == ([32]byte{}) {
 		return nil, ErrKeyringUnavailable

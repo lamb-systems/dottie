@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -375,6 +376,11 @@ type syncTestHooks struct {
 
 func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks, args ...string) (int, string, string) {
 	t.Helper()
+	return runSyncForTestWithDIDs(t, fixture, hooks, pushTestDIDs(fixture.binding.AccountDID), args...)
+}
+
+func runSyncForTestWithDIDs(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks, dids sessionDIDSource, args ...string) (int, string, string) {
+	t.Helper()
 	fixture.setEnvironment(t)
 	var stdout, stderr bytes.Buffer
 	exitCode := 0
@@ -405,7 +411,7 @@ func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks,
 			Configuration: fixture.configuration, Close: func() {},
 		}, nil
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes)
+	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes, dids)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "sync"}, args...)); err != nil && exitCode == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -663,7 +669,6 @@ func TestSyncRequiresTheDIDSelectorAndRejectsUnknownFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing did", args: nil, want: "sync requires --did DID"},
 		{name: "handle instead of did", args: []string{"--handle", "example.test"}, want: "flag provided but not defined"},
 		{name: "malformed vault", args: []string{"--did", fixture.binding.AccountDID, "--vault", "abcd"}, want: "--vault must be a 32-byte hexadecimal identifier"},
 		{name: "malformed confirmation", args: []string{"--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", "abcd"}, want: "32-byte hexadecimal confirmation"},
@@ -796,4 +801,84 @@ func TestSyncRefusesAProviderViewThatDivergesWhileTheFloorStillMatches(t *testin
 	assert.Zero(t, uploads, "a diverged provider view uploaded")
 	assert.Zero(t, sends, "a diverged provider view dispatched writes")
 	assert.Zero(t, fixture.proposalCount(t), "a diverged provider view left a retained record")
+}
+
+func TestSyncResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	before := fixture.readFloor(t)
+	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(fixture.binding.AccountDID), "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)")
+	assert.Contains(t, stdout, "pull: diverges (record_cid)")
+	assert.Contains(t, stdout, "sync: plan only; nothing was applied or published")
+	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision, "the unconfirmed run advanced the floor")
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads)
+	assert.Zero(t, sends)
+}
+
+func TestSyncRefusesWithoutAnyAuthorisedSession(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	before := publicationStateEntries(t, fixture.paths.PublicationStateDir())
+	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs())
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "dottie: sync refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr)
+	assert.Equal(t, before, publicationStateEntries(t, fixture.paths.PublicationStateDir()), "the refusal wrote local state")
+}
+
+func TestSyncRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	before := fixture.readFloor(t)
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(fixture.binding.AccountDID, other), "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "dottie: sync refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr)
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads, "the ambiguous refusal uploaded a payload")
+	assert.Zero(t, sends, "the ambiguous refusal dispatched writes")
+	assert.Zero(t, fixture.proposalCount(t), "the ambiguous refusal left a retained record")
+	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision, "the ambiguous refusal advanced the floor")
+	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"), "the ambiguous refusal applied the pull half")
+}
+
+func TestSyncProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(other, fixture.binding.AccountDID), "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.NotContains(t, stdout, "resolved from the only authorised session", "an explicit --did reported a session resolution")
+	assert.Contains(t, stdout, "pull: diverges (record_cid)")
+}
+
+func TestSyncRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.confirmedScenario(t)
+	fixture.setEnvironment(t)
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
+		return pushSession{}, atproto.ErrSessionNotFound
+	}
+	remotes := func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error) {
+		return pullRemote{}, errors.New("the provider reader must not be constructed")
+	}
+	previews := func(context.Context, *urfave.Command, publicationstate.Binding) (syncPushPreviewSources, error) {
+		return syncPushPreviewSources{}, errors.New("the preview must not be constructed")
+	}
+	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return publicationPushSources{}, errors.New("the push sources must not be constructed")
+	}
+	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
+	args := []string{"dottie", "sync", "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex()}
+	if err := command.Run(context.Background(), args); err != nil && exitCode == 0 {
+		command.ExitErrHandler(context.Background(), command, err)
+	}
+	require.Equal(t, 3, exitCode)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: sync refused: account session is unavailable\n", stderr.String())
 }

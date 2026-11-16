@@ -19,10 +19,10 @@ Usage:
   dottie targets mode <id> <auto-apply|review|backup-only>
   dottie plan --from FILE [--json]
   dottie status
-  dottie position status --did DID [--vault HEX]
-  dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]
-  dottie pull --did DID [--vault HEX] [--confirm HEX]
-  dottie sync --did DID [--vault HEX] [--confirm HEX]
+  dottie position status [--did DID] [--vault HEX]
+  dottie push [--did DID] [--vault HEX] [--device-id ID] [--confirm HEX]
+  dottie pull [--did DID] [--vault HEX] [--confirm HEX]
+  dottie sync [--did DID] [--vault HEX] [--confirm HEX]
   dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
   dottie account status (--did DID | --handle HANDLE) [--refresh]
   dottie account logout (--did DID | --handle HANDLE) [--remote]
@@ -47,10 +47,16 @@ Status is local-only and writes nothing: it reports the locally recorded vault s
 and device id, an explicit absence when no selection is recorded, then each selected target with its journal item
 count and state.
 
+Push, pull, sync and position status take --did as an optional selector. With one stored account session the command
+uses that session's DID and prints the account it resolved; two or more stored sessions refuse and require --did to
+choose, and no stored session refuses with exit 3 for want of an authorised account. There is no recency or
+recorded-binding heuristic, and --handle stays rejected because the publication scope check needs a DID.
+
 Position status inspects the local publication position store and is read-only: it prints the accepted floor or an
-empty marker, refuses an absent or unsafe store, and never prints the account DID, vault, repository, CIDs, absolute
-paths, counts, tokens or payload bytes. It resolves the vault from the recorded publication binding when --vault is
-omitted and uses --vault as an override. Refusals exit 3; exit 2 is usage only.
+empty marker, refuses an absent or unsafe store, and never prints the vault, repository, CIDs, absolute paths, counts,
+tokens or payload bytes; the account DID appears only in the resolved-session line that a run without --did prints. It
+resolves the vault from the recorded publication binding when --vault is omitted and uses --vault as an override.
+Refusals exit 3; exit 2 is usage only.
 
 Account login, status and logout manage the OAuth session in the desktop Secret Service keyring; they never touch
 target data. Account bootstrap requires a signed-in account that holds no Dottie publication, mints device keys,
@@ -77,7 +83,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runTargets(args[1:], stdout, stderr, os.Getenv)
 	}
 	if args[0] == "position" {
-		return runPosition(args[1:], stdout, stderr, os.Getenv)
+		return runPosition(args[1:], stdout, stderr, os.Getenv, func() (accountKeyring, error) { return platform.NewKeyring() })
 	}
 	switch args[0] {
 	case "status":

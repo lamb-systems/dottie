@@ -377,7 +377,7 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	command := newSyncCommand(stdout, stderr, &code,
 		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env),
 		productionPullApplySourcesFactory(env), productionSyncPushPreviewFactory(env),
-		productionPushSourcesFactory(openKeyring, env))
+		productionPushSourcesFactory(openKeyring, env), productionSessionDIDSource(openKeyring, env))
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
 	if err := command.Run(ctx, arguments); err != nil && code == 0 {
@@ -386,7 +386,7 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory) *urfave.Command {
+func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -406,7 +406,7 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier sync plan", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runSyncCommand(ctx, command, sessions, remotes, applySources, previews, pushes, os.Getenv)
+			return runSyncCommand(ctx, command, sessions, remotes, applySources, previews, pushes, dids, os.Getenv)
 		},
 	})
 	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{sync}, Writer: stdout, ErrWriter: stderr})
@@ -427,12 +427,16 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, env func(string) string) error {
+func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource, env func(string) string) error {
 	if command.NArg() != 0 {
 		return usageExit("sync takes no positional arguments")
 	}
-	if command.String("did") == "" {
-		return usageExit("sync requires --did DID")
+	resolved, err := resolveAccountDID(ctx, command, dids)
+	if err != nil {
+		return accountDIDRefusal("sync", err)
+	}
+	if err := writeResolvedAccount(command, resolved); err != nil {
+		return err
 	}
 	var confirmation [32]byte
 	if command.IsSet("confirm") {

@@ -141,3 +141,55 @@ func TestKeyringErrorsCarryNoRemoteText(t *testing.T) {
 	assert.Equal(t, "transport", keyringErrorClass(errors.New("plain failure")))
 	assert.Equal(t, "context", keyringErrorClass(context.DeadlineExceeded))
 }
+
+type fakeKeyringListingBackend struct {
+	*fakeKeyringBackend
+	prefixes []string
+	names    []string
+	listErr  error
+}
+
+func (f *fakeKeyringListingBackend) ListItems(_ context.Context, prefix string) ([]string, error) {
+	f.prefixes = append(f.prefixes, prefix)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]string(nil), f.names...), nil
+}
+
+func TestKeyringListItemsReturnsTheBackendNames(t *testing.T) {
+	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, names: []string{"session:one", "session:two"}}
+	keyring, err := NewKeyringWithBackend(backend)
+	require.NoError(t, err)
+	names, err := keyring.ListItems(context.Background(), "session:")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"session:one", "session:two"}, names)
+	assert.Equal(t, []string{"session:"}, backend.prefixes, "the prefix was not passed to the backend")
+}
+
+func TestKeyringListItemsRefusesAnEmptyPrefix(t *testing.T) {
+	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, names: []string{"session:one"}}
+	keyring, err := NewKeyringWithBackend(backend)
+	require.NoError(t, err)
+	names, err := keyring.ListItems(context.Background(), "")
+	assert.ErrorIs(t, err, ErrKeyringUnavailable)
+	assert.Empty(t, names)
+	assert.Empty(t, backend.prefixes, "an empty prefix reached the backend")
+}
+
+func TestKeyringListItemsRequiresABackendThatCanList(t *testing.T) {
+	keyring, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}})
+	require.NoError(t, err)
+	names, err := keyring.ListItems(context.Background(), "session:")
+	assert.ErrorIs(t, err, ErrKeyringUnavailable)
+	assert.Empty(t, names)
+}
+
+func TestKeyringListItemsReportsALockedCollection(t *testing.T) {
+	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, listErr: ErrKeyringLocked}
+	keyring, err := NewKeyringWithBackend(backend)
+	require.NoError(t, err)
+	names, err := keyring.ListItems(context.Background(), "session:")
+	assert.ErrorIs(t, err, ErrKeyringLocked)
+	assert.Empty(t, names)
+}

@@ -302,7 +302,7 @@ func (gate *joinGate) push(t *testing.T, machine *joinGateMachine, args ...strin
 	sources := func(ctx context.Context, _ *urfave.Command, _ pushSession) (publicationPushSources, error) {
 		return gate.pushSources(ctx)
 	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(gate.session().DID))
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "push"}, args...)); err != nil && code == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -318,7 +318,7 @@ func (gate *joinGate) pull(t *testing.T, machine *joinGateMachine, args ...strin
 	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
 		return pushSession{Session: gate.session()}, nil
 	}
-	command := newPullCommand(&stdout, &stderr, &code, sessions, gate.pullRemotes, productionPullApplySourcesFactory(os.Getenv), os.Getenv)
+	command := newPullCommand(&stdout, &stderr, &code, sessions, gate.pullRemotes, productionPullApplySourcesFactory(os.Getenv), pushTestDIDs(gate.session().DID), os.Getenv)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "pull"}, args...)); err != nil && code == 0 {
 		command.ExitErrHandler(ctx, command, err)

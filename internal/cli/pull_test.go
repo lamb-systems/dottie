@@ -275,6 +275,11 @@ func pullTestConfirmation(t *testing.T, output string) string {
 
 func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int) *urfave.Command {
 	t.Helper()
+	return newPullTestCommandWithDIDs(t, fixture, stdout, stderr, exitCode, session, sessionErr, reader, factoryCalls, pushTestDIDs(pullTestDID))
+}
+
+func newPullTestCommandWithDIDs(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int, dids sessionDIDSource) *urfave.Command {
+	t.Helper()
 	t.Setenv("HOME", fixture.paths.Home)
 	t.Setenv("XDG_CONFIG_HOME", fixture.paths.ConfigHome)
 	t.Setenv("XDG_STATE_HOME", fixture.paths.StateHome)
@@ -292,7 +297,7 @@ func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *
 		}
 		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Close: func() {}}, nil
 	}
-	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), os.Getenv)
+	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, productionPullApplySourcesFactory(os.Getenv), dids, os.Getenv)
 }
 
 func runPullForTest(command *urfave.Command, exitCode *int, args ...string) int {
@@ -684,7 +689,6 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "no selector", args: nil, want: "pull requires --did DID"},
 		{name: "handle instead of did", args: []string{"--did", pullTestDID, "--handle", "example.test", "--vault", pullTestVaultHex()}, want: "a handle cannot be resolved before the publication scope check"},
 		{name: "invalid did", args: []string{"--did", "not-a-did", "--vault", pullTestVaultHex()}, want: "--did must be a valid account DID"},
 		{name: "malformed vault", args: []string{"--did", pullTestDID, "--vault", "abcd"}, want: "--vault must be a 32-byte hexadecimal identifier"},
@@ -1031,4 +1035,76 @@ func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
 	assert.Equal(t, 3, exitError.ExitCode())
 	assert.Contains(t, refused.Error(), "accept-prepare/proposal_refused")
 	assert.Contains(t, refused.Error(), "nothing was changed")
+}
+
+func TestPullResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	reader := &pullTestReader{view: fixture.view()}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID))
+	code = runPullForTest(command, &code)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Empty(t, stderr.String())
+	assert.Equal(t, "account: "+pullTestDID+" (resolved from the only authorised session; --did was omitted)\npull: matches\n", stdout.String())
+}
+
+func TestPullRefusesWithoutAnyAuthorisedSession(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{}
+	factoryCalls := 0
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls, pushTestDIDs())
+	code = runPullForTest(command, &code)
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: pull refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr.String())
+	assert.Zero(t, factoryCalls, "the refusal constructed the provider reader")
+}
+
+func TestPullRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{view: fixture.view()}
+	factoryCalls := 0
+	var stdout, stderr bytes.Buffer
+	code := 0
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls, pushTestDIDs(pullTestDID, other))
+	code = runPullForTest(command, &code)
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: pull refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr.String())
+	assert.Zero(t, factoryCalls, "the ambiguous refusal constructed the provider reader")
+	_, statErr := os.Lstat(fixture.paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the ambiguous refusal created the position store")
+	assert.NoFileExists(t, fixture.targetPath("init.lua"), "the ambiguous refusal applied a file")
+}
+
+func TestPullProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	reader := &pullTestReader{view: fixture.view()}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(other, pullTestDID))
+	code = runPullForTest(command, &code, "--did", pullTestDID)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: matches\n", stdout.String())
+}
+
+func TestPullRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{}
+	factoryCalls := 0
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, nil, atproto.ErrSessionNotFound, reader, &factoryCalls)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: pull refused: account session is unavailable\n", stderr.String())
+	assert.Zero(t, factoryCalls, "a missing session constructed the provider reader")
 }

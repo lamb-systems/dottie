@@ -119,6 +119,12 @@ and replace-on-match item creation. A locked or unavailable keyring is a hard fa
 fallback. Partial or unknown-version envelopes require login, while local logout can delete an envelope by
 DID without decoding it.
 
+Listing the stored accounts is read-only: `Client.ListSessionDIDs` enumerates the `session:` items and
+reads only the envelope version and DID of each. It never decodes, logs or copies tokens, scopes or handles,
+never refreshes or rewrites a session, and counts distinct DIDs rather than items. An item that fails to
+decode, carries no valid DID, or is not named for the DID it holds refuses the whole listing, so a partially
+readable store is never reported as a shorter account list.
+
 Refresh resolves the handle (or the stored handle), checks discovered DID/issuer/token endpoint before any
 credential request, acquires the session lock, reloads the current item and checks those bindings again. It
 writes a secret-free `refresh-pending` marker before the token POST. A marker-save error sends no token. The

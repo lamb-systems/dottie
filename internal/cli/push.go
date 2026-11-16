@@ -43,7 +43,8 @@ type pushSourcesFactory func(context.Context, *urfave.Command, pushSession) (pub
 func runPush(args []string, stdout, stderr io.Writer, openKeyring accountKeyringFactory, env func(string) string) int {
 	code := 0
 	command := newPushCommand(stdout, stderr, &code,
-		productionPushSessionFactory(openKeyring, env), productionPushSourcesFactory(openKeyring, env))
+		productionPushSessionFactory(openKeyring, env), productionPushSourcesFactory(openKeyring, env),
+		productionSessionDIDSource(openKeyring, env))
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
 	if err := command.Run(ctx, arguments); err != nil && code == 0 {
@@ -52,7 +53,7 @@ func runPush(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, sources pushSourcesFactory) *urfave.Command {
+func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, sources pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -74,7 +75,7 @@ func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier review", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runPushCommand(ctx, command, sessions, sources)
+			return runPushCommand(ctx, command, sessions, sources, dids)
 		},
 	})
 	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push}, Writer: stdout, ErrWriter: stderr})
@@ -95,18 +96,22 @@ func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, sources pushSourcesFactory) error {
+func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, sources pushSourcesFactory, dids sessionDIDSource) error {
 	if command.NArg() != 0 {
 		return usageExit("push takes no positional arguments")
-	}
-	if command.String("did") == "" {
-		return usageExit("push requires --did DID")
 	}
 	if command.IsSet("handle") {
 		return usageExit("push requires --did; a handle cannot be resolved before the publication scope check")
 	}
 	if command.IsSet("vault") && command.String("vault") == "" || command.IsSet("device-id") && command.String("device-id") == "" {
 		return usageExit("vault or device selector value is missing")
+	}
+	resolved, err := resolveAccountDID(ctx, command, dids)
+	if err != nil {
+		return accountDIDRefusal("push", err)
+	}
+	if err := writeResolvedAccount(command, resolved); err != nil {
+		return err
 	}
 	var confirmation [32]byte
 	if command.IsSet("confirm") {

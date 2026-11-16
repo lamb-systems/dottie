@@ -13,9 +13,9 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-func runPosition(args []string, stdout, stderr io.Writer, env func(string) string) int {
+func runPosition(args []string, stdout, stderr io.Writer, env func(string) string, openKeyring accountKeyringFactory) int {
 	exitCode := 0
-	command := newPositionCommand(stdout, stderr, &exitCode, env)
+	command := newPositionCommand(stdout, stderr, &exitCode, env, productionSessionDIDSource(openKeyring, env))
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
 	if err := command.Run(ctx, arguments); err != nil && exitCode == 0 {
@@ -24,7 +24,7 @@ func runPosition(args []string, stdout, stderr io.Writer, env func(string) strin
 	return exitCode
 }
 
-func newPositionCommand(stdout, stderr io.Writer, exitCode *int, env func(string) string) *urfave.Command {
+func newPositionCommand(stdout, stderr io.Writer, exitCode *int, env func(string) string, dids sessionDIDSource) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -44,7 +44,7 @@ func newPositionCommand(stdout, stderr io.Writer, exitCode *int, env func(string
 			&urfave.StringFlag{Name: "vault", Usage: "vault fingerprint (64 hexadecimal characters); defaults to the recorded binding", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runPositionStatus(ctx, command, env)
+			return runPositionStatus(ctx, command, env, dids)
 		},
 	})
 	root := configure(&urfave.Command{
@@ -74,12 +74,16 @@ func newPositionCommand(stdout, stderr io.Writer, exitCode *int, env func(string
 	return root
 }
 
-func runPositionStatus(ctx context.Context, command *urfave.Command, env func(string) string) error {
+func runPositionStatus(ctx context.Context, command *urfave.Command, env func(string) string, dids sessionDIDSource) error {
 	if command.NArg() != 0 {
 		return usageExit("position status takes no positional arguments")
 	}
-	if command.String("did") == "" {
-		return usageExit("position status requires --did DID")
+	resolved, err := resolveAccountDID(ctx, command, dids)
+	if err != nil {
+		return accountDIDRefusal("position status", err)
+	}
+	if err := writeResolvedAccount(command, resolved); err != nil {
+		return err
 	}
 	did, err := syntax.ParseDID(command.String("did"))
 	if err != nil {

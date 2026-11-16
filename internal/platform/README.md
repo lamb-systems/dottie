@@ -40,6 +40,11 @@ device signing and X25519 recipient private keys together, with attributes
 `ErrKeyringItemNotFound`; keyring service failures return `ErrKeyringUnavailable` (a locked
 collection remains `ErrKeyringLocked`). There is no file fallback.
 
+`ListItems(ctx, prefix)` enumerates the `name` attribute of Dottie's own items under one non-empty
+prefix, using the same D-Bus item listing the device-key inventory uses. It is read-only, it never
+creates, unlocks or rewrites an item, and a backend that cannot list refuses with
+`ErrKeyringUnavailable` rather than reporting an empty result.
+
 Secret Service is at-rest protection, not an authority boundary against a compromised session.
 A process running in the unlocked user session can access secrets that the user can access; a
 keyring does not make an already-compromised session trustworthy.

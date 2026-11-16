@@ -21,10 +21,27 @@ product: `export`, `import`, `prune`, `history`, `recover`, `devices *`, `accoun
 material. `account bootstrap` is the only bootstrap-time operation that remains, alongside
 `account login`, `status` and `logout`; `account finalize` was retired with the v1 genesis write set.
 
+## Account selection
+
+`push`, `pull`, `sync` and `position status` take `--did` as an optional selector backed by the stored account
+sessions. A supplied `--did` is used exactly as before. Without it, exactly one stored session supplies the DID
+and the command prints `account: <did> (resolved from the only authorised session; --did was omitted)` before its
+own output, so the operator can see which account it acted on. Two or more stored sessions refuse with
+`<command> refused: N accounts are authorised locally; --did is required to choose the account this command acts
+on` and exit 3; no stored session refuses with `<command> refused: no account is authorised locally; run dottie
+account login --handle HANDLE or pass --did DID`. There is no recency, ordering or recorded-binding heuristic: the
+count of distinct authorised DIDs is the only input, a store that repeats one DID is one account, and a store that
+holds any session item that cannot be decoded, carries no valid DID or is not named for its own DID refuses
+instead of counting the readable remainder. `--handle` stays rejected for these commands, because the publication
+scope check needs a DID before discovery. Resolution reads the session items without opening the provider and
+without refreshing, rotating or rewriting anything, so `position status` stays a local inspection. A supplied
+`--did` is not checked against the stored sessions: a value that no session matches still fails at the session
+load with the unchanged refusal.
+
 ## Publication position status
 
-`dottie position status --did DID [--vault HEX]` inspects the local publication position store under
-`$XDG_STATE_HOME/dottie/publication-state` and prints exactly one line: `position: revision=N generation=N
+`dottie position status [--did DID] [--vault HEX]` inspects the local publication position store under
+`$XDG_STATE_HOME/dottie/publication-state` and prints one `position:` line: `position: revision=N generation=N
 provenance=first|replace sequence=N`, or `position: empty` when the store is recognized but holds no accepted
 floor. `--vault` is optional: without it the command resolves the vault from the stored publication binding, exactly
 as `pull` does, and with it the supplied fingerprint is an override that must match the stored binding. Resolving a
@@ -38,13 +55,13 @@ holds uncheckpointed frames (`io`) instead of reporting a floor that may not be 
 loses the race to it refuses `locked` and is safe to retry. Reads use a read-only
 immutable connection, so a writer that acquires the store after the lock probe can make the reported floor older
 than the newest committed floor; that staleness is bounded to the accepted floor and is disclosed here rather than
-hidden. Output never contains the account DID, vault, binding, repository, CIDs, absolute paths, directory names,
-counts, tokens or payload bytes. Refusals exit 3 with the redacted class/stage/reason string; exit 2 is usage only
-and this command never exits 4.
+hidden. Output never contains the vault, binding, repository, CIDs, absolute paths, directory names, counts, tokens or
+payload bytes; the account DID appears only in the resolved-session line that a run without `--did` prints. Refusals exit 3 — publication-state refusals with the redacted class/stage/reason string and account-selection
+refusals with their own message; exit 2 is usage only and this command never exits 4.
 
 ## Push, sync, devices and onboarding
 
-`dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]` publishes the reconciled
+`dottie push [--did DID] [--vault HEX] [--device-id ID] [--confirm HEX]` publishes the reconciled
 snapshot of every configured target through the v2 publication profile. It is a two-invocation command.
 The first invocation acquires the stored account session for `--did`, validates that the grant covers the
 v2 publication collections before any discovery or provider contact, composes exactly one candidate from
@@ -71,9 +88,9 @@ prepares cleanly without an extra flag; a proposal whose planned attempt identit
 already retired refuses as stale and marks the record consumed; and a creation that reports
 `commit_unknown` keeps the record and exits 4 instead of inferring absence.
 
-Exit codes: 0 committed or no-op, 2 usage (missing or invalid flags, malformed confirmation), 3 refusal
-(session or scope, unusable or consumed or foreign or stale proposal, config drift before submission,
-store mismatch), 4 partial or indeterminate (unresolved submission, commit-unknown,
+Exit codes: 0 committed or no-op, 2 usage (invalid flag values, malformed confirmation, a rejected `--handle`),
+3 refusal (account selection, session or scope, unusable or consumed or foreign or stale proposal, config drift
+before submission, store mismatch), 4 partial or indeterminate (unresolved submission, commit-unknown,
 queued/starved/fence-lost/unavailable outcomes, and a rendering failure after a committed publication,
 which is stated as committed on stderr).
 
@@ -102,7 +119,7 @@ owned by the current user` before any account work, and an existing store whose 
 bytes are unusable refuses with exit 3 naming its typed reason. Provisioning establishes no accepted floor; the
 first publication still needs the reviewed confirmation.
 
-`dottie sync --did DID [--vault HEX] [--confirm TOKEN]` is the reconciled path: it prepares the pull half, prepares
+`dottie sync [--did DID] [--vault HEX] [--confirm TOKEN]` is the reconciled path: it prepares the pull half, prepares
 the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
 binding, the pull plan digest, the staged accept state token, the observation digest, the provider view digest and
 the post-pull push identity (payload digest and size, review selection and approval digests with revisions).
@@ -114,7 +131,7 @@ submits; a direction conflict refuses at planning and `sync` never chooses a sid
 issued and consumed inside the confirmed run, so an unconfirmed sync leaves none. When the pull half has nothing to
 do and the floor already matches the provider head, `sync` is a plain push with the same token shape.
 
-`dottie pull --did DID [--vault HEX]` provisions and then inspects the v2 publication position. It acquires the
+`dottie pull [--did DID] [--vault HEX]` provisions and then inspects the v2 publication position. It acquires the
 stored account session and validates the publication scope before any discovery or provider contact, takes the
 vault from `--vault` instead of resolving a v1 selection, refuses `--handle` for the same reason `push` does, and
 compares the provider's validated view with the locally recorded accepted floor. Before the comparison it

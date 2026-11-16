@@ -78,6 +78,21 @@ func (k *memoryOAuthKeyring) Load(_ context.Context, name string) ([]byte, error
 	return bytes.Clone(payload), nil
 }
 
+func (k *memoryOAuthKeyring) ListItems(_ context.Context, prefix string) ([]string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.loadErr != nil {
+		return nil, k.loadErr
+	}
+	names := make([]string, 0, len(k.items))
+	for name := range k.items {
+		if strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 func (k *memoryOAuthKeyring) Delete(_ context.Context, name string) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -380,7 +395,7 @@ func TestAccountLoginPersistenceUncertaintyDoesNotClaimNothingStored(t *testing.
 	assert.Contains(t, stderr.String(), "keyring persistence is uncertain")
 	assert.NotContains(t, stderr.String(), "no session was stored")
 	assert.Contains(t, stderr.String(), accountTestDID)
-	assert.NotEmpty(t, keyring.items[cliSessionItemName()])
+	assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 	stdout.Reset()
 	stderr.Reset()
 	code = runAccountWithSession([]string{"status", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
@@ -431,7 +446,7 @@ func TestAccountStatusOfflineUsablePendingMissingCorruptAndKeyringErrors(t *test
 		}, wantText: "authorization: refresh interrupted; sign in again"},
 		{name: "missing", wantCode: 1, wantText: "not signed in; run dottie account login --handle HANDLE"},
 		{name: "corrupt", seed: func(_ *testing.T, keyring *memoryOAuthKeyring) {
-			keyring.items[cliSessionItemName()] = []byte("not-json")
+			keyring.items[cliSessionItemName(accountTestDID)] = []byte("not-json")
 		}, wantCode: 1, wantText: "corrupt or unusable"},
 		{name: "locked", loadErr: platform.ErrKeyringLocked, wantCode: 1, wantText: "keyring is locked"},
 		{name: "unavailable", loadErr: platform.ErrKeyringUnavailable, wantCode: 1, wantText: "keyring is unavailable"},
@@ -515,7 +530,7 @@ func TestAccountStatusHandleResolutionAndRefreshOutcomes(t *testing.T) {
 			require.Equal(t, 1, code)
 			assert.Contains(t, stderr.String(), test.wantText)
 			assert.Contains(t, stderr.String(), "pending local changes are preserved")
-			payload := keyring.items[cliSessionItemName()]
+			payload := keyring.items[cliSessionItemName(accountTestDID)]
 			assert.NotEmpty(t, payload)
 			if test.wantState != "" {
 				var envelope cliSessionEnvelope
@@ -533,7 +548,7 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 			keyring := newMemoryOAuthKeyring()
 			switch stateName {
 			case "corrupt":
-				keyring.items[cliSessionItemName()] = []byte("bad envelope")
+				keyring.items[cliSessionItemName(accountTestDID)] = []byte("bad envelope")
 			case atproto.SessionStateRefreshPending:
 				seedCLISession(t, keyring, atproto.SessionStateRefreshPending)
 			default:
@@ -557,7 +572,7 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		code := runAccountWithSession([]string{"logout", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "keyring is locked")
-		assert.NotEmpty(t, keyring.items[cliSessionItemName()])
+		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 		assert.Empty(t, fake.requests)
 	})
 
@@ -583,7 +598,7 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "HTTP 400")
-		assert.NotEmpty(t, keyring.items[cliSessionItemName()])
+		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 		assert.Equal(t, 1, fake.revokeRequests)
 	})
 	t.Run("handle local logout", func(t *testing.T) {
@@ -606,7 +621,7 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "does not advertise a revocation endpoint")
-		assert.NotEmpty(t, keyring.items[cliSessionItemName()])
+		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 		assert.Equal(t, 0, fake.revokeRequests)
 	})
 	t.Run("remote accepted but local delete fails", func(t *testing.T) {
@@ -619,7 +634,7 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "revocation request accepted")
 		assert.Contains(t, stderr.String(), "local authorization could not be deleted")
-		assert.NotEmpty(t, keyring.items[cliSessionItemName()])
+		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 		assert.Equal(t, 1, fake.revokeRequests)
 	})
 }
@@ -675,7 +690,7 @@ func TestAccountStatusCommandsPreservePendingStateDirectoryBytes(t *testing.T) {
 	after := snapshotStateTree(t, paths.AppStateDir())
 	assert.Equal(t, before, after)
 	var pendingEnvelope cliSessionEnvelope
-	require.NoError(t, json.Unmarshal(keyring.items[cliSessionItemName()], &pendingEnvelope))
+	require.NoError(t, json.Unmarshal(keyring.items[cliSessionItemName(accountTestDID)], &pendingEnvelope))
 	assert.Equal(t, atproto.SessionStateRefreshPending, pendingEnvelope.State)
 	second, err := state.Open(paths)
 	require.NoError(t, err)
@@ -713,25 +728,30 @@ type cliSessionEnvelope struct {
 
 func seedCLISession(t *testing.T, keyring *memoryOAuthKeyring, sessionState string) {
 	t.Helper()
+	seedCLISessionDID(t, keyring, accountTestDID, sessionState)
+}
+
+func seedCLISessionDID(t *testing.T, keyring *memoryOAuthKeyring, did, sessionState string) {
+	t.Helper()
 	if sessionState == atproto.SessionStateRefreshPending {
-		envelope := cliSessionEnvelope{Version: 1, DID: accountTestDID, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: sessionState}
+		envelope := cliSessionEnvelope{Version: 1, DID: did, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: sessionState}
 		encoded, err := json.Marshal(envelope)
 		require.NoError(t, err)
-		keyring.items[cliSessionItemName()] = encoded
+		keyring.items[cliSessionItemName(did)] = encoded
 		return
 	}
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	require.NoError(t, err)
-	envelope := cliSessionEnvelope{Version: 1, DID: accountTestDID, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: atproto.SessionStateUsable, RefreshToken: "stored-refresh-token", DPoPPrivateKey: base64.RawURLEncoding.EncodeToString(der)}
+	envelope := cliSessionEnvelope{Version: 1, DID: did, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: atproto.SessionStateUsable, RefreshToken: "stored-refresh-token", DPoPPrivateKey: base64.RawURLEncoding.EncodeToString(der)}
 	encoded, err := json.Marshal(envelope)
 	require.NoError(t, err)
-	keyring.items[cliSessionItemName()] = encoded
+	keyring.items[cliSessionItemName(did)] = encoded
 }
 
-func cliSessionItemName() string {
-	digest := sha256.Sum256([]byte(accountClientID + "\x00" + accountTestDID))
+func cliSessionItemName(did string) string {
+	digest := sha256.Sum256([]byte(accountClientID + "\x00" + did))
 	return "session:" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 

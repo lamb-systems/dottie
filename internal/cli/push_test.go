@@ -265,12 +265,23 @@ func (fixture *publicationPushTestFixture) sources() publicationPushSources {
 	}
 }
 
+const pushTestDID = "did:plc:abcdefghijklmnopqrstuvwx"
+
 func pushTestSession(t *testing.T) pushSession {
 	t.Helper()
-	return pushSession{Session: &atproto.Session{DID: "did:plc:abcdefghijklmnopqrstuvwx", Scopes: atproto.VaultScopes()}}
+	return pushSession{Session: &atproto.Session{DID: pushTestDID, Scopes: atproto.VaultScopes()}}
+}
+
+func pushTestDIDs(dids ...string) sessionDIDSource {
+	return func(context.Context) ([]string, error) { return dids, nil }
 }
 
 func newPushTestCommand(t *testing.T, stdout, stderr *bytes.Buffer, exitCode *int, session pushSession, factoryCalls *int, sessionErr error) *urfave.Command {
+	t.Helper()
+	return newPushTestCommandWithDIDs(t, stdout, stderr, exitCode, session, factoryCalls, sessionErr, pushTestDIDs(pushTestDID))
+}
+
+func newPushTestCommandWithDIDs(t *testing.T, stdout, stderr *bytes.Buffer, exitCode *int, session pushSession, factoryCalls *int, sessionErr error, dids sessionDIDSource) *urfave.Command {
 	t.Helper()
 	diag := assert.New(t)
 	fixture := newPublicationPushTestFixture(t)
@@ -287,7 +298,7 @@ func newPushTestCommand(t *testing.T, stdout, stderr *bytes.Buffer, exitCode *in
 		diag.NotNil(fixture)
 		return fixture.sources(), nil
 	}
-	return newPushCommand(stdout, stderr, exitCode, sessions, sources)
+	return newPushCommand(stdout, stderr, exitCode, sessions, sources, dids)
 }
 
 func runPushForTest(command *urfave.Command, exitCode *int, args ...string) int {
@@ -317,7 +328,7 @@ func TestPushPrintsTheReviewConfirmationAndWritesOnePrivateRecord(t *testing.T) 
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	output := stdout.String()
@@ -362,7 +373,7 @@ func TestPushConfirmPublishesOnceAndPrintsTheAcceptedFloor(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -370,7 +381,7 @@ func TestPushConfirmPublishesOnceAndPrintsTheAcceptedFloor(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(confirmed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "push: committed")
@@ -386,7 +397,7 @@ func TestPushConfirmPublishesOnceAndPrintsTheAcceptedFloor(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	replayed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	replayed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(replayed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 3, code)
 	_, sends = fixture.transport.counts()
@@ -401,7 +412,7 @@ func TestPushConfirmsARePreparedProposalAfterStateChanged(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	require.NotEmpty(t, confirmationFromOutput(t, stdout.String()))
@@ -413,7 +424,7 @@ func TestPushConfirmsARePreparedProposalAfterStateChanged(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	review := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	review := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(review, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	refreshed := confirmationFromOutput(t, stdout.String())
@@ -422,7 +433,7 @@ func TestPushConfirmsARePreparedProposalAfterStateChanged(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	confirm := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	confirm := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(confirm, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", refreshed)
 	assert.Equal(t, 0, code, stderr.String())
 	assert.Contains(t, stdout.String(), "push: committed")
@@ -438,7 +449,7 @@ func TestPushReportsASubmissionFailureAsIndeterminate(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -446,7 +457,7 @@ func TestPushReportsASubmissionFailureAsIndeterminate(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	confirm := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	confirm := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(confirm, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	assert.Equal(t, 4, code, stderr.String())
 }
@@ -459,7 +470,7 @@ func TestPushRefusesAMismatchedConfirmationWithoutDispatch(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -468,7 +479,7 @@ func TestPushRefusesAMismatchedConfirmationWithoutDispatch(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	stale := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	stale := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(stale, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", hex.EncodeToString(other))
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "stale")
@@ -483,7 +494,7 @@ func TestPushRefusesAMismatchedConfirmationWithoutDispatch(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	accepted := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	accepted := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(accepted, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 0, code, "an unchanged re-run after a stale refusal did not publish")
 }
@@ -496,7 +507,7 @@ func TestPushRefusesAConfirmationWhoseCandidateChangedSinceReview(t *testing.T) 
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -506,7 +517,7 @@ func TestPushRefusesAConfirmationWhoseCandidateChangedSinceReview(t *testing.T) 
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	changed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	changed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(changed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "stale")
@@ -524,7 +535,7 @@ func TestPushRefusesAConfirmationWhoseCandidateChangedSinceReview(t *testing.T) 
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	restored := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	restored := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(restored, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 0, code, "an unchanged re-run after a stale refusal did not publish")
 }
@@ -537,7 +548,7 @@ func TestPushRefusesAConfirmationWhenNoProposalWasRetained(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32)))
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "no retained publication proposal")
@@ -557,7 +568,7 @@ func TestPushClearsAStrandedPreSubmissionAttemptWithoutAFlag(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -565,7 +576,7 @@ func TestPushClearsAStrandedPreSubmissionAttemptWithoutAFlag(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	failed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	failed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(failed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 4, code)
 
@@ -573,7 +584,7 @@ func TestPushClearsAStrandedPreSubmissionAttemptWithoutAFlag(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	again := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	again := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(again, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stdout.String(), "review required")
@@ -589,7 +600,7 @@ func TestPushRefusesAConsumedRecordBeforeConfirmation(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -601,7 +612,7 @@ func TestPushRefusesAConsumedRecordBeforeConfirmation(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	consumed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	consumed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(consumed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "already consumed")
@@ -636,7 +647,6 @@ func TestPushRefusesAnUnavailableSessionBeforeTheScopeCheck(t *testing.T) {
 
 func TestPushRequiresTheDIDSelector(t *testing.T) {
 	for _, args := range [][]string{
-		{"push"},
 		{"push", "--handle", "example.test"},
 		{"push", "--did", "did:plc:abcdefghijklmnopqrstuvwx", "--confirm", "not-hex"},
 		{"push", "--did", "did:plc:abcdefghijklmnopqrstuvwx", "extra"},
@@ -649,7 +659,7 @@ func TestPushRequiresTheDIDSelector(t *testing.T) {
 			},
 			func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 				return publicationPushSources{}, errors.New("the sources factory must not be reached")
-			})
+			}, pushTestDIDs(pushTestDID))
 		code = runPushForTest(command, &code, args...)
 		require.Equal(t, 2, code, "args %v", args)
 		assert.Contains(t, stderr.String(), "usage:")
@@ -664,21 +674,21 @@ func TestPushNoOpAfterTheSameSnapshotIsAccepted(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(confirmed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 0, code)
 
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	unchanged := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	unchanged := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(unchanged, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "push: no-op")
@@ -745,7 +755,7 @@ func TestPushProvisionsAnAbsentPositionStoreAndPublishes(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code, stderr.String())
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -756,7 +766,7 @@ func TestPushProvisionsAnAbsentPositionStoreAndPublishes(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	confirmed := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(confirmed, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Contains(t, stdout.String(), "push: committed")
@@ -779,7 +789,7 @@ func TestPushRefusesAnUnsafeExistingPositionStoreWithoutRepairingIt(t *testing.T
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "not a private 0700 directory owned by the current user")
@@ -805,7 +815,7 @@ func TestPushRefusesAPositionStoreBoundToAnotherVaultWithoutRebindingIt(t *testi
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "unusable (binding)")
@@ -829,7 +839,7 @@ func TestPublicationProposalStoreRejectsForeignFilePermissions(t *testing.T) {
 		func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil },
 		func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 			return fixture.sources(), nil
-		})
+		}, pushTestDIDs(pushTestDID))
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	entries, err := os.ReadDir(fixture.paths.PublicationStateDir())
@@ -845,7 +855,7 @@ func TestPublicationProposalStoreRejectsForeignFilePermissions(t *testing.T) {
 		func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil },
 		func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 			return fixture.sources(), nil
-		})
+		}, pushTestDIDs(pushTestDID))
 	code = runPushForTest(other, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "private regular file")
@@ -909,14 +919,14 @@ func TestPushReportsACommittedPublicationWhoseOutputFailed(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&prepareOut, &prepareErr, &code, sessions, sources)
+	prepared := newPushCommand(&prepareOut, &prepareErr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, prepareOut.String())
 
 	var stderr bytes.Buffer
 	code = 0
-	broken := newPushCommand(failingWriter{}, &stderr, &code, sessions, sources)
+	broken := newPushCommand(failingWriter{}, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(broken, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 4, code)
 	assert.Contains(t, stderr.String(), "committed")
@@ -986,7 +996,7 @@ func TestPushReportsADefiniteSubmissionRejectionAndReviewsAgain(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -995,7 +1005,7 @@ func TestPushReportsADefiniteSubmissionRejectionAndReviewsAgain(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	refused := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	refused := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(refused, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 4, code, stderr.String())
 	output := stdout.String()
@@ -1015,7 +1025,7 @@ func TestPushReportsADefiniteSubmissionRejectionAndReviewsAgain(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	review := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	review := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(review, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code, stderr.String())
 	assert.Contains(t, stdout.String(), "push: review required")
@@ -1033,7 +1043,7 @@ func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
-	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	confirmation := confirmationFromOutput(t, stdout.String())
@@ -1042,7 +1052,7 @@ func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	ambiguous := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	ambiguous := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(ambiguous, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
 	require.Equal(t, 4, code, stderr.String())
 	assert.NotContains(t, stdout.String(), "retired locally")
@@ -1051,7 +1061,7 @@ func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = 0
-	blocked := newPushCommand(&stdout, &stderr, &code, sessions, sources)
+	blocked := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
 	code = runPushForTest(blocked, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
@@ -1082,4 +1092,122 @@ func TestSelectPublicationProposalIgnoresConsumedRecords(t *testing.T) {
 
 	_, err = selectPublicationProposal([]service.PublicationProposalRecord{consumed}, binding, true, [32]byte{})
 	assert.ErrorIs(t, err, service.ErrPublicationProposalConsumed)
+}
+
+func publicationStateEntries(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+func TestPushResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(_ context.Context, command *urfave.Command) (pushSession, error) {
+		assert.Equal(t, fixture.binding.AccountDID, command.String("did"), "the session was not resolved from the only authorised session")
+		return pushSession{Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()}}, nil
+	}
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(fixture.binding.AccountDID))
+	code = runPushForTest(command, &code, "push")
+	require.Equal(t, 3, code, stderr.String())
+	assert.Contains(t, stdout.String(), "account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)")
+	assert.Contains(t, stdout.String(), "push: review required")
+	assert.Contains(t, stdout.String(), "confirmation: ")
+	records, err := fixture.records.List(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, records, 1, "the resolved run kept no retained proposal")
+}
+
+func TestPushRefusesWithoutAnyAuthorisedSession(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
+		return pushSession{}, errors.New("the session factory must not be reached")
+	}
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return publicationPushSources{}, errors.New("the sources factory must not be reached")
+	}
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs())
+	code = runPushForTest(command, &code, "push")
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: push refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr.String())
+}
+
+func TestPushRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	factoryCalls := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
+		return pushSession{}, errors.New("the session factory must not be reached")
+	}
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		factoryCalls++
+		return fixture.sources(), nil
+	}
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(fixture.binding.AccountDID, other))
+	code = runPushForTest(command, &code, "push")
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: push refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr.String())
+	assert.Zero(t, factoryCalls, "the ambiguous refusal constructed the transport and reader")
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads, "the ambiguous refusal uploaded a payload")
+	assert.Zero(t, sends, "the ambiguous refusal dispatched writes")
+	assert.Empty(t, publicationStateEntries(t, fixture.paths.PublicationStateDir()), "the ambiguous refusal wrote local state")
+}
+
+func TestPushProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(_ context.Context, command *urfave.Command) (pushSession, error) {
+		assert.Equal(t, fixture.binding.AccountDID, command.String("did"), "the explicit --did was not used")
+		return pushSession{Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()}}, nil
+	}
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(other, fixture.binding.AccountDID))
+	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code, stderr.String())
+	assert.NotContains(t, stdout.String(), "resolved from the only authorised session", "an explicit --did reported a session resolution")
+	assert.Contains(t, stdout.String(), "push: review required")
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads)
+	assert.Zero(t, sends)
+}
+
+func TestPushRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := 0
+	factoryCalls := 0
+	command := newPushTestCommand(t, &stdout, &stderr, &code, pushSession{}, &factoryCalls, atproto.ErrSessionNotFound)
+	code = runPushForTest(command, &code, "push", "--did", pushTestDID)
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: push refused: account session is unavailable\n", stderr.String())
+	assert.Zero(t, factoryCalls, "a missing session constructed the transport and reader")
+}
+
+func TestPushStillRejectsTheHandleSelector(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPushTestCommandWithDIDs(t, &stdout, &stderr, &code, pushTestSession(t), nil, nil, pushTestDIDs(pushTestDID))
+	code = runPushForTest(command, &code, "push", "--handle", "example.test")
+	require.Equal(t, 2, code)
+	assert.Empty(t, stdout.String())
+	assert.Equal(t, "dottie: usage: push requires --did; a handle cannot be resolved before the publication scope check\n", stderr.String())
 }

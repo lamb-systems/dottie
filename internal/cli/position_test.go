@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,7 +165,7 @@ func TestPositionStatusRefusesFreshInstallAsAbsent(t *testing.T) {
 	require.NoError(t, err)
 	directory := paths.PublicationStateDir()
 	var stdout, stderr strings.Builder
-	code := runPosition([]string{"status", "--did", positionTestDID, "--vault", "091123" + strings.Repeat("00", 29)}, &stdout, &stderr, os.Getenv)
+	code := runPosition([]string{"status", "--did", positionTestDID, "--vault", "091123" + strings.Repeat("00", 29)}, &stdout, &stderr, os.Getenv, unusedPositionKeyring(t))
 	assert.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "schema/inspect/position_absent")
@@ -176,7 +178,7 @@ func TestPositionStatusHelpNamesTheNestedCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	var stdout, stderr strings.Builder
-	code := runPosition([]string{"status", "--help"}, &stdout, &stderr, os.Getenv)
+	code := runPosition([]string{"status", "--help"}, &stdout, &stderr, os.Getenv, unusedPositionKeyring(t))
 	assert.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "dottie position status")
 }
@@ -189,7 +191,8 @@ func TestPositionStatusRefusesUsageFaults(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "missing did", args: []string{"position", "status", "--vault", vaultHex}},
+		{name: "handle instead of did", args: []string{"position", "status", "--handle", "example.test", "--vault", vaultHex}},
+		{name: "unknown flag", args: []string{"position", "status", "--device-id", "laptop", "--vault", vaultHex}},
 		{name: "malformed did", args: []string{"position", "status", "--did", "not-a-did", "--vault", vaultHex}},
 		{name: "malformed vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", "abc"}},
 		{name: "short vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", vaultHex[:62]}},
@@ -270,7 +273,7 @@ func TestPositionStatusRefusesAbsentBindingWithoutVault(t *testing.T) {
 	paths, err := platform.Resolve(os.Getenv)
 	require.NoError(t, err)
 	var stdout, stderr strings.Builder
-	code := runPosition([]string{"status", "--did", positionTestDID}, &stdout, &stderr, os.Getenv)
+	code := runPosition([]string{"status", "--did", positionTestDID}, &stdout, &stderr, os.Getenv, unusedPositionKeyring(t))
 	require.Equal(t, 3, code, "exit code")
 	assert.Empty(t, stdout.String(), "unexpected stdout")
 	assert.Equal(t, "dottie: publication state: schema/inspect/position_absent\n", stderr.String(), "stderr")
@@ -292,4 +295,93 @@ func TestPositionStatusRefusesRecordedBindingOfAnotherAccount(t *testing.T) {
 	assert.Equal(t, "dottie: publication state: invalid/inspect/binding\n", stderr.String(), "stderr")
 	assert.NotContains(t, stderr.String(), otherDID, "stderr contains the requested account DID")
 	requireNoPositionIdentifiers(t, stderr.String(), binding)
+}
+
+func positionSessionKeyring(t *testing.T, dids ...string) accountKeyringFactory {
+	t.Helper()
+	keyring := newMemoryOAuthKeyring()
+	for _, did := range dids {
+		seedCLISessionDID(t, keyring, did, atproto.SessionStateUsable)
+	}
+	return func() (accountKeyring, error) { return keyring, nil }
+}
+
+func unusedPositionKeyring(t *testing.T) accountKeyringFactory {
+	t.Helper()
+	return func() (accountKeyring, error) {
+		require.FailNow(t, "position status opened the account keyring for an explicit --did")
+		return nil, errors.New("the account keyring must not be opened")
+	}
+}
+
+func runPositionForTest(t *testing.T, openKeyring accountKeyringFactory, args ...string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	command := newPositionCommand(&stdout, &stderr, &exitCode, os.Getenv, productionSessionDIDSource(openKeyring, os.Getenv))
+	ctx := context.Background()
+	if err := command.Run(ctx, append([]string{"dottie"}, args...)); err != nil && exitCode == 0 {
+		command.ExitErrHandler(ctx, command, err)
+	}
+	return exitCode, stdout.String(), stderr.String()
+}
+
+func TestPositionStatusResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
+	directory := positionTestDirectory(t)
+	binding := positionTestBinding()
+	store, _ := newPositionFloorStore(t, directory, binding)
+	require.NoError(t, store.Close())
+	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, binding.AccountDID), "status")
+	require.Equal(t, 0, code, stderr)
+	assert.Empty(t, stderr)
+	assert.Equal(t, "account: "+binding.AccountDID+" (resolved from the only authorised session; --did was omitted)\nposition: revision=1 generation=1 provenance=first sequence=0\n", stdout)
+}
+
+func TestPositionStatusRefusesWhenNoAccountIsAuthorisedAndDIDIsOmitted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t), "status")
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "dottie: position status refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr)
+	_, statErr := os.Lstat(paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the store directory")
+}
+
+func TestPositionStatusRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
+	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, positionTestDID, other), "status")
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "dottie: position status refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr)
+	_, statErr := os.Lstat(paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the store directory")
+}
+
+func TestPositionStatusInspectsTheExplicitDIDWithoutConsultingSessions(t *testing.T) {
+	directory := positionTestDirectory(t)
+	binding := positionTestBinding()
+	store, _ := newPositionFloorStore(t, directory, binding)
+	require.NoError(t, store.Close())
+	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, "did:plc:zyxwvutsrqponmlkjihgfedc"), "status", "--did", binding.AccountDID)
+	require.Equal(t, 0, code, stderr)
+	assert.Empty(t, stderr)
+	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", stdout)
+}
+
+func TestPositionStatusRefusesWhenTheStoredSessionsCannotBeListed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	keyring := newMemoryOAuthKeyring()
+	keyring.loadErr = platform.ErrKeyringLocked
+	code, stdout, stderr := runPositionForTest(t, func() (accountKeyring, error) { return keyring, nil }, "status")
+	require.Equal(t, 3, code)
+	assert.Empty(t, stdout)
+	assert.Equal(t, "dottie: position status refused: the stored account sessions cannot be listed; pass --did DID\n", stderr)
 }
