@@ -49,7 +49,10 @@ device keys exists. The plaintext provider residual above is unchanged.
 
 The retired commands are gone rather than deprecated: there is no kit generation to consume, no
 ciphertext archive to export or validate, no retention sweep and no device administration surface.
-`position status` is the one publication-position read, and `status` remains local-only.
+`position status` is the one publication-position read, and `status` remains local-only. `status` prints the
+locally recorded vault fingerprint and device id, so the recorded vault can be found without prior knowledge of it;
+when no selection is recorded it says so instead of printing a zero value. `position status` takes `--vault` only as
+an override: without it the vault comes from the stored publication binding, as it already does for `pull`.
 
 ## Target design
 

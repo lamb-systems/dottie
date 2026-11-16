@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -101,6 +102,12 @@ func productionStatusCoordinator(env func(string) string) (*service.Coordinator,
 
 func renderManualStatus(status service.Status) string {
 	var output strings.Builder
+	for _, selection := range status.Vaults {
+		fmt.Fprintf(&output, "vault\t%s\tdevice=%s\n", escapeField(hex.EncodeToString(selection.Vault[:])), escapeField(selection.DeviceID))
+	}
+	if len(status.Vaults) == 0 {
+		output.WriteString("no vault selection recorded\n")
+	}
 	for _, target := range status.Targets {
 		fmt.Fprintf(&output, "%s\t%s\t%s\t%s\titems=%d", escapeField(target.ID), escapeField(target.Source), escapeField(string(target.Mode)), escapeField(string(target.State)), target.Items)
 		if target.Reason != "" {

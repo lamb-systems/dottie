@@ -189,7 +189,6 @@ func TestPositionStatusRefusesUsageFaults(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "missing vault", args: []string{"position", "status", "--did", binding.AccountDID}},
 		{name: "missing did", args: []string{"position", "status", "--vault", vaultHex}},
 		{name: "malformed did", args: []string{"position", "status", "--did", "not-a-did", "--vault", vaultHex}},
 		{name: "malformed vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", "abc"}},
@@ -230,4 +229,67 @@ func TestPositionStatusRefusesHeldWriterAndKeepsItUsable(t *testing.T) {
 	require.Equal(t, 0, code, "exit code after the writer released the store")
 	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", stdout.String(), "stdout")
 	assert.Empty(t, stderr.String(), "stderr")
+}
+
+func TestPositionStatusResolvesVaultFromRecordedBinding(t *testing.T) {
+	directory := positionTestDirectory(t)
+	binding := positionTestBinding()
+	store, _ := newPositionFloorStore(t, directory, binding)
+	require.NoError(t, store.Close())
+	var resolved, resolvedErr bytes.Buffer
+	code := Run([]string{"position", "status", "--did", binding.AccountDID}, &resolved, &resolvedErr)
+	require.Equal(t, 0, code, "exit code without --vault")
+	assert.Empty(t, resolvedErr.String(), "stderr without --vault")
+	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", resolved.String(), "stdout without --vault")
+	var explicit, explicitErr bytes.Buffer
+	code = Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])}, &explicit, &explicitErr)
+	require.Equal(t, 0, code, "exit code with --vault")
+	assert.Empty(t, explicitErr.String(), "stderr with --vault")
+	assert.Equal(t, explicit.String(), resolved.String(), "resolved output differs from the explicit vault output")
+	requireNoPositionIdentifiers(t, resolved.String(), binding)
+}
+
+func TestPositionStatusUsesExplicitVaultOverride(t *testing.T) {
+	directory := positionTestDirectory(t)
+	binding := positionTestBinding()
+	store, _ := newPositionFloorStore(t, directory, binding)
+	require.NoError(t, store.Close())
+	other := binding
+	other.Vault = [32]byte{0x0a, 0x22, 0x34}
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(other.Vault[:])}, &stdout, &stderr)
+	require.Equal(t, 3, code, "exit code for an override that differs from the binding")
+	assert.Empty(t, stdout.String(), "unexpected stdout")
+	assert.Equal(t, "dottie: publication state: invalid/inspect/binding\n", stderr.String(), "stderr")
+	requireNoPositionIdentifiers(t, stderr.String(), binding)
+}
+
+func TestPositionStatusRefusesAbsentBindingWithoutVault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	paths, err := platform.Resolve(os.Getenv)
+	require.NoError(t, err)
+	var stdout, stderr strings.Builder
+	code := runPosition([]string{"status", "--did", positionTestDID}, &stdout, &stderr, os.Getenv)
+	require.Equal(t, 3, code, "exit code")
+	assert.Empty(t, stdout.String(), "unexpected stdout")
+	assert.Equal(t, "dottie: publication state: schema/inspect/position_absent\n", stderr.String(), "stderr")
+	assert.NotContains(t, stderr.String(), positionTestDID, "stderr contains the account DID")
+	_, statErr := os.Lstat(paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "inspection created the store directory")
+}
+
+func TestPositionStatusRefusesRecordedBindingOfAnotherAccount(t *testing.T) {
+	directory := positionTestDirectory(t)
+	binding := positionTestBinding()
+	store, _ := newPositionFloorStore(t, directory, binding)
+	require.NoError(t, store.Close())
+	const otherDID = "did:plc:zyxwvutsrqponmlkjihgfedc"
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"position", "status", "--did", otherDID}, &stdout, &stderr)
+	require.Equal(t, 3, code, "exit code")
+	assert.Empty(t, stdout.String(), "unexpected stdout")
+	assert.Equal(t, "dottie: publication state: invalid/inspect/binding\n", stderr.String(), "stderr")
+	assert.NotContains(t, stderr.String(), otherDID, "stderr contains the requested account DID")
+	requireNoPositionIdentifiers(t, stderr.String(), binding)
 }

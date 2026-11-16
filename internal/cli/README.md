@@ -2,7 +2,7 @@
 
 ## Manual coordinator workflows
 
-`dottie status` is local-only and writes nothing. `dottie pull` is the only apply path: it inspects the v2 publication position and applies a reviewed, confirmed plan, described with the push and sync commands below; it never reconciles. Without a vault override, the coordinator commands that act on a selection require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
+`dottie status` is local-only and writes nothing: it prints the recorded vault selection — `vault<TAB>HEX<TAB>device=ID` per recorded `(vault, device)` selection, or `no vault selection recorded` when none exists — then each selected target. It opens no provider connection, needs no account session and never opens the publication position store, so it stays usable offline and signed out. `dottie pull` is the only apply path: it inspects the v2 publication position and applies a reviewed, confirmed plan, described with the push and sync commands below; it never reconciles. Without a vault override, the coordinator commands that act on a selection require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
 
 `dottie recover` resolves interrupted journal entries without a remote session. There is no other write authority in this CLI: `preview` and `restore` were retired with the v1 read/apply path, so a v1 plan can no longer be inspected or applied from the command line.
 
@@ -23,10 +23,14 @@ material. `account bootstrap` is the only bootstrap-time operation that remains,
 
 ## Publication position status
 
-`dottie position status --did DID --vault HEX` inspects the local publication position store under
+`dottie position status --did DID [--vault HEX]` inspects the local publication position store under
 `$XDG_STATE_HOME/dottie/publication-state` and prints exactly one line: `position: revision=N generation=N
 provenance=first|replace sequence=N`, or `position: empty` when the store is recognized but holds no accepted
-floor. Inspection is read-only: it never creates, upgrades, repairs, unlinks or checkpoints anything, and it never
+floor. `--vault` is optional: without it the command resolves the vault from the stored publication binding, exactly
+as `pull` does, and with it the supplied fingerprint is an override that must match the stored binding. Resolving a
+binding recorded for a different account than `--did` therefore refuses `invalid/inspect/binding` instead of reading
+another account's position.
+Inspection is read-only: it never creates, upgrades, repairs, unlinks or checkpoints anything, and it never
 takes the store's lifetime lock. It refuses an absent store (`position_absent`), a directory that is not an owned
 `0700` non-symlink directory, a foreign binding, a schema that is not the current schema 3 (`upgrade_required` for
 schema 1 and 2), a store whose lifetime lock is held by a running writer (`locked`), and a store whose WAL still

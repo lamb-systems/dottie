@@ -19,7 +19,7 @@ Usage:
   dottie targets mode <id> <auto-apply|review|backup-only>
   dottie plan --from FILE [--json]
   dottie status
-  dottie position status --did DID --vault HEX
+  dottie position status --did DID [--vault HEX]
   dottie push --did DID [--vault HEX] [--device-id ID] [--confirm HEX]
   dottie pull --did DID [--vault HEX] [--confirm HEX]
   dottie sync --did DID [--vault HEX] [--confirm HEX]
@@ -43,11 +43,14 @@ sync, exit codes are:
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success.
 
-Status is local-only and writes nothing: it reports each selected target with its journal item count and state.
+Status is local-only and writes nothing: it reports the locally recorded vault selection as the vault fingerprint
+and device id, an explicit absence when no selection is recorded, then each selected target with its journal item
+count and state.
 
 Position status inspects the local publication position store and is read-only: it prints the accepted floor or an
 empty marker, refuses an absent or unsafe store, and never prints the account DID, vault, repository, CIDs, absolute
-paths, counts, tokens or payload bytes. Refusals exit 3; exit 2 is usage only.
+paths, counts, tokens or payload bytes. It resolves the vault from the recorded publication binding when --vault is
+omitted and uses --vault as an override. Refusals exit 3; exit 2 is usage only.
 
 Account login, status and logout manage the OAuth session in the desktop Secret Service keyring; they never touch
 target data. Account bootstrap requires a signed-in account that holds no Dottie publication, mints device keys,

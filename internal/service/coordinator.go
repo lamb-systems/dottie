@@ -47,6 +47,10 @@ func (coordinator *Coordinator) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	selections, err := coordinator.deps.State.VaultSelections(ctx)
+	if err != nil {
+		return Status{}, err
+	}
 	journals, err := coordinator.deps.State.JournalEntriesAll(ctx)
 	if err != nil {
 		return Status{}, err
@@ -81,7 +85,10 @@ func (coordinator *Coordinator) Status(ctx context.Context) (Status, error) {
 		}
 		latest[entry.Identity.TargetID] = status
 	}
-	result := Status{Targets: make([]TargetStatus, 0, len(configuration.Targets))}
+	result := Status{Vaults: make([]VaultSelection, 0, len(selections)), Targets: make([]TargetStatus, 0, len(configuration.Targets))}
+	for _, selection := range selections {
+		result.Vaults = append(result.Vaults, VaultSelection{Vault: selection.Vault, DeviceID: selection.DeviceID})
+	}
 	for _, target := range configuration.Targets {
 		result.Targets = append(result.Targets, latest[target.ID])
 	}

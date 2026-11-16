@@ -41,7 +41,7 @@ func newPositionCommand(stdout, stderr io.Writer, exitCode *int, env func(string
 		Usage: "inspect the local publication position store",
 		Flags: []urfave.Flag{
 			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
-			&urfave.StringFlag{Name: "vault", Usage: "vault fingerprint (64 hexadecimal characters)", OnlyOnce: true},
+			&urfave.StringFlag{Name: "vault", Usage: "vault fingerprint (64 hexadecimal characters); defaults to the recorded binding", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runPositionStatus(ctx, command, env)
@@ -78,25 +78,33 @@ func runPositionStatus(ctx context.Context, command *urfave.Command, env func(st
 	if command.NArg() != 0 {
 		return usageExit("position status takes no positional arguments")
 	}
-	if command.String("did") == "" || command.String("vault") == "" {
-		return usageExit("position status requires --did DID and --vault HEX")
+	if command.String("did") == "" {
+		return usageExit("position status requires --did DID")
 	}
 	did, err := syntax.ParseDID(command.String("did"))
 	if err != nil {
 		return usageExit("--did must be a valid account DID")
 	}
-	vault, err := parseVaultFingerprint(command.String("vault"))
-	if err != nil {
-		return usageExit("--vault must be a 32-byte hexadecimal identifier")
+	vault := [32]byte{}
+	if command.IsSet("vault") {
+		parsed, parseErr := parseVaultFingerprint(command.String("vault"))
+		if parseErr != nil || parsed == [32]byte{} {
+			return usageExit("--vault must be a 32-byte hexadecimal identifier")
+		}
+		vault = parsed
 	}
-	if vault == [32]byte{} {
-		return usageExit("--vault must be a 32-byte hexadecimal identifier")
-	}
-	binding := publicationstate.Binding{AccountDID: did.String(), Backend: publicationstate.BackendPublicRepo, Repository: "at://" + did.String(), Vault: vault}
 	paths, err := platform.Resolve(env)
 	if err != nil {
 		return refused(errors.New("publication state location is unavailable"))
 	}
+	if vault == ([32]byte{}) {
+		stored, bindingErr := publicationstate.ReadBinding(paths.PublicationStateDir())
+		if bindingErr != nil {
+			return refused(bindingErr)
+		}
+		vault = stored.Vault
+	}
+	binding := publicationstate.Binding{AccountDID: did.String(), Backend: publicationstate.BackendPublicRepo, Repository: "at://" + did.String(), Vault: vault}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
 		return refused(err)

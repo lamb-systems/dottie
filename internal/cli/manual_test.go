@@ -3,7 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"testing"
 
 	urfave "github.com/urfave/cli/v3"
@@ -59,6 +65,88 @@ func TestManualStatusReportsSelectedTargetsWithoutJournalRows(t *testing.T) {
 	require.Equal(t, 0, code)
 	assert.Empty(t, stderr.String())
 	assert.Contains(t, stdout.String(), "prefs\tfiles\treview\tunknown\titems=0")
+}
+
+func newManualStatusTestStore(t *testing.T) (*state.Store, platform.Paths) {
+	t.Helper()
+	root := t.TempDir()
+	paths := platform.Paths{Home: root + "/home", StateHome: root + "/state", CacheHome: root + "/cache"}
+	store, err := state.Open(paths)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+	return store, paths
+}
+
+func TestManualStatusPrintsRecordedVaultSelection(t *testing.T) {
+	store, paths := newManualStatusTestStore(t)
+	selection := state.VaultSelection{Vault: [32]byte{0x09, 0x11, 0x23}, DeviceID: "synthetic-device", RecordedAt: 7}
+	require.NoError(t, store.PutVaultSelection(context.Background(), selection))
+	configuration := config.Default()
+	factory := func() (*service.Coordinator, func(), error) {
+		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: configuration}, State: store})
+		return coordinator, func() {}, err
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newManualCommand(&stdout, &stderr, &code, factory)
+	code = runManualCommandForTest(command, &code, "status")
+	require.Equal(t, 0, code, "exit code")
+	assert.Empty(t, stderr.String(), "stderr")
+	assert.Equal(t, "vault\t"+hex.EncodeToString(selection.Vault[:])+"\tdevice=synthetic-device\nno targets selected\n", stdout.String(), "stdout")
+	_, statErr := os.Lstat(paths.PublicationStateDir())
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "status opened the publication position store")
+}
+
+func TestManualStatusPrintsAbsentVaultSelection(t *testing.T) {
+	store, _ := newManualStatusTestStore(t)
+	factory := func() (*service.Coordinator, func(), error) {
+		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: config.Default()}, State: store})
+		return coordinator, func() {}, err
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newManualCommand(&stdout, &stderr, &code, factory)
+	code = runManualCommandForTest(command, &code, "status")
+	require.Equal(t, 0, code, "exit code")
+	assert.Empty(t, stderr.String(), "stderr")
+	assert.Equal(t, "no vault selection recorded\nno targets selected\n", stdout.String(), "stdout")
+}
+
+func TestStatusDispatchPassesNoSessionFactory(t *testing.T) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join("root.go"), nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	closures := make([]string, 0)
+	cases := 0
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != "Run" || function.Body == nil {
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			clause, ok := node.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, expression := range clause.List {
+				literal, ok := expression.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING || literal.Value != `"status"` {
+					continue
+				}
+				cases++
+				for _, statement := range clause.Body {
+					ast.Inspect(statement, func(inner ast.Node) bool {
+						if _, closure := inner.(*ast.FuncLit); closure {
+							closures = append(closures, "status dispatch passes a factory closure")
+						}
+						return true
+					})
+				}
+			}
+			return true
+		})
+	}
+	assert.Equal(t, 1, cases, "status dispatch case")
+	assert.Empty(t, closures, "status must be wired without a keyring or session factory")
 }
 
 type statusTestConfig struct {
