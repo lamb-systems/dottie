@@ -15,7 +15,6 @@ import (
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
@@ -119,6 +118,14 @@ func (coordinator *Coordinator) selectVault(ctx context.Context, requested Vault
 	return VaultSelection{Vault: selections[0].Vault, DeviceID: selections[0].DeviceID}, nil
 }
 
+func (coordinator *Coordinator) ResolveSelection(ctx context.Context, requested VaultSelection) (VaultSelection, error) {
+	if err := coordinator.lock(ctx); err != nil {
+		return VaultSelection{}, err
+	}
+	defer coordinator.mu.Unlock()
+	return coordinator.selectVault(ctx, requested)
+}
+
 func (coordinator *Coordinator) lock(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -129,85 +136,6 @@ func (coordinator *Coordinator) lock(ctx context.Context) error {
 		return err
 	}
 	return nil
-}
-
-func validateHeldEvidence(trust TrustMaterial) error {
-	control, err := vault.DecodeControl(trust.Held.Control)
-	if err != nil {
-		return err
-	}
-	policy, err := vault.DecodePolicy(trust.Held.Policy)
-	if err != nil {
-		return err
-	}
-	digest, err := vault.ComputePolicyDigest(trust.Held.Policy)
-	if err != nil || control.Vault != trust.Selection.Vault || policy.Vault != trust.Selection.Vault || policy.EpochSeq != trust.Checkpoint.Epoch || control.EpochSeq != trust.Checkpoint.Epoch || digest != trust.Checkpoint.PolicyDigest || digest != control.PolicyDigest || !bytes.Equal(trust.Checkpoint.ControlBytes, trust.Held.Control) || !bytes.Equal(trust.Checkpoint.SnapshotCID, control.HeadSnapshotCID) {
-		return errors.New("local checkpoint does not match held authenticated position")
-	}
-	context := vault.NewTrustedContext(trust.Selection.Vault, trust.Anchor)
-	if err := context.SetHeldCheckpoint(trust.Held); err != nil {
-		return err
-	}
-	result, err := vault.VerifyControlState(context, vault.VerificationRequest{Supplied: trust.Held})
-	if err != nil {
-		return err
-	}
-	if result.Outcome != vault.CheckpointCurrent {
-		return errors.New("local held checkpoint did not verify as current")
-	}
-	return nil
-}
-
-func encodePredecessorRecords(trust TrustMaterial) ([]byte, []byte, error) {
-	if trust.Checkpoint.Epoch == 0 {
-		return nil, nil, nil
-	}
-	if len(trust.PredecessorPolicy) == 0 || len(trust.PredecessorControl) == 0 {
-		return nil, nil, ErrMissingPredecessorEvidence
-	}
-	return encodePositionRecords(trust.PredecessorPolicy, trust.PredecessorControl)
-}
-
-func encodePositionRecords(policyBytes, controlBytes []byte) ([]byte, []byte, error) {
-	policy, err := vault.DecodePolicy(policyBytes)
-	if err != nil {
-		return nil, nil, err
-	}
-	control, err := vault.DecodeControl(controlBytes)
-	if err != nil {
-		return nil, nil, err
-	}
-	policyRecord := atproto.PolicyRecord{
-		SchemaVersion: 1, Vault: bytes.Clone(policy.Vault[:]), EpochSeq: policy.EpochSeq,
-		PolicyRetentionFloor: policy.PolicyRetentionFloor, RetainedRecoveryPoints: policy.RetainedRecoveryPoints,
-		MaxPublications: policy.MaxPublications, MaxEpochAge: policy.MaxEpochAge,
-		RecoveryAnchor: bytes.Clone(policy.RecoveryAnchor[:]), PrevPolicyDigest: bytes.Clone(policy.PrevPolicyDigest[:]),
-		SignerDeviceID: policy.Signer.DeviceID, SignerKeyID: bytes.Clone(policy.Signer.KeyID), Signature: bytes.Clone(policy.Signature[:]),
-	}
-	for _, role := range policy.Roles {
-		policyRecord.Roles = append(policyRecord.Roles, atproto.PolicyRoleRecord{DeviceID: role.DeviceID, Role: uint8(role.Role)})
-	}
-	for _, recipient := range policy.Recipients {
-		policyRecord.Recipients = append(policyRecord.Recipients, atproto.PolicyRecipientRecord{DeviceID: recipient.DeviceID, KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:])})
-	}
-	encodedPolicy, err := atproto.EncodeRecord(policyRecord)
-	if err != nil {
-		return nil, nil, err
-	}
-	controlRecord := atproto.ControlRecord{
-		SchemaVersion: 1, Vault: bytes.Clone(control.Vault[:]), EpochSeq: control.EpochSeq,
-		PolicyDigest: bytes.Clone(control.PolicyDigest[:]), HeadSnapshotCID: bytes.Clone(control.HeadSnapshotCID),
-		PrevControlCID: bytes.Clone(control.PrevControlCID), SignerDeviceID: control.Signer.DeviceID,
-		SignerKeyID: bytes.Clone(control.Signer.KeyID), Signature: bytes.Clone(control.Signature[:]),
-	}
-	for _, revoked := range control.Revoked {
-		controlRecord.Revoked = append(controlRecord.Revoked, atproto.RevokedDeviceRecord{DeviceID: revoked.DeviceID, CertEpoch: revoked.CertEpoch})
-	}
-	encodedControl, err := atproto.EncodeRecord(controlRecord)
-	if err != nil {
-		return nil, nil, err
-	}
-	return encodedPolicy, encodedControl, nil
 }
 
 func snapshotBlob(plaintext []byte) (vault.Blob, error) {

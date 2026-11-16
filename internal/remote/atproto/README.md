@@ -209,25 +209,22 @@ A structured `{"error":"InvalidSwap"}` maps to `ErrFenceLost`; message text is n
 classification. A 5xx, timeout or transport failure is `ErrAmbiguousTransport`, not absence, and
 is never blindly retried.
 
-## Genesis bootstrap composition
+## Genesis emptiness preflight
 
-`CommitGenesis` is separate from ordinary publication and transition commits. The six-record write set is unchanged: the v2 read path requires policy, control, head, certificate set, snapshot record plus blob, and a checkpoint record at `self`. It first
-requires a real verified empty repository revision, stages the sealed canonical empty
-snapshot, and sends policy, control, certificate, checkpoint, snapshot reference and
-count-zero head as one all-creates `applyWrites` batch fenced to that empty revision. It
-never routes through `PreparePublication` or `commitPublication`. Every transmitted batch
-is resolved with a fresh signed revision; success also requires exact six-record
-membership, exact checkpoint record binding against the composed position, a successful
-real `VaultReader` result and the canonical empty plaintext snapshot. The genesis checkpoint
-is signed by the root device and binds the root anchor; no kit signing material exists, and
-`CommitGenesis` performs no kit authentication. A reread that proves the
-records absent returns `ErrGenesisNotLanded`; a failed or moving reread returns
-`ErrGenesisUnavailable`. The next call reads the repository again before another attempt.
+`CheckGenesisRepositoryEmpty` is the only genesis-time provider operation this package offers. It
+requires an authenticated revision reader bound to the same DID and refuses any repository whose
+verified membership is not empty (`ErrGenesisRepositoryNotEmpty`); an unreadable or moving revision is
+`ErrGenesisPreflightUnavailable`. Bootstrap writes no repository record, so there is no genesis
+publication, no genesis read-back and no genesis record set here: the six v1 collections
+(`vaultHead`, `vaultControl`, `vaultSnapshot`, `vaultPolicy`, `vaultCertificate`, `vaultCheckpoint`)
+and `vaultAttestation` are refused by the v2 transport as `legacy_profile`, and `CommitGenesis` was
+deleted with the v1 publication path. V2 publication through `push` is the only way a vault reaches a
+repository.
 
 `atprototest` exports builders for canonical records, raw blobs and Indigo-signed
 repository revisions/CARs. The builders use production Indigo primitives and have no
-connection to a live account or PDS. A self-test constructs a genesis-epoch repository
-revision and reads it through the real `VaultReader`.
+connection to a live account or PDS. A self-test constructs a repository revision and reads
+it through the real `VaultReader`.
 
 The live fence harness uses provisional test-only records: `systems.lamb.dottie.vaultSnapshot` at
 `probe-<base32>` with `{$type, probe, blob, createdAt}`; `systems.lamb.dottie.vaultHead` at

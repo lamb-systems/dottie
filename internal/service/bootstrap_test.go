@@ -1,14 +1,15 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
-	"errors"
+	"database/sql"
+	"net/url"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,150 +53,135 @@ func (keyring *bootstrapTestKeyStore) DeleteDeviceKeys(_ context.Context, _ [32]
 	return nil
 }
 
-type bootstrapTestRemoteReader struct {
+type bootstrapTestPreflight struct {
+	err   error
 	calls int
 }
 
-func (reader *bootstrapTestRemoteReader) Read(context.Context, atproto.ReadRequest) (atproto.ReadResult, error) {
-	reader.calls++
-	return atproto.ReadResult{}, errors.New("unexpected provider read")
+func (port *bootstrapTestPreflight) Preflight(context.Context) error {
+	port.calls++
+	return port.err
 }
 
-const pushTestDID = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
-
-type pushTestSession struct {
-	did     string
-	methods []atproto.VerificationMethod
+func newBootstrapTestDevice(t *testing.T, deviceID string) vault.DeviceMaterial {
+	t.Helper()
+	signing, recipient, err := vault.GenerateDeviceKeys()
+	require.NoError(t, err)
+	t.Cleanup(func() { clear(signing) })
+	return vault.DeviceMaterial{DeviceID: deviceID, KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
 }
 
-func (session pushTestSession) ReadRequest(_ context.Context, _ VaultSelection, _ vault.DeviceMaterial, _ [32]byte, previousPolicy, previousControl []byte) (atproto.ReadRequest, error) {
-	return atproto.ReadRequest{
-		DID: session.did, DIDDocumentID: session.did, VerificationMethods: session.methods,
-		PreviousPolicy: bytes.Clone(previousPolicy), PreviousControl: bytes.Clone(previousControl),
-	}, nil
+func TestCoordinatorPreflightVaultRequiresThePreflightPort(t *testing.T) {
+	store, _ := openCoordinatorStateWithPaths(t)
+	coordinator, err := NewCoordinator(Dependencies{State: store})
+	require.NoError(t, err)
+	require.Error(t, coordinator.PreflightVault(context.Background()))
 }
 
-type bootstrapTestGenesisPort struct {
-	result      atproto.GenesisCommitResult
-	commitErr   error
-	limitErr    error
-	order       *[]string
-	commitCalls int
-}
-
-func (port *bootstrapTestGenesisPort) Preflight(context.Context) error {
-	*port.order = append(*port.order, "preflight")
-	return nil
-}
-
-func (port *bootstrapTestGenesisPort) BlobUploadLimit(context.Context) (int64, error) {
-	*port.order = append(*port.order, "blob-limit")
-	return 1 << 20, port.limitErr
-}
-
-func (port *bootstrapTestGenesisPort) CommitGenesis(_ context.Context, _ int64, _ vault.DeviceMaterial, _ vault.Genesis) (atproto.GenesisCommitResult, error) {
-	port.commitCalls++
-	*port.order = append(*port.order, "publication")
-	return port.result, port.commitErr
-}
-
-func TestCoordinatorFinalizeVaultRefusesWhenDeviceKeysAreMissing(t *testing.T) {
+func TestCoordinatorInitializeVaultRecordsTheSelectionAndPublishesNothing(t *testing.T) {
 	store, _ := openCoordinatorStateWithPaths(t)
 	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
-	remote := &bootstrapTestRemoteReader{}
-	coordinator, err := NewCoordinator(Dependencies{
-		State: store, DeviceKeys: keyring, Session: pushTestSession{did: pushTestDID}, Remote: remote,
-	})
+	preflight := &bootstrapTestPreflight{}
+	clock := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: preflight, Clock: clock})
 	require.NoError(t, err)
-	_, err = coordinator.FinalizeVaultTrust(context.Background(), [32]byte{1})
-	require.ErrorIs(t, err, ErrFinalizeKeysMissing)
-	assert.Zero(t, remote.calls)
+	require.NoError(t, coordinator.PreflightVault(context.Background()))
+	device := newBootstrapTestDevice(t, "bootstrap-test-root")
+	result, err := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "bootstrap test", Device: device})
+	require.NoError(t, err)
+	assert.Equal(t, BootstrapLocalIdentityRecorded, result.Outcome)
+	assert.NotEqual(t, [32]byte{}, result.Bootstrap.Vault)
+	assert.Equal(t, 1, preflight.calls)
+	assert.Equal(t, device.DeviceID, keyring.items[device.DeviceID].DeviceID)
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	require.Len(t, selections, 1)
+	assert.Equal(t, result.Bootstrap.Vault, selections[0].Vault)
+	assert.Equal(t, device.DeviceID, selections[0].DeviceID)
+	assert.Equal(t, time.Unix(1_800_000_000, 0).Unix(), selections[0].RecordedAt)
+	selected, err := coordinator.ResolveSelection(context.Background(), VaultSelection{})
+	require.NoError(t, err)
+	assert.Equal(t, VaultSelection{Vault: result.Bootstrap.Vault, DeviceID: device.DeviceID}, selected)
 }
 
-func TestCoordinatorInitializeVaultMapsGenesisOutcomesAndCustody(t *testing.T) {
-	for _, test := range []struct {
-		name        string
-		phase       atproto.GenesisPhase
-		commitErr   error
-		outcome     BootstrapOutcome
-		keyRetained bool
-		deleteCalls int
-	}{
-		{name: "definite precommit", phase: atproto.GenesisNotSubmitted, commitErr: atproto.ErrBatchRejected, outcome: BootstrapPrecommitFailure, deleteCalls: 1},
-		{name: "empty-repository race", phase: atproto.GenesisNotSubmitted, commitErr: atproto.ErrGenesisRepositoryNotEmpty, outcome: BootstrapPrecommitFailure, deleteCalls: 1},
-		{name: "verified absence", phase: atproto.GenesisSubmitted, commitErr: atproto.ErrGenesisNotLanded, outcome: BootstrapVerifiedAbsence, deleteCalls: 1},
-		{name: "submitted unresolved", phase: atproto.GenesisSubmitted, commitErr: atproto.ErrGenesisUnavailable, outcome: BootstrapUnresolved, keyRetained: true},
-		{name: "membership verified final readback failed", phase: atproto.GenesisMembershipVerified, commitErr: atproto.ErrGenesisReadbackRejected, outcome: BootstrapUnresolved, keyRetained: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store, _ := openCoordinatorStateWithPaths(t)
-			order := make([]string, 0, 3)
-			keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
-			port := &bootstrapTestGenesisPort{result: atproto.GenesisCommitResult{Phase: test.phase}, commitErr: test.commitErr, order: &order}
-			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, Genesis: port})
-			require.NoError(t, err)
-			signing, recipient, err := vault.GenerateDeviceKeys()
-			require.NoError(t, err)
-			defer clear(signing)
-			device := vault.DeviceMaterial{DeviceID: "bootstrap-test-root", KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
-			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
-				VaultName: "bootstrap test", Device: device,
-			})
-			require.ErrorIs(t, initializeErr, test.commitErr)
-			assert.Equal(t, test.outcome, result.Outcome)
-			assert.Equal(t, 1, port.commitCalls)
-			assert.Equal(t, test.deleteCalls, keyring.deleteCalls)
-			assert.Equal(t, test.keyRetained, len(keyring.items) == 1)
-			assert.Equal(t, []string{"blob-limit", "publication"}, order)
-			assert.Empty(t, result.RecordTargets)
-			selections, err := store.VaultSelections(context.Background())
-			require.NoError(t, err)
-			assert.Empty(t, selections)
-		})
-	}
-}
-
-func TestCoordinatorInitializeVaultAbortsBeforePublicationOnCustodyFailure(t *testing.T) {
+func TestCoordinatorInitializeVaultRefusesCustodyAndSelectionFailures(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		storeErr    error
-		wantStored  int
-		wantDelete  int
+		existing    bool
 		wantOutcome BootstrapOutcome
-		wantErr     error
+		wantDelete  int
+		wantKeys    int
 	}{
-		{name: "keyring failure", storeErr: platform.ErrKeyringUnavailable, wantDelete: 1, wantErr: platform.ErrKeyringUnavailable},
+		{name: "keyring failure", storeErr: platform.ErrKeyringUnavailable, wantOutcome: BootstrapNotRecorded, wantDelete: 1},
+		{name: "device keys already exist", existing: true, wantOutcome: BootstrapNotRecorded, wantKeys: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, _ := openCoordinatorStateWithPaths(t)
-			order := make([]string, 0, 3)
 			keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial), storeErr: test.storeErr}
-			port := &bootstrapTestGenesisPort{order: &order}
-			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, Genesis: port})
+			device := newBootstrapTestDevice(t, "custody-test-root")
+			if test.existing {
+				keyring.items[device.DeviceID] = device
+			}
+			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
 			require.NoError(t, err)
-			signing, recipient, err := vault.GenerateDeviceKeys()
-			require.NoError(t, err)
-			defer clear(signing)
-			device := vault.DeviceMaterial{DeviceID: "custody-test-root", KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
-			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
-				VaultName: "custody test", Device: device,
-			})
-			require.ErrorIs(t, initializeErr, test.wantErr)
-			assert.Equal(t, test.wantOutcome, result.Outcome)
-			assert.Equal(t, 0, port.commitCalls)
-			assert.Equal(t, 0, len(keyring.items))
+			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "custody test", Device: device})
+			require.Error(t, initializeErr)
+			assert.NotEqual(t, BootstrapLocalIdentityRecorded, result.Outcome)
 			assert.Equal(t, test.wantDelete, keyring.deleteCalls)
-			assert.Equal(t, test.wantStored, func() int {
-				if test.storeErr != nil {
-					return 0
-				}
-				return 1
-			}())
-			assert.NotContains(t, order, "blob-limit")
-			assert.NotContains(t, order, "publication")
 			selections, err := store.VaultSelections(context.Background())
 			require.NoError(t, err)
 			assert.Empty(t, selections)
+			if !test.existing {
+				assert.Empty(t, keyring.items)
+			}
 		})
 	}
+}
+
+func TestCoordinatorInitializeVaultDeletesStoredKeysWhenTheSelectionCannotBeRecorded(t *testing.T) {
+	store, paths := openCoordinatorStateWithPaths(t)
+	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
+	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
+	require.NoError(t, err)
+	interruptVaultSelectionWrites(t, paths)
+	result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
+		VaultName: "selection test", Device: newBootstrapTestDevice(t, "selection-test-root"),
+	})
+	require.Error(t, initializeErr)
+	assert.Equal(t, BootstrapNotRecorded, result.Outcome)
+	assert.Equal(t, 1, keyring.deleteCalls)
+	assert.Empty(t, keyring.items)
+	selections, err := store.VaultSelections(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, selections)
+}
+
+func interruptVaultSelectionWrites(t *testing.T, paths platform.Paths) {
+	t.Helper()
+	database, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: filepath.Join(paths.AppStateDir(), "state.db")}).String())
+	require.NoError(t, err)
+	defer database.Close()
+	_, err = database.Exec(`CREATE TRIGGER fail_bootstrap_selection BEFORE INSERT ON vault_selections BEGIN SELECT RAISE(FAIL, 'interrupted write'); END`)
+	require.NoError(t, err)
+}
+
+func TestCoordinatorInitializeVaultRequiresDeviceKeyCustody(t *testing.T) {
+	store, _ := openCoordinatorStateWithPaths(t)
+	coordinator, err := NewCoordinator(Dependencies{State: store, GenesisPreflight: &bootstrapTestPreflight{}})
+	require.NoError(t, err)
+	device := newBootstrapTestDevice(t, "custody-required-root")
+	_, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "custody required", Device: device})
+	require.Error(t, initializeErr)
+}
+
+func TestCoordinatorInitializeVaultRequiresAVaultName(t *testing.T) {
+	store, _ := openCoordinatorStateWithPaths(t)
+	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
+	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
+	require.NoError(t, err)
+	_, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{Device: newBootstrapTestDevice(t, "nameless-root")})
+	require.Error(t, initializeErr)
+	assert.Empty(t, keyring.items)
+	assert.Zero(t, keyring.deleteCalls)
 }

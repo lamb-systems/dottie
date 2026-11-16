@@ -8,12 +8,14 @@ inspect, apply and advance the accepted floor through the packed-plaintext v2 pr
 apply journal and recovery proven against real process death. `dottie pull --confirm` is the only
 apply path. The v1 encrypted read-and-apply authority, the recovery-kit cross-machine workflow and
 every command that served them were retired: `preview`, `restore`, `recover`, `export`, `import`,
-`prune`, `history`, `devices *`, `account enroll`, `account import-bundle`, `account recovery` and
-`account verify` no longer exist. The signing material those commands consumed is gone from the tree:
-`dottie account bootstrap` no longer mints a recovery kit, writes no kit to state or the keyring and
-prints none, and `internal/vault` no longer creates, parses or validates kit material, kit-signed
-checkpoints or export archives. Cross-machine recovery without a live PDS is not supported and is
-not planned; v2 publication replaces it. Real-data use is permitted under the residual limits in
+`prune`, `history`, `devices *`, `account enroll`, `account import-bundle`, `account recovery`,
+`account verify` and `account finalize` no longer exist. The signing material those commands consumed
+is gone from the tree: `dottie account bootstrap` no longer mints a recovery kit, writes no kit to
+state or the keyring and prints none, and `internal/vault` no longer creates, parses or validates kit
+material, kit-signed checkpoints or export archives. Bootstrap also writes no repository record at
+all: the v1 genesis record set is deleted and the first `push` publishes the vault. Cross-machine
+recovery without a live PDS is not supported and is not planned; v2 publication replaces it.
+Real-data use is permitted under the residual limits in
 [`docs/acceptance.md`](docs/acceptance.md): no global freshness, one published vault per account, and
 provider-held records that cannot be deleted. The plaintext profile adds one disclosed residual: the
 packed snapshot is uploaded before its record batch, so a rejected or ambiguous batch can leave an
@@ -29,10 +31,12 @@ push/sync, device administration, history summaries, export and archive validati
 capture for publication requires a build with the `gsettings` tag and an available settings backend.
 `account bootstrap` requires a
 verified empty repository and a signed-in account. It checks repository emptiness before minting
-keys, stores root device keys in Secret Service, and records trust atomically after verified
-publication. An account can hold only one published Dottie vault because genesis requires an empty
-repository. Multi-vault selection refers only to locally recorded vaults, not multiple published
-vaults on one account.
+keys, stores root device keys in Secret Service, and records the local vault selection. Bootstrap
+writes no repository record and publishes no vault: v2 publication through `push`, `pull` and `sync`
+is the only publication path, and the first push is what makes a bootstrapped account's vault
+visible to another machine. An account can hold only one published Dottie vault because bootstrap
+requires an empty repository. Multi-vault selection refers only to locally recorded vaults, not
+multiple published vaults on one account.
 
 Authenticity is repo-scoped through AT Protocol account authority: the records live in the
 account's own repository, signed by the account's repository key, and writing them requires an

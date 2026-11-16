@@ -194,12 +194,13 @@ with `crypto/rand`; `Bootstrap` itself does not use a clock or randomness. The v
 `sha256("dottie/v2/vault\x00" || vault name || 0x00 || root device signing public key)`, so it needs
 no kit, secret or provider input, and two devices bootstrapping the same name derive different
 vault IDs. The root device's certificate is self-signed by its Ed25519 key, and its fingerprint is
-the `anchor`. The genesis checkpoint is signed by the root device and carries that anchor; the
-policy's `recovery_anchor` field is all zeros, because no offline anchor exists. `ComposeGenesis`
+the `anchor`. `Bootstrap` also signs the epoch-zero policy, control and checkpoint that the v1
+library compositions consume; the policy's `recovery_anchor` field is all zeros, because no offline
+anchor exists. `ComposeGenesis` remains the in-memory epoch-zero seal composition for that library: it
 seals the canonical empty snapshot and builds the count-zero head, control and checkpoint so the
-control and checkpoint bind the final snapshot and control CIDs. `ValidateGenesis` verifies those
-bindings and signatures. This is the seal composition only; repository publication and verified
-read-back are owned by `internal/remote/atproto`.
+control and checkpoint bind the final snapshot and control CIDs, and `ValidateGenesis` verifies those
+bindings and signatures. Nothing in this package writes to a repository: bootstrap publishes no
+record, v2 publication is the only publication path, and the v1 genesis record set has no publisher.
 
 There is no vault signature beyond these per-object device signatures and no offline anchor. The
 published record set is authentic because it lives in the account's own AT Protocol repository and

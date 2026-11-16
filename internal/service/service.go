@@ -9,7 +9,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
@@ -17,28 +16,18 @@ import (
 )
 
 var (
-	ErrNoVaultSelection                 = errors.New("no local vault selection")
-	ErrAmbiguousVaultSelection          = errors.New("multiple local vault selections require an explicit vault")
-	ErrNoCheckpoint                     = errors.New("no local trust checkpoint is recorded")
-	ErrMissingPredecessorEvidence       = errors.New("authenticated predecessor evidence is missing")
-	ErrDeviceKeyMissing                 = errors.New("device keyring item is missing")
-	ErrTrustEvidenceInvalid             = errors.New("local trust evidence is invalid")
-	ErrCheckpointNotCurrent             = errors.New("remote checkpoint is not current or a verified descendant")
-	ErrBaseRecordingFailed              = errors.New("applied-base recording failed")
-	ErrGNOMEReapproval                  = errors.New("GNOME category approval requires re-approval")
-	ErrUnapprovedEntry                  = errors.New("remote or base entry is not approved by local target policy")
-	ErrAdministrativeRootRequired       = errors.New("administrative operation requires the selected root device")
-	ErrOnboardingAnchorMismatch         = errors.New("onboarding anchor does not match the supplied root fingerprint")
-	ErrOnboardingVaultMismatch          = errors.New("onboarding bundle does not match the selected vault")
-	ErrOnboardingDeviceMismatch         = errors.New("onboarding bundle does not contain the selected device recipient")
-	ErrOnboardingCheckpoint             = errors.New("onboarding checkpoint does not match authenticated state")
-	ErrOnboardingChain                  = errors.New("onboarding evidence does not form an authenticated successor chain")
-	ErrOnboardingStateConflict          = errors.New("onboarding conflicts with existing local vault state")
-	ErrRevokeApprovalMismatch           = errors.New("revocation approval fingerprint does not match the current verified device")
-	ErrFinalizeKeysMissing              = errors.New("device keys for this vault are missing from Secret Service")
-	ErrFinalizeStateConflict            = errors.New("local vault trust exists but does not match the verified remote position")
-	ErrFinalizeStateIncomplete          = errors.New("local vault trust is incomplete")
-	ErrBootstrapTrustFinalizationFailed = errors.New("verified genesis local trust finalization failed")
+	ErrNoVaultSelection           = errors.New("no local vault selection")
+	ErrAmbiguousVaultSelection    = errors.New("multiple local vault selections require an explicit vault")
+	ErrCheckpointNotCurrent       = errors.New("remote checkpoint is not current or a verified descendant")
+	ErrBaseRecordingFailed        = errors.New("applied-base recording failed")
+	ErrGNOMEReapproval            = errors.New("GNOME category approval requires re-approval")
+	ErrUnapprovedEntry            = errors.New("remote or base entry is not approved by local target policy")
+	ErrAdministrativeRootRequired = errors.New("administrative operation requires the selected root device")
+	ErrOnboardingAnchorMismatch   = errors.New("onboarding anchor does not match the supplied root fingerprint")
+	ErrOnboardingDeviceMismatch   = errors.New("onboarding bundle does not contain the selected device recipient")
+	ErrOnboardingCheckpoint       = errors.New("onboarding checkpoint does not match authenticated state")
+	ErrOnboardingStateConflict    = errors.New("onboarding conflicts with existing local vault state")
+	ErrRevokeApprovalMismatch     = errors.New("revocation approval fingerprint does not match the current verified device")
 )
 
 type ConfigPort interface {
@@ -65,33 +54,12 @@ type SettingsPort interface {
 	Backend() syncengine.SettingsBackend
 }
 
-type SessionPort interface {
-	ReadRequest(context.Context, VaultSelection, vault.DeviceMaterial, [32]byte, []byte, []byte) (atproto.ReadRequest, error)
+type DeviceKeySource interface {
+	LoadDeviceKeys(context.Context, [32]byte, string) (vault.DeviceMaterial, error)
 }
 
-type RemoteReadPort interface {
-	Read(context.Context, atproto.ReadRequest) (atproto.ReadResult, error)
-}
-
-type GenesisPort interface {
+type GenesisPreflightPort interface {
 	Preflight(context.Context) error
-	BlobUploadLimit(context.Context) (int64, error)
-	CommitGenesis(context.Context, int64, vault.DeviceMaterial, vault.Genesis) (atproto.GenesisCommitResult, error)
-}
-
-type TrustSource interface {
-	Resolve(context.Context, VaultSelection) (TrustMaterial, error)
-}
-
-type TrustMaterial struct {
-	Selection          VaultSelection
-	Anchor             [32]byte
-	Checkpoint         state.VaultCheckpoint
-	Held               vault.ControlEvidence
-	ImportedCheckpoint bool
-	PredecessorPolicy  []byte
-	PredecessorControl []byte
-	Device             vault.DeviceMaterial
 }
 
 type VaultSelection struct {
@@ -111,18 +79,15 @@ type SettingsCapture struct {
 }
 
 type Dependencies struct {
-	Config     ConfigPort
-	State      *state.Store
-	DeviceKeys DeviceKeySource
-	Files      CapturePort
-	Settings   SettingsPort
-	Trust      TrustSource
-	Session    SessionPort
-	Remote     RemoteReadPort
-	Genesis    GenesisPort
-	Clock      func() time.Time
-	Filesystem files.ApplyFileSystem
-	Paths      platform.Paths
+	Config           ConfigPort
+	State            *state.Store
+	DeviceKeys       DeviceKeySource
+	Files            CapturePort
+	Settings         SettingsPort
+	GenesisPreflight GenesisPreflightPort
+	Clock            func() time.Time
+	Filesystem       files.ApplyFileSystem
+	Paths            platform.Paths
 }
 
 type StatusState string

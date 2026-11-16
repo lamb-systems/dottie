@@ -4,15 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"testing"
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,24 +39,6 @@ func (store *memoryConfig) Update(_ context.Context, expected config.Token, muta
 	store.value = updated
 	store.token[0]++
 	return config.Snapshot{Config: store.value, Token: store.token}, nil
-}
-
-type emptyTrust struct{}
-
-type unavailableSession struct{}
-
-func (emptyTrust) Resolve(_ context.Context, selection VaultSelection) (TrustMaterial, error) {
-	return TrustMaterial{Selection: selection}, nil
-}
-
-func (unavailableSession) ReadRequest(context.Context, VaultSelection, vault.DeviceMaterial, [32]byte, []byte, []byte) (atproto.ReadRequest, error) {
-	return atproto.ReadRequest{}, errors.New("unexpected session request")
-}
-
-type unavailableRemote struct{}
-
-func (unavailableRemote) Read(context.Context, atproto.ReadRequest) (atproto.ReadResult, error) {
-	return atproto.ReadResult{}, errors.New("unexpected remote read")
 }
 
 func openCoordinatorState(t *testing.T) *state.Store {

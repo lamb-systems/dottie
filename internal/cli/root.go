@@ -27,7 +27,6 @@ Usage:
   dottie account status (--did DID | --handle HANDLE) [--refresh]
   dottie account logout (--did DID | --handle HANDLE) [--remote]
   dottie account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)
-  dottie account finalize --vault HEX (--did DID | --handle HANDLE)
 
 Push publishes the reconciled snapshot for selected local targets through the v2 publication profile. The first
 invocation prepares one retained proposal, prints its confirmation and summary, and publishes nothing; repeat it
@@ -52,16 +51,16 @@ paths, counts, tokens or payload bytes. Refusals exit 3; exit 2 is usage only.
 
 Account login, status and logout manage the OAuth session in the desktop Secret Service keyring; they never touch
 target data. Account bootstrap requires a signed-in account and a verified empty repository, mints device keys,
-stores them in Secret Service, prints no secret, and records trust atomically after verified publication. Account
-finalize verifies the published position with the retained device keys and records local trust when bootstrap could
-not. An account can hold only one published Dottie vault because genesis requires an empty repository.
+stores them in Secret Service, prints no secret, and records the local vault selection. Bootstrap writes no
+repository record: the first v2 push is the only publication path, so a bootstrapped account publishes and pulls
+through the v2 profile. An account can hold only one published Dottie vault because bootstrap requires an empty
+repository.
 
 This tree has no cross-machine recovery path and no offline anchor: recovering a vault on another machine without a
 live PDS is not supported, bootstrap mints no recovery kit, and nothing Dottie writes can restore data without a
 surviving device key. Authenticity is repo-scoped through the account's own AT Protocol repository; Dottie adds no
-vault signature over a published position. V2 publication through push, pull and sync is the supported path, and a
-publication position store must already exist because bootstrap publishes the genesis vault records that the v2
-publication profile rejects as a legacy record set.
+vault signature over a published position. V2 publication through push, pull and sync is the only publication
+path, and a publication position store must already exist because bootstrap provisions no publication state.
 
 See README.md for build instructions and current status.
 `

@@ -1,10 +1,10 @@
 # Service
 
-The coordinator owns local configuration mutations, state/checkpoint writes, verified reads, v2 publication planning/apply, base recording and journal recovery. CLI commands provide inputs and render redacted results; they do not run a local apply path or modify config/state directly. Target add/remove/mode and `account verify --record` are serialized through coordinator entry points.
+The coordinator owns local configuration mutations, the local vault selection, bootstrap identity custody, v2 publication planning/apply, base recording and journal recovery. CLI commands provide inputs and render redacted results; they do not run a local apply path or modify config/state directly. Target add/remove/mode are serialized through coordinator entry points.
 
-Explicit dependency ports cover configuration, state, file capture, GNOME settings resolution/capture, keyring-backed trust/device keys, account session, remote VaultReader, fenced publisher I/O, clock and apply filesystem. The production remote adapter delegates to the real `atproto.VaultReader`; tests can inject deterministic transports and fake keyring/session ports without bypassing cryptographic verification.
+Explicit dependency ports cover configuration, state, file capture, GNOME settings resolution/capture, keyring-backed device keys, the genesis emptiness preflight, clock and apply filesystem. The v2 material transport and publication reader own the provider surface for push and pull; tests can inject deterministic transports and fake keyring ports without bypassing cryptographic verification.
 
-A read requires a local vault selection, anchor and checkpoint. The coordinator compares the checkpoint with authenticated remote control state using `vault.VerifyControlState`; only current or verified descendants are eligible for apply. Successful reads store the authenticated position. Genesis can be checked from the local anchor/control and authenticated remote policy/certificates; non-genesis reads require local predecessor evidence. No checkpoint guess or anchor-less read is allowed. Authenticity is repo-scoped through AT Protocol account authority: the coordinator verifies per-object device signatures and certificate chains, not a vault signature or an offline anchor.
+A vault selection is the only local vault state a v2 command needs: `ResolveSelection` reads the recorded selection set, and `push`/`pull`/`sync` bind their publication work to it. The coordinator performs no v1 verified read and stores no v1 trust checkpoint; the accepted publication position is the v2 floor in `internal/publicationstate`. Authenticity is repo-scoped through AT Protocol account authority: the reader verifies the packed record set, chain and head binding, not a vault signature or an offline anchor.
 
 GNOME use derives the allowlist from the stored category set and current matrix, verifies the stored matrix version and key digest, resolves the local schema path and requires exact path equality. Wrong-path, unapproved and stale-base GNOME entries are untracked/refused, never treated as absent. Target identity always includes target ID.
 
@@ -20,15 +20,23 @@ The v2 apply path is covered single-machine by `internal/service/publication_app
 
 `Coordinator.PlanPrune` and `ApplyPrune` anchor pruning to the held checkpoint's exact epoch, snapshot CID, policy digest and control CID, require that position to be the oldest declared recovery point, require a strictly later authenticated live epoch and complete revalidated inventories, and delegate all reference selection/deletion to state. The CLI requires explicit `--confirm` for apply. The plan reports the recovery floor (oldest complete inventory), confidentiality floor (oldest surviving known material, including protected backups) and unknown holdings separately. A payload or backup still associated with a retained point is protected at every age; an aged backup associated with a point evicted below the boundary may be pruned; a bound backup with no association and a migrated legacy-unbound backup remain protected. Floors can remain below policy or unknown while staged, orphaned or unknown-epoch payloads survive; the retained-point cap limits selected epochs, not on-disk growth. Pruning is foreground-only: B09 scheduling/automatic GC is outside scope, and no background deletion is wired. Evidence records do not cache ciphertext.
 
-`InitializeVault` composes and publishes genesis, then records trust atomically. It mints device keys
-and nothing else: no recovery kit is generated, delivered, printed or stored, and there is no
-delivery callback whose failure could abort before publication. Bootstrap still verifies repository
-emptiness before writing anything, still stores pending device keys in Secret Service first, and still
-finalizes the selection, epoch-zero checkpoint and authenticated position evidence in one
-transaction after a verified commit. `FinalizeVaultTrust` re-reads the published position with the
-retained device keys and records trust when bootstrap could not. The genesis write set is unchanged at
-six records, because the read path requires the policy, control, head, certificate set, snapshot
-record plus blob and the checkpoint record.
+`PreflightVault` verifies repository emptiness through the `GenesisPreflightPort`; bootstrap refuses a
+non-empty repository before it mints anything. `InitializeVault` derives the vault identity from the
+vault name and the root device key, stores the device keys in Secret Service, and records the local
+vault selection. It writes no repository record, uploads no blob, and records no vault checkpoint:
+v2 publication through `PreparePublicationPush`/`ConfirmPublicationPush` is the only publication
+path, so the first push publishes the vault. Bootstrap mints device keys and nothing else: no
+recovery kit is generated, delivered, printed or stored. A keyring failure and a selection failure
+both delete the pending device keys best-effort, leave the account untouched, and exit 3.
+
+`FinalizeVaultTrust` and `account finalize` were retired with the v1 genesis write set. Their only
+reader was the published `vaultCheckpoint` record, and bootstrap no longer writes it, so there is
+nothing left for a finalization re-read to verify. The property they protected — local state recorded
+only from a verified publication — is carried by the v2 paths: `push` advances the accepted floor
+only through `ResolveAttempt`/`FinalizeAttempt` on a verified read-back, and `pull --confirm` records
+the accepted position only after its journaled apply succeeds. The v1 read/trust orchestration that
+served finalize (`StateTrustSource`, the coordinator `Trust`, `Session` and `Remote` ports,
+`atproto.TrustMaterialFromVerifiedRead`) is deleted with it. `GenesisPreflight` only checks emptiness.
 
 ## Offline local publication reconciliation
 

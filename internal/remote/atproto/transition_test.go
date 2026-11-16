@@ -155,12 +155,12 @@ func candidateUploadResponse(t *testing.T, data []byte) []byte {
 }
 
 func TestPredecessorFromRevisionRejectsAmbiguousExactCertificateIdentity(t *testing.T) {
-	fixture := newGenesisFixture(t)
-	policy, err := vault.DecodePolicy(fixture.genesis.Policy)
+	fixture := newTransitionTestFixture(t)
+	policy, err := vault.DecodePolicy(fixture.predecessor.Policy)
 	require.NoError(t, err)
-	control, err := vault.DecodeControl(fixture.genesis.Control)
+	control, err := vault.DecodeControl(fixture.predecessor.Control)
 	require.NoError(t, err)
-	certificate, err := vault.DecodeCertificate(fixture.genesis.Certificate)
+	certificate, err := vault.DecodeCertificate(fixture.predecessor.Certificates[0])
 	require.NoError(t, err)
 	policyRecord, err := EncodeRecord(toPolicyRecord(policy))
 	require.NoError(t, err)
@@ -174,7 +174,7 @@ func TestPredecessorFromRevisionRejectsAmbiguousExactCertificateIdentity(t *test
 		{Collection: VaultCertificateNSID, RKey: "root-1"}: {Data: certificateRecord},
 		{Collection: VaultCertificateNSID, RKey: "root-2"}: {Data: certificateRecord},
 	}}
-	_, err = predecessorFromRevision(revision, fixture.genesis.Anchor, nil, nil)
+	_, err = predecessorFromRevision(revision, fixture.predecessor.TrustAnchor, nil, nil)
 	require.ErrorIs(t, err, ErrRecord)
 	assert.Contains(t, err.Error(), "duplicate certificate identity")
 }

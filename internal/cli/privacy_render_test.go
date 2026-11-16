@@ -11,7 +11,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/service"
-	"github.com/lamb-systems/dottie/internal/state"
+	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,9 +36,9 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 	}
 
 	manualStatus := service.Status{Targets: []service.TargetStatus{{ID: targetID, Source: string(model.SourceFiles), Mode: config.Review, State: service.StatusApplied, Reason: "journal-applied", Items: 1}}}
-	finalize := service.FinalizeResult{
-		Checkpoint:         state.VaultCheckpoint{Vault: [32]byte{0x01}, Anchor: [32]byte{0x02}, Epoch: 1},
-		CheckpointPosition: []byte(fileContent + "|" + settingValue + "|" + homeRoot),
+	bootstrap := service.BootstrapResult{
+		Outcome:   service.BootstrapLocalIdentityRecorded,
+		Bootstrap: vault.BootstrapResult{Vault: [32]byte{0x01}, Anchor: [32]byte{0x02}},
 	}
 
 	table := []struct {
@@ -52,7 +52,7 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 		{name: "pull-apply-report", output: renderPullApplyReport(service.PublicationApplyReport{Applied: 1, Unchanged: 2, BytesWritten: 3}), checkAbsoluteTokens: true},
 		{name: "position-inspection", output: renderInspection(publicationstate.Inspection{Present: true, Floor: publicationstate.Floor{Revision: 1, Generation: 2, Sequence: 3}}), checkAbsoluteTokens: true},
 		{name: "manual-status", output: renderManualStatus(manualStatus), requireTargetID: true, checkAbsoluteTokens: true},
-		{name: "finalize", output: renderFinalizeResult(finalize), checkAbsoluteTokens: true},
+		{name: "bootstrap", output: renderBootstrapOutcome(bootstrap), checkAbsoluteTokens: true},
 	}
 
 	for _, surface := range table {

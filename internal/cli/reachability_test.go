@@ -36,16 +36,17 @@ var removedV1ApplySymbols = map[string]bool{
 }
 
 var removedV1Commands = []string{
-	"recover", "export", "import", "prune", "history", "devices", "recoverCommand",
+	"recover", "export", "import", "prune", "history", "devices", "recoverCommand", "finalize",
 }
 
 var removedV1ServiceSymbols = map[string]bool{
-	"Enroll":           true,
-	"Revoke":           true,
-	"RevokeApproval":   true,
-	"RecordCheckpoint": true,
-	"PrepareArchive":   true,
-	"ValidateArchive":  true,
+	"Enroll":             true,
+	"Revoke":             true,
+	"RevokeApproval":     true,
+	"RecordCheckpoint":   true,
+	"FinalizeVaultTrust": true,
+	"PrepareArchive":     true,
+	"ValidateArchive":    true,
 }
 
 func TestRetiredV1CommandsAreGone(t *testing.T) {
