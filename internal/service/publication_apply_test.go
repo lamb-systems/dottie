@@ -957,41 +957,123 @@ func publicationApplyModeEntry(targetID, path, content string, mode uint32) mode
 	return model.Entry{TargetID: targetID, File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: mode}}
 }
 
-func TestApplyPublicationRefusesUnsupportedModeChanges(t *testing.T) {
+func TestPublicationApplySupportedMode(t *testing.T) {
+	supported := map[uint32]os.FileMode{0o600: 0o600, 0o644: 0o644}
+	for mode, expected := range supported {
+		actual, ok := publicationApplySupportedMode(mode)
+		assert.True(t, ok, "mode %04o is supported", mode)
+		assert.Equal(t, expected, actual)
+	}
+	for _, mode := range []uint32{0, 0o400, 0o440, 0o640, 0o660, 0o666, 0o700, 0o755, 0o777, 0o1644, 0o2644, 0o4644, 0o7644} {
+		_, ok := publicationApplySupportedMode(mode)
+		assert.False(t, ok, "mode %04o is refused", mode)
+	}
+}
+
+func TestApplyPublicationWritesTheDeclaredMode(t *testing.T) {
+	cases := map[string]os.FileMode{"private": 0o600, "shared": 0o644}
+	for name, declared := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPublicationApplyFixture(t)
+			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", uint32(declared))})
+
+			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			require.NoError(t, err)
+			assert.Nil(t, report.Stopped)
+			assert.Equal(t, 1, report.Applied)
+			applied := publicationApplyEntryFor(t, report, "note.ini")
+			assert.Equal(t, PublicationApplyWrite, applied.Operation)
+			assert.Equal(t, uint32(declared), applied.Mode)
+			assert.Equal(t, "after", fixture.read(t, "note.ini"))
+			info, err := os.Lstat(fixture.path("note.ini"))
+			require.NoError(t, err)
+			assert.Equal(t, declared.Perm(), info.Mode().Perm())
+			assert.Empty(t, fixture.resolutions(t))
+		})
+	}
+}
+
+func TestApplyPublicationAppliesModeOnlyDivergence(t *testing.T) {
 	cases := map[string]struct {
-		local      string
-		localMode  os.FileMode
-		base       string
-		remote     string
-		remoteMode uint32
+		local    os.FileMode
+		declared os.FileMode
 	}{
-		"mode only difference":               {local: "same", localMode: 0o600, base: "same", remote: "same", remoteMode: 0o644},
-		"content and mode difference":        {local: "before", localMode: 0o600, base: "before", remote: "after", remoteMode: 0o644},
-		"local mode is not the applied mode": {local: "same", localMode: 0o644, base: "same", remote: "same", remoteMode: 0o600},
+		"declared shared over private": {local: 0o600, declared: 0o644},
+		"declared private over shared": {local: 0o644, declared: 0o600},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
 			fixture := newPublicationApplyFixture(t)
-			fixture.write(t, "note.ini", testCase.local)
-			require.NoError(t, os.Chmod(fixture.path("note.ini"), testCase.localMode))
-			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", testCase.base, uint32(testCase.localMode))})
-			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", testCase.remote, testCase.remoteMode)})
+			fixture.write(t, "note.ini", "same")
+			require.NoError(t, os.Chmod(fixture.path("note.ini"), testCase.local))
+			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.local))})
+			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.declared))})
+
+			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
+			require.NoError(t, err)
+			assert.Equal(t, 1, plan.Changes)
+			require.Len(t, plan.Entries, 1)
+			assert.Equal(t, PublicationApplyWrite, plan.Entries[0].Operation)
+
+			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
+			require.NoError(t, err)
+			assert.Equal(t, 1, report.Applied)
+			assert.Equal(t, 0, report.Unchanged)
+			applied := publicationApplyEntryFor(t, report, "note.ini")
+			assert.Equal(t, PublicationApplyWrite, applied.Operation)
+			assert.Equal(t, uint32(testCase.declared), applied.Mode)
+			assert.Equal(t, "same", fixture.read(t, "note.ini"))
+			info, err := os.Lstat(fixture.path("note.ini"))
+			require.NoError(t, err)
+			assert.Equal(t, testCase.declared.Perm(), info.Mode().Perm())
+		})
+	}
+}
+
+func TestApplyPublicationRefusesUnsupportedDeclaredModes(t *testing.T) {
+	for _, mode := range []uint32{0o755, 0o640, 0o660} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			fixture := newPublicationApplyFixture(t)
+			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", mode)})
+
+			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			refused := requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			assert.Contains(t, refused.Error(), fmt.Sprintf("%04o", mode))
+			assert.Empty(t, plan.Entries)
+
+			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			refused = requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			assert.Contains(t, refused.Error(), fmt.Sprintf("%04o", mode))
+			assert.Equal(t, 0, report.Applied)
+			assert.Nil(t, report.Stopped)
+			_, statErr := os.Lstat(fixture.path("note.ini"))
+			require.ErrorIs(t, statErr, os.ErrNotExist)
+			fixture.assertNoJournalRows(t)
+		})
+	}
+}
+
+func TestApplyPublicationRefusesUnsupportedLocalModeOnlyChange(t *testing.T) {
+	for _, local := range []os.FileMode{0o755, 0o640, 0o660} {
+		t.Run(fmt.Sprintf("%04o", local), func(t *testing.T) {
+			fixture := newPublicationApplyFixture(t)
+			fixture.write(t, "note.ini", "same")
+			require.NoError(t, os.Chmod(fixture.path("note.ini"), local))
+			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(local))})
+			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o644)})
 			before, err := os.Lstat(fixture.path("note.ini"))
 			require.NoError(t, err)
 
-			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
-			requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
-			assert.Empty(t, plan.Entries)
-
 			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
-			requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			refused := requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
+			assert.Contains(t, refused.Error(), fmt.Sprintf("%04o", local))
 			assert.Equal(t, 0, report.Applied)
 			assert.Nil(t, report.Stopped)
 			after, err := os.Lstat(fixture.path("note.ini"))
 			require.NoError(t, err)
 			assert.True(t, os.SameFile(before, after))
-			assert.Equal(t, testCase.localMode, after.Mode().Perm())
-			assert.Equal(t, testCase.local, fixture.read(t, "note.ini"))
+			assert.Equal(t, local.Perm(), after.Mode().Perm())
+			assert.Equal(t, "same", fixture.read(t, "note.ini"))
 			fixture.assertNoJournalRows(t)
 		})
 	}
@@ -1007,7 +1089,7 @@ func TestApplyPublicationRefusesMixedPlanBeforeAnyMutation(t *testing.T) {
 	})
 	remote := fixture.targetSnapshot([]model.Entry{
 		publicationApplyModeEntry(fixture.target.ID, "supported.ini", "after", 0o600),
-		publicationApplyModeEntry(fixture.target.ID, "unsupported.ini", "after", 0o644),
+		publicationApplyModeEntry(fixture.target.ID, "unsupported.ini", "after", 0o755),
 	})
 
 	report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))

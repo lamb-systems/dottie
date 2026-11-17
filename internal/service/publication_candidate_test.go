@@ -108,6 +108,20 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 	require.Error(t, err, "the builder accepted a zero publication identity")
 }
 
+func TestPublicationSyncSnapshotKeepsTheDeclaredAppliedMode(t *testing.T) {
+	for _, declared := range []uint32{0o600, 0o644} {
+		floor := []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "niri.kdl", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("before"), Mode: 0o600}}}
+		remote := []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "niri.kdl", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("after"), Mode: declared}}}
+		local := []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "niri.kdl", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("after"), Mode: declared}}}
+
+		composed := publicationSyncPostPullEntries(floor, remote, local)
+		require.Len(t, composed, 1)
+		require.NotNil(t, composed[0].File)
+		assert.Equal(t, declared, composed[0].File.Mode)
+		assert.Equal(t, []byte("after"), composed[0].File.Content)
+	}
+}
+
 func TestBuildPublicationSnapshotUsesOnlyTheSuppliedBaseAndRemoteEntries(t *testing.T) {
 	ctx := context.Background()
 	coordinator, _, configuration := publicationCandidateFixture(t)

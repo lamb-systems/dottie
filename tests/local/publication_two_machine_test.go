@@ -214,6 +214,30 @@ func TestTwoMachinePublicationPullApplyGate(t *testing.T) {
 	assert.Equal(t, publicationTwoMachineGamma, readPublicationTwoMachineFile(t, fixture.a))
 }
 
+func TestTwoMachinePublicationPreservesDeclaredFileModes(t *testing.T) {
+	fixture := newPublicationTwoMachineFixture(t)
+	writePublicationTwoMachineFileMode(t, fixture.a, publicationTwoMachineAlpha, 0o600)
+	writePublicationTwoMachineFileMode(t, fixture.b, publicationTwoMachineAlpha, 0o600)
+	fixture.push(t, fixture.a)
+	fixture.joinFirstUse(t, fixture.b)
+
+	writePublicationTwoMachineFileMode(t, fixture.a, publicationTwoMachineBeta, 0o644)
+	fixture.push(t, fixture.a)
+	shared := fixture.pull(t, fixture.b)
+	assert.Equal(t, "diverges", shared.Finding)
+	assert.Equal(t, 1, shared.Report.Applied)
+	assert.Equal(t, publicationTwoMachineBeta, readPublicationTwoMachineFile(t, fixture.b))
+	assert.Equal(t, os.FileMode(0o644), publicationTwoMachineFileMode(t, fixture.b))
+
+	writePublicationTwoMachineFileMode(t, fixture.a, publicationTwoMachineGamma, 0o600)
+	fixture.push(t, fixture.a)
+	private := fixture.pull(t, fixture.b)
+	assert.Equal(t, "diverges", private.Finding)
+	assert.Equal(t, 1, private.Report.Applied)
+	assert.Equal(t, publicationTwoMachineGamma, readPublicationTwoMachineFile(t, fixture.b))
+	assert.Equal(t, os.FileMode(0o600), publicationTwoMachineFileMode(t, fixture.b))
+}
+
 func TestTwoMachinePublicationApplyInterleavingRecovers(t *testing.T) {
 	fixture := newPublicationTwoMachineFixture(t)
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineAlpha)
@@ -288,7 +312,7 @@ func TestTwoMachinePublicationConflictRefusesWithoutMutation(t *testing.T) {
 	}
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, "apply-plan", refused.Stage())
-	assert.Equal(t, "plan_unresolved", refused.Reason())
+	assert.Equal(t, "plan_conflict", refused.Reason())
 	assert.False(t, preparation.Applies)
 	assert.Equal(t, publicationTwoMachineConflictA, readPublicationTwoMachineFile(t, fixture.a))
 	assert.Equal(t, publicationTwoMachineConflictB, readPublicationTwoMachineFile(t, fixture.b))
@@ -596,6 +620,20 @@ func writePublicationTwoMachineFile(t *testing.T, machine *publicationTwoMachine
 func writePublicationTwoMachineFileAt(t *testing.T, path string, content []byte) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, content, 0o600))
+}
+
+func writePublicationTwoMachineFileMode(t *testing.T, machine *publicationTwoMachine, content []byte, mode os.FileMode) {
+	t.Helper()
+	path := filepath.Join(machine.selected, publicationTwoMachineTrackedFile)
+	require.NoError(t, os.WriteFile(path, content, mode))
+	require.NoError(t, os.Chmod(path, mode))
+}
+
+func publicationTwoMachineFileMode(t *testing.T, machine *publicationTwoMachine) os.FileMode {
+	t.Helper()
+	info, err := os.Lstat(filepath.Join(machine.selected, publicationTwoMachineTrackedFile))
+	require.NoError(t, err)
+	return info.Mode().Perm()
 }
 
 func readPublicationTwoMachineFile(t *testing.T, machine *publicationTwoMachine) []byte {

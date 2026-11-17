@@ -551,7 +551,7 @@ func TestSyncRefusesAConflictAtPlanningBeforeAnyChange(t *testing.T) {
 	before := fixture.readFloor(t)
 	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code)
-	assert.Contains(t, stderr, "apply-plan/plan_unresolved")
+	assert.Contains(t, stderr, "apply-plan/plan_conflict")
 	assert.NotContains(t, stdout, "confirmation:")
 	assert.Equal(t, "local conflicting a", readSyncFile(t, fixture, "a.txt"), "a conflicting sync applied the pull half")
 	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision)

@@ -27,9 +27,20 @@ var errPublicationApplyAnchor = errors.New("apply anchor identity changed")
 const (
 	publicationApplyWriteOperation               = "apply"
 	publicationApplyDeleteOperation              = "delete"
-	publicationApplyFileMode         os.FileMode = 0o600
+	publicationApplyDefaultFileMode  os.FileMode = 0o600
+	publicationApplySharedFileMode   os.FileMode = 0o644
 	publicationApplyMaxObservedBytes int64       = 8 << 20
 )
+
+func publicationApplySupportedMode(mode uint32) (os.FileMode, bool) {
+	fileMode := os.FileMode(mode)
+	switch fileMode {
+	case publicationApplyDefaultFileMode, publicationApplySharedFileMode:
+		return fileMode, true
+	default:
+		return 0, false
+	}
+}
 
 type publicationApplyHookStage string
 
@@ -67,6 +78,11 @@ const (
 	publicationApplyReasonCaptureIncomplete publicationReconciliationReason = "capture_incomplete"
 	publicationApplyReasonBounds            publicationReconciliationReason = "bounds_exceeded"
 	publicationApplyReasonPlanUnresolved    publicationReconciliationReason = "plan_unresolved"
+	publicationApplyReasonPlanBinding       publicationReconciliationReason = "plan_binding"
+	publicationApplyReasonPlanReconcile     publicationReconciliationReason = "plan_reconcile"
+	publicationApplyReasonPlanPreview       publicationReconciliationReason = "plan_preview"
+	publicationApplyReasonPlanIncomplete    publicationReconciliationReason = "plan_preview_incomplete"
+	publicationApplyReasonPlanConflict      publicationReconciliationReason = "plan_conflict"
 	publicationApplyReasonConfirmation      publicationReconciliationReason = "confirmation_mismatch"
 	publicationApplyReasonRoot              publicationReconciliationReason = "root_mismatch"
 	publicationApplyReasonContainment       publicationReconciliationReason = "containment_refused"
@@ -82,15 +98,20 @@ const (
 type publicationApplyError struct {
 	stage        publicationReconciliationStage
 	reason       publicationReconciliationReason
+	detail       string
 	entry        int64
 	cancellation error
 }
 
 func (e *publicationApplyError) Error() string {
-	if e.entry != 0 {
-		return fmt.Sprintf("publication apply: %s/%s: journal entry %d", e.stage, e.reason, e.entry)
+	message := "publication apply: " + string(e.stage) + "/" + string(e.reason)
+	if e.detail != "" {
+		message += ": " + e.detail
 	}
-	return "publication apply: " + string(e.stage) + "/" + string(e.reason)
+	if e.entry != 0 {
+		return fmt.Sprintf("%s: journal entry %d", message, e.entry)
+	}
+	return message
 }
 
 func (e *publicationApplyError) Is(target error) bool {
@@ -418,18 +439,23 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 		}
 		binding, err := syncengine.NewTargetBinding(selection.portable)
 		if err != nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, err)
+			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanBinding, err)
 		}
 		plan, err := syncengine.Reconcile(baseView, localView, remote.entries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
 		if err != nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, err)
+			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanReconcile, err)
+		}
+		for _, decision := range plan.Decisions {
+			if decision.Action == syncengine.ActionConflict {
+				return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanConflict, nil)
+			}
 		}
 		preview, err := syncengine.BuildPreview(plan, []model.Target{selection.portable}, captured.observations)
 		if err != nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, err)
+			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanPreview, err)
 		}
 		if !preview.Complete || len(preview.Targets) != 1 {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, nil)
+			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanIncomplete, nil)
 		}
 		content := make(map[model.EntryKey]model.Entry, len(remote.entries))
 		for _, entry := range remote.entries {
@@ -468,13 +494,14 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		if !ok || entry.File == nil || entry.File.State != model.FilePresent || entry.File.Kind != model.FileRegular {
 			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonTargetUnsupported, nil)
 		}
-		if entry.File.Mode != uint32(publicationApplyFileMode) {
-			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
+		declared, supported := publicationApplySupportedMode(entry.File.Mode)
+		if !supported {
+			return publicationApplyOperation{}, publicationApplyUnsupportedMode(ctx, entry.File.Mode)
 		}
 		operation.kind = PublicationApplyWrite
 		operation.journalOperation = publicationApplyWriteOperation
 		operation.content = append([]byte(nil), entry.File.Content...)
-		operation.mode = publicationApplyFileMode
+		operation.mode = declared
 		operation.post = publicationstate.ObservedJournalFile(operation.content)
 	case syncengine.ActionDeleteLocal:
 		if selection.mode == config.BackupOnly {
@@ -501,8 +528,10 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 	if operation.kind == PublicationApplyDelete && !captured.present {
 		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPreimage, nil)
 	}
-	if operation.kind == PublicationApplyWrite && captured.present && captured.digest == operation.post.Digest && captured.mode != uint32(publicationApplyFileMode) {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
+	if operation.kind == PublicationApplyWrite && captured.present && captured.digest == operation.post.Digest {
+		if _, supported := publicationApplySupportedMode(captured.mode); !supported {
+			return publicationApplyOperation{}, publicationApplyUnsupportedMode(ctx, captured.mode)
+		}
 	}
 	destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
 	if err != nil {
@@ -688,7 +717,7 @@ func publicationApplySettled(operation publicationApplyOperation, observed files
 		if !observed.Exists {
 			return false
 		}
-		return sha256.Sum256(observed.Data) == operation.post.Digest && uint64(len(observed.Data)) == operation.post.Size
+		return sha256.Sum256(observed.Data) == operation.post.Digest && uint64(len(observed.Data)) == operation.post.Size && observed.Mode == uint32(operation.mode.Perm())
 	default:
 		return true
 	}
@@ -739,6 +768,14 @@ func observePublicationApplyEntry(fileSystem files.ApplyFileSystem, entry public
 		return publicationstate.ObservedFile{}, err
 	}
 	return publicationApplyObserved(observed), nil
+}
+
+func publicationApplyUnsupportedMode(ctx context.Context, mode uint32) error {
+	failure := publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
+	if refused, ok := failure.(*publicationApplyError); ok && refused.reason == publicationApplyReasonModeUnsupported {
+		refused.detail = fmt.Sprintf("mode %04o", mode)
+	}
+	return failure
 }
 
 func publicationApplyFailure(ctx context.Context, stage publicationReconciliationStage, reason publicationReconciliationReason, cause error) error {

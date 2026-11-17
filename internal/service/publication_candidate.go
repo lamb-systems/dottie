@@ -252,7 +252,7 @@ func publicationSyncAppliedEntry(entry model.Entry) (model.Entry, bool) {
 		}
 		return model.Entry{TargetID: entry.TargetID, File: &model.FileEntry{
 			Path: entry.File.Path, State: model.FilePresent, Kind: model.FileRegular,
-			Content: append([]byte(nil), entry.File.Content...), Mode: uint32(publicationApplyFileMode),
+			Content: append([]byte(nil), entry.File.Content...), Mode: entry.File.Mode,
 		}}, true
 	}
 	if entry.Setting != nil && entry.Setting.State == model.SettingPresent {
