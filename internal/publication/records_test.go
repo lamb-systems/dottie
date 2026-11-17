@@ -197,6 +197,72 @@ func TestHeadBindingChecksEveryRecordAndPayloadJoin(t *testing.T) {
 	requireViolation(t, VerifyPayload(payload, wrongLength), ErrPayload, "blob.size", "mismatch")
 }
 
+func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
+	showcase := fixtureShowcaseRecord(t)
+	showcaseBytes, err := EncodeSnapshot(showcase)
+	require.NoError(t, err)
+	showcaseCID, err := RecordCID(showcaseBytes)
+	require.NoError(t, err)
+	showcaseKey, err := SequenceKey(showcase.PublicationSeq)
+	require.NoError(t, err)
+	packed := fixtureSnapshotValue(t)
+	packedBytes, err := EncodeSnapshot(packed)
+	require.NoError(t, err)
+	packedCID, err := RecordCID(packedBytes)
+	require.NoError(t, err)
+	packedKey, err := SequenceKey(packed.PublicationSeq)
+	require.NoError(t, err)
+
+	showcaseHead := HeadRecord{
+		SchemaVersion:  SchemaVersion,
+		Vault:          showcase.Vault,
+		PublicationSeq: showcase.PublicationSeq,
+		SnapshotCID:    showcaseCID,
+	}
+	showcaseHeadBytes, err := EncodeHead(showcaseHead)
+	require.NoError(t, err)
+	assert.NoError(t, VerifyHeadBinding(showcaseHeadBytes, showcaseBytes, showcaseKey))
+
+	packedHead := HeadRecord{
+		SchemaVersion:  SchemaVersion,
+		Vault:          packed.Vault,
+		PublicationSeq: packed.PublicationSeq,
+		SnapshotCID:    packedCID,
+		BlobCID:        bytes.Clone(packed.Blob.CID),
+	}
+	packedHeadBytes, err := EncodeHead(packedHead)
+	require.NoError(t, err)
+	assert.NoError(t, VerifyHeadBinding(packedHeadBytes, packedBytes, packedKey))
+
+	packedHeadOnShowcase := packedHead
+	packedHeadOnShowcase.Vault = showcase.Vault
+	packedHeadOnShowcase.PublicationSeq = showcase.PublicationSeq
+	packedHeadOnShowcase.SnapshotCID = showcaseCID
+	packedHeadOnShowcaseBytes, err := EncodeHead(packedHeadOnShowcase)
+	require.NoError(t, err)
+	requireViolation(
+		t,
+		VerifyHeadBinding(packedHeadOnShowcaseBytes, showcaseBytes, showcaseKey),
+		ErrPayloadFormMismatch,
+		"blobCid",
+		"showcase_payload",
+	)
+
+	showcaseHeadOnPacked := showcaseHead
+	showcaseHeadOnPacked.Vault = packed.Vault
+	showcaseHeadOnPacked.PublicationSeq = packed.PublicationSeq
+	showcaseHeadOnPacked.SnapshotCID = packedCID
+	showcaseHeadOnPackedBytes, err := EncodeHead(showcaseHeadOnPacked)
+	require.NoError(t, err)
+	requireViolation(
+		t,
+		VerifyHeadBinding(showcaseHeadOnPackedBytes, packedBytes, packedKey),
+		ErrPayloadFormMismatch,
+		"blobCid",
+		"packed_payload",
+	)
+}
+
 func TestIdenticalPayloadHasDistinctChainedPublicationRecords(t *testing.T) {
 	payload := []byte("identical plaintext for two publications")
 	first, firstBytes := fixtureSnapshot(t, payload, 0, nil, 3)
@@ -800,7 +866,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	)
 	assert.Equal(
 		t,
-		[]string{"blobCid", "publicationSeq", "schemaVersion", "snapshotCid", "vault"},
+		[]string{"publicationSeq", "schemaVersion", "snapshotCid", "vault"},
 		sortedStrings(head.Defs["main"].Record.Required),
 	)
 	assert.Equal(

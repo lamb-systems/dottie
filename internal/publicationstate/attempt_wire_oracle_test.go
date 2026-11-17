@@ -870,6 +870,7 @@ func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 		SnapshotCID:           []byte{3},
 		HeadCID:               []byte{4},
 		BlobCID:               []byte{5},
+		BlobSize:              9,
 		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
 		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
 	}
@@ -879,11 +880,40 @@ func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, valid, decoded)
 
-	wrongVersion := valid
-	wrongVersion.Version = 2
+	showcase := attemptCoreWire{
+		Version:               2,
+		AttemptID:             bytes.Repeat([]byte{1}, 16),
+		DatabaseID:            bytes.Repeat([]byte{2}, 32),
+		SnapshotCID:           []byte{3},
+		HeadCID:               []byte{4},
+		Entries:               []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}},
+		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
+		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
+	}
+	showcaseBytes, err := encodeAttemptCore(showcase)
+	require.NoError(t, err)
+	showcaseDecoded, err := decodeAttemptCore(showcaseBytes)
+	require.NoError(t, err)
+	assert.Equal(t, showcase, showcaseDecoded)
+
+	wrongVersion := showcase
+	wrongVersion.Version = 3
 	wrongVersionBytes, err := encodeAttemptCore(wrongVersion)
 	require.NoError(t, err)
 	_, err = decodeAttemptCore(wrongVersionBytes)
+	require.Error(t, err)
+	showcaseWithBlob := showcase
+	showcaseWithBlob.BlobCID = []byte{8}
+	showcaseWithBlob.BlobSize = 9
+	showcaseWithBlobBytes, err := encodeAttemptCore(showcaseWithBlob)
+	require.NoError(t, err)
+	_, err = decodeAttemptCore(showcaseWithBlobBytes)
+	require.Error(t, err)
+	packedWithEntries := valid
+	packedWithEntries.Entries = showcase.Entries
+	packedWithEntriesBytes, err := encodeAttemptCore(packedWithEntries)
+	require.NoError(t, err)
+	_, err = decodeAttemptCore(packedWithEntriesBytes)
 	require.Error(t, err)
 	wrongDatabaseID := valid
 	wrongDatabaseID.DatabaseID = wrongDatabaseID.DatabaseID[:31]

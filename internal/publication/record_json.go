@@ -102,14 +102,17 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{
+		value := map[string]any{
 			"$type":          HeadNSID,
 			"schemaVersion":  record.SchemaVersion,
 			"vault":          atdata.Bytes(cloneRecordBytes(record.Vault[:])),
 			"publicationSeq": int64(record.PublicationSeq),
 			"snapshotCid":    atdata.Bytes(cloneRecordBytes(record.SnapshotCID)),
-			"blobCid":        atdata.Bytes(cloneRecordBytes(record.BlobCID)),
-		}, nil
+		}
+		if len(record.BlobCID) != 0 {
+			value["blobCid"] = atdata.Bytes(cloneRecordBytes(record.BlobCID))
+		}
+		return value, nil
 	default:
 		return nil, ErrInvalidRecord
 	}

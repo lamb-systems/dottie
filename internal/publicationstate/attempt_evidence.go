@@ -29,6 +29,9 @@ func (s *Store) ResolveAttempt(
 	if err != nil {
 		return AttemptResolution{}, err
 	}
+	if err := requirePackedAttemptCore(stored.core, StageResolve); err != nil {
+		return AttemptResolution{}, err
+	}
 	if !bytes.Equal(stored.stateDigest, expectedToken[:]) {
 		return AttemptResolution{}, classified(ErrConsent, StageResolve, ReasonStale)
 	}

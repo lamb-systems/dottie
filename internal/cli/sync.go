@@ -856,7 +856,8 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 	if err != nil {
 		return errSyncFloorMismatch
 	}
-	if !bytes.Equal(floor.RecordCID, cid) || !bytes.Equal(floor.BlobCID, record.Blob.CID) ||
+	if !bytes.Equal(floor.RecordCID, cid) || floor.Showcase != nil ||
+		!bytes.Equal(floor.BlobCID, record.Blob.CID) ||
 		floor.BlobSize != record.Blob.Size ||
 		floor.Sequence != record.PublicationSeq ||
 		floor.SnapshotKey != terminal.Key {

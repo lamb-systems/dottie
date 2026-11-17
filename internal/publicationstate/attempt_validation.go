@@ -116,6 +116,9 @@ func validateSuppliedRepositoryView(
 		if err != nil {
 			return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
+		if payloadFormOf(record) == PayloadFormShowcase {
+			return validatedRepositoryView{}, showcasePayloadUnsupported(StageInput)
+		}
 		if index == 0 {
 			vault = record.Vault
 			if sequence != 0 || len(record.Parent) != 0 {
@@ -183,6 +186,9 @@ func validateCandidateInput(input CandidateInput, binding Binding) (validatedCan
 	snapshot, err := publication.DecodeSnapshot(input.SnapshotRecord)
 	if err != nil || snapshot.Vault != binding.Vault || allZero(snapshot.PublicationID[:]) {
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+	}
+	if payloadFormOf(snapshot) == PayloadFormShowcase {
+		return validatedCandidate{}, showcasePayloadUnsupported(StageInput)
 	}
 	key, err := publication.SequenceKey(snapshot.PublicationSeq)
 	if err != nil || input.SnapshotKey != key {

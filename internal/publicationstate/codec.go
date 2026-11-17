@@ -36,43 +36,51 @@ type referenceWire struct {
 	Sequence uint64 `json:"sequence"`
 }
 
+type payloadEntryWire struct {
+	Path string `json:"path"`
+	CID  []byte `json:"cid"`
+	Size uint64 `json:"size"`
+}
+
 type floorCoreWire struct {
-	Version           uint32      `json:"version"`
-	DatabaseID        []byte      `json:"databaseId"`
-	Revision          uint64      `json:"revision"`
-	Generation        uint64      `json:"generation"`
-	Provenance        string      `json:"provenance"`
-	AnchorCID         []byte      `json:"anchorCid"`
-	Binding           bindingWire `json:"binding"`
-	SuppliedContext   contextWire `json:"suppliedContext"`
-	Head              []byte      `json:"head"`
-	SnapshotKey       string      `json:"snapshotKey"`
-	Sequence          uint64      `json:"sequence"`
-	PublicationID     []byte      `json:"publicationId"`
-	RecordCID         []byte      `json:"recordCid"`
-	BlobCID           []byte      `json:"blobCid"`
-	BlobSize          uint64      `json:"blobSize"`
-	ObservationDigest []byte      `json:"observationDigest"`
+	Version           uint32             `json:"version"`
+	DatabaseID        []byte             `json:"databaseId"`
+	Revision          uint64             `json:"revision"`
+	Generation        uint64             `json:"generation"`
+	Provenance        string             `json:"provenance"`
+	AnchorCID         []byte             `json:"anchorCid"`
+	Binding           bindingWire        `json:"binding"`
+	SuppliedContext   contextWire        `json:"suppliedContext"`
+	Head              []byte             `json:"head"`
+	SnapshotKey       string             `json:"snapshotKey"`
+	Sequence          uint64             `json:"sequence"`
+	PublicationID     []byte             `json:"publicationId"`
+	RecordCID         []byte             `json:"recordCid"`
+	BlobCID           []byte             `json:"blobCid,omitempty"`
+	BlobSize          uint64             `json:"blobSize,omitempty"`
+	Entries           []payloadEntryWire `json:"entries,omitempty"`
+	ObservationDigest []byte             `json:"observationDigest"`
 }
 
 type floorWire struct {
-	Version             uint32      `json:"version"`
-	DatabaseID          []byte      `json:"databaseId"`
-	Revision            uint64      `json:"revision"`
-	Generation          uint64      `json:"generation"`
-	Provenance          string      `json:"provenance"`
-	AnchorCID           []byte      `json:"anchorCid"`
-	Binding             bindingWire `json:"binding"`
-	SuppliedContext     contextWire `json:"suppliedContext"`
-	Head                []byte      `json:"head"`
-	SnapshotKey         string      `json:"snapshotKey"`
-	Sequence            uint64      `json:"sequence"`
-	PublicationID       []byte      `json:"publicationId"`
-	RecordCID           []byte      `json:"recordCid"`
-	BlobCID             []byte      `json:"blobCid"`
-	BlobSize            uint64      `json:"blobSize"`
-	ObservationDigest   []byte      `json:"observationDigest"`
-	AcceptedEventDigest []byte      `json:"acceptedEventDigest"`
+	Version             uint32             `json:"version"`
+	DatabaseID          []byte             `json:"databaseId"`
+	Revision            uint64             `json:"revision"`
+	Generation          uint64             `json:"generation"`
+	Provenance          string             `json:"provenance"`
+	AnchorCID           []byte             `json:"anchorCid"`
+	Binding             bindingWire        `json:"binding"`
+	SuppliedContext     contextWire        `json:"suppliedContext"`
+	Head                []byte             `json:"head"`
+	SnapshotKey         string             `json:"snapshotKey"`
+	Sequence            uint64             `json:"sequence"`
+	PublicationID       []byte             `json:"publicationId"`
+	RecordCID           []byte             `json:"recordCid"`
+	BlobCID             []byte             `json:"blobCid,omitempty"`
+	BlobSize            uint64             `json:"blobSize,omitempty"`
+	Entries             []payloadEntryWire `json:"entries,omitempty"`
+	ObservationDigest   []byte             `json:"observationDigest"`
+	AcceptedEventDigest []byte             `json:"acceptedEventDigest"`
 }
 
 type observationWire struct {
@@ -255,7 +263,7 @@ func referencesToWire(refs []RecordReference) []referenceWire {
 
 func floorCoreToWire(f Floor) floorCoreWire {
 	return floorCoreWire{
-		Version:           1,
+		Version:           floorWireVersion(f),
 		DatabaseID:        bytes.Clone(f.DatabaseID[:]),
 		Revision:          f.Revision,
 		Generation:        f.Generation,
@@ -270,8 +278,16 @@ func floorCoreToWire(f Floor) floorCoreWire {
 		RecordCID:         bytes.Clone(f.RecordCID),
 		BlobCID:           bytes.Clone(f.BlobCID),
 		BlobSize:          f.BlobSize,
+		Entries:           showcasePayloadToWire(f.Showcase),
 		ObservationDigest: bytes.Clone(f.ObservationDigest[:]),
 	}
+}
+
+func floorWireVersion(f Floor) uint32 {
+	if f.Showcase != nil {
+		return 2
+	}
+	return 1
 }
 
 func floorToWire(f Floor) floorWire {
@@ -292,6 +308,7 @@ func floorToWire(f Floor) floorWire {
 		RecordCID:           core.RecordCID,
 		BlobCID:             core.BlobCID,
 		BlobSize:            core.BlobSize,
+		Entries:             core.Entries,
 		ObservationDigest:   core.ObservationDigest,
 		AcceptedEventDigest: bytes.Clone(f.AcceptedEventDigest[:]),
 	}
@@ -314,6 +331,7 @@ func floorFromWire(w floorWire) (Floor, error) {
 		RecordCID:         w.RecordCID,
 		BlobCID:           w.BlobCID,
 		BlobSize:          w.BlobSize,
+		Entries:           w.Entries,
 		ObservationDigest: w.ObservationDigest,
 	}
 	floor, err := floorCoreFromWire(core)
@@ -326,14 +344,30 @@ func floorFromWire(w floorWire) (Floor, error) {
 
 func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	binding, err := bindingFromWire(w.Binding)
-	if err != nil || w.Version != 1 || len(w.DatabaseID) != 32 || len(w.PublicationID) != 16 ||
+	if err != nil || len(w.DatabaseID) != 32 || len(w.PublicationID) != 16 ||
 		len(w.ObservationDigest) != 32 ||
 		len(w.AnchorCID) == 0 ||
 		len(w.RecordCID) == 0 ||
-		len(w.BlobCID) == 0 ||
 		len(w.Head) == 0 ||
 		!validText(w.SnapshotKey) ||
 		!validText(w.Provenance) {
+		return Floor{}, errors.New("invalid floor")
+	}
+	var showcase *ShowcasePayload
+	switch w.Version {
+	case 1:
+		if len(w.BlobCID) == 0 || w.BlobSize == 0 || len(w.Entries) != 0 {
+			return Floor{}, errors.New("invalid floor")
+		}
+	case 2:
+		if len(w.BlobCID) != 0 || w.BlobSize != 0 || len(w.Entries) == 0 {
+			return Floor{}, errors.New("invalid floor")
+		}
+		showcase, err = showcasePayloadFromWire(w.Entries)
+		if err != nil {
+			return Floor{}, errors.New("invalid floor")
+		}
+	default:
 		return Floor{}, errors.New("invalid floor")
 	}
 	context, err := contextFromWire(w.SuppliedContext)
@@ -356,6 +390,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	floor.RecordCID = bytes.Clone(w.RecordCID)
 	floor.BlobCID = bytes.Clone(w.BlobCID)
 	floor.BlobSize = w.BlobSize
+	floor.Showcase = showcase
 	return floor, nil
 }
 

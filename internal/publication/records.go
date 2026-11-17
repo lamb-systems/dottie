@@ -35,6 +35,7 @@ var (
 	ErrBinding               = errors.New("publication binding mismatch")
 	ErrPayload               = errors.New("publication payload mismatch")
 	ErrPackedPayloadRequired = errors.New("publication packed payload required")
+	ErrPayloadFormMismatch   = errors.New("publication payload form mismatch")
 )
 
 var snapshotCommonKeys = []string{
@@ -44,6 +45,14 @@ var snapshotCommonKeys = []string{
 	"publicationId",
 	"publicationSeq",
 	"parent",
+}
+
+var headCommonKeys = []string{
+	"$type",
+	"schemaVersion",
+	"vault",
+	"publicationSeq",
+	"snapshotCid",
 }
 
 type ViolationError struct {
@@ -249,18 +258,21 @@ func EncodeHead(record HeadRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	blobCID, err := castCID(record.BlobCID, cid.Raw, "blobCid")
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := atdata.MarshalCBOR(map[string]any{
+	object := map[string]any{
 		"$type":          HeadNSID,
 		"schemaVersion":  SchemaVersion,
 		"vault":          bytes.Clone(record.Vault[:]),
 		"publicationSeq": int64(record.PublicationSeq),
 		"snapshotCid":    snapshotCID.Bytes(),
-		"blobCid":        blobCID.Bytes(),
-	})
+	}
+	if len(record.BlobCID) != 0 {
+		blobCID, err := castCID(record.BlobCID, cid.Raw, "blobCid")
+		if err != nil {
+			return nil, err
+		}
+		object["blobCid"] = blobCID.Bytes()
+	}
+	encoded, err := atdata.MarshalCBOR(object)
 	if err != nil {
 		return nil, violation(ErrInvalidRecord, "record", "encode")
 	}
@@ -275,15 +287,7 @@ func DecodeHead(encoded []byte) (HeadRecord, error) {
 	if err != nil {
 		return HeadRecord{}, err
 	}
-	if err := exactKeys(
-		object,
-		"$type",
-		"schemaVersion",
-		"vault",
-		"publicationSeq",
-		"snapshotCid",
-		"blobCid",
-	); err != nil {
+	if err := checkHeadKeys(object); err != nil {
 		return HeadRecord{}, err
 	}
 	if object["$type"] != HeadNSID {
@@ -308,19 +312,23 @@ func DecodeHead(encoded []byte) (HeadRecord, error) {
 	if len(snapshotBytes) == 0 || len(snapshotBytes) > MaxCIDBytes {
 		return HeadRecord{}, violation(ErrCID, "snapshotCid", "length")
 	}
-	blobBytes, ok := byteString(object["blobCid"])
-	if !ok {
-		return HeadRecord{}, violation(ErrInvalidRecord, "blobCid", "type")
-	}
-	if len(blobBytes) == 0 || len(blobBytes) > MaxCIDBytes {
-		return HeadRecord{}, violation(ErrCID, "blobCid", "length")
+	var blobCID []byte
+	if _, present := object["blobCid"]; present {
+		blobBytes, ok := byteString(object["blobCid"])
+		if !ok {
+			return HeadRecord{}, violation(ErrInvalidRecord, "blobCid", "type")
+		}
+		if len(blobBytes) == 0 || len(blobBytes) > MaxCIDBytes {
+			return HeadRecord{}, violation(ErrCID, "blobCid", "length")
+		}
+		blobCID = bytes.Clone(blobBytes)
 	}
 	var record HeadRecord
 	record.SchemaVersion = version
 	copy(record.Vault[:], vaultBytes)
 	record.PublicationSeq = sequence
 	record.SnapshotCID = bytes.Clone(snapshotBytes)
-	record.BlobCID = bytes.Clone(blobBytes)
+	record.BlobCID = blobCID
 	if err := validateHead(record); err != nil {
 		return HeadRecord{}, err
 	}
@@ -418,6 +426,15 @@ func VerifyHeadBinding(headEncoded, snapshotEncoded []byte, snapshotKey string) 
 	}
 	if !bytes.Equal(head.SnapshotCID, recordCID) {
 		return violation(ErrBinding, "snapshotCid", "mismatch")
+	}
+	if len(snapshot.Entries) != 0 {
+		if len(head.BlobCID) != 0 {
+			return violation(ErrPayloadFormMismatch, "blobCid", "showcase_payload")
+		}
+		return nil
+	}
+	if len(head.BlobCID) == 0 {
+		return violation(ErrPayloadFormMismatch, "blobCid", "packed_payload")
 	}
 	if !bytes.Equal(head.BlobCID, snapshot.Blob.CID) {
 		return violation(ErrBinding, "blobCid", "mismatch")
@@ -526,6 +543,23 @@ func exactKeys(object map[string]any, names ...string) error {
 	return nil
 }
 
+func checkHeadKeys(object map[string]any) error {
+	_, packed := object["blobCid"]
+	expected := len(headCommonKeys)
+	if packed {
+		expected++
+	}
+	if len(object) != expected {
+		return violation(ErrInvalidRecord, "record", "fields")
+	}
+	for _, name := range headCommonKeys {
+		if _, ok := object[name]; !ok {
+			return violation(ErrInvalidRecord, name, "missing")
+		}
+	}
+	return nil
+}
+
 func checkSnapshotKeys(object map[string]any) error {
 	_, packed := object["blob"]
 	_, showcase := object["entries"]
@@ -616,8 +650,10 @@ func validateHead(record HeadRecord) error {
 	if _, err := castCID(record.SnapshotCID, cid.DagCBOR, "snapshotCid"); err != nil {
 		return err
 	}
-	if _, err := castCID(record.BlobCID, cid.Raw, "blobCid"); err != nil {
-		return err
+	if len(record.BlobCID) != 0 {
+		if _, err := castCID(record.BlobCID, cid.Raw, "blobCid"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

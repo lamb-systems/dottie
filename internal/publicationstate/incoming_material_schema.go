@@ -145,6 +145,9 @@ func (s *Store) checkIncomingMaterialRef(ctx context.Context, q queryer, ref inc
 	if err != nil || validatePersistedFloor(floor, s.binding, s.databaseID, s.limits) != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
+	if floor.Showcase != nil {
+		return showcasePayloadUnsupported(stage)
+	}
 	if floor.Revision != uint64(ref.revision) || !bytes.Equal(floor.RecordCID, ref.recordCID) ||
 		!bytes.Equal(floor.BlobCID, ref.blobCID) ||
 		!bytes.Equal(floor.AcceptedEventDigest[:], digestRaw) {

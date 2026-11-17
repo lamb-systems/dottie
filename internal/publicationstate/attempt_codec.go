@@ -3,6 +3,8 @@ package publicationstate
 import (
 	"bytes"
 	"errors"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 type localReviewWire struct {
@@ -13,29 +15,30 @@ type localReviewWire struct {
 }
 
 type attemptCoreWire struct {
-	Version                 uint32          `json:"version"`
-	AttemptID               []byte          `json:"attemptId"`
-	DatabaseID              []byte          `json:"databaseId"`
-	Binding                 bindingWire     `json:"binding"`
-	Kind                    string          `json:"kind"`
-	CapturedFloor           *floorWire      `json:"capturedFloor"`
-	CapturedRevision        uint64          `json:"capturedRevision"`
-	CapturedGeneration      uint64          `json:"capturedGeneration"`
-	PredecessorKey          string          `json:"predecessorKey"`
-	PredecessorRecord       []byte          `json:"predecessorRecord"`
-	PredecessorCID          []byte          `json:"predecessorCid"`
-	SnapshotKey             string          `json:"snapshotKey"`
-	SnapshotRecord          []byte          `json:"snapshotRecord"`
-	SnapshotCID             []byte          `json:"snapshotCid"`
-	HeadRecord              []byte          `json:"headRecord"`
-	HeadCID                 []byte          `json:"headCid"`
-	BlobCID                 []byte          `json:"blobCid"`
-	BlobSize                uint64          `json:"blobSize"`
-	InitialContext          contextWire     `json:"initialContext"`
-	InitialViewDigest       []byte          `json:"initialViewDigest"`
-	Review                  localReviewWire `json:"review"`
-	CandidateConfirmation   []byte          `json:"candidateConfirmation"`
-	ReservedCompletionBytes uint64          `json:"reservedCompletionBytes"`
+	Version                 uint32             `json:"version"`
+	AttemptID               []byte             `json:"attemptId"`
+	DatabaseID              []byte             `json:"databaseId"`
+	Binding                 bindingWire        `json:"binding"`
+	Kind                    string             `json:"kind"`
+	CapturedFloor           *floorWire         `json:"capturedFloor"`
+	CapturedRevision        uint64             `json:"capturedRevision"`
+	CapturedGeneration      uint64             `json:"capturedGeneration"`
+	PredecessorKey          string             `json:"predecessorKey"`
+	PredecessorRecord       []byte             `json:"predecessorRecord"`
+	PredecessorCID          []byte             `json:"predecessorCid"`
+	SnapshotKey             string             `json:"snapshotKey"`
+	SnapshotRecord          []byte             `json:"snapshotRecord"`
+	SnapshotCID             []byte             `json:"snapshotCid"`
+	HeadRecord              []byte             `json:"headRecord"`
+	HeadCID                 []byte             `json:"headCid"`
+	BlobCID                 []byte             `json:"blobCid,omitempty"`
+	BlobSize                uint64             `json:"blobSize,omitempty"`
+	Entries                 []payloadEntryWire `json:"entries,omitempty"`
+	InitialContext          contextWire        `json:"initialContext"`
+	InitialViewDigest       []byte             `json:"initialViewDigest"`
+	Review                  localReviewWire    `json:"review"`
+	CandidateConfirmation   []byte             `json:"candidateConfirmation"`
+	ReservedCompletionBytes uint64             `json:"reservedCompletionBytes"`
 }
 
 type attemptStateWire struct {
@@ -261,16 +264,45 @@ func makeViewDigest(view SuppliedRepositoryView, snapshots []SnapshotBlock) ([32
 
 func decodeAttemptCore(encoded []byte) (attemptCoreWire, error) {
 	var wire attemptCoreWire
-	if len(encoded) == 0 || strictJSON(encoded, &wire) != nil || wire.Version != 1 || len(wire.AttemptID) != 16 ||
+	if len(encoded) == 0 || strictJSON(encoded, &wire) != nil || len(wire.AttemptID) != 16 ||
 		len(wire.DatabaseID) != 32 ||
 		len(wire.SnapshotCID) == 0 ||
 		len(wire.HeadCID) == 0 ||
-		len(wire.BlobCID) == 0 ||
 		len(wire.CandidateConfirmation) != 32 ||
 		len(wire.InitialViewDigest) != 32 {
 		return attemptCoreWire{}, errors.New("invalid attempt core")
 	}
+	if err := checkAttemptCorePayload(wire); err != nil {
+		return attemptCoreWire{}, err
+	}
 	return wire, nil
+}
+
+func checkAttemptCorePayload(wire attemptCoreWire) error {
+	switch wire.Version {
+	case 1:
+		if len(wire.BlobCID) == 0 || wire.BlobSize == 0 || len(wire.Entries) != 0 {
+			return errors.New("invalid attempt core")
+		}
+		return nil
+	case 2:
+		if len(wire.BlobCID) != 0 || wire.BlobSize != 0 {
+			return errors.New("invalid attempt core")
+		}
+		if _, err := showcasePayloadFromWire(wire.Entries); err != nil {
+			return errors.New("invalid attempt core")
+		}
+		return nil
+	default:
+		return errors.New("invalid attempt core")
+	}
+}
+
+func attemptCoreVersion(snapshot publication.SnapshotRecord) uint32 {
+	if payloadFormOf(snapshot) == PayloadFormShowcase {
+		return 2
+	}
+	return 1
 }
 
 func encodeAttemptCore(wire attemptCoreWire) ([]byte, error) {

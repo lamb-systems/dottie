@@ -711,8 +711,9 @@ func syntheticGenesis() (publicationstate.Binding, publicationstate.SuppliedCont
 		PublicationSeq: 0,
 		Parent:         []byte{},
 		Blob: publication.BlobReference{
-			CID:  blobCID,
-			Size: uint64(len(packed.Payload)),
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
 		},
 	})
 	if err != nil {
@@ -2446,8 +2447,9 @@ func syntheticCandidate(binding publicationstate.Binding, publicationID [16]byte
 		PublicationSeq: sequence,
 		Parent:         bytes.Clone(parentCID),
 		Blob: publication.BlobReference{
-			CID:  bytes.Clone(blobCID),
-			Size: uint64(len(packed.Payload)),
+			CID:      bytes.Clone(blobCID),
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
 		},
 	})
 	if err != nil {

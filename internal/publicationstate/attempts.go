@@ -492,7 +492,7 @@ func (s *Store) makeAttemptCore(
 		}
 	}
 	core := attemptCoreWire{
-		Version:                 1,
+		Version:                 attemptCoreVersion(candidate.snapshot),
 		AttemptID:               bytes.Clone(candidate.id[:]),
 		DatabaseID:              bytes.Clone(s.databaseID[:]),
 		Binding:                 bindingToWire(s.binding),
@@ -510,6 +510,7 @@ func (s *Store) makeAttemptCore(
 		HeadCID:                 bytes.Clone(candidate.headCID),
 		BlobCID:                 bytes.Clone(candidate.blobCID),
 		BlobSize:                candidate.snapshot.Blob.Size,
+		Entries:                 showcasePayloadToWire(showcasePayloadOf(candidate.snapshot)),
 		InitialContext:          contextToWire(candidate.view.input.SuppliedContext),
 		InitialViewDigest:       bytes.Clone(candidate.view.digest[:]),
 		Review:                  reviewToWire(review),
@@ -957,6 +958,9 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if err != nil {
 		return CandidateMaterial{}, err
 	}
+	if err := requirePackedAttemptCore(stored.core, StageCustody); err != nil {
+		return CandidateMaterial{}, err
+	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, StageCustody)
 	}
@@ -1041,6 +1045,7 @@ func projectAttempt(
 		HeadRecordCID:      bytes.Clone(core.HeadCID),
 		BlobCID:            bytes.Clone(core.BlobCID),
 		BlobSize:           core.BlobSize,
+		Showcase:           showcasePayloadOf(snapshot),
 		CapturedFloor:      floor,
 		CapturedRevision:   core.CapturedRevision,
 		CapturedGeneration: core.CapturedGeneration,
@@ -1141,7 +1146,7 @@ func (s *Store) loadStoredAttempt(ctx context.Context, q queryer, id [16]byte, s
 	if err != nil || !bytes.Equal(calculated[:], stateDigest) {
 		return storedAttempt{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if err := validateStoredAttemptCore(core, s.binding, s.limits, s.databaseID); err != nil {
+	if err := validateStoredAttemptCore(core, s.binding, s.limits, s.attemptLimits, s.databaseID); err != nil {
 		return storedAttempt{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return storedAttempt{
@@ -1159,13 +1164,17 @@ func (s *Store) loadStoredAttempt(ctx context.Context, q queryer, id [16]byte, s
 	}, nil
 }
 
-func validateStoredAttemptCore(core attemptCoreWire, binding Binding, limits Limits, databaseID [32]byte) error {
+func validateStoredAttemptCore(
+	core attemptCoreWire,
+	binding Binding,
+	limits Limits,
+	attemptLimits AttemptLimits,
+	databaseID [32]byte,
+) error {
 	storedBinding, err := bindingFromWire(core.Binding)
-	if err != nil || !sameBinding(storedBinding, binding) || core.Version != 1 || len(core.AttemptID) != 16 ||
+	if err != nil || !sameBinding(storedBinding, binding) || len(core.AttemptID) != 16 ||
 		len(core.DatabaseID) != 32 ||
 		!bytes.Equal(core.DatabaseID, databaseID[:]) ||
-		len(core.BlobCID) == 0 ||
-		core.BlobSize == 0 ||
 		core.BlobSize > publication.MaxBlobBytes ||
 		len(core.CandidateConfirmation) != 32 ||
 		core.ReservedCompletionBytes != 512<<10 ||
@@ -1179,10 +1188,14 @@ func validateStoredAttemptCore(core attemptCoreWire, binding Binding, limits Lim
 	}
 	snapshot, err := publication.DecodeSnapshot(core.SnapshotRecord)
 	if err != nil || snapshot.Vault != binding.Vault || snapshot.PublicationSeq >= ordinaryPublicationLimit ||
-		!bytes.Equal(snapshot.PublicationID[:], core.AttemptID) ||
-		!bytes.Equal(snapshot.Blob.CID, core.BlobCID) ||
-		snapshot.Blob.Size != core.BlobSize {
+		!bytes.Equal(snapshot.PublicationID[:], core.AttemptID) {
 		return errors.New("snapshot")
+	}
+	if err := checkAttemptCorePayload(core); err != nil {
+		return err
+	}
+	if err := validateAttemptCorePayload(core, snapshot, attemptLimits); err != nil {
+		return err
 	}
 	initialContext, err := contextFromWire(core.InitialContext)
 	if err != nil || validateContext(initialContext, binding, limits) != nil {
@@ -1197,7 +1210,6 @@ func validateStoredAttemptCore(core attemptCoreWire, binding Binding, limits Lim
 	}
 	head, err := publication.DecodeHead(core.HeadRecord)
 	if err != nil || head.Vault != binding.Vault || !bytes.Equal(head.SnapshotCID, core.SnapshotCID) ||
-		!bytes.Equal(head.BlobCID, core.BlobCID) ||
 		head.PublicationSeq != snapshot.PublicationSeq ||
 		publication.VerifyHeadBinding(core.HeadRecord, core.SnapshotRecord, core.SnapshotKey) != nil {
 		return errors.New("head")
@@ -1241,6 +1253,27 @@ func validateStoredAttemptCore(core attemptCoreWire, binding Binding, limits Lim
 		}
 	} else {
 		return errors.New("kind")
+	}
+	return nil
+}
+
+func validateAttemptCorePayload(
+	core attemptCoreWire,
+	snapshot publication.SnapshotRecord,
+	attemptLimits AttemptLimits,
+) error {
+	if attemptCoreVersion(snapshot) != core.Version {
+		return errors.New("payload form")
+	}
+	if payloadFormOf(snapshot) == PayloadFormShowcase {
+		showcase, err := showcasePayloadFromWire(core.Entries)
+		if err != nil || !showcasePayloadMatchesRecord(showcase, snapshot) {
+			return errors.New("payload form")
+		}
+		return validateShowcasePayloadCustody(showcase, attemptLimits)
+	}
+	if !bytes.Equal(snapshot.Blob.CID, core.BlobCID) || snapshot.Blob.Size != core.BlobSize {
+		return errors.New("snapshot")
 	}
 	return nil
 }
@@ -1898,6 +1931,9 @@ func (s *Store) validateAttemptPayloadReference(
 	attempt storedAttempt,
 	stage Stage,
 ) error {
+	if err := requirePackedAttemptCore(attempt.core, stage); err != nil {
+		return err
+	}
 	var refCIDValue, objectCIDValue, sizeValue, basenameValue any
 	if err := q.QueryRowContext(ctx, "SELECT attempt_payload_refs.blob_cid,payload_objects.blob_cid,payload_objects.size,payload_objects.basename FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", attempt.core.AttemptID).
 		Scan(&refCIDValue, &objectCIDValue, &sizeValue, &basenameValue); err != nil {

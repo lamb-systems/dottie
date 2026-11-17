@@ -58,6 +58,9 @@ func (s *Store) ReadAcceptedMaterial(
 	if !sameAcceptedFloor(*state.floor, expectedFloor) {
 		return AcceptedMaterial{}, classified(ErrContinuity, StageReadAcceptedMaterial, ReasonStale)
 	}
+	if state.floor.Showcase != nil {
+		return AcceptedMaterial{}, showcasePayloadUnsupported(StageReadAcceptedMaterial)
+	}
 	basename, record, blob, err := s.acceptedMaterialOwner(ctx, s.conn, *state.floor, StageReadAcceptedMaterial)
 	if err != nil {
 		return AcceptedMaterial{}, err
@@ -83,8 +86,6 @@ func validateExpectedAcceptedFloor(floor Floor, binding Binding, limits Limits, 
 		len(floor.Head) > publication.MaxRecordBytes ||
 		len(floor.RecordCID) == 0 ||
 		len(floor.RecordCID) > publication.MaxCIDBytes ||
-		len(floor.BlobCID) == 0 ||
-		len(floor.BlobCID) > publication.MaxCIDBytes ||
 		len(floor.SnapshotKey) != publication.SequenceKeyLength ||
 		(floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace) ||
 		allZero(floor.DatabaseID[:]) {
@@ -111,6 +112,7 @@ func sameAcceptedFloor(left, right Floor) bool {
 		bytes.Equal(left.RecordCID, right.RecordCID) &&
 		bytes.Equal(left.BlobCID, right.BlobCID) &&
 		left.BlobSize == right.BlobSize &&
+		sameShowcasePayload(left.Showcase, right.Showcase) &&
 		left.ObservationDigest == right.ObservationDigest &&
 		left.AcceptedEventDigest == right.AcceptedEventDigest
 }

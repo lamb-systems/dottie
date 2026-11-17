@@ -49,20 +49,23 @@ func className(err error) string {
 		return "closed"
 	case ErrSchema:
 		return "schema"
+	case ErrUnsupported:
+		return "unsupported"
 	default:
 		return "storage"
 	}
 }
 
 var (
-	ErrInvalid    = errors.New("publication state invalid")
-	ErrContinuity = errors.New("publication state continuity")
-	ErrConsent    = errors.New("publication state consent")
-	ErrLimit      = errors.New("publication state limit")
-	ErrLocked     = errors.New("publication state locked")
-	ErrClosed     = errors.New("publication state closed")
-	ErrSchema     = errors.New("publication state schema")
-	ErrStorage    = errors.New("publication state storage")
+	ErrInvalid     = errors.New("publication state invalid")
+	ErrContinuity  = errors.New("publication state continuity")
+	ErrConsent     = errors.New("publication state consent")
+	ErrLimit       = errors.New("publication state limit")
+	ErrLocked      = errors.New("publication state locked")
+	ErrClosed      = errors.New("publication state closed")
+	ErrSchema      = errors.New("publication state schema")
+	ErrUnsupported = errors.New("publication state unsupported")
+	ErrStorage     = errors.New("publication state storage")
 )
 
 const (
@@ -96,6 +99,7 @@ const (
 	ReasonLocked           Reason = "locked"
 	ReasonClosed           Reason = "closed"
 	ReasonSchema           Reason = "schema"
+	ReasonPayloadForm      Reason = "payload_form"
 	ReasonCorrupt          Reason = "corrupt"
 	ReasonIO               Reason = "io"
 	ReasonCommitUnknown    Reason = "commit_unknown"
@@ -205,6 +209,7 @@ type Floor struct {
 	RecordCID           []byte
 	BlobCID             []byte
 	BlobSize            uint64
+	Showcase            *ShowcasePayload
 	ObservationDigest   [32]byte
 	AcceptedEventDigest [32]byte
 }

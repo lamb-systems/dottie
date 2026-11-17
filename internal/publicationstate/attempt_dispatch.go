@@ -31,6 +31,9 @@ func (s *Store) PrepareDispatch(
 	if err != nil {
 		return DispatchProposal{}, err
 	}
+	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
+		return DispatchProposal{}, err
+	}
 	if err := s.validateDispatchReview(ctx, s.conn, stored, kind, view, review, state, StageDispatch); err != nil {
 		return DispatchProposal{}, err
 	}
@@ -79,6 +82,9 @@ func (s *Store) BeginUpload(
 	}
 	stored, err := s.loadStoredAttempt(ctx, s.conn, id, StageDispatch)
 	if err != nil {
+		return UploadMaterial{}, err
+	}
+	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
 		return UploadMaterial{}, err
 	}
 	if err := s.validateDispatchReview(
@@ -188,6 +194,9 @@ func (s *Store) BeginSubmission(
 	}
 	stored, err := s.loadStoredAttempt(ctx, s.conn, id, StageDispatch)
 	if err != nil {
+		return SubmissionMaterial{}, err
+	}
+	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
 		return SubmissionMaterial{}, err
 	}
 	if err := s.validateDispatchReview(
@@ -420,6 +429,9 @@ func (s *Store) readCandidateUnlocked(
 	stored storedAttempt,
 	stage Stage,
 ) (CandidateMaterial, error) {
+	if err := requirePackedAttemptCore(stored.core, stage); err != nil {
+		return CandidateMaterial{}, err
+	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)
 	}

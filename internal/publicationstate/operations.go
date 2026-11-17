@@ -1010,8 +1010,7 @@ func (s *Store) verifyAudit(ctx context.Context, source queryer, state stateSnap
 		}
 		candidateRecord, decodeErr := publication.DecodeSnapshot(records[0].raw)
 		if decodeErr != nil || candidateRecord.PublicationID != newFloor.PublicationID ||
-			!bytes.Equal(candidateRecord.Blob.CID, newFloor.BlobCID) ||
-			candidateRecord.Blob.Size != newFloor.BlobSize ||
+			!floorPayloadMatchesRecord(newFloor, candidateRecord) ||
 			publication.VerifyHeadBinding(newFloor.Head, records[0].raw, newFloor.SnapshotKey) != nil {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
@@ -1129,14 +1128,15 @@ func validatePersistedFloor(floor Floor, binding Binding, databaseID [32]byte, l
 		len(floor.AnchorCID) == 0 ||
 		len(floor.RecordCID) == 0 ||
 		len(floor.RecordCID) > publication.MaxCIDBytes ||
-		len(floor.BlobCID) == 0 ||
-		len(floor.BlobCID) > publication.MaxCIDBytes ||
 		len(floor.Head) == 0 ||
 		len(floor.Head) > publication.MaxRecordBytes ||
 		len(floor.ObservationDigest) == 0 {
 		return errors.New("floor")
 	}
 	if floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace {
+		return errors.New("floor")
+	}
+	if validateFloorPayload(floor) != nil {
 		return errors.New("floor")
 	}
 	if sequence, err := publication.ParseSequenceKey(floor.SnapshotKey); err != nil || sequence != floor.Sequence {
@@ -1256,8 +1256,7 @@ func validateEventTransition(
 	if err != nil || records[0].ref.Sequence != next.Sequence || records[0].ref.Key != next.SnapshotKey ||
 		!bytes.Equal(records[0].ref.CID, next.RecordCID) ||
 		candidate.PublicationID != next.PublicationID ||
-		!bytes.Equal(candidate.Blob.CID, next.BlobCID) ||
-		candidate.Blob.Size != next.BlobSize ||
+		!floorPayloadMatchesRecord(next, candidate) ||
 		publication.VerifyHeadBinding(next.Head, records[0].raw, next.SnapshotKey) != nil {
 		return errors.New("candidate")
 	}
@@ -1631,6 +1630,7 @@ func buildFloor(
 		RecordCID:         bytes.Clone(candidate.ref.CID),
 		BlobCID:           bytes.Clone(record.Blob.CID),
 		BlobSize:          record.Blob.Size,
+		Showcase:          showcasePayloadOf(record),
 		ObservationDigest: observation.observationDigest,
 	}
 }
@@ -1652,6 +1652,7 @@ func cloneFloor(floor Floor) Floor {
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
 	out.BlobCID = bytes.Clone(floor.BlobCID)
+	out.Showcase = cloneShowcasePayload(floor.Showcase)
 	return out
 }
 func cloneReference(ref RecordReference) RecordReference {

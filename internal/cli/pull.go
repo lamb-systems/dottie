@@ -35,6 +35,7 @@ const (
 const (
 	pullDivergenceRecordCID   = "record_cid"
 	pullDivergencePayloadSize = "payload_size"
+	pullDivergencePayloadForm = "payload_form"
 )
 
 const (
@@ -288,6 +289,9 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	record, err := publication.DecodeSnapshot(terminal.Raw)
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
+	}
+	if floor.Showcase != nil {
+		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 	}
 	if record.Blob.Size != floor.BlobSize {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadSize}
@@ -739,6 +743,7 @@ func pullApplySnapshots(
 	}
 	baseCID, err := publication.RecordCID(block.Raw)
 	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) ||
+		floor.Showcase != nil ||
 		!bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) ||
 		baseRecord.Blob.Size != floor.BlobSize {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved

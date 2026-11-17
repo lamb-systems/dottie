@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ipfs/go-cid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,13 +51,6 @@ func TestIndependentMalformedHeadCBORIsRejectedWithoutPartialRecords(t *testing.
 			want:   ErrInvalidRecord,
 			field:  "record",
 			reason: "fields",
-		},
-		{
-			name:    "missing field",
-			encoded: independentRecordMutation(t, base, func(value map[string]any) { delete(value, "blobCid") }),
-			want:    ErrInvalidRecord,
-			field:   "record",
-			reason:  "fields",
 		},
 		{
 			name:    "null sequence",
@@ -144,6 +138,31 @@ func TestIndependentMalformedHeadCBORIsRejectedWithoutPartialRecords(t *testing.
 	}
 }
 
+func TestHeadWithoutBlobCIDDecodesAsShowcaseHead(t *testing.T) {
+	showcase := fixtureShowcaseRecord(t)
+	snapshotBytes, err := EncodeSnapshot(showcase)
+	require.NoError(t, err)
+	snapshotCID, err := RecordCID(snapshotBytes)
+	require.NoError(t, err)
+	head := HeadRecord{
+		SchemaVersion:  SchemaVersion,
+		Vault:          showcase.Vault,
+		PublicationSeq: showcase.PublicationSeq,
+		SnapshotCID:    snapshotCID,
+	}
+	encoded, err := EncodeHead(head)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "blobCid")
+	decoded, err := DecodeHead(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, head, decoded)
+	assert.Nil(t, decoded.BlobCID)
+
+	key, err := SequenceKey(showcase.PublicationSeq)
+	require.NoError(t, err)
+	assert.NoError(t, VerifyHeadBinding(encoded, snapshotBytes, key))
+}
+
 func TestHeadCIDLengthErrorsMatchEncodeAndDecode(t *testing.T) {
 	base := fixtureHeadValue(t)
 	for _, field := range []string{"snapshotCid", "blobCid"} {
@@ -167,6 +186,14 @@ func TestHeadCIDLengthErrorsMatchEncodeAndDecode(t *testing.T) {
 				} else {
 					head.SnapshotCID = independentCID(t, []byte("snapshot record"), cid.DagCBOR)
 					head.BlobCID = bytes.Clone(invalidBytes)
+					if test.length == 0 {
+						encoded, err = EncodeHead(head)
+						require.NoError(t, err)
+						decoded, decodeErr := DecodeHead(encoded)
+						require.NoError(t, decodeErr)
+						assert.Nil(t, decoded.BlobCID)
+						return
+					}
 				}
 				encoded, err = EncodeHead(head)
 				require.Nil(t, encoded)
