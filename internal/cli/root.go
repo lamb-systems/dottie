@@ -75,7 +75,7 @@ is repo-scoped through the account's own AT Protocol repository; Dottie adds no 
 position. V2 publication through push, pull and sync is the only publication path; bootstrap provisions no
 publication state, so the first pull provisions the position store from the position the account publishes.
 
-See README.md for build instructions, docs/ for the trust model and acceptance record.
+See README.md for build instructions and docs/security.md for the trust model.
 `
 
 func Run(args []string, stdout, stderr io.Writer) int {

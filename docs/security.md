@@ -38,8 +38,7 @@ The plaintext provider residual is unchanged. The packed payload is uploaded bef
 so a rejected or ambiguous batch can leave an unattached plaintext blob that remains retrievable by
 CID at the provider. Dottie cannot delete that blob. Dottie itself never surfaces candidate bytes for
 a publication that did not succeed: no command, log, error, report or archive surfaces them, and the
-accepted position does not advance. The residual is provider-side only and is recorded in
-[`docs/acceptance.md`](acceptance.md).
+accepted position does not advance. The residual is provider-side only.
 
 ## Public metadata visibility
 

@@ -1,8 +1,7 @@
 # Development guidance
 
-- Start with README.md, then docs/security.md for the trust model and docs/acceptance.md for what has
-  actually been measured. Component directories carry no README of their own; put design notes in
-  docs/, not beside the code.
+- Start with README.md, then docs/security.md for the trust model. Component directories carry no
+  README of their own; put design notes in docs/, not beside the code.
 - This is a scaffold. Do not describe unimplemented features or placeholder
   component directories as working functionality.
 - Keep repository documentation focused on product behavior, architecture and
@@ -17,8 +16,8 @@
   candidate bytes for a publication that did not succeed. The plaintext v2 profile
   uploads the packed payload before its record batch, so a rejected or ambiguous
   batch can leave an unattached, provider-held plaintext blob that cannot be
-  deleted. That provider-side residual is accepted and recorded in
-  docs/acceptance.md; it must be disclosed, never silently assumed away, and it
+  deleted. That provider-side residual is accepted and documented in
+  docs/security.md; it must be disclosed, never silently assumed away, and it
   does not license exposing candidate bytes locally.
 - Recovery authenticates data, not global freshness. Risk acceptance cannot
   override invalid signatures, wrong keys or failed policy checks.
