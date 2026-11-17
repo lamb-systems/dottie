@@ -104,6 +104,8 @@ Observed, in one session:
 - `pull` reporting `pull: matches` against that publication, and a subsequent `push` reporting `push: no-op`.
 - A fresh home resolving the vault from the published `vaultHeadV2` record instead of requiring `--vault`, and
   planning a first-use join of two files without applying anything until confirmed.
+- `push` and `pull` succeeding **from both homes**, so each side both published and consumed the other's position and
+  each advanced its own accepted floor. This is the first two-machine observation of the v2 profile.
 
 What the run proved: the blob upload, the record batch, the view validation, the accepted-floor readback and the
 consent token all behave against a real PDS as the in-memory provider models them, once six provider-behaviour
@@ -111,9 +113,15 @@ differences were corrected (blob media-type canonicalisation, the record's decla
 rejection classification, the preflight's emptiness rule, first-use provisioning of the position store, and selection
 of a retained proposal alongside a consumed one).
 
+The two directions were then repeated, each side pulling what the other had just published.
+
 What it did not prove, and must not be read as proving:
 
-- The confirmed first-use join was not observed end to end on a second machine; the plan was, the apply was not.
+- Both homes ran on one physical machine. "Two machines" here means two independent installs: separate state
+  stores, position stores, journals and configurations. It does not exercise two hosts, concurrent operation, clock
+  skew, or a network interruption mid-apply.
+- The confirmed join was observed once per direction. It does not establish behaviour under repeated concurrent
+  publication from both sides, which remains refused rather than reconciled.
 - It says nothing about power-loss durability, provider-side at-most-once effects, hidden provider logs, or
   server-side retention.
 - Provider blobs cannot be deleted. Rejected attempts uploaded real payloads that remain retrievable by CID while
