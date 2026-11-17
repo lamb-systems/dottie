@@ -90,8 +90,6 @@ account can read it back.
 ## Documentation
 
 - `docs/security.md`: what the trust model actually guarantees, and what it does not.
-- `docs/acceptance.md`: the evidence behind the claims above, including what was measured live
-  against a real provider and what was not.
 - `docs/adr/`: design decisions, with their reasoning and the alternatives that lost.
 - `docs/operations.md`: publishing the docs site, lexicons and release packaging.
 
