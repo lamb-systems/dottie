@@ -71,6 +71,7 @@ func (store *memoryProposalStore) has(publicationID [16]byte) (PublicationPropos
 
 type stubAcceptedSource struct {
 	mu       sync.Mutex
+	payload  publication.Payload
 	snapshot model.Snapshot
 	err      error
 	calls    int
@@ -83,7 +84,20 @@ func (source *stubAcceptedSource) ReadAcceptedPayload(context.Context) (Accepted
 	if source.err != nil {
 		return AcceptedPublication{}, source.err
 	}
-	return AcceptedPublication{Snapshot: clonePublicationSnapshot(source.snapshot)}, nil
+	if source.payload.Form != "" {
+		return AcceptedPublication{Payload: source.payload}, nil
+	}
+	return AcceptedPublication{
+		Payload: publication.Payload{
+			Form: publication.PayloadFormPacked, Snapshot: clonePublicationSnapshot(source.snapshot),
+		},
+	}, nil
+}
+
+func (source *stubAcceptedSource) setPayload(payload publication.Payload) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.payload = payload
 }
 
 func (source *stubAcceptedSource) set(snapshot model.Snapshot) {

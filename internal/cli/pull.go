@@ -290,7 +290,7 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
 	}
-	if floor.Showcase != nil {
+	if floor.Showcase != nil || record.PayloadForm() == publication.PayloadFormShowcase {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 	}
 	if record.Blob.Size != floor.BlobSize {
@@ -712,6 +712,11 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
+	if terminal.PayloadForm() == publication.PayloadFormShowcase {
+		return pullApplyMaterial{}, &publication.ShowcasePayloadError{
+			Reason: publication.ShowcaseReasonPackedRequired,
+		}
+	}
 	recordCID, err := publication.RecordCID(view.Snapshots[len(view.Snapshots)-1].Raw)
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
@@ -740,6 +745,11 @@ func pullApplySnapshots(
 	baseRecord, err := publication.DecodeSnapshot(block.Raw)
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
+	}
+	if baseRecord.PayloadForm() == publication.PayloadFormShowcase {
+		return pullApplyMaterial{}, &publication.ShowcasePayloadError{
+			Reason: publication.ShowcaseReasonPackedRequired,
+		}
 	}
 	baseCID, err := publication.RecordCID(block.Raw)
 	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) ||
@@ -772,6 +782,12 @@ func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicat
 }
 
 func pullApplyRemoteFailure(label string, err error) error {
+	if errors.Is(err, publication.ErrShowcasePayload) {
+		return urfave.Exit(
+			label+" refused: the provider position carries a showcase publication that this build cannot apply; nothing was changed",
+			3,
+		)
+	}
 	if errors.Is(err, errPullApplySnapshotMoved) || errors.Is(err, errPullApplySnapshotUnavailable) ||
 		errors.Is(err, atproto.ErrAmbiguousTransport) ||
 		errors.Is(err, atproto.ErrRevisionMoving) {

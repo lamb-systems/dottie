@@ -620,6 +620,11 @@ func newMaterialWriteBatch(
 	if err != nil || key != candidate.SnapshotKey {
 		return MaterialWriteBatch{}, errors.New("publication material candidate key does not match its sequence")
 	}
+	if snapshot.PayloadForm() == publication.PayloadFormShowcase {
+		return MaterialWriteBatch{}, &publication.ShowcasePayloadError{
+			Reason: publication.ShowcaseReasonPackedRequired,
+		}
+	}
 	if err := publication.VerifyPayload(candidate.Payload, snapshot.Blob); err != nil {
 		return MaterialWriteBatch{}, err
 	}
@@ -1000,6 +1005,11 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
+		if record.PayloadForm() == publication.PayloadFormShowcase {
+			return PublicationPushPreparation{}, &publication.ShowcasePayloadError{
+				Reason: publication.ShowcaseReasonPackedRequired,
+			}
+		}
 		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
 		if err != nil {
 			return PublicationPushPreparation{}, err
@@ -1011,7 +1021,10 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	accepted, err := request.Reader.ReadAcceptedPayload(ctx)
 	switch {
 	case err == nil:
-		remote = accepted.Snapshot
+		remote, err = accepted.Payload.PackedSnapshot()
+		if err != nil {
+			return PublicationPushPreparation{}, err
+		}
 	case errors.Is(err, atproto.ErrReadRecordMissing) && !present:
 	default:
 		return PublicationPushPreparation{}, err

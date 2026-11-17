@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
@@ -194,7 +195,9 @@ func TestPublicationReaderReturnsTheAdapterViewAndAcceptedPayload(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, view.Head, accepted.View.Head)
 	assert.Equal(t, view.Snapshots, accepted.View.Snapshots)
-	assert.Equal(t, publisher.snapshot, accepted.Snapshot)
+	assert.Equal(t, publication.PayloadFormPacked, accepted.Payload.Form)
+	assert.Equal(t, publisher.snapshot, accepted.Payload.Snapshot)
+	assert.Empty(t, accepted.Payload.Entries)
 	assert.Equal(t, 1, fixture.transport.blobStreams)
 }
 
@@ -483,4 +486,167 @@ func publicationReaderMalformedPayload(t *testing.T) []byte {
 	require.ErrorAs(t, unpackErr, &payloadError)
 	assert.Equal(t, "validate", payloadError.Stage)
 	return malformed
+}
+
+type publicationReaderShowcaseFile struct {
+	path    string
+	mode    uint32
+	content []byte
+}
+
+func (fixture *publicationReaderFixture) showcasePublication(
+	t *testing.T,
+	files ...publicationReaderShowcaseFile,
+) (publication.SnapshotRecord, map[string][]byte) {
+	t.Helper()
+	entries := make([]publication.SnapshotEntry, 0, len(files))
+	contents := make(map[string][]byte, len(files))
+	for _, file := range files {
+		blobCID := fixture.transport.storeBlob(t, file.content)
+		entries = append(entries, publication.SnapshotEntry{
+			Path: file.path, Mode: file.mode, Size: uint64(len(file.content)),
+			Kind: publication.SnapshotEntryKindFile,
+			Blob: publication.BlobReference{
+				CID: blobCID, Size: uint64(len(file.content)), MIMEType: publication.BlobMIMEType,
+			},
+		})
+		contents[file.path] = file.content
+	}
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationID: [16]byte{0x62, 0x21}, Entries: entries,
+	}
+	snapshotRecord, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	snapshotCID, err := publication.RecordCID(snapshotRecord)
+	require.NoError(t, err)
+	headRecord, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault, SnapshotCID: snapshotCID,
+	})
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+	fixture.repository.setRecords(t, map[atproto.RecordKey][]byte{
+		{Collection: publication.SnapshotNSID, RKey: key}:         snapshotRecord,
+		{Collection: publication.HeadNSID, RKey: materialHeadKey}: headRecord,
+	})
+	return record, contents
+}
+
+func (fixture *publicationReaderFixture) forgetBlob(content []byte) {
+	blob, err := atprototest.BuildBlob(content)
+	if err != nil {
+		panic(err)
+	}
+	fixture.transport.mu.Lock()
+	delete(fixture.transport.blobs, blob.CID.String())
+	fixture.transport.mu.Unlock()
+}
+
+func (fixture *publicationReaderFixture) substituteBlob(content, substitute []byte) {
+	blob, err := atprototest.BuildBlob(content)
+	if err != nil {
+		panic(err)
+	}
+	fixture.transport.mu.Lock()
+	fixture.transport.blobs[blob.CID.String()] = bytes.Clone(substitute)
+	fixture.transport.mu.Unlock()
+}
+
+func fixtureShowcaseFiles() []publicationReaderShowcaseFile {
+	return []publicationReaderShowcaseFile{
+		{path: "init.lua", mode: 0o600, content: []byte("synthetic showcase init")},
+		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic showcase options")},
+	}
+}
+
+func TestPublicationReaderReadsAShowcasePublicationWithVerifiedEntries(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
+	fixture.showcasePublication(t, fixtureShowcaseFiles()...)
+
+	view, err := fixture.reader.ReadView(ctx)
+	require.NoError(t, err)
+	require.Len(t, view.Snapshots, 1)
+	headRecord, err := publication.DecodeHead(view.Head)
+	require.NoError(t, err)
+	assert.Empty(t, headRecord.BlobCID)
+
+	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, view.Head, accepted.View.Head)
+	assert.Equal(t, publication.PayloadFormShowcase, accepted.Payload.Form)
+	assert.Equal(t, model.Snapshot{}, accepted.Payload.Snapshot)
+	require.Len(t, accepted.Payload.Entries, 2)
+	assert.Equal(t, "init.lua", accepted.Payload.Entries[0].Path)
+	assert.Equal(t, uint32(0o600), accepted.Payload.Entries[0].Mode)
+	assert.Equal(t, []byte("synthetic showcase init"), accepted.Payload.Entries[0].Content)
+	assert.Equal(t, "lua/config/options.lua", accepted.Payload.Entries[1].Path)
+	assert.Equal(t, uint32(0o644), accepted.Payload.Entries[1].Mode)
+	assert.Equal(t, []byte("synthetic showcase options"), accepted.Payload.Entries[1].Content)
+	assert.Equal(t, uint64(len("synthetic showcase init")), accepted.Payload.Entries[0].Size)
+	assert.Equal(t, uint64(len("synthetic showcase options")), accepted.Payload.Entries[1].Size)
+	assert.Equal(t, 2, fixture.transport.blobStreams)
+
+	snapshot, err := accepted.Payload.PackedSnapshot()
+	assert.Equal(t, model.Snapshot{}, snapshot)
+	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+}
+
+func TestPublicationReaderRefusesAMissingShowcaseEntryBlobNamingThePath(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
+	files := fixtureShowcaseFiles()
+	fixture.showcasePublication(t, files...)
+	fixture.forgetBlob(files[1].content)
+
+	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched showcase payload was exposed")
+	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
+	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	require.ErrorIs(t, err, atproto.ErrReadBlobMissing)
+	var refusal *publication.ShowcasePayloadError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, files[1].path, refusal.EntryPath())
+	assert.Equal(t, publication.ShowcaseReasonUnavailable, refusal.Reason)
+	assert.Contains(t, err.Error(), files[1].path)
+	assert.Equal(t, 2, fixture.transport.blobStreams, "the reader kept fetching after the refused entry")
+}
+
+func TestPublicationReaderRefusesAMismatchedShowcaseEntryNamingThePath(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
+	files := fixtureShowcaseFiles()
+	fixture.showcasePublication(t, files...)
+	fixture.substituteBlob(files[1].content, files[1].content[:len(files[1].content)-1])
+
+	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched showcase payload was exposed")
+	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
+	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	require.ErrorIs(t, err, atproto.ErrReadBlobTruncated)
+	var refusal *publication.ShowcasePayloadError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, files[1].path, refusal.EntryPath())
+	assert.Contains(t, err.Error(), files[1].path)
+}
+
+func TestPublicationReaderRefusesAShowcasePayloadWithAPartiallyAvailableEntrySet(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
+	files := append(
+		fixtureShowcaseFiles(),
+		publicationReaderShowcaseFile{path: "lua/plugin/showcase.lua", mode: 0o600, content: []byte("showcase plugin")},
+	)
+	fixture.showcasePublication(t, files...)
+	fixture.forgetBlob(files[2].content)
+
+	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
+	assert.Equal(t, AcceptedPublication{}, accepted, "an incomplete showcase payload was exposed")
+	assert.Empty(t, accepted.Payload.Entries)
+	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	var refusal *publication.ShowcasePayloadError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, files[2].path, refusal.EntryPath())
+	assert.Equal(t, 3, fixture.transport.blobStreams)
 }

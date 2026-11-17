@@ -213,7 +213,12 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 	if err != nil {
 		return service.AcceptedPublication{}, err
 	}
-	return service.AcceptedPublication{View: view, Snapshot: snapshot}, nil
+	return service.AcceptedPublication{
+		View: view,
+		Payload: publication.Payload{
+			Form: publication.PayloadFormPacked, Snapshot: snapshot,
+		},
+	}, nil
 }
 
 type pushTestGuard struct{}

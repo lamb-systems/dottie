@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
@@ -33,8 +32,8 @@ type PublicationReader struct {
 }
 
 type AcceptedPublication struct {
-	View     publicationstate.SuppliedRepositoryView
-	Snapshot model.Snapshot
+	View    publicationstate.SuppliedRepositoryView
+	Payload publication.Payload
 }
 
 func NewPublicationReader(config PublicationReaderConfig) (*PublicationReader, error) {
@@ -68,15 +67,26 @@ func (reader *PublicationReader) ReadAcceptedPayload(ctx context.Context) (Accep
 	if err != nil {
 		return AcceptedPublication{}, errors.Join(ErrPublicationReaderAccepted, err)
 	}
-	payload, err := reader.blobs.FetchBlob(ctx, reader.did, record.Blob.CID, int64(record.Blob.Size))
+	payload, err := publication.ResolvePayload(
+		record,
+		publicationReaderPayloadLimits(),
+		func(reference publication.BlobReference) ([]byte, error) {
+			return reader.blobs.FetchBlob(ctx, reader.did, reference.CID, int64(reference.Size))
+		},
+	)
 	if err != nil {
 		return AcceptedPublication{}, errors.Join(ErrPublicationReaderAccepted, err)
 	}
-	snapshot, err := publication.DecodePayload(payload, record.Blob)
-	if err != nil {
-		return AcceptedPublication{}, errors.Join(ErrPublicationReaderAccepted, err)
+	return AcceptedPublication{View: view, Payload: payload}, nil
+}
+
+func publicationReaderPayloadLimits() publication.PayloadLimits {
+	limits := publicationstate.DefaultAttemptLimits()
+	return publication.PayloadLimits{
+		MaxEntries:    int(limits.ManagedObjects),
+		MaxEntryBytes: uint64(publicationApplyMaxObservedBytes),
+		MaxTotalBytes: limits.CustodyBytes,
 	}
-	return AcceptedPublication{View: view, Snapshot: snapshot}, nil
 }
 
 func (reader *PublicationReader) authorize() error {

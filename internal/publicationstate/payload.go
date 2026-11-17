@@ -10,8 +10,8 @@ import (
 type PayloadForm string
 
 const (
-	PayloadFormPacked   PayloadForm = "packed"
-	PayloadFormShowcase PayloadForm = "showcase"
+	PayloadFormPacked   PayloadForm = PayloadForm(publication.PayloadFormPacked)
+	PayloadFormShowcase PayloadForm = PayloadForm(publication.PayloadFormShowcase)
 )
 
 type PayloadEntryReference struct {
@@ -50,10 +50,7 @@ func cloneShowcasePayload(payload *ShowcasePayload) *ShowcasePayload {
 }
 
 func payloadFormOf(record publication.SnapshotRecord) PayloadForm {
-	if len(record.Entries) != 0 {
-		return PayloadFormShowcase
-	}
-	return PayloadFormPacked
+	return PayloadForm(record.PayloadForm())
 }
 
 func showcasePayloadOf(record publication.SnapshotRecord) *ShowcasePayload {

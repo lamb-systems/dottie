@@ -694,6 +694,15 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the provider position cannot be re-read", "post_pull_provider")
 	}
+	acceptedSnapshot, err := accepted.Payload.PackedSnapshot()
+	if err != nil {
+		return syncPushRefusal(
+			command,
+			output,
+			"the provider position carries a showcase publication this build cannot compose from",
+			"post_pull_payload_form",
+		)
+	}
 	if syncViewDigest(accepted.View) != viewDigest {
 		return syncPushRefusal(
 			command,
@@ -725,7 +734,7 @@ func runSyncPushHalf(
 	snapshot, err := sources.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
 		Configuration:  sources.Configuration,
 		FloorSnapshot:  baseline,
-		RemoteSnapshot: accepted.Snapshot,
+		RemoteSnapshot: acceptedSnapshot,
 		PublicationID:  publicationID,
 	})
 	if err != nil {
@@ -857,6 +866,7 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 		return errSyncFloorMismatch
 	}
 	if !bytes.Equal(floor.RecordCID, cid) || floor.Showcase != nil ||
+		record.PayloadForm() == publication.PayloadFormShowcase ||
 		!bytes.Equal(floor.BlobCID, record.Blob.CID) ||
 		floor.BlobSize != record.Blob.Size ||
 		floor.Sequence != record.PublicationSeq ||
@@ -870,6 +880,11 @@ func syncAcceptedSnapshot(material publicationstate.AcceptedMaterial) (model.Sna
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	if err != nil {
 		return model.Snapshot{}, err
+	}
+	if record.PayloadForm() == publication.PayloadFormShowcase {
+		return model.Snapshot{}, &publication.ShowcasePayloadError{
+			Reason: publication.ShowcaseReasonPackedRequired,
+		}
 	}
 	return publication.DecodePayload(material.Payload, record.Blob)
 }
