@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
+	"maps"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -19,7 +20,14 @@ type incomingMaterialUpgradeSource struct {
 	metadata      map[string][]byte
 }
 
-func readIncomingMaterialUpgradeSource(ctx context.Context, q queryer, version int, binding Binding, limits Limits, attemptLimits AttemptLimits) (incomingMaterialUpgradeSource, error) {
+func readIncomingMaterialUpgradeSource(
+	ctx context.Context,
+	q queryer,
+	version int,
+	binding Binding,
+	limits Limits,
+	attemptLimits AttemptLimits,
+) (incomingMaterialUpgradeSource, error) {
 	if ctx == nil {
 		return incomingMaterialUpgradeSource{}, classified(ErrInvalid, StageOpen, ReasonContext)
 	}
@@ -43,7 +51,15 @@ func readIncomingMaterialUpgradeSource(ctx context.Context, q queryer, version i
 	}
 	keys := []string{"binding", "database_id", "generation", "limits", "revision"}
 	if version == 2 {
-		keys = []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}
+		keys = []string{
+			"attempt_limits",
+			"attempt_mutation_revision",
+			"binding",
+			"database_id",
+			"generation",
+			"limits",
+			"revision",
+		}
 	}
 	metadata := make(map[string][]byte, len(keys))
 	for _, key := range keys {
@@ -72,8 +88,7 @@ func readIncomingMaterialUpgradeSource(ctx context.Context, q queryer, version i
 	}
 	if version == 1 {
 		if _, err := readStateForUpgrade(ctx, q, binding, limits); err != nil {
-			var stateError *Error
-			if errors.As(err, &stateError) {
+			if _, ok := errors.AsType[*Error](err); ok {
 				return incomingMaterialUpgradeSource{}, err
 			}
 			return incomingMaterialUpgradeSource{}, storageFailure(ctx, StageOpen, err)
@@ -85,17 +100,28 @@ func readIncomingMaterialUpgradeSource(ctx context.Context, q queryer, version i
 		if len(metadata["attempt_mutation_revision"]) != 8 {
 			return incomingMaterialUpgradeSource{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
 		}
-		source := &Store{binding: binding, limits: limits, attemptLimits: attemptLimits, databaseID: databaseID, schemaVersion: 2}
+		source := &Store{
+			binding:       binding,
+			limits:        limits,
+			attemptLimits: attemptLimits,
+			databaseID:    databaseID,
+			schemaVersion: 2,
+		}
 		source.attemptMutationRevision = binary.BigEndian.Uint64(metadata["attempt_mutation_revision"])
 		if _, err := source.readState(ctx, q, StageOpen); err != nil {
-			var stateError *Error
-			if errors.As(err, &stateError) {
+			if _, ok := errors.AsType[*Error](err); ok {
 				return incomingMaterialUpgradeSource{}, err
 			}
 			return incomingMaterialUpgradeSource{}, storageFailure(ctx, StageOpen, err)
 		}
 	}
-	return incomingMaterialUpgradeSource{version: version, binding: binding, limits: limits, attemptLimits: attemptLimits, metadata: metadata}, nil
+	return incomingMaterialUpgradeSource{
+		version:       version,
+		binding:       binding,
+		limits:        limits,
+		attemptLimits: attemptLimits,
+		metadata:      metadata,
+	}, nil
 }
 
 const (
@@ -131,9 +157,7 @@ func checkIncomingMaterialUpgradeSchema(ctx context.Context, q queryer) error {
 		return schemaOrStorageError(ctx, StageOpen, err)
 	}
 	expected := make(map[string]string, len(inventory.objects)+1)
-	for name, kind := range inventory.objects {
-		expected[name] = kind
-	}
+	maps.Copy(expected, inventory.objects)
 	expected[statementTableName(incomingMaterialSchemaStatement)] = "table"
 	if !sameObjects(objects, expected) {
 		return classified(ErrSchema, StageOpen, ReasonSchema)
@@ -143,7 +167,9 @@ func checkIncomingMaterialUpgradeSchema(ctx context.Context, q queryer) error {
 			return classified(ErrSchema, StageOpen, ReasonSchema)
 		}
 	}
-	if strings.TrimSpace(definitions[statementTableName(incomingMaterialSchemaStatement)]) != incomingMaterialSchemaStatement {
+	if strings.TrimSpace(
+		definitions[statementTableName(incomingMaterialSchemaStatement)],
+	) != incomingMaterialSchemaStatement {
 		return classified(ErrSchema, StageOpen, ReasonSchema)
 	}
 	keys, err := readMetadataKeys(ctx, q)
@@ -156,7 +182,11 @@ func checkIncomingMaterialUpgradeSchema(ctx context.Context, q queryer) error {
 	return nil
 }
 
-func checkIncomingMaterialUpgradeDestination(ctx context.Context, q queryer, source incomingMaterialUpgradeSource) error {
+func checkIncomingMaterialUpgradeDestination(
+	ctx context.Context,
+	q queryer,
+	source incomingMaterialUpgradeSource,
+) error {
 	if ctx == nil {
 		return classified(ErrInvalid, StageOpen, ReasonContext)
 	}
@@ -194,7 +224,8 @@ func checkIncomingMaterialUpgradeDestination(ctx context.Context, q queryer, sou
 		}
 	}
 	if source.version == 2 {
-		if len(source.metadata["attempt_mutation_revision"]) != 8 || len(source.metadata["attempt_limits"]) == 0 || len(source.metadata["attempt_limits"]) > 16384 {
+		if len(source.metadata["attempt_mutation_revision"]) != 8 || len(source.metadata["attempt_limits"]) == 0 ||
+			len(source.metadata["attempt_limits"]) > 16384 {
 			return classified(ErrSchema, StageOpen, ReasonCorrupt)
 		}
 	}
@@ -242,7 +273,8 @@ func checkIncomingMaterialUpgradeDestination(ctx context.Context, q queryer, sou
 		if err != nil {
 			return classified(ErrInvalid, StageOpen, ReasonLimits)
 		}
-		if !bytes.Equal(metadata["attempt_limits"], wantedAttemptLimits) || !bytes.Equal(metadata["attempt_mutation_revision"], uint64Bytes(0)) {
+		if !bytes.Equal(metadata["attempt_limits"], wantedAttemptLimits) ||
+			!bytes.Equal(metadata["attempt_mutation_revision"], uint64Bytes(0)) {
 			return classified(ErrSchema, StageOpen, ReasonCorrupt)
 		}
 	}
@@ -250,11 +282,16 @@ func checkIncomingMaterialUpgradeDestination(ctx context.Context, q queryer, sou
 	if len(mutation) != 8 {
 		return classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
-	store := &Store{binding: source.binding, limits: source.limits, attemptLimits: source.attemptLimits, databaseID: databaseID, schemaVersion: 3}
+	store := &Store{
+		binding:       source.binding,
+		limits:        source.limits,
+		attemptLimits: source.attemptLimits,
+		databaseID:    databaseID,
+		schemaVersion: 3,
+	}
 	store.attemptMutationRevision = binary.BigEndian.Uint64(mutation)
 	if _, err := store.readState(ctx, q, StageOpen); err != nil {
-		var stateError *Error
-		if errors.As(err, &stateError) {
+		if _, ok := errors.AsType[*Error](err); ok {
 			return err
 		}
 		return storageFailure(ctx, StageOpen, err)
@@ -262,14 +299,26 @@ func checkIncomingMaterialUpgradeDestination(ctx context.Context, q queryer, sou
 	return store.checkIncomingMaterialRefs(ctx, q, StageOpen)
 }
 
-func migrateIncomingMaterialTx(ctx context.Context, tx *sql.Tx, source incomingMaterialUpgradeSource, fault func(int) error) error {
+func migrateIncomingMaterialTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	source incomingMaterialUpgradeSource,
+	fault func(int) error,
+) error {
 	if ctx == nil {
 		return classified(ErrInvalid, StageOpen, ReasonContext)
 	}
 	if err := ctx.Err(); err != nil {
 		return canceled(StageOpen, err)
 	}
-	actual, err := readIncomingMaterialUpgradeSource(ctx, tx, source.version, source.binding, source.limits, source.attemptLimits)
+	actual, err := readIncomingMaterialUpgradeSource(
+		ctx,
+		tx,
+		source.version,
+		source.binding,
+		source.limits,
+		source.attemptLimits,
+	)
 	if err != nil {
 		return err
 	}
@@ -297,7 +346,12 @@ func migrateIncomingMaterialTx(ctx context.Context, tx *sql.Tx, source incomingM
 				}
 			}
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO store_meta(key,value) VALUES ('attempt_limits',?),('attempt_mutation_revision',?)", encodedLimits, uint64Bytes(0)); err != nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			"INSERT INTO store_meta(key,value) VALUES ('attempt_limits',?),('attempt_mutation_revision',?)",
+			encodedLimits,
+			uint64Bytes(0),
+		); err != nil {
 			return storageFailure(ctx, StageOpen, err)
 		}
 		if fault != nil {
@@ -343,7 +397,14 @@ const (
 
 const incomingMaterialUpgradeRootSyncFault = 16
 
-func upgradeIncomingMaterial(ctx context.Context, conn *sql.Conn, source incomingMaterialUpgradeSource, rootFD int, fault func(int) error, commitHook func(*sql.Tx) error) (incomingMaterialUpgradeOutcome, error) {
+func upgradeIncomingMaterial(
+	ctx context.Context,
+	conn *sql.Conn,
+	source incomingMaterialUpgradeSource,
+	rootFD int,
+	fault func(int) error,
+	commitHook func(*sql.Tx) error,
+) (incomingMaterialUpgradeOutcome, error) {
 	if ctx == nil {
 		return incomingMaterialUpgradeNotAttempted, classified(ErrInvalid, StageOpen, ReasonContext)
 	}

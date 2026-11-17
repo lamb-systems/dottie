@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	urfave "github.com/urfave/cli/v3"
+
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
@@ -23,7 +25,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	urfave "github.com/urfave/cli/v3"
 )
 
 type memoryAccountKeyring struct {
@@ -33,7 +34,11 @@ type memoryAccountKeyring struct {
 	deleteCalls int
 }
 
-func (k *memoryAccountKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, material vault.DeviceMaterial) error {
+func (k *memoryAccountKeyring) StoreDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	material vault.DeviceMaterial,
+) error {
 	k.storeCalls++
 	if k.err != nil {
 		return k.err
@@ -46,7 +51,11 @@ func (k *memoryAccountKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]by
 	return nil
 }
 
-func (k *memoryAccountKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+func (k *memoryAccountKeyring) LoadDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	deviceID string,
+) (vault.DeviceMaterial, error) {
 	if k.err != nil {
 		return vault.DeviceMaterial{}, k.err
 	}
@@ -57,7 +66,10 @@ func (k *memoryAccountKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byt
 	return cloneAccountMaterial(material)
 }
 
-func (k *memoryAccountKeyring) LoadDeviceKeysForVault(ctx context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+func (k *memoryAccountKeyring) LoadDeviceKeysForVault(
+	ctx context.Context,
+	vaultID [32]byte,
+) ([]vault.DeviceMaterial, error) {
 	prefix := hex.EncodeToString(vaultID[:]) + ":"
 	materials := make([]vault.DeviceMaterial, 0)
 	for name := range k.items {
@@ -132,8 +144,14 @@ func (port injectedBootstrapPreflight) Preflight(ctx context.Context) error {
 func TestAccountBootstrapCommandRecordsLocalIdentityWithoutPublishing(t *testing.T) {
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
@@ -144,11 +162,20 @@ func TestAccountBootstrapCommandRecordsLocalIdentityWithoutPublishing(t *testing
 	pds, err := atprototest.NewMemoryPDS(did, repositoryKey)
 	require.NoError(t, err)
 	method := pds.VerificationMethod()
-	reader := atproto.RevisionReader{Transport: pds, DIDDocumentID: did, VerificationMethods: []atproto.VerificationMethod{{
-		ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-	}}}
+	reader := atproto.RevisionReader{
+		Transport:     pds,
+		DIDDocumentID: did,
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
+	}
 	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}
-	factory := func(ctx context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
+	factory := func(_ context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
 		if command.String("did") != did {
 			return nil, func() {}, errors.New("unexpected authenticated identity")
 		}
@@ -175,7 +202,11 @@ func TestAccountBootstrapCommandRecordsLocalIdentityWithoutPublishing(t *testing
 		return runAccountCommandForAccountTest(command, &code, args...)
 	}
 	run := func(stdout, stderr io.Writer) int {
-		return runArgs([]string{"bootstrap", "--vault-name", "personal", "--device-id", "root-device", "--did", did}, stdout, stderr)
+		return runArgs(
+			[]string{"bootstrap", "--vault-name", "personal", "--device-id", "root-device", "--did", did},
+			stdout,
+			stderr,
+		)
 	}
 	var stderr bytes.Buffer
 	emptyRevision, err := reader.Read(context.Background(), did)
@@ -210,7 +241,7 @@ func TestAccountBootstrapCommandRecordsLocalIdentityWithoutPublishing(t *testing
 	require.Len(t, selections, 1)
 	assert.Equal(t, "root-device", selections[0].DeviceID)
 	_, err = store.VaultCheckpoint(context.Background(), selections[0].Vault)
-	assert.ErrorIs(t, err, state.ErrVaultCheckpointNotFound)
+	require.ErrorIs(t, err, state.ErrVaultCheckpointNotFound)
 	assert.Contains(t, stdout.buffer.String(), hex.EncodeToString(selections[0].Vault[:]))
 	require.NoError(t, store.Close())
 	revision, err := reader.Read(context.Background(), did)
@@ -239,7 +270,20 @@ func TestAccountKeyringFactoryErrorDoesNotExposeDetails(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	open := func() (accountKeyring, error) { return nil, errors.New("synthetic backend detail") }
 	var stdout, stderr bytes.Buffer
-	code := runAccount([]string{"bootstrap", "--vault-name", "vault", "--device-id", "root", "--did", "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"}, &stdout, &stderr, open)
+	code := runAccount(
+		[]string{
+			"bootstrap",
+			"--vault-name",
+			"vault",
+			"--device-id",
+			"root",
+			"--did",
+			"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		&stdout,
+		&stderr,
+		open,
+	)
 	require.Equal(t, 1, code, "keyring error exit code")
 	assert.NotContains(t, stderr.String(), "synthetic backend detail", "keyring detail leaked")
 }
@@ -247,8 +291,14 @@ func TestAccountKeyringFactoryErrorDoesNotExposeDetails(t *testing.T) {
 func TestAccountBootstrapRefusesAccountHoldingADottiePublication(t *testing.T) {
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
@@ -259,20 +309,36 @@ func TestAccountBootstrapRefusesAccountHoldingADottiePublication(t *testing.T) {
 	pds, err := atprototest.NewMemoryPDS(did, repositoryKey)
 	require.NoError(t, err)
 	method := pds.VerificationMethod()
-	reader := atproto.RevisionReader{Transport: pds, DIDDocumentID: did, VerificationMethods: []atproto.VerificationMethod{{
-		ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-	}}}
+	reader := atproto.RevisionReader{
+		Transport:     pds,
+		DIDDocumentID: did,
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
+	}
 	seed := []byte(`{"repo":"` + did + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[` +
 		`{"$type":"com.atproto.repo.applyWrites#create","collection":"app.bsky.actor.profile","rkey":"self","value":{"$type":"app.bsky.actor.profile","probe":"bootstrap"}},` +
 		`{"$type":"com.atproto.repo.applyWrites#create","collection":"` + publication.HeadNSID + `","rkey":"self","value":{"$type":"` + publication.HeadNSID + `","schemaVersion":2}}]}`)
-	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, seed, "application/json")
+	status, _, err := pds.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.applyWrites",
+		nil,
+		seed,
+		"application/json",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	before, err := reader.Read(context.Background(), did)
 	require.NoError(t, err)
 	require.Len(t, before.Membership(), 2)
 	keyring := &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}
-	factory := func(ctx context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
+	factory := func(_ context.Context, command *urfave.Command) (bootstrapCoordinator, func(), error) {
 		if command.String("did") != did {
 			return nil, func() {}, errors.New("unexpected authenticated identity")
 		}
@@ -295,7 +361,17 @@ func TestAccountBootstrapRefusesAccountHoldingADottiePublication(t *testing.T) {
 	code := 0
 	command := newAccountCommandWithFactories(&stdout, &stderr, open, &code,
 		accountSessionOptions{env: func(string) string { return "" }}, factory)
-	code = runAccountCommandForAccountTest(command, &code, "bootstrap", "--vault-name", "personal", "--device-id", "root-device", "--did", did)
+	code = runAccountCommandForAccountTest(
+		command,
+		&code,
+		"bootstrap",
+		"--vault-name",
+		"personal",
+		"--device-id",
+		"root-device",
+		"--did",
+		did,
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "no existing Dottie publication")
 	assert.Empty(t, keyring.items)

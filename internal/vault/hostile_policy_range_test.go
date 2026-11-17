@@ -18,10 +18,26 @@ type policyRangeCase struct {
 
 func outOfRangePolicyCases() []policyRangeCase {
 	return []policyRangeCase{
-		{name: "max_publications_below_minimum", field: "max_publications", mutate: func(policy *Policy) { policy.MaxPublications = 0 }},
-		{name: "max_publications_above_maximum", field: "max_publications", mutate: func(policy *Policy) { policy.MaxPublications = 100001 }},
-		{name: "max_epoch_age_below_minimum", field: "max_epoch_age", mutate: func(policy *Policy) { policy.MaxEpochAge = 3599 }},
-		{name: "max_epoch_age_above_maximum", field: "max_epoch_age", mutate: func(policy *Policy) { policy.MaxEpochAge = 31536001 }},
+		{
+			name:   "max_publications_below_minimum",
+			field:  "max_publications",
+			mutate: func(policy *Policy) { policy.MaxPublications = 0 },
+		},
+		{
+			name:   "max_publications_above_maximum",
+			field:  "max_publications",
+			mutate: func(policy *Policy) { policy.MaxPublications = 100001 },
+		},
+		{
+			name:   "max_epoch_age_below_minimum",
+			field:  "max_epoch_age",
+			mutate: func(policy *Policy) { policy.MaxEpochAge = 3599 },
+		},
+		{
+			name:   "max_epoch_age_above_maximum",
+			field:  "max_epoch_age",
+			mutate: func(policy *Policy) { policy.MaxEpochAge = 31536001 },
+		},
 	}
 }
 
@@ -54,9 +70,20 @@ func rebuildEnrollmentRaw(t *testing.T, fixture devicesFixture, mutate func(*Pol
 	recipients, err := prepareSealRecipients(policy, wraps)
 	require.NoError(t, err)
 	envelope, err := SealPrepared(PreparedSeal{
-		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: fixture.intent.PublicationID, EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, Parent: bytes.Clone(fixture.predecessor.HeadCID), DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
-		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey, Nonce: fixture.intent.Nonce, Recipients: recipients, Policy: policy,
+		Purpose:       PurposeSnapshot,
+		Vault:         policy.Vault,
+		PublicationID: fixture.intent.PublicationID,
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  digest,
+		Parent:        bytes.Clone(fixture.predecessor.HeadCID),
+		DeviceID:      fixture.root.DeviceID,
+		KeyID:         bytes.Clone(fixture.root.KeyID),
+		Plaintext:     fixture.intent.Plaintext,
+		SigningKey:    fixture.root.Signing,
+		ContentKey:    fixture.intent.ContentKey,
+		Nonce:         fixture.intent.Nonce,
+		Recipients:    recipients,
+		Policy:        policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)
@@ -125,14 +152,20 @@ func TestPolicyDecoderRefusesOutOfRangeBounds(t *testing.T) {
 
 			_, decodeErr := DecodePolicy(encoded)
 			require.ErrorIs(t, decodeErr, ErrLimit, "DecodePolicy rejects out-of-range %s", check.name)
-			assert.ErrorContains(t, decodeErr, check.field, "DecodePolicy identifies out-of-range %s", check.field)
+			require.ErrorContains(t, decodeErr, check.field, "DecodePolicy identifies out-of-range %s", check.field)
 
 			transition := rebuildEnrollmentRaw(t, fixture, check.mutate)
 			transitionErr := ValidateTransition(transition, fixture.predecessor)
 			require.ErrorIs(t, transitionErr, ErrTransitionSignature,
 				"ValidateTransition rejects out-of-range %s", check.name)
-			assert.ErrorIs(t, transitionErr, ErrLimit, "ValidateTransition preserves the policy range error")
-			assert.ErrorContains(t, transitionErr, check.field, "ValidateTransition identifies out-of-range %s", check.field)
+			require.ErrorIs(t, transitionErr, ErrLimit, "ValidateTransition preserves the policy range error")
+			assert.ErrorContains(
+				t,
+				transitionErr,
+				check.field,
+				"ValidateTransition identifies out-of-range %s",
+				check.field,
+			)
 		})
 	}
 }

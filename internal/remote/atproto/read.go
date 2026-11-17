@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"sort"
 	"time"
 
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -144,20 +146,29 @@ type PublicationCountOptions struct {
 	RecordFirstSeen bool
 }
 
-func CheckPublicationCount(ctx context.Context, store PublicationObservationStore, vaultID [32]byte, result ReadResult, options PublicationCountOptions) error {
+func CheckPublicationCount(
+	ctx context.Context,
+	store PublicationObservationStore,
+	vaultID [32]byte,
+	result ReadResult,
+	options PublicationCountOptions,
+) error {
 	if options.EnforceMaximum && result.PublicationCount > options.MaxPublications {
 		return vault.ErrPublicationCount
 	}
 	if store == nil {
 		return ErrPublicationObservationRequired
 	}
-	if result.EpochSeq > uint64(^uint64(0)>>1) || result.PublicationCount > uint64(^uint64(0)>>1) || result.PublicationCount < result.PublicationCountBaseline {
+	if result.EpochSeq > math.MaxInt64 || result.PublicationCount > math.MaxInt64 ||
+		result.PublicationCount < result.PublicationCountBaseline {
 		return ErrPublicationCountBackwards
 	}
-	if result.Head.PublicationCount != result.PublicationCount || result.Head.EpochSeq != result.EpochSeq || !bytes.Equal(result.Head.SnapshotCID, result.HeadCID) {
+	if result.Head.PublicationCount != result.PublicationCount || result.Head.EpochSeq != result.EpochSeq ||
+		!bytes.Equal(result.Head.SnapshotCID, result.HeadCID) {
 		return ErrReadVaultAuthentication
 	}
-	if result.PublicationCount == result.PublicationCountBaseline && !bytes.Equal(result.HeadCID, result.Control.HeadSnapshotCID) {
+	if result.PublicationCount == result.PublicationCountBaseline &&
+		!bytes.Equal(result.HeadCID, result.Control.HeadSnapshotCID) {
 		return ErrReadVaultAuthentication
 	}
 	if _, err := cid.Cast(result.HeadCID); err != nil {
@@ -171,9 +182,17 @@ func CheckPublicationCount(ctx context.Context, store PublicationObservationStor
 		return err
 	}
 	if err := store.RecordVaultPublicationObservation(ctx, state.VaultPublicationObservation{
-		Vault: vaultID, Epoch: result.EpochSeq, PublicationCount: result.PublicationCount, HeadCID: bytes.Clone(result.HeadCID),
-		ControlCID: bytes.Clone(result.ControlCID), PrevControlCID: bytes.Clone(result.Control.PrevControlCID),
-		PrevHeadCID: bytes.Clone(options.PrevHeadCID), ParentCID: bytes.Clone(options.ParentCID), EnforceParent: options.EnforceParent,
+		Vault:            vaultID,
+		Epoch:            result.EpochSeq,
+		PublicationCount: result.PublicationCount,
+		HeadCID:          bytes.Clone(result.HeadCID),
+		ControlCID:       bytes.Clone(result.ControlCID),
+		PrevControlCID:   bytes.Clone(result.Control.PrevControlCID),
+		PrevHeadCID: bytes.Clone(
+			options.PrevHeadCID,
+		),
+		ParentCID:     bytes.Clone(options.ParentCID),
+		EnforceParent: options.EnforceParent,
 	}); err != nil {
 		return err
 	}
@@ -204,7 +223,7 @@ func (r VaultReader) Read(ctx context.Context, request ReadRequest) (ReadResult,
 		Transport: r.Transport, Budgets: r.Budgets,
 		DIDDocumentID: request.DIDDocumentID, VerificationMethods: request.VerificationMethods,
 	}
-	for attempt := 0; attempt < readAttempts; attempt++ {
+	for range readAttempts {
 		revision, err := reader.Read(ctx, request.DID)
 		if err != nil {
 			return ReadResult{}, &ReadError{Stage: ReadStageRevision, Err: err}
@@ -310,17 +329,26 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	}
 	envelope, err := vault.DecodeEnvelope(blob)
 	if err != nil {
-		return ReadResult{}, &ReadError{Stage: ReadStageEnvelope, Err: fmt.Errorf("%w: %w", ErrReadEnvelopeInvalid, err)}
+		return ReadResult{}, &ReadError{
+			Stage: ReadStageEnvelope,
+			Err:   fmt.Errorf("%w: %w", ErrReadEnvelopeInvalid, err),
+		}
 	}
 	snapshotCertificate, found := certificates[certificateIdentity(envelope.DeviceID, envelope.KeyID)]
 	if !found {
 		return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: ErrReadVaultAuthentication}
 	}
 	if err := verifyEnvelopeSignature(blob, envelope, snapshotCertificate.object.SigningPublicKey[:]); err != nil {
-		return ReadResult{}, &ReadError{Stage: ReadStageEnvelopeSignature, Err: fmt.Errorf("%w: %w", ErrReadEnvelopeSignature, err)}
+		return ReadResult{}, &ReadError{
+			Stage: ReadStageEnvelopeSignature,
+			Err:   fmt.Errorf("%w: %w", ErrReadEnvelopeSignature, err),
+		}
 	}
 	if err := VerifySnapshotRecordSignature(snapshot, snapshotCertificate.object.SigningPublicKey[:]); err != nil {
-		return ReadResult{}, &ReadError{Stage: ReadStageRecordSignature, Err: fmt.Errorf("%w: %w", ErrReadRecordSignature, err)}
+		return ReadResult{}, &ReadError{
+			Stage: ReadStageRecordSignature,
+			Err:   fmt.Errorf("%w: %w", ErrReadRecordSignature, err),
+		}
 	}
 	if err := VerifyRecordBinding(snapshotBytes, blob); err != nil {
 		return ReadResult{}, readBindingError(err)
@@ -333,10 +361,16 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	}); err != nil {
 		return ReadResult{}, readContextError(err)
 	}
-	if err := VerifyRecordContext(controlBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes, TrustAnchor: request.TrustAnchor}); err != nil {
+	if err := VerifyRecordContext(
+		controlBytes,
+		RecordContext{Policy: policyBytes, Snapshot: snapshotBytes, TrustAnchor: request.TrustAnchor},
+	); err != nil {
 		return ReadResult{}, readContextError(err)
 	}
-	if err := VerifyRecordContext(headBytes, RecordContext{Policy: policyBytes, Snapshot: snapshotBytes, TrustAnchor: request.TrustAnchor}); err != nil {
+	if err := VerifyRecordContext(
+		headBytes,
+		RecordContext{Policy: policyBytes, Snapshot: snapshotBytes, TrustAnchor: request.TrustAnchor},
+	); err != nil {
 		return ReadResult{}, readContextError(err)
 	}
 	if err := VerifyRecordContext(snapshotBytes, RecordContext{
@@ -352,8 +386,22 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	}, certificates, policyBytes, controlBytes, request.TrustAnchor); err != nil {
 		return ReadResult{}, readContextError(err)
 	}
-	if err := authenticateVault(request, policy, policyObject, control, controlObject, head, headObject, envelope, blob, certificates); err != nil {
-		return ReadResult{}, &ReadError{Stage: ReadStageVaultAuth, Err: fmt.Errorf("%w: %w", ErrReadVaultAuthentication, err)}
+	if err := authenticateVault(
+		request,
+		policy,
+		policyObject,
+		control,
+		controlObject,
+		head,
+		headObject,
+		envelope,
+		blob,
+		certificates,
+	); err != nil {
+		return ReadResult{}, &ReadError{
+			Stage: ReadStageVaultAuth,
+			Err:   fmt.Errorf("%w: %w", ErrReadVaultAuthentication, err),
+		}
 	}
 
 	controlCID, err := rawBlobCID(controlObject)
@@ -369,19 +417,39 @@ func (r VaultReader) readRevision(ctx context.Context, request ReadRequest, revi
 	if request.DeviceKey != nil {
 		policyRecordObject, decodeErr := vault.DecodePolicy(policyObject)
 		if decodeErr != nil {
-			return ReadResult{}, &ReadError{Stage: ReadStageDecryption, Err: fmt.Errorf("%w: %w", ErrReadDecryption, decodeErr)}
+			return ReadResult{}, &ReadError{
+				Stage: ReadStageDecryption,
+				Err:   fmt.Errorf("%w: %w", ErrReadDecryption, decodeErr),
+			}
 		}
 		policyDigest, digestErr := vault.ComputePolicyDigest(policyObject)
 		if digestErr != nil {
-			return ReadResult{}, &ReadError{Stage: ReadStageDecryption, Err: fmt.Errorf("%w: %w", ErrReadDecryption, digestErr)}
+			return ReadResult{}, &ReadError{
+				Stage: ReadStageDecryption,
+				Err:   fmt.Errorf("%w: %w", ErrReadDecryption, digestErr),
+			}
 		}
 		plaintext, openErr := vault.Open(envelope, vault.OpenRequest{
-			Vault: policyRecordObject.Vault, EpochSeq: policyRecordObject.EpochSeq, PolicyDigest: policyDigest,
-			Policy: policyObject, Control: controlObject, TrustAnchor: request.TrustAnchor,
-			Certificates: certificateChainsForOpen(policyRecordObject, controlFromRecord(control), envelope, certificates), DeviceKeyID: bytes.Clone(request.DeviceKeyID), DeviceKey: request.DeviceKey,
+			Vault:        policyRecordObject.Vault,
+			EpochSeq:     policyRecordObject.EpochSeq,
+			PolicyDigest: policyDigest,
+			Policy:       policyObject,
+			Control:      controlObject,
+			TrustAnchor:  request.TrustAnchor,
+			Certificates: certificateChainsForOpen(
+				policyRecordObject,
+				controlFromRecord(control),
+				envelope,
+				certificates,
+			),
+			DeviceKeyID: bytes.Clone(request.DeviceKeyID),
+			DeviceKey:   request.DeviceKey,
 		})
 		if openErr != nil {
-			return ReadResult{}, &ReadError{Stage: ReadStageDecryption, Err: fmt.Errorf("%w: %w", ErrReadDecryption, openErr)}
+			return ReadResult{}, &ReadError{
+				Stage: ReadStageDecryption,
+				Err:   fmt.Errorf("%w: %w", ErrReadDecryption, openErr),
+			}
 		}
 		result.Plaintext = plaintext
 	}
@@ -418,7 +486,11 @@ func (r VaultReader) fetchBlob(ctx context.Context, did string, blobCID cid.Cid,
 	if declaredSize <= 0 || declaredSize > maximum {
 		return nil, &ReadError{Stage: ReadStageBlob, Err: ErrReadBlobTooLarge}
 	}
-	status, stream, err := r.Transport.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {did}, "cid": {blobCID.String()}})
+	status, stream, err := r.Transport.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {did}, "cid": {blobCID.String()}},
+	)
 	if stream != nil {
 		defer stream.Close()
 	}
@@ -511,7 +583,10 @@ func findSnapshotRecord(revision *Revision, expectedCID []byte) ([]byte, Snapsho
 	return selected, result, nil
 }
 
-func loadCertificates(revision *Revision, expectedVault [32]byte) (map[string]storedCertificate, []storedCertificate, error) {
+func loadCertificates(
+	revision *Revision,
+	expectedVault [32]byte,
+) (map[string]storedCertificate, []storedCertificate, error) {
 	keys := make([]RecordKey, 0)
 	for key := range revision.records {
 		if key.Collection == VaultCertificateNSID {
@@ -562,7 +637,12 @@ func findPolicySignerRecord(policy PolicyRecord, certificates map[string]storedC
 	return certificate.recordBytes
 }
 
-func verifySignerCertificateContexts(signers []vault.Signer, certificates map[string]storedCertificate, policy, control []byte, trustAnchor [32]byte) error {
+func verifySignerCertificateContexts(
+	signers []vault.Signer,
+	certificates map[string]storedCertificate,
+	policy, control []byte,
+	trustAnchor [32]byte,
+) error {
 	seen := make(map[string]bool, len(signers))
 	for _, signer := range signers {
 		identity := certificateIdentity(signer.DeviceID, signer.KeyID)
@@ -583,7 +663,18 @@ func verifySignerCertificateContexts(signers []vault.Signer, certificates map[st
 	return nil
 }
 
-func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyBytes []byte, controlRecord ControlRecord, controlBytes []byte, headRecord HeadRecord, headBytes []byte, envelope vault.Envelope, envelopeBytes []byte, certificates map[string]storedCertificate) error {
+func authenticateVault(
+	request ReadRequest,
+	policyRecord PolicyRecord,
+	policyBytes []byte,
+	controlRecord ControlRecord,
+	controlBytes []byte,
+	headRecord HeadRecord,
+	headBytes []byte,
+	envelope vault.Envelope,
+	envelopeBytes []byte,
+	certificates map[string]storedCertificate,
+) error {
 	policy, err := vault.DecodePolicy(policyBytes)
 	if err != nil {
 		return err
@@ -596,40 +687,83 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	if err != nil {
 		return err
 	}
-	if policy.Vault != request.Vault || control.Vault != request.Vault || head.Vault != request.Vault || envelope.Vault != request.Vault {
+	if policy.Vault != request.Vault || control.Vault != request.Vault || head.Vault != request.Vault ||
+		envelope.Vault != request.Vault {
 		return errors.New("vault identifiers disagree")
 	}
 	policyDigest, err := vault.ComputePolicyDigest(policyBytes)
 	if err != nil {
 		return err
 	}
-	if policy.EpochSeq != control.EpochSeq || policy.EpochSeq != head.EpochSeq || policy.EpochSeq != envelope.EpochSeq || control.PolicyDigest != policyDigest || head.PolicyDigest != policyDigest || envelope.PolicyDigest != policyDigest {
+	if policy.EpochSeq != control.EpochSeq || policy.EpochSeq != head.EpochSeq ||
+		policy.EpochSeq != envelope.EpochSeq ||
+		control.PolicyDigest != policyDigest ||
+		head.PolicyDigest != policyDigest ||
+		envelope.PolicyDigest != policyDigest {
 		return errors.New("epoch or policy digest disagrees")
 	}
-	if !bytes.Equal(head.SnapshotCID, cidBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, cidBytes(envelopeBytes)) || head.EpochSeq != control.EpochSeq || head.PolicyDigest != control.PolicyDigest {
+	if !bytes.Equal(head.SnapshotCID, cidBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, cidBytes(envelopeBytes)) ||
+		head.EpochSeq != control.EpochSeq ||
+		head.PolicyDigest != control.PolicyDigest {
 		return errors.New("head and snapshot linkage disagrees")
 	}
 	if head.PublicationCount == 0 && !bytes.Equal(head.SnapshotCID, control.HeadSnapshotCID) {
 		return errors.New("head publication count is below its epoch baseline")
 	}
-	policySigner, err := authorizedReadSigner(policy.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RoleRoot)
+	policySigner, err := authorizedReadSigner(
+		policy.Signer,
+		policy.Roles,
+		certificates,
+		policy.Vault,
+		policy.EpochSeq,
+		request.TrustAnchor,
+		control.Revoked,
+		vault.RoleRoot,
+	)
 	if err != nil {
 		return err
 	}
-	if err := verifySignedObject(policyBytes, "dottie/v1/sig-policy", policy.Signature[:], policySigner.object.SigningPublicKey[:]); err != nil {
+	if err := verifySignedObject(
+		policyBytes,
+		"dottie/v1/sig-policy",
+		policy.Signature[:],
+		policySigner.object.SigningPublicKey[:],
+	); err != nil {
 		return err
 	}
-	if policy.Signer.DeviceID != policyRecord.SignerDeviceID || !bytes.Equal(policy.Signer.KeyID, policyRecord.SignerKeyID) {
+	if policy.Signer.DeviceID != policyRecord.SignerDeviceID ||
+		!bytes.Equal(policy.Signer.KeyID, policyRecord.SignerKeyID) {
 		return errors.New("policy signer mismatch")
 	}
-	if err := authorizePolicyPredecessor(request, policy, policyBytes, policySigner, certificates, control); err != nil {
+	if err := authorizePolicyPredecessor(
+		request,
+		policy,
+		policyBytes,
+		policySigner,
+		certificates,
+		control,
+	); err != nil {
 		return err
 	}
-	controlSigner, err := authorizedReadSigner(control.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RoleRoot)
+	controlSigner, err := authorizedReadSigner(
+		control.Signer,
+		policy.Roles,
+		certificates,
+		policy.Vault,
+		policy.EpochSeq,
+		request.TrustAnchor,
+		control.Revoked,
+		vault.RoleRoot,
+	)
 	if err != nil {
 		return err
 	}
-	if err := verifySignedObject(controlBytes, "dottie/v1/sig-control", control.Signature[:], controlSigner.object.SigningPublicKey[:]); err != nil {
+	if err := verifySignedObject(
+		controlBytes,
+		"dottie/v1/sig-control",
+		control.Signature[:],
+		controlSigner.object.SigningPublicKey[:],
+	); err != nil {
 		return err
 	}
 	if isReadGenesis(policy, control) {
@@ -641,14 +775,37 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	} else if err := authorizeControlPredecessor(request, policy, control, certificates); err != nil {
 		return err
 	}
-	headSigner, err := authorizedReadSigner(head.Signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RolePublisher)
+	headSigner, err := authorizedReadSigner(
+		head.Signer,
+		policy.Roles,
+		certificates,
+		policy.Vault,
+		policy.EpochSeq,
+		request.TrustAnchor,
+		control.Revoked,
+		vault.RolePublisher,
+	)
 	if err != nil {
 		return err
 	}
-	if err := verifySignedObject(headBytes, "dottie/v1/sig-head", head.Signature[:], headSigner.object.SigningPublicKey[:]); err != nil {
+	if err := verifySignedObject(
+		headBytes,
+		"dottie/v1/sig-head",
+		head.Signature[:],
+		headSigner.object.SigningPublicKey[:],
+	); err != nil {
 		return err
 	}
-	snapshotSigner, err := authorizedReadSigner(vault.Signer{DeviceID: envelope.DeviceID, KeyID: envelope.KeyID}, policy.Roles, certificates, policy.Vault, policy.EpochSeq, request.TrustAnchor, control.Revoked, vault.RolePublisher)
+	snapshotSigner, err := authorizedReadSigner(
+		vault.Signer{DeviceID: envelope.DeviceID, KeyID: envelope.KeyID},
+		policy.Roles,
+		certificates,
+		policy.Vault,
+		policy.EpochSeq,
+		request.TrustAnchor,
+		control.Revoked,
+		vault.RolePublisher,
+	)
 	if err != nil {
 		return err
 	}
@@ -682,13 +839,21 @@ func authenticateVault(request ReadRequest, policyRecord PolicyRecord, policyByt
 	if len(recipientKeyIDs) != 0 {
 		return ErrReadRecipientSet
 	}
-	if policy.EpochSeq != policyRecord.EpochSeq || control.EpochSeq != controlRecord.EpochSeq || head.EpochSeq != headRecord.EpochSeq {
+	if policy.EpochSeq != policyRecord.EpochSeq || control.EpochSeq != controlRecord.EpochSeq ||
+		head.EpochSeq != headRecord.EpochSeq {
 		return errors.New("signed object epoch differs from its records")
 	}
 	return nil
 }
 
-func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, currentBytes []byte, signer storedCertificate, certificates map[string]storedCertificate, controls ...vault.Control) error {
+func authorizePolicyPredecessor(
+	request ReadRequest,
+	current vault.Policy,
+	currentBytes []byte,
+	signer storedCertificate,
+	certificates map[string]storedCertificate,
+	controls ...vault.Control,
+) error {
 	zeroPredecessor := allZero(current.PrevPolicyDigest[:])
 	if current.EpochSeq > 0 && zeroPredecessor || current.EpochSeq == 0 && !zeroPredecessor {
 		return ErrPolicyAncestry
@@ -737,11 +902,25 @@ func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, curre
 	if previous.Vault != current.Vault || previous.EpochSeq == ^uint64(0) || previous.EpochSeq+1 != current.EpochSeq {
 		return errors.New("predecessor policy identity or epoch is invalid")
 	}
-	previousSigner, err := authorizedReadSigner(previous.Signer, previous.Roles, certificates, previous.Vault, previous.EpochSeq, request.TrustAnchor, nil, vault.RoleRoot)
+	previousSigner, err := authorizedReadSigner(
+		previous.Signer,
+		previous.Roles,
+		certificates,
+		previous.Vault,
+		previous.EpochSeq,
+		request.TrustAnchor,
+		nil,
+		vault.RoleRoot,
+	)
 	if err != nil {
 		return err
 	}
-	if err := verifySignedObject(previousObject, "dottie/v1/sig-policy", previous.Signature[:], previousSigner.object.SigningPublicKey[:]); err != nil {
+	if err := verifySignedObject(
+		previousObject,
+		"dottie/v1/sig-policy",
+		previous.Signature[:],
+		previousSigner.object.SigningPublicKey[:],
+	); err != nil {
 		return err
 	}
 	if roleForDevice(previous.Roles, signer.object.DeviceID) != vault.RoleRoot || signer.object.Role != vault.RoleRoot {
@@ -755,14 +934,20 @@ func authorizePolicyPredecessor(request ReadRequest, current vault.Policy, curre
 }
 
 func isReadGenesis(policy vault.Policy, control vault.Control) bool {
-	return policy.EpochSeq == 0 && allZero(policy.PrevPolicyDigest[:]) && len(control.PrevControlCID) == 0 && sameReadSigner(control.Signer, policy.Signer)
+	return policy.EpochSeq == 0 && allZero(policy.PrevPolicyDigest[:]) && len(control.PrevControlCID) == 0 &&
+		sameReadSigner(control.Signer, policy.Signer)
 }
 
 func sameReadSigner(left, right vault.Signer) bool {
 	return left.DeviceID == right.DeviceID && bytes.Equal(left.KeyID, right.KeyID)
 }
 
-func authorizeControlPredecessor(request ReadRequest, policy vault.Policy, control vault.Control, certificates map[string]storedCertificate) error {
+func authorizeControlPredecessor(
+	request ReadRequest,
+	policy vault.Policy,
+	control vault.Control,
+	certificates map[string]storedCertificate,
+) error {
 	if len(request.PreviousControl) == 0 {
 		return ErrReadControlRequired
 	}
@@ -805,14 +990,30 @@ func authorizeControlPredecessor(request ReadRequest, policy vault.Policy, contr
 	if err != nil {
 		return ErrPolicyAncestry
 	}
-	previousSigner, err := authorizedReadSigner(previousControl.Signer, previousPolicy.Roles, certificates, previousPolicy.Vault, previousPolicy.EpochSeq, request.TrustAnchor, nil, vault.RoleRoot)
-	if err != nil || verifySignedObject(previousObjectBytes, "dottie/v1/sig-control", previousControl.Signature[:], previousSigner.object.SigningPublicKey[:]) != nil {
+	previousSigner, err := authorizedReadSigner(
+		previousControl.Signer,
+		previousPolicy.Roles,
+		certificates,
+		previousPolicy.Vault,
+		previousPolicy.EpochSeq,
+		request.TrustAnchor,
+		nil,
+		vault.RoleRoot,
+	)
+	if err != nil ||
+		verifySignedObject(
+			previousObjectBytes,
+			"dottie/v1/sig-control",
+			previousControl.Signature[:],
+			previousSigner.object.SigningPublicKey[:],
+		) != nil {
 		return ErrReadControlSignature
 	}
 	if !sameReadSigner(previousControl.Signer, previousPolicy.Signer) {
 		return ErrReadControlSigner
 	}
-	if previousControl.Vault != policy.Vault || policy.EpochSeq == 0 || previousControl.EpochSeq == ^uint64(0) || previousControl.EpochSeq != policy.EpochSeq-1 {
+	if previousControl.Vault != policy.Vault || policy.EpochSeq == 0 || previousControl.EpochSeq == ^uint64(0) ||
+		previousControl.EpochSeq != policy.EpochSeq-1 {
 		return ErrReadControlEpoch
 	}
 	previousPolicyDigest, err := vault.ComputePolicyDigest(previousPolicyBytes)
@@ -825,7 +1026,16 @@ func authorizeControlPredecessor(request ReadRequest, policy vault.Policy, contr
 	return nil
 }
 
-func authorizedReadSigner(signer vault.Signer, roles []vault.RoleBinding, certificates map[string]storedCertificate, vaultID [32]byte, epoch uint64, trustAnchor [32]byte, revoked []vault.RevokedDevice, minimumRole vault.Role) (storedCertificate, error) {
+func authorizedReadSigner(
+	signer vault.Signer,
+	roles []vault.RoleBinding,
+	certificates map[string]storedCertificate,
+	vaultID [32]byte,
+	epoch uint64,
+	trustAnchor [32]byte,
+	revoked []vault.RevokedDevice,
+	minimumRole vault.Role,
+) (storedCertificate, error) {
 	certificate, found := certificates[certificateIdentity(signer.DeviceID, signer.KeyID)]
 	if !found {
 		return storedCertificate{}, errors.New("signing certificate is absent")
@@ -842,12 +1052,21 @@ func authorizedReadSigner(signer vault.Signer, roles []vault.RoleBinding, certif
 			return storedCertificate{}, errors.New("signing certificate is revoked")
 		}
 	}
-	if err := verifyCertificateChain(certificate.object, certificates, vaultID, epoch, trustAnchor, 1, make(map[string]bool)); err != nil {
+	if err := verifyCertificateChain(
+		certificate.object,
+		certificates,
+		vaultID,
+		epoch,
+		trustAnchor,
+		1,
+		make(map[string]bool),
+	); err != nil {
 		return storedCertificate{}, err
 	}
 	if certificate.object.Issuer != certificate.object.DeviceID {
 		issuer := certificates[certificateIdentity(certificate.object.Issuer, certificate.object.Signer.KeyID)]
-		if issuer.object.Role != vault.RoleRoot || roleForDevice(roles, issuer.object.DeviceID) != vault.RoleRoot || issuer.object.CertEpoch > epoch {
+		if issuer.object.Role != vault.RoleRoot || roleForDevice(roles, issuer.object.DeviceID) != vault.RoleRoot ||
+			issuer.object.CertEpoch > epoch {
 			return storedCertificate{}, errors.New("certificate issuer is not authorized by the current policy")
 		}
 		for _, item := range revoked {
@@ -859,7 +1078,15 @@ func authorizedReadSigner(signer vault.Signer, roles []vault.RoleBinding, certif
 	return certificate, nil
 }
 
-func verifyCertificateChain(certificate vault.Certificate, certificates map[string]storedCertificate, vaultID [32]byte, epoch uint64, trustAnchor [32]byte, depth int, visited map[string]bool) error {
+func verifyCertificateChain(
+	certificate vault.Certificate,
+	certificates map[string]storedCertificate,
+	vaultID [32]byte,
+	epoch uint64,
+	trustAnchor [32]byte,
+	depth int,
+	visited map[string]bool,
+) error {
 	if depth > 3 || certificate.Vault != vaultID || certificate.CertEpoch > epoch {
 		return errors.New("certificate chain bounds or identity are invalid")
 	}
@@ -874,13 +1101,19 @@ func verifyCertificateChain(certificate vault.Certificate, certificates map[stri
 		return errors.New("certificate chain member is absent")
 	}
 	if certificate.Issuer == certificate.DeviceID {
-		if certificate.Role != vault.RoleRoot || certificate.Signer.DeviceID != certificate.DeviceID || !bytes.Equal(certificate.Signer.KeyID, certificate.KeyID) {
+		if certificate.Role != vault.RoleRoot || certificate.Signer.DeviceID != certificate.DeviceID ||
+			!bytes.Equal(certificate.Signer.KeyID, certificate.KeyID) {
 			return errors.New("root certificate identity is invalid")
 		}
 		if readSHA256(certificate.SigningPublicKey[:]) != trustAnchor {
 			return errors.New("root certificate does not match the trust anchor")
 		}
-		return verifySignedObject(encoded.objectBytes, "dottie/v1/sig-certificate", certificate.Signature[:], certificate.SigningPublicKey[:])
+		return verifySignedObject(
+			encoded.objectBytes,
+			"dottie/v1/sig-certificate",
+			certificate.Signature[:],
+			certificate.SigningPublicKey[:],
+		)
 	}
 	if certificate.Signer.DeviceID != certificate.Issuer {
 		return errors.New("certificate issuer and signer differ")
@@ -889,10 +1122,23 @@ func verifyCertificateChain(certificate vault.Certificate, certificates map[stri
 	if !found || issuer.object.Role != vault.RoleRoot {
 		return errors.New("certificate issuer is not a root")
 	}
-	if err := verifyCertificateChain(issuer.object, certificates, vaultID, epoch, trustAnchor, depth+1, visited); err != nil {
+	if err := verifyCertificateChain(
+		issuer.object,
+		certificates,
+		vaultID,
+		epoch,
+		trustAnchor,
+		depth+1,
+		visited,
+	); err != nil {
 		return err
 	}
-	return verifySignedObject(encoded.objectBytes, "dottie/v1/sig-certificate", certificate.Signature[:], issuer.object.SigningPublicKey[:])
+	return verifySignedObject(
+		encoded.objectBytes,
+		"dottie/v1/sig-certificate",
+		certificate.Signature[:],
+		issuer.object.SigningPublicKey[:],
+	)
 }
 
 func rolePermitted(actual, minimum vault.Role) bool {
@@ -923,7 +1169,8 @@ func VerifySnapshotEnvelopeSignature(encoded []byte, certificate vault.Certifica
 	if err != nil {
 		return err
 	}
-	if envelope.Purpose != vault.PurposeSnapshot || envelope.DeviceID != certificate.DeviceID || !bytes.Equal(envelope.KeyID, certificate.KeyID) {
+	if envelope.Purpose != vault.PurposeSnapshot || envelope.DeviceID != certificate.DeviceID ||
+		!bytes.Equal(envelope.KeyID, certificate.KeyID) {
 		return ErrReadVaultAuthentication
 	}
 	return verifyEnvelopeSignature(encoded, envelope, certificate.SigningPublicKey[:])
@@ -955,7 +1202,12 @@ func readSHA256(value []byte) [32]byte {
 	return sha256.Sum256(value)
 }
 
-func certificateChainsForOpen(policy vault.Policy, control vault.Control, envelope vault.Envelope, certificates map[string]storedCertificate) [][]byte {
+func certificateChainsForOpen(
+	policy vault.Policy,
+	control vault.Control,
+	envelope vault.Envelope,
+	certificates map[string]storedCertificate,
+) [][]byte {
 	ordered := make([]string, 0, 3)
 	seen := make(map[string]bool)
 	appendChain := func(signer vault.Signer) {

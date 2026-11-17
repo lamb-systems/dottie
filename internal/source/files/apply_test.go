@@ -28,12 +28,30 @@ func TestObserveReplaceAndDeleteRegularFiles(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(digest[:]), observed.Digest)
 	assert.Equal(t, uint32(0o640), observed.Mode)
 
-	require.NoError(t, ReplaceFile(filesystem, root, "file", []byte("after"), 0o600, ExpectedPreimage{Exists: true, Digest: hex.EncodeToString(digest[:]), Mode: 0o640}))
+	require.NoError(
+		t,
+		ReplaceFile(
+			filesystem,
+			root,
+			"file",
+			[]byte("after"),
+			0o600,
+			ExpectedPreimage{Exists: true, Digest: hex.EncodeToString(digest[:]), Mode: 0o640},
+		),
+	)
 	observed, err = ObserveFile(filesystem, root, "file")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("after"), observed.Data)
 	assert.Equal(t, uint32(0o600), observed.Mode)
-	require.NoError(t, DeleteFile(filesystem, root, "file", ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("after")), Mode: 0o600}))
+	require.NoError(
+		t,
+		DeleteFile(
+			filesystem,
+			root,
+			"file",
+			ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("after")), Mode: 0o600},
+		),
+	)
 	observed, err = ObserveFile(filesystem, root, "file")
 	require.NoError(t, err)
 	assert.False(t, observed.Exists)
@@ -53,15 +71,15 @@ func TestApplyFilesystemRefusesDirectoriesLinksAndRootDeletes(t *testing.T) {
 	info, err := os.Stat(directory)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
-	assert.Error(t, ReplaceFile(filesystem, root, ".", []byte("root"), 0o600, ExpectedPreimage{}))
-	assert.Error(t, DeleteFile(filesystem, root, ".", ExpectedPreimage{}))
-	assert.Error(t, ReplaceFile(filesystem, root, "../escape", []byte("escape"), 0o600, ExpectedPreimage{}))
+	require.Error(t, ReplaceFile(filesystem, root, ".", []byte("root"), 0o600, ExpectedPreimage{}))
+	require.Error(t, DeleteFile(filesystem, root, ".", ExpectedPreimage{}))
+	require.Error(t, ReplaceFile(filesystem, root, "../escape", []byte("escape"), 0o600, ExpectedPreimage{}))
 
-	real := filepath.Join(root, "real")
-	require.NoError(t, os.Mkdir(real, 0o700))
-	write := filepath.Join(real, "file")
+	realRoot := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realRoot, 0o700))
+	write := filepath.Join(realRoot, "file")
 	require.NoError(t, os.WriteFile(write, []byte("keep"), 0o600))
-	require.NoError(t, os.Symlink(real, filepath.Join(root, "link")))
+	require.NoError(t, os.Symlink(realRoot, filepath.Join(root, "link")))
 	err = ReplaceFile(filesystem, root, "link/file", []byte("outside"), 0o600, ExpectedPreimage{})
 	var unsupported *UnsupportedPathError
 	require.ErrorAs(t, err, &unsupported)
@@ -71,7 +89,17 @@ func TestApplyFilesystemRefusesDirectoriesLinksAndRootDeletes(t *testing.T) {
 func TestApplyFilesystemSupportsSingleFileSelectionRoot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "selected")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
-	require.NoError(t, ReplaceFile(DefaultApplyFileSystem(), path, ".", []byte("after"), 0o600, ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600}))
+	require.NoError(
+		t,
+		ReplaceFile(
+			DefaultApplyFileSystem(),
+			path,
+			".",
+			[]byte("after"),
+			0o600,
+			ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600},
+		),
+	)
 	assert.Equal(t, []byte("after"), readFileForApplyTest(t, path))
 }
 
@@ -93,13 +121,13 @@ func TestObserveFileBoundedStopsReadingAtTheLimit(t *testing.T) {
 	observed, err := ObserveFileBounded(counter, root, "file", 4096)
 	require.NoError(t, err)
 	require.True(t, observed.Exists)
-	assert.Equal(t, 4096, len(observed.Data))
+	assert.Len(t, observed.Data, 4096)
 	assert.Equal(t, int64(4096), counter.read)
 
 	counter.read = 0
 	observed, err = ObserveFile(counter, root, "file")
 	require.NoError(t, err)
-	assert.Equal(t, 4096, len(observed.Data))
+	assert.Len(t, observed.Data, 4096)
 	assert.Equal(t, int64(4096), counter.read)
 }
 
@@ -163,11 +191,8 @@ func (f *countingApplyFile) Read(buffer []byte) (int, error) {
 	if f.growth == 0 {
 		return read, err
 	}
-	extra := f.growth
-	if extra > len(buffer) {
-		extra = len(buffer)
-	}
-	for index := 0; index < extra; index++ {
+	extra := min(f.growth, len(buffer))
+	for index := range extra {
 		buffer[index] = 'g'
 	}
 	f.growth -= extra
@@ -191,8 +216,20 @@ func TestReplaceFileRechecksExpectedPreimageAfterSync(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "file")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
-	filesystem := &preimageRaceFS{base: DefaultApplyFileSystem(), path: path, when: "sync", replacement: []byte("editor save")}
-	err := ReplaceFile(filesystem, root, "file", []byte("dottie bytes"), 0o600, ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600})
+	filesystem := &preimageRaceFS{
+		base:        DefaultApplyFileSystem(),
+		path:        path,
+		when:        "sync",
+		replacement: []byte("editor save"),
+	}
+	err := ReplaceFile(
+		filesystem,
+		root,
+		"file",
+		[]byte("dottie bytes"),
+		0o600,
+		ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600},
+	)
 	var precondition *PreconditionError
 	require.ErrorAs(t, err, &precondition)
 	assert.Equal(t, []byte("editor save"), readFileForApplyTest(t, path))
@@ -205,8 +242,18 @@ func TestDeleteFileRechecksExpectedPreimageBeforeRemove(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "file")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
-	filesystem := &preimageRaceFS{base: DefaultApplyFileSystem(), path: path, when: "lstat", replacement: []byte("editor save")}
-	err := DeleteFile(filesystem, root, "file", ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600})
+	filesystem := &preimageRaceFS{
+		base:        DefaultApplyFileSystem(),
+		path:        path,
+		when:        "lstat",
+		replacement: []byte("editor save"),
+	}
+	err := DeleteFile(
+		filesystem,
+		root,
+		"file",
+		ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600},
+	)
 	var precondition *PreconditionError
 	require.ErrorAs(t, err, &precondition)
 	assert.Equal(t, []byte("editor save"), readFileForApplyTest(t, path))
@@ -283,12 +330,19 @@ func TestApplyFilesystemDoesNotFallbackAfterRenameError(t *testing.T) {
 	path := filepath.Join(root, "file")
 	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
 	filesystem := &renameFailureFS{base: DefaultApplyFileSystem()}
-	err := ReplaceFile(filesystem, root, "file", []byte("after"), 0o600, ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600})
+	err := ReplaceFile(
+		filesystem,
+		root,
+		"file",
+		[]byte("after"),
+		0o600,
+		ExpectedPreimage{Exists: true, Digest: applyDigestHex([]byte("before")), Mode: 0o600},
+	)
 	require.Error(t, err)
 	var applyError *ApplyError
 	require.ErrorAs(t, err, &applyError)
 	assert.Equal(t, ApplyStageRename, applyError.Stage)
-	assert.ErrorIs(t, err, syscallEXDEV)
+	require.ErrorIs(t, err, syscallEXDEV)
 	assert.Equal(t, []byte("before"), readFileForApplyTest(t, path))
 }
 
@@ -385,6 +439,6 @@ func (f *renameFailureFS) OpenRoot(path string) (ApplyRoot, error) {
 	return renameFailureRoot{ApplyRoot: root}, nil
 }
 
-func (r renameFailureRoot) Rename(oldName, newName string) error {
+func (r renameFailureRoot) Rename(_, _ string) error {
 	return syscallEXDEV
 }

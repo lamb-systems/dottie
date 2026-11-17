@@ -20,7 +20,13 @@ func NewATClientTransport(client *atclient.APIClient) *ATClientTransport {
 	return &ATClientTransport{Client: client}
 }
 
-func (t *ATClientTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (t *ATClientTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	request, err := t.request(method, endpoint, query, body, contentType)
 	if err != nil {
 		return 0, nil, err
@@ -44,7 +50,11 @@ func (t *ATClientTransport) Do(ctx context.Context, method, endpoint string, que
 	return response.StatusCode, encoded, nil
 }
 
-func (t *ATClientTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (t *ATClientTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	request, err := t.request(http.MethodGet, endpoint, query, nil, "")
 	if err != nil {
 		return 0, nil, err
@@ -63,7 +73,12 @@ func (t *ATClientTransport) OpenStream(ctx context.Context, endpoint string, que
 	return response.StatusCode, response.Body, nil
 }
 
-func (t *ATClientTransport) request(method, endpoint string, query url.Values, body []byte, contentType string) (*atclient.APIRequest, error) {
+func (t *ATClientTransport) request(
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (*atclient.APIRequest, error) {
 	if t == nil || t.Client == nil {
 		return nil, errors.New("AT Protocol API client is required")
 	}

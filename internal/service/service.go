@@ -27,7 +27,9 @@ var (
 	ErrOnboardingDeviceMismatch   = errors.New("onboarding bundle does not contain the selected device recipient")
 	ErrOnboardingCheckpoint       = errors.New("onboarding checkpoint does not match authenticated state")
 	ErrOnboardingStateConflict    = errors.New("onboarding conflicts with existing local vault state")
-	ErrRevokeApprovalMismatch     = errors.New("revocation approval fingerprint does not match the current verified device")
+	ErrRevokeApprovalMismatch     = errors.New(
+		"revocation approval fingerprint does not match the current verified device",
+	)
 )
 
 type ConfigPort interface {

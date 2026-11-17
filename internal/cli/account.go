@@ -47,10 +47,21 @@ func runAccount(args []string, stdout, stderr io.Writer, openKeyring accountKeyr
 }
 
 func newAccountCommand(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int) *urfave.Command {
-	return newAccountCommandWithSession(stdout, stderr, openKeyring, exitCode, accountSessionOptions{browser: openAuthorizationURL, env: os.Getenv})
+	return newAccountCommandWithSession(
+		stdout,
+		stderr,
+		openKeyring,
+		exitCode,
+		accountSessionOptions{browser: openAuthorizationURL, env: os.Getenv},
+	)
 }
 
-func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions) *urfave.Command {
+func newAccountCommandWithSession(
+	stdout, stderr io.Writer,
+	openKeyring accountKeyringFactory,
+	exitCode *int,
+	sessionOptions accountSessionOptions,
+) *urfave.Command {
 	if sessionOptions.env == nil {
 		sessionOptions.env = os.Getenv
 	}
@@ -58,7 +69,13 @@ func newAccountCommandWithSession(stdout, stderr io.Writer, openKeyring accountK
 		productionBootstrapFactory(openKeyring, sessionOptions.env))
 }
 
-func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accountKeyringFactory, exitCode *int, sessionOptions accountSessionOptions, bootstrapFactory bootstrapFactory) *urfave.Command {
+func newAccountCommandWithFactories(
+	stdout, stderr io.Writer,
+	openKeyring accountKeyringFactory,
+	exitCode *int,
+	sessionOptions accountSessionOptions,
+	bootstrapFactory bootstrapFactory,
+) *urfave.Command {
 	if sessionOptions.env == nil {
 		sessionOptions.env = os.Getenv
 	}
@@ -88,7 +105,8 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 			if command.NArg() != 0 || command.String("vault-name") == "" || command.String("device-id") == "" {
 				return usageExit("account bootstrap requires --vault-name, --device-id and one of --did or --handle")
 			}
-			if command.IsSet("did") == command.IsSet("handle") || command.IsSet("did") && command.String("did") == "" || command.IsSet("handle") && command.String("handle") == "" {
+			if command.IsSet("did") == command.IsSet("handle") || command.IsSet("did") && command.String("did") == "" ||
+				command.IsSet("handle") && command.String("handle") == "" {
 				return usageExit("account bootstrap requires exactly one non-empty --did or --handle")
 			}
 			coordinator, closeResources, err := bootstrapFactory(ctx, command)
@@ -98,16 +116,27 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 			defer closeResources()
 			if err := coordinator.PreflightVault(ctx); err != nil {
 				if errors.Is(err, atproto.ErrDottiePublicationPresent) {
-					return urfave.Exit("account bootstrap requires an account with no existing Dottie publication; this account already holds one", 3)
+					return urfave.Exit(
+						"account bootstrap requires an account with no existing Dottie publication; this account already holds one",
+						3,
+					)
 				}
-				return urfave.Exit("account bootstrap could not verify whether the account holds a Dottie publication", 3)
+				return urfave.Exit(
+					"account bootstrap could not verify whether the account holds a Dottie publication",
+					3,
+				)
 			}
 			signing, recipient, err := vault.GenerateDeviceKeys()
 			if err != nil {
 				return urfave.Exit("cannot generate device keys", 1)
 			}
 			defer clear(signing)
-			material := vault.DeviceMaterial{DeviceID: command.String("device-id"), KeyID: deviceKeyID(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient}
+			material := vault.DeviceMaterial{
+				DeviceID:  command.String("device-id"),
+				KeyID:     deviceKeyID(signing.Public().(ed25519.PublicKey)),
+				Signing:   signing,
+				Recipient: recipient,
+			}
 			result, initializeErr := coordinator.InitializeVault(ctx, service.BootstrapRequest{
 				VaultName: command.String("vault-name"), Device: material,
 			})
@@ -116,7 +145,10 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 					if err := writeCommandOutput(command, renderBootstrapOutcome(result)); err != nil {
 						return err
 					}
-					return urfave.Exit("bootstrap recorded no local vault; pending device keys were deleted best-effort; nothing was published", 3)
+					return urfave.Exit(
+						"bootstrap recorded no local vault; pending device keys were deleted best-effort; nothing was published",
+						3,
+					)
 				}
 				return urfave.Exit("bootstrap could not proceed", 1)
 			}
@@ -144,8 +176,7 @@ func newAccountCommandWithFactories(stdout, stderr io.Writer, openKeyring accoun
 	root.ErrWriter = stderr
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code != 1 && code != 2 && code != 3 && code != 4 {
@@ -230,7 +261,8 @@ type sessionGenesisPreflight struct {
 }
 
 func (port sessionGenesisPreflight) Preflight(ctx context.Context) error {
-	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 || port.transport == nil {
+	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 ||
+		port.transport == nil {
 		return errors.New("authenticated genesis provider wiring is unavailable")
 	}
 	return atproto.CheckNoDottiePublication(ctx, atproto.RevisionReader{
@@ -240,7 +272,11 @@ func (port sessionGenesisPreflight) Preflight(ctx context.Context) error {
 }
 
 func renderBootstrapOutcome(result service.BootstrapResult) string {
-	return fmt.Sprintf("bootstrap: %s\nvault fingerprint: %x\n", escapeField(string(result.Outcome)), result.Bootstrap.Vault)
+	return fmt.Sprintf(
+		"bootstrap: %s\nvault fingerprint: %x\n",
+		escapeField(string(result.Outcome)),
+		result.Bootstrap.Vault,
+	)
 }
 func deviceKeyID(public ed25519.PublicKey) []byte {
 	keyID := sha256.Sum256(public)

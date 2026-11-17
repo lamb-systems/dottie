@@ -48,17 +48,52 @@ func (s *Store) RejectAttempt(ctx context.Context, id [16]byte, expectedToken [3
 		if err != nil {
 			return err
 		}
-		if _, err := s.updateAttemptTx(ctx, tx, fresh, AttemptMayHaveSubmitted, OutcomeRejected, "", "outcome", outcome, nil, "outcome-provider-rejected", nil, nil, StageReject); err != nil {
+		if _, err := s.updateAttemptTx(
+			ctx,
+			tx,
+			fresh,
+			AttemptMayHaveSubmitted,
+			OutcomeRejected,
+			"",
+			"outcome",
+			outcome,
+			nil,
+			"outcome-provider-rejected",
+			nil,
+			nil,
+			StageReject,
+		); err != nil {
 			return err
 		}
 		fresh.outcome = OutcomeRejected
 		fresh.terminal = bytes.Clone(outcome)
 		var newStateDigest [32]byte
-		nextMutation, err = s.updateAttemptTx(ctx, tx, fresh, AttemptRetiredAbandoned, OutcomeRejected, "", "retirement", retirement, retirement, "retired-abandoned", nil, &newStateDigest, StageReject)
+		nextMutation, err = s.updateAttemptTx(
+			ctx,
+			tx,
+			fresh,
+			AttemptRetiredAbandoned,
+			OutcomeRejected,
+			"",
+			"retirement",
+			retirement,
+			retirement,
+			"retired-abandoned",
+			nil,
+			&newStateDigest,
+			StageReject,
+		)
 		if err != nil {
 			return err
 		}
-		rejectedAttempt = projectAttempt(fresh.core, AttemptRetiredAbandoned, OutcomeRejected, "", nextMutation, AvailabilityUnchecked)
+		rejectedAttempt = projectAttempt(
+			fresh.core,
+			AttemptRetiredAbandoned,
+			OutcomeRejected,
+			"",
+			nextMutation,
+			AvailabilityUnchecked,
+		)
 		rejectedAttempt.StateDigest = newStateDigest
 		for _, statement := range []struct {
 			query string

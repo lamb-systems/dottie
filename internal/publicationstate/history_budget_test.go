@@ -5,9 +5,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestHistoryReturnsLargestCompleteByteBoundedPrefix(t *testing.T) {
@@ -23,25 +24,54 @@ func TestHistoryReturnsLargestCompleteByteBoundedPrefix(t *testing.T) {
 	require.NoError(t, err)
 	var dbid [32]byte
 	dbid[0] = 0x71
-	firstTrace := resolvedTrace{refs: []RecordReference{firstValidated.candidate.ref}, records: []validatedRecord{firstValidated.candidate}, stop: "first_use"}
+	firstTrace := resolvedTrace{
+		refs:    []RecordReference{firstValidated.candidate.ref},
+		records: []validatedRecord{firstValidated.candidate},
+		stop:    "first_use",
+	}
 	firstFloor := buildFloor(dbid, f.binding, firstValidated, stateSnapshot{}, firstTrace, ModeFirstUse)
-	firstBody, err := makeEventBody(ModeFirstUse, "", nil, firstFloor, firstTrace.refs, "first_use", firstValidated.observationDigest, firstValidated.setDigest)
+	firstBody, err := makeEventBody(
+		ModeFirstUse,
+		"",
+		nil,
+		firstFloor,
+		firstTrace.refs,
+		"first_use",
+		firstValidated.observationDigest,
+		firstValidated.setDigest,
+	)
 	require.NoError(t, err)
 	firstDigest := domainHash("systems.lamb.dottie.local-publication-event.v1", firstBody)
 	firstFloor.AcceptedEventDigest = firstDigest
 	firstBytes := uint64(len(firstBody)+32+8) + recordLogicalBytes(firstValidated.candidate)
-	secondTrace := resolvedTrace{refs: []RecordReference{secondValidated.candidate.ref}, records: []validatedRecord{secondValidated.candidate}, stop: "joined"}
+	secondTrace := resolvedTrace{
+		refs:    []RecordReference{secondValidated.candidate.ref},
+		records: []validatedRecord{secondValidated.candidate},
+		stop:    "joined",
+	}
 	secondState := stateSnapshot{floor: &firstFloor, revision: 1, generation: 1}
 	secondFloor := buildFloor(dbid, f.binding, secondValidated, secondState, secondTrace, ModeAdvance)
-	secondBody, err := makeEventBody(ModeAdvance, "", &firstFloor, secondFloor, secondTrace.refs, "joined", secondValidated.observationDigest, secondValidated.setDigest)
+	secondBody, err := makeEventBody(
+		ModeAdvance,
+		"",
+		&firstFloor,
+		secondFloor,
+		secondTrace.refs,
+		"joined",
+		secondValidated.observationDigest,
+		secondValidated.setDigest,
+	)
 	require.NoError(t, err)
 	secondDigest := domainHash("systems.lamb.dottie.local-publication-event.v1", secondBody)
 	secondFloor.AcceptedEventDigest = secondDigest
-	secondBytes := uint64(len(secondBody)+32+8) + recordLogicalBytes(secondValidated.candidate) + recordLogicalBytes(firstValidated.candidate)
-	budget := firstBytes
-	if secondBytes > budget {
-		budget = secondBytes
-	}
+	secondBytes := uint64(
+		len(secondBody)+32+8,
+	) + recordLogicalBytes(
+		secondValidated.candidate,
+	) + recordLogicalBytes(
+		firstValidated.candidate,
+	)
+	budget := max(secondBytes, firstBytes)
 	require.Greater(t, firstBytes+secondBytes, budget)
 	limits := DefaultLimits()
 	limits.HistoryEvidenceBytes = budget
@@ -83,17 +113,33 @@ func TestHistoryAnchorAdmissionRejectsOneByteUnderStandaloneEvent(t *testing.T) 
 	require.NoError(t, err)
 	var dbid [32]byte
 	dbid[0] = 0x71
-	t0 := resolvedTrace{refs: []RecordReference{v0.candidate.ref}, records: []validatedRecord{v0.candidate}, stop: "first_use"}
+	t0 := resolvedTrace{
+		refs:    []RecordReference{v0.candidate.ref},
+		records: []validatedRecord{v0.candidate},
+		stop:    "first_use",
+	}
 	floor0 := buildFloor(dbid, f.binding, v0, stateSnapshot{}, t0, ModeFirstUse)
 	body0, err := makeEventBody(ModeFirstUse, "", nil, floor0, t0.refs, "first_use", v0.observationDigest, v0.setDigest)
 	require.NoError(t, err)
 	firstBytes := uint64(len(body0)+40) + independentRecordBytes(t, f.blocks[0])
-	t1 := resolvedTrace{refs: []RecordReference{v1.candidate.ref}, records: []validatedRecord{v1.candidate}, stop: "joined"}
+	t1 := resolvedTrace{
+		refs:    []RecordReference{v1.candidate.ref},
+		records: []validatedRecord{v1.candidate},
+		stop:    "joined",
+	}
 	state1 := stateSnapshot{floor: &floor0, revision: 1, generation: 1}
 	floor1 := buildFloor(dbid, f.binding, v1, state1, t1, ModeAdvance)
 	body1, err := makeEventBody(ModeAdvance, "", &floor0, floor1, t1.refs, "joined", v1.observationDigest, v1.setDigest)
 	require.NoError(t, err)
-	secondBytes := uint64(len(body1)+40) + independentRecordBytes(t, f.blocks[1]) + independentRecordBytes(t, f.blocks[0])
+	secondBytes := uint64(
+		len(body1)+40,
+	) + independentRecordBytes(
+		t,
+		f.blocks[1],
+	) + independentRecordBytes(
+		t,
+		f.blocks[0],
+	)
 	require.Greater(t, secondBytes, firstBytes)
 	budget := secondBytes - 1
 	require.GreaterOrEqual(t, budget, firstBytes)
@@ -124,7 +170,7 @@ func TestHistoryAnchorAdmissionRejectsOneByteUnderStandaloneEvent(t *testing.T) 
 func TestHistoryAnchorPagingChargesOldFloorAtNonzeroCursor(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for seq := uint64(0); seq < 3; seq++ {
+	for seq := range uint64(3) {
 		f.appendRecord(t, seq)
 	}
 	obs0 := f.observation(1)
@@ -138,23 +184,60 @@ func TestHistoryAnchorPagingChargesOldFloorAtNonzeroCursor(t *testing.T) {
 	require.NoError(t, err)
 	var dbid [32]byte
 	dbid[0] = 0x72
-	t0 := resolvedTrace{refs: []RecordReference{v0.candidate.ref}, records: []validatedRecord{v0.candidate}, stop: "first_use"}
+	t0 := resolvedTrace{
+		refs:    []RecordReference{v0.candidate.ref},
+		records: []validatedRecord{v0.candidate},
+		stop:    "first_use",
+	}
 	floor0 := buildFloor(dbid, f.binding, v0, stateSnapshot{}, t0, ModeFirstUse)
 	body0, err := makeEventBody(ModeFirstUse, "", nil, floor0, t0.refs, "first_use", v0.observationDigest, v0.setDigest)
 	require.NoError(t, err)
 	floor0.AcceptedEventDigest = domainHash("systems.lamb.dottie.local-publication-event.v1", body0)
-	t1 := resolvedTrace{refs: []RecordReference{v1.candidate.ref}, records: []validatedRecord{v1.candidate}, stop: "joined"}
-	floor1 := buildFloor(dbid, f.binding, v1, stateSnapshot{floor: &floor0, revision: 1, generation: 1}, t1, ModeAdvance)
+	t1 := resolvedTrace{
+		refs:    []RecordReference{v1.candidate.ref},
+		records: []validatedRecord{v1.candidate},
+		stop:    "joined",
+	}
+	floor1 := buildFloor(
+		dbid,
+		f.binding,
+		v1,
+		stateSnapshot{floor: &floor0, revision: 1, generation: 1},
+		t1,
+		ModeAdvance,
+	)
 	body1, err := makeEventBody(ModeAdvance, "", &floor0, floor1, t1.refs, "joined", v1.observationDigest, v1.setDigest)
 	require.NoError(t, err)
 	floor1.AcceptedEventDigest = domainHash("systems.lamb.dottie.local-publication-event.v1", body1)
-	t2 := resolvedTrace{refs: []RecordReference{v2.candidate.ref}, records: []validatedRecord{v2.candidate}, stop: "joined"}
-	floor2 := buildFloor(dbid, f.binding, v2, stateSnapshot{floor: &floor1, revision: 2, generation: 1}, t2, ModeAdvance)
+	t2 := resolvedTrace{
+		refs:    []RecordReference{v2.candidate.ref},
+		records: []validatedRecord{v2.candidate},
+		stop:    "joined",
+	}
+	floor2 := buildFloor(
+		dbid,
+		f.binding,
+		v2,
+		stateSnapshot{floor: &floor1, revision: 2, generation: 1},
+		t2,
+		ModeAdvance,
+	)
 	body2, err := makeEventBody(ModeAdvance, "", &floor1, floor2, t2.refs, "joined", v2.observationDigest, v2.setDigest)
 	require.NoError(t, err)
 	event2 := uint64(len(body1)+40) + independentRecordBytes(t, f.blocks[0]) + independentRecordBytes(t, f.blocks[1])
 	event3 := uint64(len(body2)+40) + independentRecordBytes(t, f.blocks[1]) + independentRecordBytes(t, f.blocks[2])
-	combined := uint64(len(body1)+40+len(body2)+40) + independentRecordBytes(t, f.blocks[0]) + independentRecordBytes(t, f.blocks[1]) + independentRecordBytes(t, f.blocks[2])
+	combined := uint64(
+		len(body1)+40+len(body2)+40,
+	) + independentRecordBytes(
+		t,
+		f.blocks[0],
+	) + independentRecordBytes(
+		t,
+		f.blocks[1],
+	) + independentRecordBytes(
+		t,
+		f.blocks[2],
+	)
 	budget := combined - 1
 	require.GreaterOrEqual(t, budget, event2)
 	require.GreaterOrEqual(t, budget, event3)

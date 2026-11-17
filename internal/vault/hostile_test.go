@@ -38,14 +38,44 @@ type securityDefect struct {
 }
 
 var caseMatrix = []matrixCase{
-	{id: "1b", status: statusNewRefusal, test: "TestEnrollmentRefusesParentMismatch", refusal: "TestExpectedRefusalEnrollmentParentJoin"},
+	{
+		id:      "1b",
+		status:  statusNewRefusal,
+		test:    "TestEnrollmentRefusesParentMismatch",
+		refusal: "TestExpectedRefusalEnrollmentParentJoin",
+	},
 	{id: "3a-i", status: statusExisting, test: "TestOpenVerificationOrderAndAuthorizationErrors"},
 	{id: "3a-ii", status: statusNewRefusal, test: "TestOpenRefusesRecipientAbsentFromPolicy"},
-	{id: "13", status: statusNewRefusal, test: "TestVerifyControlStateRefusesSkippedPolicyChain", refusal: "TestExpectedRefusalCheckpointSkippedPolicyChain"},
-	{id: "14", status: statusNewRefusal, test: "TestEnrollmentRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalEnrollmentDeltaPolicyFields"},
-	{id: "15", status: statusNewRefusal, test: "TestRevocationRefusesNonRosterPolicyFieldChanges", refusal: "TestExpectedRefusalRevocationDeltaPolicyFields"},
-	{id: "19", status: statusNewRefusal, test: "TestVerifyControlStateRefusesCertificatePolicyRoleMismatch", refusal: "TestExpectedRefusalCheckpointCertPolicyRole"},
-	{id: "20", status: statusNewRefusal, test: "TestPolicyDecoderRefusesOutOfRangeBounds", refusal: "TestExpectedRefusalPolicyDecoderOutOfRangeBounds"},
+	{
+		id:      "13",
+		status:  statusNewRefusal,
+		test:    "TestVerifyControlStateRefusesSkippedPolicyChain",
+		refusal: "TestExpectedRefusalCheckpointSkippedPolicyChain",
+	},
+	{
+		id:      "14",
+		status:  statusNewRefusal,
+		test:    "TestEnrollmentRefusesNonRosterPolicyFieldChanges",
+		refusal: "TestExpectedRefusalEnrollmentDeltaPolicyFields",
+	},
+	{
+		id:      "15",
+		status:  statusNewRefusal,
+		test:    "TestRevocationRefusesNonRosterPolicyFieldChanges",
+		refusal: "TestExpectedRefusalRevocationDeltaPolicyFields",
+	},
+	{
+		id:      "19",
+		status:  statusNewRefusal,
+		test:    "TestVerifyControlStateRefusesCertificatePolicyRoleMismatch",
+		refusal: "TestExpectedRefusalCheckpointCertPolicyRole",
+	},
+	{
+		id:      "20",
+		status:  statusNewRefusal,
+		test:    "TestPolicyDecoderRefusesOutOfRangeBounds",
+		refusal: "TestExpectedRefusalPolicyDecoderOutOfRangeBounds",
+	},
 }
 
 var knownSecurityDefects []securityDefect
@@ -106,7 +136,14 @@ func TestCaseMatrixMatchesTests(t *testing.T) {
 		for _, entry := range caseMatrix {
 			if entry.test == name {
 				found = true
-				assert.Equal(t, statusKnownDefect, entry.status, "characterization test %q maps to a non-known-defect row %s", name, entry.id)
+				assert.Equal(
+					t,
+					statusKnownDefect,
+					entry.status,
+					"characterization test %q maps to a non-known-defect row %s",
+					name,
+					entry.id,
+				)
 			}
 		}
 		assert.True(t, found, "characterization test %q is not registered in the case matrix", name)
@@ -150,10 +187,20 @@ func rebuildEnrollment(t *testing.T, fixture devicesFixture, parentOverride []by
 	recipients, err := prepareSealRecipients(policy, wraps)
 	require.NoError(t, err)
 	envelope, err := SealPrepared(PreparedSeal{
-		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: fixture.intent.PublicationID, EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, Parent: parent, DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
-		Plaintext: fixture.intent.Plaintext, SigningKey: fixture.root.Signing, ContentKey: fixture.intent.ContentKey,
-		Nonce: fixture.intent.Nonce, Recipients: recipients, Policy: policy,
+		Purpose:       PurposeSnapshot,
+		Vault:         policy.Vault,
+		PublicationID: fixture.intent.PublicationID,
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  digest,
+		Parent:        parent,
+		DeviceID:      fixture.root.DeviceID,
+		KeyID:         bytes.Clone(fixture.root.KeyID),
+		Plaintext:     fixture.intent.Plaintext,
+		SigningKey:    fixture.root.Signing,
+		ContentKey:    fixture.intent.ContentKey,
+		Nonce:         fixture.intent.Nonce,
+		Recipients:    recipients,
+		Policy:        policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)
@@ -233,7 +280,14 @@ func TestEnrollmentRefusesNonRosterPolicyFieldChanges(t *testing.T) {
 		"enrollment accepts a transition with all non-roster policy fields unchanged")
 }
 
-func rebuildRevocation(t *testing.T, base Transition, predecessor Predecessor, signer DeviceMaterial, intent TransitionIntent, mutate func(*Policy)) Transition {
+func rebuildRevocation(
+	t *testing.T,
+	base Transition,
+	predecessor Predecessor,
+	signer DeviceMaterial,
+	intent TransitionIntent,
+	mutate func(*Policy),
+) Transition {
 	t.Helper()
 	policy, err := DecodePolicy(base.Policy)
 	require.NoError(t, err)
@@ -251,9 +305,20 @@ func rebuildRevocation(t *testing.T, base Transition, predecessor Predecessor, s
 	recipients, err := prepareSealRecipients(policy, wraps)
 	require.NoError(t, err)
 	envelope, err := SealPrepared(PreparedSeal{
-		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: intent.PublicationID, EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, Parent: bytes.Clone(predecessor.HeadCID), DeviceID: signer.DeviceID, KeyID: bytes.Clone(signer.KeyID),
-		Plaintext: intent.Plaintext, SigningKey: signer.Signing, ContentKey: intent.ContentKey, Nonce: intent.Nonce, Recipients: recipients, Policy: policy,
+		Purpose:       PurposeSnapshot,
+		Vault:         policy.Vault,
+		PublicationID: intent.PublicationID,
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  digest,
+		Parent:        bytes.Clone(predecessor.HeadCID),
+		DeviceID:      signer.DeviceID,
+		KeyID:         bytes.Clone(signer.KeyID),
+		Plaintext:     intent.Plaintext,
+		SigningKey:    signer.Signing,
+		ContentKey:    intent.ContentKey,
+		Nonce:         intent.Nonce,
+		Recipients:    recipients,
+		Policy:        policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := EncodeEnvelope(envelope)
@@ -289,10 +354,24 @@ func revocationFixture(t *testing.T) (devicesFixture, Predecessor, Transition, T
 	t.Helper()
 	fixture, predecessor, _, _ := newPublicationTestFixture(t)
 	intent := TransitionIntent{
-		Kind: TransitionRevoke, Vault: fixture.bootstrap.Vault, Signer: fixture.root, RevokeDeviceID: fixture.newDevice.DeviceID,
-		ContentKey: fixtureBytes(31, 32), Recipients: [][]byte{predecessor.Certificates[0]},
-		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(91, 32)), WrapNonce: [24]byte(fixtureBytes(123, 24))}},
-		Plaintext: []byte("complete current snapshot"), PublicationID: [16]byte(fixtureBytes(157, 16)), Nonce: [24]byte(fixtureBytes(173, 24)),
+		Kind:           TransitionRevoke,
+		Vault:          fixture.bootstrap.Vault,
+		Signer:         fixture.root,
+		RevokeDeviceID: fixture.newDevice.DeviceID,
+		ContentKey:     fixtureBytes(31, 32),
+		Recipients:     [][]byte{predecessor.Certificates[0]},
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(91, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(123, 24)),
+			},
+		},
+		Plaintext: []byte(
+			"complete current snapshot",
+		),
+		PublicationID: [16]byte(fixtureBytes(157, 16)),
+		Nonce:         [24]byte(fixtureBytes(173, 24)),
 	}
 	base, err := PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
@@ -387,7 +466,10 @@ func TestVerifyControlStateRefusesSkippedPolicyChain(t *testing.T) {
 
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
-	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}})
+	result, err := VerifyControlState(
+		trustedContext,
+		VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}},
+	)
 	var refusal *VerificationRefusal
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "supplied", refusal.Side)
@@ -407,13 +489,26 @@ func TestOpenRefusesRecipientAbsentFromPolicy(t *testing.T) {
 	var ephemeral [32]byte
 	copy(ephemeral[:], fixedX25519Key(43).PublicKey().Bytes())
 	envelope := Envelope{
-		Purpose: PurposeSnapshot, Vault: policy.Vault, PublicationID: [16]byte(fixtureBytes(201, 16)), EpochSeq: policy.EpochSeq,
-		PolicyDigest: digest, DeviceID: fixture.root.DeviceID, KeyID: bytes.Clone(fixture.root.KeyID),
-		Commit: [32]byte(fixtureBytes(221, 32)), Nonce: [24]byte(fixtureBytes(5, 24)),
-		Ciphertext: []byte("hostile synthetic payload"),
-		Recipients: []EnvelopeRecipient{{
-			KeyID: bytes.Clone(absentID), Ephemeral: ephemeral, WrapNonce: [24]byte(fixtureBytes(81, 24)), WrappedKey: fixtureBytes(113, 48),
-		}},
+		Purpose:       PurposeSnapshot,
+		Vault:         policy.Vault,
+		PublicationID: [16]byte(fixtureBytes(201, 16)),
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  digest,
+		DeviceID:      fixture.root.DeviceID,
+		KeyID:         bytes.Clone(fixture.root.KeyID),
+		Commit:        [32]byte(fixtureBytes(221, 32)),
+		Nonce:         [24]byte(fixtureBytes(5, 24)),
+		Ciphertext:    []byte("hostile synthetic payload"),
+		Recipients: []EnvelopeRecipient{
+			{
+				KeyID: bytes.Clone(
+					absentID,
+				),
+				Ephemeral:  ephemeral,
+				WrapNonce:  [24]byte(fixtureBytes(81, 24)),
+				WrappedKey: fixtureBytes(113, 48),
+			},
+		},
 	}
 	unsignedBytes, err := EncodeEnvelope(envelope)
 	require.NoError(t, err)
@@ -431,5 +526,10 @@ func TestOpenRefusesRecipientAbsentFromPolicy(t *testing.T) {
 		Certificates: fixture.transition.Recipients, DeviceKeyID: absentID, DeviceKey: absent,
 	}
 	_, err = Open(hostileEnvelope, request)
-	require.ErrorIs(t, err, ErrRecipient, "Open must refuse a signed envelope recipient absent from policy authorization")
+	require.ErrorIs(
+		t,
+		err,
+		ErrRecipient,
+		"Open must refuse a signed envelope recipient absent from policy authorization",
+	)
 }

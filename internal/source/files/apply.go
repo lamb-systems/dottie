@@ -199,7 +199,11 @@ func observeApplyLocation(location applyLocation, key string, limit int64) (Appl
 	if !info.Mode().IsRegular() {
 		return ApplyObservation{}, &UnsupportedPathError{Path: key, Reason: "only regular files are applied"}
 	}
-	file, err := location.root.OpenFile(location.name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
+	file, err := location.root.OpenFile(
+		location.name,
+		os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return ApplyObservation{}, &ApplyError{Stage: ApplyStageObserve, Err: err}
 	}
@@ -213,8 +217,7 @@ func observeApplyLocation(location applyLocation, key string, limit int64) (Appl
 	}
 	data, readErr := readApplyObservation(file, limit)
 	if readErr != nil {
-		var oversized *ObservationLimitError
-		if errors.As(readErr, &oversized) {
+		if oversized, ok := errors.AsType[*ObservationLimitError](readErr); ok {
 			_ = file.Close()
 			oversized.Path = key
 			return ApplyObservation{}, oversized
@@ -226,14 +229,30 @@ func observeApplyLocation(location applyLocation, key string, limit int64) (Appl
 	if readErr != nil {
 		return ApplyObservation{}, &ApplyError{Stage: ApplyStageObserve, Err: readErr}
 	}
-	if fdErr != nil || pathErr != nil || closeErr != nil || !fdAfter.Mode().IsRegular() || !pathAfter.Mode().IsRegular() || !sameIdentity(opened, fdAfter) || !sameVersion(opened, fdAfter) || !sameIdentity(opened, pathAfter) || !sameVersion(opened, pathAfter) {
+	if fdErr != nil || pathErr != nil || closeErr != nil || !fdAfter.Mode().IsRegular() ||
+		!pathAfter.Mode().IsRegular() ||
+		!sameIdentity(opened, fdAfter) ||
+		!sameVersion(opened, fdAfter) ||
+		!sameIdentity(opened, pathAfter) ||
+		!sameVersion(opened, pathAfter) {
 		return ApplyObservation{}, &UnsupportedPathError{Path: key, Reason: "file changed during inspection"}
 	}
 	digest := sha256.Sum256(data)
-	return ApplyObservation{Exists: true, Data: data, Digest: hex.EncodeToString(digest[:]), Mode: uint32(opened.Mode().Perm() & 0o777)}, nil
+	return ApplyObservation{
+		Exists: true,
+		Data:   data,
+		Digest: hex.EncodeToString(digest[:]),
+		Mode:   uint32(opened.Mode().Perm() & 0o777),
+	}, nil
 }
 
-func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte, mode os.FileMode, expected ExpectedPreimage) error {
+func ReplaceFile(
+	filesystem ApplyFileSystem,
+	targetRoot, key string,
+	data []byte,
+	mode os.FileMode,
+	expected ExpectedPreimage,
+) error {
 	if err := validateApplyMode(mode); err != nil {
 		return &ApplyError{Stage: ApplyStageSetMode, Err: err}
 	}
@@ -246,7 +265,11 @@ func ReplaceFile(filesystem ApplyFileSystem, targetRoot, key string, data []byte
 	if err != nil {
 		return &ApplyError{Stage: ApplyStageCreateTemp, Err: err}
 	}
-	file, err := location.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	file, err := location.root.OpenFile(
+		temporary,
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		0o600,
+	)
 	if err != nil {
 		return &ApplyError{Stage: ApplyStageCreateTemp, Err: err}
 	}
@@ -308,14 +331,19 @@ func verifyExpectedPreimage(location applyLocation, key string, expected Expecte
 		return &PreconditionError{Path: key, Expected: expected}
 	}
 	actual := ExpectedPreimage{Exists: observed.Exists, Digest: observed.Digest, Mode: observed.Mode}
-	if expected.Exists != actual.Exists || expected.Exists && (expected.Digest != actual.Digest || expected.Mode != actual.Mode) {
+	if expected.Exists != actual.Exists ||
+		expected.Exists && (expected.Digest != actual.Digest || expected.Mode != actual.Mode) {
 		return &PreconditionError{Path: key, Expected: expected, Actual: actual}
 	}
 	return nil
 }
 
 func syncApplyDirectory(location applyLocation) error {
-	directory, err := location.root.OpenFile(location.directory, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	directory, err := location.root.OpenFile(
+		location.directory,
+		os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		0,
+	)
 	if err != nil {
 		return &ApplyError{Stage: ApplyStageSyncDirectory, Err: err}
 	}
@@ -365,16 +393,25 @@ func openApplyLocation(filesystem ApplyFileSystem, targetRoot, key string) (appl
 	var anchor, name string
 	if fileRoot {
 		if key != "." {
-			return applyLocation{}, &UnsupportedPathError{Path: key, Reason: "single-file targets only support the root entry"}
+			return applyLocation{}, &UnsupportedPathError{
+				Path:   key,
+				Reason: "single-file targets only support the root entry",
+			}
 		}
 		anchor = filepath.Dir(targetRoot)
 		name = filepath.Base(targetRoot)
 	} else {
 		if !rootInfo.IsDir() {
-			return applyLocation{}, &UnsupportedPathError{Path: key, Reason: "target root is not a directory or regular file"}
+			return applyLocation{}, &UnsupportedPathError{
+				Path:   key,
+				Reason: "target root is not a directory or regular file",
+			}
 		}
 		if key == "." {
-			return applyLocation{}, &UnsupportedPathError{Path: key, Reason: "the selected directory itself is not an apply entry"}
+			return applyLocation{}, &UnsupportedPathError{
+				Path:   key,
+				Reason: "the selected directory itself is not an apply entry",
+			}
 		}
 		anchor = targetRoot
 		name = key
@@ -408,7 +445,12 @@ func openApplyLocation(filesystem ApplyFileSystem, targetRoot, key string) (appl
 	if directory == "" {
 		directory = "."
 	}
-	return applyLocation{root: root, name: name, directory: directory, closeRoot: func() error { return rootClose(root) }}, nil
+	return applyLocation{
+		root:      root,
+		name:      name,
+		directory: directory,
+		closeRoot: func() error { return rootClose(root) },
+	}, nil
 }
 
 func rootClose(root ApplyRoot) error {

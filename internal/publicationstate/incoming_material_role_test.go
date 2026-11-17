@@ -49,8 +49,28 @@ func TestAcceptMaterialCoexistsWithPreparedAttempt(t *testing.T) {
 	assert.Equal(t, AttemptPrepared, attempt.Lifecycle)
 	assert.Equal(t, OutcomeNotSubmitted, attempt.Outcome)
 	assert.Empty(t, attempt.Blocked)
-	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", composition.attempt.ID[:]))
-	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", composition.attempt.ID[:]))
+	require.Equal(
+		t,
+		int64(1),
+		b8Count(
+			t,
+			ctx,
+			store.conn,
+			"SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?",
+			composition.attempt.ID[:],
+		),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		b8Count(
+			t,
+			ctx,
+			store.conn,
+			"SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?",
+			composition.attempt.ID[:],
+		),
+	)
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
 
 	loaded, present, err := store.Load(ctx)
@@ -130,8 +150,28 @@ func TestAcceptMaterialCoexistsWithSubmittedAttempt(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, present)
 	assert.Equal(t, activeBefore, activeAfter)
-	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", composition.attempt.ID[:]))
-	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", composition.attempt.ID[:]))
+	require.Equal(
+		t,
+		int64(1),
+		b8Count(
+			t,
+			ctx,
+			store.conn,
+			"SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?",
+			composition.attempt.ID[:],
+		),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		b8Count(
+			t,
+			ctx,
+			store.conn,
+			"SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?",
+			composition.attempt.ID[:],
+		),
+	)
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
 
 	candidate, err := store.ReadCandidate(ctx, composition.attempt.ID)
@@ -191,7 +231,14 @@ func TestAcceptMaterialCoexistsWithAbandonedAttempt(t *testing.T) {
 
 	observation := f.observation(1)
 	intake := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, intake.StateToken, observation, f.payload, intake.Confirmation)
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		intake.StateToken,
+		observation,
+		f.payload,
+		intake.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), floor.Revision)
 	require.Equal(t, uint64(1), floor.Generation)
@@ -215,8 +262,14 @@ func TestAcceptMaterialCoexistsWithAbandonedAttempt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredAbandoned, abandoned.Lifecycle)
 	assert.Equal(t, OutcomeNotSubmitted, abandoned.Outcome)
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]))
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]))
+	require.Zero(
+		t,
+		b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]),
+	)
+	require.Zero(
+		t,
+		b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]),
+	)
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
 
 	missing, err := store.ReadCandidate(ctx, attempt.ID)
@@ -280,7 +333,16 @@ func TestAcceptMaterialAdvancesPastRetainedPublication(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, sameAcceptedFloor(second, current))
 	incomingRoleRequireSingleReference(t, before, after, second)
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?", int64(finalized.Floor.Revision)))
+	require.Zero(
+		t,
+		b8Count(
+			t,
+			ctx,
+			store.conn,
+			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?",
+			int64(finalized.Floor.Revision),
+		),
+	)
 	fileAfter := incomingRolePayloadFileState(t, directory, f.payload)
 	assert.Equal(t, fileBefore, fileAfter)
 	assert.Equal(t, mutationBefore, store.attemptMutationRevision)
@@ -422,7 +484,14 @@ func incomingRolePrepareUnownedWithSuccessor(t *testing.T, store *Store, f fixtu
 	review := attemptReview()
 	attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 	require.NoError(t, err)
-	attempt, err := store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+	attempt, err := store.CreateAttempt(
+		ctx,
+		attemptProposal.StateToken,
+		candidate,
+		view,
+		review,
+		attemptProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, AttemptSuccessor, attempt.Kind)
 	require.Equal(t, AttemptPrepared, attempt.Lifecycle)
@@ -435,21 +504,50 @@ func incomingRoleSubmitAttempt(t *testing.T, store *Store, state incomingRoleSuc
 	ctx := context.Background()
 	uploadProposal, err := store.PrepareDispatch(ctx, state.attempt.ID, DispatchUpload, state.view, state.review)
 	require.NoError(t, err)
-	upload, err := store.BeginUpload(ctx, state.attempt.ID, uploadProposal.StateToken, state.view, state.review, uploadProposal.Confirmation)
+	upload, err := store.BeginUpload(
+		ctx,
+		state.attempt.ID,
+		uploadProposal.StateToken,
+		state.view,
+		state.review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, state.attempt.ID, upload.AttemptID)
 	require.Equal(t, payload, upload.Payload)
-	submissionProposal, err := store.PrepareDispatch(ctx, state.attempt.ID, DispatchSubmission, state.view, state.review)
+	submissionProposal, err := store.PrepareDispatch(
+		ctx,
+		state.attempt.ID,
+		DispatchSubmission,
+		state.view,
+		state.review,
+	)
 	require.NoError(t, err)
-	submission, err := store.BeginSubmission(ctx, state.attempt.ID, submissionProposal.StateToken, state.view, state.review, submissionProposal.Confirmation)
+	submission, err := store.BeginSubmission(
+		ctx,
+		state.attempt.ID,
+		submissionProposal.StateToken,
+		state.view,
+		state.review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, state.attempt.ID, submission.AttemptID)
 }
 
-func incomingRoleSubmissionWitness(t *testing.T, ctx context.Context, store *Store, id [16]byte) incomingRoleSubmissionWitnessState {
+func incomingRoleSubmissionWitness(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	id [16]byte,
+) incomingRoleSubmissionWitnessState {
 	t.Helper()
 	var body []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", id[:]).Scan(&body))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", id[:]).
+			Scan(&body),
+	)
 	require.NotEmpty(t, body)
 	var event attemptEventWire
 	require.NoError(t, strictJSON(body, &event))
@@ -518,17 +616,62 @@ type incomingRoleRawState struct {
 func incomingRoleCaptureState(t *testing.T, ctx context.Context, q queryer) incomingRoleRawState {
 	t.Helper()
 	return incomingRoleRawState{
-		records:         incomingRoleKeyedRows(t, ctx, q, "SELECT cid,record_key,sequence,raw,logical_bytes FROM accepted_records ORDER BY cid"),
-		events:          incomingRoleKeyedRows(t, ctx, q, "SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events ORDER BY revision"),
-		activeFloor:     incomingRoleRows(t, ctx, q, "SELECT singleton,floor FROM active_floor"),
-		meta:            incomingRoleMeta(t, ctx, q),
-		attempts:        incomingRoleRows(t, ctx, q, "SELECT attempt_id,core,lifecycle,outcome,blocked,state_digest,mutation_revision,created_order,logical_bytes,terminal_evidence,retirement_evidence FROM publication_attempts ORDER BY attempt_id"),
-		attemptEvents:   incomingRoleRows(t, ctx, q, "SELECT attempt_id,ordinal,kind,body,digest FROM attempt_events ORDER BY attempt_id,ordinal"),
-		attemptEvidence: incomingRoleRows(t, ctx, q, "SELECT attempt_id,role,body FROM attempt_evidence ORDER BY attempt_id,role"),
-		reservations:    incomingRoleRows(t, ctx, q, "SELECT attempt_id,metadata_bytes,accepted_bytes,accepted_records,accepted_events,retained_points FROM attempt_reservations ORDER BY attempt_id"),
-		retained:        incomingRoleRows(t, ctx, q, "SELECT record_cid,attempt_id,sequence,blob_cid,size,accepted_revision FROM retained_publications ORDER BY record_cid"),
-		objects:         incomingRoleRows(t, ctx, q, "SELECT blob_cid,size,basename,logical_bytes FROM payload_objects ORDER BY blob_cid"),
-		incoming:        incomingRoleRows(t, ctx, q, "SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision"),
+		records: incomingRoleKeyedRows(
+			t,
+			ctx,
+			q,
+			"SELECT cid,record_key,sequence,raw,logical_bytes FROM accepted_records ORDER BY cid",
+		),
+		events: incomingRoleKeyedRows(
+			t,
+			ctx,
+			q,
+			"SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events ORDER BY revision",
+		),
+		activeFloor: incomingRoleRows(t, ctx, q, "SELECT singleton,floor FROM active_floor"),
+		meta:        incomingRoleMeta(t, ctx, q),
+		attempts: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT attempt_id,core,lifecycle,outcome,blocked,state_digest,mutation_revision,created_order,logical_bytes,terminal_evidence,retirement_evidence FROM publication_attempts ORDER BY attempt_id",
+		),
+		attemptEvents: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT attempt_id,ordinal,kind,body,digest FROM attempt_events ORDER BY attempt_id,ordinal",
+		),
+		attemptEvidence: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT attempt_id,role,body FROM attempt_evidence ORDER BY attempt_id,role",
+		),
+		reservations: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT attempt_id,metadata_bytes,accepted_bytes,accepted_records,accepted_events,retained_points FROM attempt_reservations ORDER BY attempt_id",
+		),
+		retained: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT record_cid,attempt_id,sequence,blob_cid,size,accepted_revision FROM retained_publications ORDER BY record_cid",
+		),
+		objects: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT blob_cid,size,basename,logical_bytes FROM payload_objects ORDER BY blob_cid",
+		),
+		incoming: incomingRoleRows(
+			t,
+			ctx,
+			q,
+			"SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision",
+		),
 	}
 }
 
@@ -624,7 +767,10 @@ func incomingRoleSingleRow(t *testing.T, keyed map[string][]any) []any {
 
 func incomingRolePayloadFileState(t *testing.T, directory string, payload []byte) acceptedMaterialPayloadFileState {
 	t.Helper()
-	file, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, payloadBasename(payload)), len(payload))
+	file, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(directory, payloadDirectoryName, payloadBasename(payload)),
+		len(payload),
+	)
 	require.NoError(t, err)
 	return file
 }
@@ -667,7 +813,11 @@ func incomingRoleRequireFirstUseAcceptance(t *testing.T, state incomingRoleRawSt
 	assert.Equal(t, block.Key, incomingRoleText(t, record, incomingRoleRecordKey))
 	assert.Equal(t, int64(0), incomingRoleInt(t, record, incomingRoleRecordSequence))
 	assert.Equal(t, block.Raw, incomingRoleBytes(t, record, incomingRoleRecordRaw))
-	assert.Equal(t, int64(len(block.Raw)+len(floor.RecordCID)+len(block.Key)+8), incomingRoleInt(t, record, incomingRoleRecordLogicalBytes))
+	assert.Equal(
+		t,
+		int64(len(block.Raw)+len(floor.RecordCID)+len(block.Key)+8),
+		incomingRoleInt(t, record, incomingRoleRecordLogicalBytes),
+	)
 
 	event := incomingRoleSingleRow(t, state.events)
 	assert.Equal(t, int64(floor.Revision), incomingRoleInt(t, event, incomingRoleEventRevision))
@@ -683,7 +833,11 @@ func incomingRoleRequireFirstUseAcceptance(t *testing.T, state incomingRoleRawSt
 	newFloor := incomingRoleBytes(t, event, incomingRoleEventNewFloor)
 	require.NotEmpty(t, body)
 	require.Len(t, digest, 32)
-	assert.Equal(t, int64(len(body)+len(digest)+len(newFloor)+len(string(ModeFirstUse))+len("first_use")+8), incomingRoleInt(t, event, incomingRoleEventLogicalBytes))
+	assert.Equal(
+		t,
+		int64(len(body)+len(digest)+len(newFloor)+len(string(ModeFirstUse))+len("first_use")+8),
+		incomingRoleInt(t, event, incomingRoleEventLogicalBytes),
+	)
 
 	require.Len(t, state.activeFloor, 1)
 	assert.Equal(t, int64(1), incomingRoleInt(t, state.activeFloor[0], incomingRoleFloorSingleton))
@@ -697,7 +851,14 @@ func incomingRoleAcceptAttachedFirstUse(t *testing.T, store *Store, f fixture) F
 	ctx := context.Background()
 	observation := f.observation(1)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), floor.Revision)
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))

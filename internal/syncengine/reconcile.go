@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lamb-systems/dottie/internal/model"
@@ -199,7 +201,10 @@ func Reconcile(base BaseView, local LocalView, remote []model.Entry, opts Option
 	if err != nil {
 		return Plan{}, err
 	}
-	keys := make(map[model.EntryKey]struct{}, len(baseEntries)+len(localEntries)+len(remoteEntries)+len(unknown)+len(untracked))
+	keys := make(
+		map[model.EntryKey]struct{},
+		len(baseEntries)+len(localEntries)+len(remoteEntries)+len(unknown)+len(untracked),
+	)
 	for _, entries := range []map[model.EntryKey]model.Entry{baseEntries, localEntries, remoteEntries} {
 		for key := range entries {
 			keys[key] = struct{}{}
@@ -321,7 +326,11 @@ func decideWithoutBase(local, remote *model.Entry, source model.SourceKind) (Act
 	if bothFileDeleted(local, remote, source) {
 		return ActionUnchanged, ReasonBothDeleted
 	}
-	if source == model.SourceGNOME && local != nil && local.Setting != nil && local.Setting.State == model.SettingReset && remote != nil && remote.Setting != nil && remote.Setting.State == model.SettingPresent {
+	if source == model.SourceGNOME && local != nil && local.Setting != nil &&
+		local.Setting.State == model.SettingReset &&
+		remote != nil &&
+		remote.Setting != nil &&
+		remote.Setting.State == model.SettingPresent {
 		return ActionDownload, ReasonBaseMissing
 	}
 	if local == nil && remote != nil {
@@ -389,7 +398,11 @@ func classifyEntry(entry *model.Entry) ValueState {
 	return ValuePresent
 }
 
-func classifyLocalState(key model.EntryKey, entry *model.Entry, unknown, untracked map[model.EntryKey]struct{}) (ValueState, Reason) {
+func classifyLocalState(
+	key model.EntryKey,
+	entry *model.Entry,
+	unknown, untracked map[model.EntryKey]struct{},
+) (ValueState, Reason) {
 	if hasAncestor(key, unknown) {
 		return ValueUnknown, ReasonUnknown
 	}
@@ -424,7 +437,7 @@ func applyStructuralConflicts(plan *Plan) {
 		if parent.Key.Source != model.SourceFiles {
 			continue
 		}
-		for side := 0; side < 2; side++ {
+		for side := range 2 {
 			parentResult, parentKnown := resultOnSide(*parent, side)
 			if !parentKnown {
 				continue
@@ -437,7 +450,8 @@ func applyStructuralConflicts(plan *Plan) {
 			}
 			for childIndex := range plan.Decisions {
 				child := &plan.Decisions[childIndex]
-				if child.Key.TargetID != parent.Key.TargetID || child.Key.Source != model.SourceFiles || !isDescendantPath(child.Key.FilePath, parent.Key.FilePath) {
+				if child.Key.TargetID != parent.Key.TargetID || child.Key.Source != model.SourceFiles ||
+					!isDescendantPath(child.Key.FilePath, parent.Key.FilePath) {
 					continue
 				}
 				childResult, childKnown := resultOnSide(*child, side)
@@ -486,16 +500,15 @@ func presentFile(entry *model.Entry) bool {
 }
 
 func anyPresent(entries ...*model.Entry) bool {
-	for _, entry := range entries {
-		if presentFile(entry) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(entries, presentFile)
 }
 
 func fingerprintSet(base, local, remote *model.Entry) FingerprintSet {
-	return FingerprintSet{Base: fingerprintPointer(base), Local: fingerprintPointer(local), Remote: fingerprintPointer(remote)}
+	return FingerprintSet{
+		Base:   fingerprintPointer(base),
+		Local:  fingerprintPointer(local),
+		Remote: fingerprintPointer(remote),
+	}
 }
 
 func fingerprintPointer(entry *model.Entry) *Fingerprint {
@@ -556,7 +569,11 @@ func validateBindings(values []TargetBinding) (map[string]TargetBinding, error) 
 	return bindings, nil
 }
 
-func entryMap(entries []model.Entry, name string, bindings map[string]TargetBinding) (map[model.EntryKey]model.Entry, error) {
+func entryMap(
+	entries []model.Entry,
+	name string,
+	bindings map[string]TargetBinding,
+) (map[model.EntryKey]model.Entry, error) {
 	result := make(map[model.EntryKey]model.Entry, len(entries))
 	for _, entry := range entries {
 		if err := entry.Validate(); err != nil {
@@ -575,7 +592,11 @@ func entryMap(entries []model.Entry, name string, bindings map[string]TargetBind
 	return result, nil
 }
 
-func keySet(keys []model.EntryKey, name string, bindings map[string]TargetBinding) (map[model.EntryKey]struct{}, error) {
+func keySet(
+	keys []model.EntryKey,
+	name string,
+	bindings map[string]TargetBinding,
+) (map[model.EntryKey]struct{}, error) {
 	result := make(map[model.EntryKey]struct{}, len(keys))
 	for _, key := range keys {
 		if err := key.Validate(); err != nil {
@@ -646,26 +667,26 @@ func entryPointer(entry model.Entry, ok bool) *model.Entry {
 	if !ok {
 		return nil
 	}
-	copy := cloneEntry(entry)
-	return &copy
+	cloned := cloneEntry(entry)
+	return &cloned
 }
 
 func cloneEntryPointer(entry *model.Entry) *model.Entry {
 	if entry == nil {
 		return nil
 	}
-	copy := cloneEntry(*entry)
-	return &copy
+	cloned := cloneEntry(*entry)
+	return &cloned
 }
 
 func cloneEntry(entry model.Entry) model.Entry {
-	copy := model.Entry{TargetID: entry.TargetID}
+	cloned := model.Entry{TargetID: entry.TargetID}
 	if entry.File != nil {
 		file := *entry.File
 		if file.Content != nil {
 			file.Content = bytes.Clone(file.Content)
 		}
-		copy.File = &file
+		cloned.File = &file
 	}
 	if entry.Setting != nil {
 		setting := *entry.Setting
@@ -673,9 +694,9 @@ func cloneEntry(entry model.Entry) model.Entry {
 			value := *setting.Value
 			setting.Value = &value
 		}
-		copy.Setting = &setting
+		cloned.Setting = &setting
 	}
-	return copy
+	return cloned
 }
 
 func cloneBinding(binding TargetBinding) TargetBinding {
@@ -692,7 +713,7 @@ func cloneTarget(target model.Target) model.Target {
 }
 
 func targetFingerprint(target model.Target) string {
-	fields := []string{target.ID, string(target.Source), fmt.Sprint(target.SourceVersion)}
+	fields := []string{target.ID, string(target.Source), strconv.FormatUint(uint64(target.SourceVersion), 10)}
 	if target.Root == nil {
 		fields = append(fields, "-")
 	} else {

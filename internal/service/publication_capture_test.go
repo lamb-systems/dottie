@@ -9,20 +9,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/source/files"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type publicationCapturePortFunc func(context.Context, config.Target, string) (files.Result, error)
 
-func (capture publicationCapturePortFunc) Capture(ctx context.Context, target config.Target, path string) (files.Result, error) {
+func (capture publicationCapturePortFunc) Capture(
+	ctx context.Context,
+	target config.Target,
+	path string,
+) (files.Result, error) {
 	return capture(ctx, target, path)
 }
 
-func publicationCaptureSelectionFor(t *testing.T, fixture publicationSelectionFixture, target config.Target, capture CapturePort) publicationSelection {
+func publicationCaptureSelectionFor(
+	t *testing.T,
+	fixture publicationSelectionFixture,
+	target config.Target,
+	capture CapturePort,
+) publicationSelection {
 	t.Helper()
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
@@ -35,8 +45,16 @@ func publicationCaptureSelectionFor(t *testing.T, fixture publicationSelectionFi
 	return selection
 }
 
-func publicationCaptureObservation(targetID, path string, kind model.FileKind, content []byte, mode uint32) model.Observation {
-	entry := model.Entry{TargetID: targetID, File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: kind, Content: content, Mode: mode}}
+func publicationCaptureObservation(
+	targetID, path string,
+	kind model.FileKind,
+	content []byte,
+	mode uint32,
+) model.Observation {
+	entry := model.Entry{
+		TargetID: targetID,
+		File:     &model.FileEntry{Path: path, State: model.FilePresent, Kind: kind, Content: content, Mode: mode},
+	}
 	if kind == model.FileDirectory {
 		entry.File.Content = nil
 	}
@@ -48,7 +66,10 @@ func publicationCaptureObservation(targetID, path string, kind model.FileKind, c
 }
 
 func publicationCaptureUnknown(targetID, path string) model.Observation {
-	return model.Observation{State: model.ObservationUnknown, Identity: model.EntryKey{TargetID: targetID, Source: model.SourceFiles, FilePath: path}}
+	return model.Observation{
+		State:    model.ObservationUnknown,
+		Identity: model.EntryKey{TargetID: targetID, Source: model.SourceFiles, FilePath: path},
+	}
 }
 
 func assertPublicationCaptureError(t *testing.T, err error, reason string) {
@@ -144,12 +165,22 @@ func TestCapturePublicationFilesDirectoryExcludesDoNotMatchSyntheticRoot(t *test
 			require.NoError(t, os.WriteFile(filepath.Join(root, "config"), []byte("root config"), 0o600))
 			require.NoError(t, os.WriteFile(filepath.Join(root, "z"), []byte("single character"), 0o600))
 			require.NoError(t, os.MkdirAll(filepath.Join(root, "x"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(root, "x", "child"), []byte("under excluded directory"), 0o600))
+			require.NoError(
+				t,
+				os.WriteFile(filepath.Join(root, "x", "child"), []byte("under excluded directory"), 0o600),
+			)
 			require.NoError(t, os.WriteFile(filepath.Join(root, ".hidden"), []byte("hidden file"), 0o600))
 			require.NoError(t, os.MkdirAll(filepath.Join(root, ".hidden-dir"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(root, ".hidden-dir", "child"), []byte("hidden child"), 0o600))
 			require.NoError(t, os.MkdirAll(filepath.Join(root, "folder", ".nested-hidden"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(root, "folder", ".nested-hidden", "child"), []byte("nested hidden child"), 0o600))
+			require.NoError(
+				t,
+				os.WriteFile(
+					filepath.Join(root, "folder", ".nested-hidden", "child"),
+					[]byte("nested hidden child"),
+					0o600,
+				),
+			)
 			require.NoError(t, os.WriteFile(filepath.Join(root, "folder", "config"), []byte("nested config"), 0o600))
 
 			target := cloneSelectionTarget(fixture.target)
@@ -169,13 +200,15 @@ func TestCapturePublicationFilesEmptyDirectoryAndMissingRootDiffer(t *testing.T)
 	fixture := newPublicationSelectionFixture(t)
 	root := filepath.Join(fixture.paths.Home, "selected")
 	for _, name := range []string{"old-selected", "old-selected-2"} {
-		assert.NoError(t, os.RemoveAll(filepath.Join(fixture.paths.Home, name)))
+		require.NoError(t, os.RemoveAll(filepath.Join(fixture.paths.Home, name)))
 	}
 	calls := 0
-	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		calls++
-		return (LocalFilesCapture{}).Capture(ctx, target, path)
-	})
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			calls++
+			return (LocalFilesCapture{}).Capture(ctx, target, path)
+		},
+	)
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 	captured, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -195,7 +228,11 @@ func TestCapturePublicationFilesSingleFileDotAndOmissionRules(t *testing.T) {
 	fixture := newPublicationSelectionFixture(t)
 	filePath := filepath.Join(fixture.paths.Home, "single.ini")
 	require.NoError(t, os.WriteFile(filePath, []byte("single"), 0o600))
-	target := config.Target{ID: "single", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile}}
+	target := config.Target{
+		ID:     "single",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile},
+	}
 	selection := publicationCaptureSelectionFor(t, fixture, target, nil)
 	captured, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -219,11 +256,17 @@ func TestCapturePublicationFilesSingleFileDotAndOmissionRules(t *testing.T) {
 
 	dotCalls := 0
 	var callbackPath string
-	presentDot := publicationCapturePortFunc(func(_ context.Context, selected config.Target, path string) (files.Result, error) {
-		dotCalls++
-		callbackPath = path
-		return files.Result{Observations: []model.Observation{publicationCaptureObservation(selected.ID, ".", model.FileRegular, []byte("captured dot"), 0o600)}}, nil
-	})
+	presentDot := publicationCapturePortFunc(
+		func(_ context.Context, selected config.Target, path string) (files.Result, error) {
+			dotCalls++
+			callbackPath = path
+			return files.Result{
+				Observations: []model.Observation{
+					publicationCaptureObservation(selected.ID, ".", model.FileRegular, []byte("captured dot"), 0o600),
+				},
+			}, nil
+		},
+	)
 	for _, pattern := range []string{"?", ".*", "*", "**", "**/.*"} {
 		t.Run("dot-excluded-"+pattern, func(t *testing.T) {
 			patterned := cloneSelectionTarget(target)
@@ -293,7 +336,11 @@ func TestCapturePublicationFilesKnownSkipsBecomeUnknownWithoutDetails(t *testing
 	result, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
 	assert.False(t, result.complete)
-	assert.Equal(t, []string{"legacy", "outside", "root-unknown", "special"}, publicationCapturePaths(result.observations))
+	assert.Equal(
+		t,
+		[]string{"legacy", "outside", "root-unknown", "special"},
+		publicationCapturePaths(result.observations),
+	)
 	for _, observation := range result.observations {
 		assert.Equal(t, model.ObservationUnknown, observation.State)
 		assert.Nil(t, observation.Entry)
@@ -328,8 +375,16 @@ func TestCapturePublicationFilesKnownSkipsRejectPresentDescendants(t *testing.T)
 		t.Run(string(reason), func(t *testing.T) {
 			capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
 				return files.Result{
-					Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, "ancestor/child", model.FileRegular, []byte("not reachable"), 0o600)},
-					Skipped:      []files.Skip{{Path: "ancestor", Reason: reason}},
+					Observations: []model.Observation{
+						publicationCaptureObservation(
+							fixture.target.ID,
+							"ancestor/child",
+							model.FileRegular,
+							[]byte("not reachable"),
+							0o600,
+						),
+					},
+					Skipped: []files.Skip{{Path: "ancestor", Reason: reason}},
 				}, nil
 			})
 			selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
@@ -360,7 +415,9 @@ func TestCapturePublicationFilesKnownSkipsRejectPresentDescendants(t *testing.T)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil })
+			capture := publicationCapturePortFunc(
+				func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil },
+			)
 			selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 			captured, err := capturePublicationFiles(context.Background(), selection)
 			assert.Equal(t, publicationCapture{}, captured)
@@ -374,8 +431,16 @@ func TestCapturePublicationFilesMixedSiblingSkipAndPresentEntryRemainsIncomplete
 	canary := "private-mixed-skip-detail"
 	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
 		return files.Result{
-			Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, "sibling", model.FileRegular, []byte("safe sibling"), 0o600)},
-			Skipped:      []files.Skip{{Path: "uncertain", Reason: files.SkipExternalLink, Detail: canary}},
+			Observations: []model.Observation{
+				publicationCaptureObservation(
+					fixture.target.ID,
+					"sibling",
+					model.FileRegular,
+					[]byte("safe sibling"),
+					0o600,
+				),
+			},
+			Skipped: []files.Skip{{Path: "uncertain", Reason: files.SkipExternalLink, Detail: canary}},
 		}, nil
 	})
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
@@ -411,7 +476,9 @@ func TestCapturePublicationFilesEmptyIdentityPathsAreProviderInvalid(t *testing.
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil })
+			capture := publicationCapturePortFunc(
+				func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil },
+			)
 			selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 			captured, err := capturePublicationFiles(context.Background(), selection)
 			assert.Equal(t, publicationCapture{}, captured)
@@ -443,7 +510,9 @@ func TestCapturePublicationFilesExclusionClaimsAreValidatedAndDetailsAreDiscarde
 	assert.NotContains(t, err.Error(), canary)
 
 	invalidReason := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
-		return files.Result{Skipped: []files.Skip{{Path: "ordinary", Reason: files.SkipReason("future-reason"), Detail: canary}}}, nil
+		return files.Result{
+			Skipped: []files.Skip{{Path: "ordinary", Reason: files.SkipReason("future-reason"), Detail: canary}},
+		}, nil
 	})
 	selection = publicationCaptureSelectionFor(t, fixture, fixture.target, invalidReason)
 	captured, err = capturePublicationFiles(context.Background(), selection)
@@ -458,21 +527,111 @@ func TestCapturePublicationFilesRejectsMalformedAndInconsistentProducerShapes(t 
 		name   string
 		result files.Result
 	}{
-		{name: "wrong target", result: files.Result{Observations: []model.Observation{publicationCaptureObservation("other", "file", model.FileRegular, []byte("x"), 0o600)}}},
-		{name: "wrong source", result: files.Result{Observations: []model.Observation{{State: model.ObservationUnknown, Identity: model.EntryKey{TargetID: fixture.target.ID, Source: model.SourceGNOME, SchemaID: "org.example.Test", SettingsPath: "/test/", SettingKey: "key"}}}}},
-		{name: "identity differs from entry", result: files.Result{Observations: []model.Observation{{State: model.ObservationPresent, Identity: model.EntryKey{TargetID: fixture.target.ID, Source: model.SourceFiles, FilePath: "other"}, Entry: valid.Entry}}}},
+		{
+			name: "wrong target",
+			result: files.Result{
+				Observations: []model.Observation{
+					publicationCaptureObservation("other", "file", model.FileRegular, []byte("x"), 0o600),
+				},
+			},
+		},
+		{
+			name: "wrong source",
+			result: files.Result{
+				Observations: []model.Observation{
+					{
+						State: model.ObservationUnknown,
+						Identity: model.EntryKey{
+							TargetID:     fixture.target.ID,
+							Source:       model.SourceGNOME,
+							SchemaID:     "org.example.Test",
+							SettingsPath: "/test/",
+							SettingKey:   "key",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "identity differs from entry",
+			result: files.Result{
+				Observations: []model.Observation{
+					{
+						State: model.ObservationPresent,
+						Identity: model.EntryKey{
+							TargetID: fixture.target.ID,
+							Source:   model.SourceFiles,
+							FilePath: "other",
+						},
+						Entry: valid.Entry,
+					},
+				},
+			},
+		},
 		{name: "duplicate identity", result: files.Result{Observations: []model.Observation{valid, valid}}},
-		{name: "present file ancestor", result: files.Result{Observations: []model.Observation{valid, publicationCaptureUnknown(fixture.target.ID, "file/child")}}},
-		{name: "missing is not file producer output", result: files.Result{Observations: []model.Observation{{State: model.ObservationMissing, Identity: valid.Identity}}}},
-		{name: "untracked is not file producer output", result: files.Result{Observations: []model.Observation{{State: model.ObservationUntracked, Identity: valid.Identity}}}},
-		{name: "directory dot is not an entry", result: files.Result{Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, ".", model.FileDirectory, nil, 0o700)}}},
-		{name: "empty file payload is required", result: files.Result{Observations: []model.Observation{{State: model.ObservationPresent, Identity: valid.Identity, Entry: &model.Entry{TargetID: fixture.target.ID, File: &model.FileEntry{Path: "file", State: model.FilePresent, Kind: model.FileRegular, Mode: 0o600}}}}}},
-		{name: "duplicate skip and observation", result: files.Result{Observations: []model.Observation{valid}, Skipped: []files.Skip{{Path: "file", Reason: files.SkipSpecialFile}}}},
-		{name: "invalid skip path", result: files.Result{Skipped: []files.Skip{{Path: "../escape", Reason: files.SkipSpecialFile}}}},
+		{
+			name: "present file ancestor",
+			result: files.Result{
+				Observations: []model.Observation{valid, publicationCaptureUnknown(fixture.target.ID, "file/child")},
+			},
+		},
+		{
+			name: "missing is not file producer output",
+			result: files.Result{
+				Observations: []model.Observation{{State: model.ObservationMissing, Identity: valid.Identity}},
+			},
+		},
+		{
+			name: "untracked is not file producer output",
+			result: files.Result{
+				Observations: []model.Observation{{State: model.ObservationUntracked, Identity: valid.Identity}},
+			},
+		},
+		{
+			name: "directory dot is not an entry",
+			result: files.Result{
+				Observations: []model.Observation{
+					publicationCaptureObservation(fixture.target.ID, ".", model.FileDirectory, nil, 0o700),
+				},
+			},
+		},
+		{
+			name: "empty file payload is required",
+			result: files.Result{
+				Observations: []model.Observation{
+					{
+						State:    model.ObservationPresent,
+						Identity: valid.Identity,
+						Entry: &model.Entry{
+							TargetID: fixture.target.ID,
+							File: &model.FileEntry{
+								Path:  "file",
+								State: model.FilePresent,
+								Kind:  model.FileRegular,
+								Mode:  0o600,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "duplicate skip and observation",
+			result: files.Result{
+				Observations: []model.Observation{valid},
+				Skipped:      []files.Skip{{Path: "file", Reason: files.SkipSpecialFile}},
+			},
+		},
+		{
+			name:   "invalid skip path",
+			result: files.Result{Skipped: []files.Skip{{Path: "../escape", Reason: files.SkipSpecialFile}}},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil })
+			capture := publicationCapturePortFunc(
+				func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil },
+			)
 			selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 			captured, err := capturePublicationFiles(context.Background(), selection)
 			assert.Equal(t, publicationCapture{}, captured)
@@ -535,7 +694,13 @@ func TestCapturePublicationFilesFiltersExcludedObservationsThroughAncestors(t *t
 	target.Root.Exclude = []string{"blocked"}
 	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
 		return files.Result{Observations: []model.Observation{
-			publicationCaptureObservation(target.ID, "blocked/nested/item", model.FileRegular, []byte("excluded"), 0o600),
+			publicationCaptureObservation(
+				target.ID,
+				"blocked/nested/item",
+				model.FileRegular,
+				[]byte("excluded"),
+				0o600,
+			),
 		}}, nil
 	})
 	selection := publicationCaptureSelectionFor(t, fixture, target, capture)
@@ -568,13 +733,41 @@ func TestCapturePublicationFilesEnforcesProducerBoundsBeforeCopying(t *testing.T
 		name   string
 		result files.Result
 	}{
-		{name: "count", result: files.Result{Observations: make([]model.Observation, files.DefaultBudget().MaxEntries+1)}},
-		{name: "depth", result: files.Result{Observations: []model.Observation{publicationCaptureUnknown(fixture.target.ID, strings.Join(strings.Split(strings.Repeat("d/", 32)+"leaf", "/"), "/"))}}},
-		{name: "file bytes", result: files.Result{Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, "large", model.FileRegular, make([]byte, files.DefaultBudget().MaxFileBytes+1), 0o600)}}},
+		{
+			name:   "count",
+			result: files.Result{Observations: make([]model.Observation, files.DefaultBudget().MaxEntries+1)},
+		},
+		{
+			name: "depth",
+			result: files.Result{
+				Observations: []model.Observation{
+					publicationCaptureUnknown(
+						fixture.target.ID,
+						strings.Join(strings.Split(strings.Repeat("d/", 32)+"leaf", "/"), "/"),
+					),
+				},
+			},
+		},
+		{
+			name: "file bytes",
+			result: files.Result{
+				Observations: []model.Observation{
+					publicationCaptureObservation(
+						fixture.target.ID,
+						"large",
+						model.FileRegular,
+						make([]byte, files.DefaultBudget().MaxFileBytes+1),
+						0o600,
+					),
+				},
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil })
+			capture := publicationCapturePortFunc(
+				func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil },
+			)
 			selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 			captured, err := capturePublicationFiles(context.Background(), selection)
 			assert.Equal(t, publicationCapture{}, captured)
@@ -585,7 +778,13 @@ func TestCapturePublicationFilesEnforcesProducerBoundsBeforeCopying(t *testing.T
 	shared := make([]byte, files.DefaultBudget().MaxFileBytes)
 	observations := make([]model.Observation, 33)
 	for index := range observations {
-		observations[index] = publicationCaptureObservation(fixture.target.ID, fmt.Sprintf("large-%02d", index), model.FileRegular, shared, 0o600)
+		observations[index] = publicationCaptureObservation(
+			fixture.target.ID,
+			fmt.Sprintf("large-%02d", index),
+			model.FileRegular,
+			shared,
+			0o600,
+		)
 	}
 	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
 		return files.Result{Observations: observations}, nil
@@ -603,7 +802,9 @@ func TestCapturePublicationFilesBoundsCombinedCountSkipDepthAndObservationPath(t
 		observations[index] = publicationCaptureUnknown(fixture.target.ID, fmt.Sprintf("unknown-%05d", index))
 	}
 	result := files.Result{Observations: observations}
-	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return result, nil })
+	capture := publicationCapturePortFunc(
+		func(context.Context, config.Target, string) (files.Result, error) { return result, nil },
+	)
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 	positive, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -634,7 +835,9 @@ func TestCapturePublicationFilesBoundsCombinedCountSkipDepthAndObservationPath(t
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			boundedCapture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil })
+			boundedCapture := publicationCapturePortFunc(
+				func(context.Context, config.Target, string) (files.Result, error) { return test.result, nil },
+			)
 			boundedSelection := publicationCaptureSelectionFor(t, fixture, fixture.target, boundedCapture)
 			captured, captureErr := capturePublicationFiles(context.Background(), boundedSelection)
 			assert.Equal(t, publicationCapture{}, captured)
@@ -646,16 +849,21 @@ func TestCapturePublicationFilesBoundsCombinedCountSkipDepthAndObservationPath(t
 func TestCapturePublicationFilesDetachesSelectionAndProducerOwnership(t *testing.T) {
 	fixture := newPublicationSelectionFixture(t)
 	producerContent := []byte("detached")
-	producer := files.Result{Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, "owned", model.FileRegular, producerContent, 0o600)}}
+	producer := files.Result{
+		Observations: []model.Observation{
+			publicationCaptureObservation(fixture.target.ID, "owned", model.FileRegular, producerContent, 0o600),
+		},
+	}
 	calls := 0
-	capture := publicationCapturePortFunc(func(_ context.Context, target config.Target, path string) (files.Result, error) {
-		calls++
-		assert.Equal(t, filepath.Join(fixture.paths.Home, "selected"), path)
-		target.ID = "mutated"
-		target.Root.Path = "mutated"
-		target.Root.Exclude[0] = "mutated"
-		return producer, nil
-	})
+	capture := publicationCapturePortFunc(
+		func(_ context.Context, target config.Target, path string) (files.Result, error) {
+			calls++
+			assert.Equal(t, filepath.Join(fixture.paths.Home, "selected"), path)
+			target.Root.Path = "mutated"
+			target.Root.Exclude[0] = "mutated"
+			return producer, nil
+		},
+	)
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 	first, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -723,17 +931,23 @@ func TestCapturePublicationFilesAllowsAtomicSingleFileReplacementInSameParent(t 
 	fixture := newPublicationSelectionFixture(t)
 	filePath := filepath.Join(fixture.paths.Home, "single.ini")
 	require.NoError(t, os.WriteFile(filePath, []byte("old"), 0o600))
-	target := config.Target{ID: "single", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile}}
-	capture := publicationCapturePortFunc(func(ctx context.Context, selected config.Target, path string) (files.Result, error) {
-		temporary := filepath.Join(fixture.paths.Home, "single-new")
-		if err := os.WriteFile(temporary, []byte("new"), 0o640); err != nil {
-			return files.Result{}, err
-		}
-		if err := os.Rename(temporary, path); err != nil {
-			return files.Result{}, err
-		}
-		return (LocalFilesCapture{}).Capture(ctx, selected, path)
-	})
+	target := config.Target{
+		ID:     "single",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile},
+	}
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, selected config.Target, path string) (files.Result, error) {
+			temporary := filepath.Join(fixture.paths.Home, "single-new")
+			if err := os.WriteFile(temporary, []byte("new"), 0o640); err != nil {
+				return files.Result{}, err
+			}
+			if err := os.Rename(temporary, path); err != nil {
+				return files.Result{}, err
+			}
+			return (LocalFilesCapture{}).Capture(ctx, selected, path)
+		},
+	)
 	selection := publicationCaptureSelectionFor(t, fixture, target, capture)
 	captured, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -749,7 +963,11 @@ func TestCapturePublicationFilesPreservesContainedDirectoryAliases(t *testing.T)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "value"), []byte("inside"), 0o600))
 	alias := filepath.Join(fixture.paths.Home, "selected-alias")
 	require.NoError(t, os.Symlink(root, alias))
-	target := config.Target{ID: "aliased", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "selected-alias", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "aliased",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "selected-alias", Kind: model.SelectionDirectory},
+	}
 	selection := publicationCaptureSelectionFor(t, fixture, target, nil)
 	captured, err := capturePublicationFiles(context.Background(), selection)
 	require.NoError(t, err)
@@ -763,7 +981,19 @@ func TestCapturePublicationFilesClosedFailuresAndCancellation(t *testing.T) {
 	fixture := newPublicationSelectionFixture(t)
 	canary := "private-provider-error-canary"
 	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
-		return files.Result{Observations: []model.Observation{publicationCaptureObservation(fixture.target.ID, "partial", model.FileRegular, []byte("partial"), 0o600)}}, errors.New(canary)
+		return files.Result{
+			Observations: []model.Observation{
+				publicationCaptureObservation(
+					fixture.target.ID,
+					"partial",
+					model.FileRegular,
+					[]byte("partial"),
+					0o600,
+				),
+			},
+		}, errors.New(
+			canary,
+		)
 	})
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, capture)
 	captured, err := capturePublicationFiles(context.Background(), selection)
@@ -782,7 +1012,7 @@ func TestCapturePublicationFilesClosedFailuresAndCancellation(t *testing.T) {
 	cancel()
 	captured, err = capturePublicationFiles(ctx, selection)
 	assert.Equal(t, publicationCapture{}, captured)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assertPublicationCaptureError(t, err, string(publicationCaptureReasonCanceled))
 	assert.Zero(t, calls)
 }

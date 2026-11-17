@@ -6,9 +6,10 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestReaderRecipientSetComparandVariesIndependently(t *testing.T) {
@@ -23,12 +24,21 @@ func TestReaderRecipientSetComparandVariesIndependently(t *testing.T) {
 		policyKeyIDs[index] = bytes.Clone(recipient.KeyID)
 	}
 	policyKeyIDs[0] = bytes.Clone(rogueKeyID)
-	hostileEnvelope, hostileSnapshot := forgeEnvelopeRecipientKeyIDs(t, baseEnvelope, policyKeyIDs, fixtureSigningKey(12))
+	hostileEnvelope, hostileSnapshot := forgeEnvelopeRecipientKeyIDs(
+		t,
+		baseEnvelope,
+		policyKeyIDs,
+		fixtureSigningKey(12),
+	)
 	hostileHead := signFixtureHead(t, fixture, hostileEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, hostileEnvelope, hostileSnapshot, hostileHead)
 
 	hostileIDs := envelopeRecipientKeyIDs(t, hostileEnvelope)
-	assert.Equal(t, len(policy.Recipients), len(hostileIDs), "the hostile key-ID set keeps recipient cardinality unchanged")
+	assert.Len(
+		t,
+		hostileIDs, len(policy.Recipients),
+		"the hostile key-ID set keeps recipient cardinality unchanged",
+	)
 	_, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecipientSet)
 
@@ -44,7 +54,12 @@ func TestReaderRecipientSetComparandVariesIndependently(t *testing.T) {
 	require.NoError(t, err)
 	policyDigest, err := vault.ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
-	putReadRecord(t, fixture.records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(policyObject))
+	putReadRecord(
+		t,
+		fixture.records,
+		RecordKey{Collection: VaultPolicyNSID, RKey: "self"},
+		policyRecordFromObject(policyObject),
+	)
 
 	controlRecordBytes := fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}]
 	controlRecord, err := DecodeRecord(controlRecordBytes)
@@ -54,18 +69,38 @@ func TestReaderRecipientSetComparandVariesIndependently(t *testing.T) {
 	controlBytes := signReadControl(t, control, fixtureSigningKey(11))
 	control, err = vault.DecodeControl(controlBytes)
 	require.NoError(t, err)
-	putReadRecord(t, fixture.records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(control))
+	putReadRecord(
+		t,
+		fixture.records,
+		RecordKey{Collection: VaultControlNSID, RKey: "self"},
+		controlRecordFromObject(control),
+	)
 
 	matchingEnvelope, matchingSnapshot := sealFixtureSnapshot(t, fixture, nil, 0xA2, []byte("fixed recipient set"))
-	assert.Equal(t, hostileIDs, envelopeRecipientKeyIDs(t, matchingEnvelope), "only the trusted policy recipient set changes")
+	assert.Equal(
+		t,
+		hostileIDs,
+		envelopeRecipientKeyIDs(t, matchingEnvelope),
+		"only the trusted policy recipient set changes",
+	)
 	matchingCID := readRawCID(t, matchingEnvelope)
-	matchingHead := craftHead(t, fixture, policyObject.EpochSeq, policyDigest, matchingCID, nil, 1, publisherSigner(), fixtureSigningKey(12))
+	matchingHead := craftHead(
+		t,
+		fixture,
+		policyObject.EpochSeq,
+		policyDigest,
+		matchingCID,
+		nil,
+		1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &fixture, matchingEnvelope, matchingSnapshot, matchingHead)
 
 	result, err := fixture.reader().Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	assert.Equal(t, hostileIDs, envelopeRecipientKeyIDs(t, matchingEnvelope))
-	assert.Equal(t, 2, len(result.Envelope.Recipients))
+	assert.Len(t, result.Envelope.Recipients, 2)
 }
 
 func envelopeRecipientKeyIDs(t *testing.T, envelopeBytes []byte) [][]byte {
@@ -98,7 +133,9 @@ func TestReaderPreviousControlSignerComparandVariesIndependently(t *testing.T) {
 	alternateCertificateRecordBytes, err := EncodeRecord(certificateRecordFromObject(alternateCertificate))
 	require.NoError(t, err)
 	certificates[certificateIdentity("root", alternateKeyID)] = storedCertificate{
-		recordBytes: alternateCertificateRecordBytes, objectBytes: alternateCertificateObjectBytes, object: alternateCertificate,
+		recordBytes: alternateCertificateRecordBytes,
+		objectBytes: alternateCertificateObjectBytes,
+		object:      alternateCertificate,
 	}
 
 	previousPolicyRecord, err := DecodeRecord(fixture.request.PreviousPolicy)
@@ -111,10 +148,26 @@ func TestReaderPreviousControlSignerComparandVariesIndependently(t *testing.T) {
 	alternatePolicyRecordBytes, err := EncodeRecord(policyRecordFromObject(alternatePolicyObject))
 	require.NoError(t, err)
 	require.NoError(t, VerifyRecordBinding(alternatePolicyRecordBytes, alternatePolicyBytes))
-	alternateSigner, err := authorizedReadSigner(alternatePolicyObject.Signer, alternatePolicyObject.Roles, certificates,
-		alternatePolicyObject.Vault, alternatePolicyObject.EpochSeq, fixture.request.TrustAnchor, nil, vault.RoleRoot)
+	alternateSigner, err := authorizedReadSigner(
+		alternatePolicyObject.Signer,
+		alternatePolicyObject.Roles,
+		certificates,
+		alternatePolicyObject.Vault,
+		alternatePolicyObject.EpochSeq,
+		fixture.request.TrustAnchor,
+		nil,
+		vault.RoleRoot,
+	)
 	require.NoError(t, err, "the alternative policy signer is independently certificate-authorized")
-	require.NoError(t, verifySignedObject(alternatePolicyBytes, "dottie/v1/sig-policy", alternatePolicyObject.Signature[:], alternateSigner.object.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		verifySignedObject(
+			alternatePolicyBytes,
+			"dottie/v1/sig-policy",
+			alternatePolicyObject.Signature[:],
+			alternateSigner.object.SigningPublicKey[:],
+		),
+	)
 
 	currentPolicyRecord, err := DecodeRecord(fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}])
 	require.NoError(t, err)
@@ -130,7 +183,11 @@ func TestReaderPreviousControlSignerComparandVariesIndependently(t *testing.T) {
 
 	request.PreviousPolicy = bytes.Clone(fixture.request.PreviousPolicy)
 	err = authorizeControlPredecessor(request, currentPolicy, currentControl, certificates)
-	assert.NoError(t, err, "the fixed predecessor control is accepted when only the trusted policy-signer comparand matches")
+	assert.NoError(
+		t,
+		err,
+		"the fixed predecessor control is accepted when only the trusted policy-signer comparand matches",
+	)
 }
 
 func TestReaderRevocationComparandVariesIndependently(t *testing.T) {
@@ -148,7 +205,11 @@ func TestReaderRevocationComparandVariesIndependently(t *testing.T) {
 
 	_, err = authorizedReadSigner(signer, policy.Roles, certificates, policy.Vault, policy.EpochSeq,
 		fixture.request.TrustAnchor, nil, vault.RolePublisher)
-	assert.NoError(t, err, "the same fixed signer and certificate authorize when the signed revocation comparand is absent")
+	assert.NoError(
+		t,
+		err,
+		"the same fixed signer and certificate authorize when the signed revocation comparand is absent",
+	)
 }
 
 func TestReaderPreviousPolicyDigestComparandVariesIndependently(t *testing.T) {
@@ -169,7 +230,12 @@ func TestReaderPreviousPolicyDigestComparandVariesIndependently(t *testing.T) {
 	previousControlCID := readRawCID(t, previousControlObject)
 	previousSnapshotCID := fixtureSnapshotCID(t, fixture)
 
-	currentPolicyRecordBytes, currentPolicy, currentPolicyDigest := craftSuccessorPolicy(t, fixture, 2, previousPolicyDigest)
+	currentPolicyRecordBytes, currentPolicy, currentPolicyDigest := craftSuccessorPolicy(
+		t,
+		fixture,
+		2,
+		previousPolicyDigest,
+	)
 	currentEnvelope, currentSnapshot := sealSnapshotAtEpoch(t, fixture, currentPolicy, currentPolicyDigest, 2,
 		previousSnapshotCID, 0xB2, []byte("epoch two payload"))
 	currentCID := readRawCID(t, currentEnvelope)
@@ -189,10 +255,26 @@ func TestReaderPreviousPolicyDigestComparandVariesIndependently(t *testing.T) {
 	decoyPolicyRecordBytes, err := EncodeRecord(policyRecordFromObject(decoyPolicyObject))
 	require.NoError(t, err)
 	require.NoError(t, VerifyRecordBinding(decoyPolicyRecordBytes, decoyPolicyBytes))
-	decoySigner, err := authorizedReadSigner(decoyPolicyObject.Signer, decoyPolicyObject.Roles, fixtureCertificates(t, fixture),
-		decoyPolicyObject.Vault, decoyPolicyObject.EpochSeq, fixture.request.TrustAnchor, nil, vault.RoleRoot)
+	decoySigner, err := authorizedReadSigner(
+		decoyPolicyObject.Signer,
+		decoyPolicyObject.Roles,
+		fixtureCertificates(t, fixture),
+		decoyPolicyObject.Vault,
+		decoyPolicyObject.EpochSeq,
+		fixture.request.TrustAnchor,
+		nil,
+		vault.RoleRoot,
+	)
 	require.NoError(t, err)
-	require.NoError(t, verifySignedObject(decoyPolicyBytes, "dottie/v1/sig-policy", decoyPolicyObject.Signature[:], decoySigner.object.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		verifySignedObject(
+			decoyPolicyBytes,
+			"dottie/v1/sig-policy",
+			decoyPolicyObject.Signature[:],
+			decoySigner.object.SigningPublicKey[:],
+		),
+	)
 	fixture.request.PreviousPolicy = decoyPolicyRecordBytes
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
@@ -203,7 +285,11 @@ func TestReaderPreviousPolicyDigestComparandVariesIndependently(t *testing.T) {
 
 	fixture.request.PreviousPolicy = previousPolicyBytes
 	result, err := fixture.reader().Read(context.Background(), fixture.request)
-	require.NoError(t, err, "the fixed current policy succeeds when only PreviousPolicy is varied to its signed predecessor")
+	require.NoError(
+		t,
+		err,
+		"the fixed current policy succeeds when only PreviousPolicy is varied to its signed predecessor",
+	)
 	assert.Equal(t, currentPolicy.EpochSeq, result.Policy.EpochSeq)
 	assert.Equal(t, previousPolicyDigest[:], result.Policy.PrevPolicyDigest)
 }
@@ -228,15 +314,24 @@ func TestReaderPublicationMaximumComparandVariesIndependently(t *testing.T) {
 	require.Equal(t, uint64(2), result.PublicationCount)
 
 	options := PublicationCountOptions{
-		MaxPublications: 1, EnforceMaximum: true,
-		PrevHeadCID: bytes.Clone(result.Head.PrevHeadCID), ParentCID: bytes.Clone(result.Envelope.Parent), EnforceParent: true,
+		MaxPublications: 1,
+		EnforceMaximum:  true,
+		PrevHeadCID: bytes.Clone(
+			result.Head.PrevHeadCID,
+		),
+		ParentCID:     bytes.Clone(result.Envelope.Parent),
+		EnforceParent: true,
 	}
 	err = CheckPublicationCount(context.Background(), fixture.observationStore, fixture.request.Vault, result, options)
 	require.ErrorIs(t, err, vault.ErrPublicationCount)
 
 	options.MaxPublications = 2
 	err = CheckPublicationCount(context.Background(), fixture.observationStore, fixture.request.Vault, result, options)
-	assert.NoError(t, err, "the same authenticated two-publication input passes when only the trusted maximum is raised to two")
+	assert.NoError(
+		t,
+		err,
+		"the same authenticated two-publication input passes when only the trusted maximum is raised to two",
+	)
 }
 
 func TestReaderRecordBindingComparandVariesIndependently(t *testing.T) {

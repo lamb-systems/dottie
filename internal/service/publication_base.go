@@ -80,7 +80,10 @@ const (
 	publicationBaseEligibilityHistory   publicationBaseReason = "history_invalid"
 )
 
-func EstablishLocalReconciliationBase(ctx context.Context, request PublicationReconciliationRequest) (*PublicationReconciliationBase, error) {
+func EstablishLocalReconciliationBase(
+	ctx context.Context,
+	request PublicationReconciliationRequest,
+) (*PublicationReconciliationBase, error) {
 	if ctx == nil || request.Store == nil || request.Local == nil || request.TargetID == "" {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, nil)
 	}
@@ -145,7 +148,12 @@ func EstablishLocalReconciliationBase(ctx context.Context, request PublicationRe
 	if err != nil {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonPlan, err)
 	}
-	plan, err := syncengine.Reconcile(syncengine.BaseView{Status: syncengine.BaseMissing}, localView, projected.entries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
+	plan, err := syncengine.Reconcile(
+		syncengine.BaseView{Status: syncengine.BaseMissing},
+		localView,
+		projected.entries,
+		syncengine.Options{Bindings: []syncengine.TargetBinding{binding}},
+	)
 	if err != nil {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonPlan, err)
 	}
@@ -173,8 +181,17 @@ func EstablishLocalReconciliationBase(ctx context.Context, request PublicationRe
 	return base, nil
 }
 
-func checkBaseEligibility(ctx context.Context, store *publicationstate.Store, position publicationBasePosition, baseSelection publicationBaseSelection, currentFloor publicationstate.Floor, currentSelection publicationSelection) error {
-	if ctx == nil || store == nil || !validPublicationBasePosition(position) || !validPublicationBaseSelection(baseSelection) || !validPublicationFloorInput(currentFloor) {
+func checkBaseEligibility(
+	ctx context.Context,
+	store *publicationstate.Store,
+	position publicationBasePosition,
+	baseSelection publicationBaseSelection,
+	currentFloor publicationstate.Floor,
+	currentSelection publicationSelection,
+) error {
+	if ctx == nil || store == nil || !validPublicationBasePosition(position) ||
+		!validPublicationBaseSelection(baseSelection) ||
+		!validPublicationFloorInput(currentFloor) {
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilityInput, nil)
 	}
 	if err := ctx.Err(); err != nil {
@@ -183,11 +200,15 @@ func checkBaseEligibility(ctx context.Context, store *publicationstate.Store, po
 	if position.floor.Binding != currentFloor.Binding {
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilityBinding, nil)
 	}
-	if position.floor.DatabaseID == ([32]byte{}) || currentFloor.DatabaseID != position.floor.DatabaseID || position.floor.Generation == 0 || currentFloor.Generation != position.floor.Generation || position.floor.Revision > currentFloor.Revision {
+	if position.floor.DatabaseID == ([32]byte{}) || currentFloor.DatabaseID != position.floor.DatabaseID ||
+		position.floor.Generation == 0 ||
+		currentFloor.Generation != position.floor.Generation ||
+		position.floor.Revision > currentFloor.Revision {
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilityLineage, nil)
 	}
 	currentSnapshot := snapshotPublicationBaseSelection(currentSelection)
-	if !validPublicationBaseSelection(currentSnapshot) || !samePublicationBaseSelection(baseSelection, currentSnapshot) {
+	if !validPublicationBaseSelection(currentSnapshot) ||
+		!samePublicationBaseSelection(baseSelection, currentSnapshot) {
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilitySelection, nil)
 	}
 
@@ -199,7 +220,11 @@ func checkBaseEligibility(ctx context.Context, store *publicationstate.Store, po
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilityHistory, nil)
 	}
 	event := page.Events[0]
-	if event.Revision != position.floor.Revision || !reflect.DeepEqual(event.NewFloor, position.floor) || event.EventDigest != position.floor.AcceptedEventDigest || event.ObservationDigest != position.floor.ObservationDigest || !hasAcceptedRecordReference(event.Trace, position.floor) || !hasAcceptedRecordEvidence(page.Records, position.snapshotRecord, position.floor) {
+	if event.Revision != position.floor.Revision || !reflect.DeepEqual(event.NewFloor, position.floor) ||
+		event.EventDigest != position.floor.AcceptedEventDigest ||
+		event.ObservationDigest != position.floor.ObservationDigest ||
+		!hasAcceptedRecordReference(event.Trace, position.floor) ||
+		!hasAcceptedRecordEvidence(page.Records, position.snapshotRecord, position.floor) {
 		return publicationBaseFailure(ctx, publicationBaseEligibilityStage, publicationBaseEligibilityHistory, nil)
 	}
 	return nil
@@ -207,7 +232,9 @@ func checkBaseEligibility(ctx context.Context, store *publicationstate.Store, po
 
 func validPublicationBasePosition(position publicationBasePosition) bool {
 	floor := position.floor
-	if !validPublicationFloorInput(floor) || floor.DatabaseID == ([32]byte{}) || floor.Generation == 0 || len(position.snapshotRecord) == 0 || len(position.snapshotRecord) > publication.MaxRecordBytes {
+	if !validPublicationFloorInput(floor) || floor.DatabaseID == ([32]byte{}) || floor.Generation == 0 ||
+		len(position.snapshotRecord) == 0 ||
+		len(position.snapshotRecord) > publication.MaxRecordBytes {
 		return false
 	}
 	record, err := publication.DecodeSnapshot(position.snapshotRecord)
@@ -215,38 +242,71 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		return false
 	}
 	cid, err := publication.RecordCID(position.snapshotRecord)
-	if err != nil || !bytes.Equal(cid, floor.RecordCID) || record.Vault != floor.Binding.Vault || record.PublicationID != floor.PublicationID || record.PublicationSeq != floor.Sequence || !bytes.Equal(record.Blob.CID, floor.BlobCID) || record.Blob.Size != floor.BlobSize {
+	if err != nil || !bytes.Equal(cid, floor.RecordCID) || record.Vault != floor.Binding.Vault ||
+		record.PublicationID != floor.PublicationID ||
+		record.PublicationSeq != floor.Sequence ||
+		!bytes.Equal(record.Blob.CID, floor.BlobCID) ||
+		record.Blob.Size != floor.BlobSize {
 		return false
 	}
 	sequence, err := publication.ParseSequenceKey(floor.SnapshotKey)
-	if err != nil || sequence != floor.Sequence || publication.VerifyHeadBinding(floor.Head, position.snapshotRecord, floor.SnapshotKey) != nil {
+	if err != nil || sequence != floor.Sequence ||
+		publication.VerifyHeadBinding(floor.Head, position.snapshotRecord, floor.SnapshotKey) != nil {
 		return false
 	}
 	head, err := publication.DecodeHead(floor.Head)
-	return err == nil && head.Vault == floor.Binding.Vault && head.PublicationSeq == floor.Sequence && bytes.Equal(head.SnapshotCID, floor.RecordCID) && bytes.Equal(head.BlobCID, floor.BlobCID)
+	return err == nil && head.Vault == floor.Binding.Vault && head.PublicationSeq == floor.Sequence &&
+		bytes.Equal(head.SnapshotCID, floor.RecordCID) &&
+		bytes.Equal(head.BlobCID, floor.BlobCID)
 }
 
 func validPublicationBaseSelection(selection publicationBaseSelection) bool {
-	if selection.affinity.token == nil || selection.affinity.identity == 0 || selection.affinity.token.identity != selection.affinity.identity || !validPublicationContextPaths(selection.paths) {
+	if selection.affinity.token == nil || selection.affinity.identity == 0 ||
+		selection.affinity.token.identity != selection.affinity.identity ||
+		!validPublicationContextPaths(selection.paths) {
 		return false
 	}
 	portable, err := selection.target.Model()
-	if err != nil || !reflect.DeepEqual(portable, selection.portable) || portable.Validate() != nil || !validPublicationBaseMode(selection.mode) {
+	if err != nil || !reflect.DeepEqual(portable, selection.portable) || portable.Validate() != nil ||
+		!validPublicationBaseMode(selection.mode) {
 		return false
 	}
 	if selection.target.Source == model.SourceFiles {
-		context := &PublicationLocalContext{paths: selection.paths, files: LocalFilesCapture{}, affinity: selection.affinity.token}
-		fileSelection := publicationSelection{
-			context: context, target: cloneSelectionTarget(selection.target), portable: cloneSelectionTargetModel(selection.portable), mode: selection.mode,
-			excludes: append([]string(nil), selection.excludes...), resolvedPath: selection.resolvedPath,
-			anchorPath: selection.anchorPath, anchorName: selection.anchorName, anchorInfo: selection.anchorInfo,
+		context := &PublicationLocalContext{
+			paths:    selection.paths,
+			files:    LocalFilesCapture{},
+			affinity: selection.affinity.token,
 		}
-		return selection.target.Root != nil && len(selection.settingRefs) == 0 && validPublicationFileSelection(fileSelection)
+		fileSelection := publicationSelection{
+			context:      context,
+			target:       cloneSelectionTarget(selection.target),
+			portable:     cloneSelectionTargetModel(selection.portable),
+			mode:         selection.mode,
+			excludes:     append([]string(nil), selection.excludes...),
+			resolvedPath: selection.resolvedPath,
+			anchorPath:   selection.anchorPath,
+			anchorName:   selection.anchorName,
+			anchorInfo:   selection.anchorInfo,
+		}
+		return selection.target.Root != nil && len(selection.settingRefs) == 0 &&
+			validPublicationFileSelection(fileSelection)
 	}
-	if selection.target.Source != model.SourceGNOME || selection.target.Root != nil || selection.target.GNOMEPolicy == nil || len(selection.excludes) != 0 || selection.resolvedPath != "" || selection.anchorPath != "" || selection.anchorName != "" || selection.anchorInfo != nil {
+	if selection.target.Source != model.SourceGNOME || selection.target.Root != nil ||
+		selection.target.GNOMEPolicy == nil ||
+		len(selection.excludes) != 0 ||
+		selection.resolvedPath != "" ||
+		selection.anchorPath != "" ||
+		selection.anchorName != "" ||
+		selection.anchorInfo != nil {
 		return false
 	}
-	refs, ok := publicationGNOMESelectedRefs(publicationSelection{target: selection.target, portable: selection.portable, settingRefs: selection.settingRefs})
+	refs, ok := publicationGNOMESelectedRefs(
+		publicationSelection{
+			target:      selection.target,
+			portable:    selection.portable,
+			settingRefs: selection.settingRefs,
+		},
+	)
 	return ok && sameSettingRefs(refs, selection.settingRefs)
 }
 
@@ -255,7 +315,18 @@ func validPublicationBaseMode(mode config.Mode) bool {
 }
 
 func samePublicationBaseSelection(left, right publicationBaseSelection) bool {
-	if !validPublicationBaseSelection(left) || !validPublicationBaseSelection(right) || left.affinity.token != right.affinity.token || left.affinity.identity != right.affinity.identity || left.paths != right.paths || !reflect.DeepEqual(left.target, right.target) || !reflect.DeepEqual(left.portable, right.portable) || left.mode != right.mode || !samePublicationStrings(left.excludes, right.excludes) || !sameSettingRefs(left.settingRefs, right.settingRefs) || left.resolvedPath != right.resolvedPath || left.anchorPath != right.anchorPath || left.anchorName != right.anchorName {
+	if !validPublicationBaseSelection(left) || !validPublicationBaseSelection(right) ||
+		left.affinity.token != right.affinity.token ||
+		left.affinity.identity != right.affinity.identity ||
+		left.paths != right.paths ||
+		!reflect.DeepEqual(left.target, right.target) ||
+		!reflect.DeepEqual(left.portable, right.portable) ||
+		left.mode != right.mode ||
+		!samePublicationStrings(left.excludes, right.excludes) ||
+		!sameSettingRefs(left.settingRefs, right.settingRefs) ||
+		left.resolvedPath != right.resolvedPath ||
+		left.anchorPath != right.anchorPath ||
+		left.anchorName != right.anchorName {
 		return false
 	}
 	if left.anchorInfo == nil || right.anchorInfo == nil {
@@ -275,7 +346,10 @@ func snapshotPublicationBaseSelection(selection publicationSelection) publicatio
 	if selection.context != nil {
 		result.paths = selection.context.paths
 		if selection.context.affinity != nil {
-			result.affinity = publicationBaseAffinity{token: selection.context.affinity, identity: selection.context.affinity.identity}
+			result.affinity = publicationBaseAffinity{
+				token:    selection.context.affinity,
+				identity: selection.context.affinity.identity,
+			}
 		}
 	}
 	return result
@@ -327,9 +401,21 @@ func publicationBasePlanUnchanged(plan syncengine.Plan) bool {
 	return true
 }
 
-func publicationBaseWithinBounds(base []model.Entry, local syncengine.LocalView, remote []model.Entry, untracked []model.EntryKey) bool {
+func publicationBaseWithinBounds(
+	base []model.Entry,
+	local syncengine.LocalView,
+	remote []model.Entry,
+	untracked []model.EntryKey,
+) bool {
 	views := [][]model.Entry{base, local.Entries, remote}
-	occurrences := []int{len(base), len(local.Entries), len(remote), len(local.Unknown), len(local.Untracked), len(untracked)}
+	occurrences := []int{
+		len(base),
+		len(local.Entries),
+		len(remote),
+		len(local.Unknown),
+		len(local.Untracked),
+		len(untracked),
+	}
 	totalOccurrences := 0
 	for _, count := range occurrences {
 		if count < 0 || count > publicationBaseMaxUnionKeys || totalOccurrences > int(^uint(0)>>1)-count {
@@ -338,10 +424,7 @@ func publicationBaseWithinBounds(base []model.Entry, local syncengine.LocalView,
 		totalOccurrences += count
 	}
 
-	capacity := totalOccurrences
-	if capacity > publicationBaseMaxUnionKeys {
-		capacity = publicationBaseMaxUnionKeys
-	}
+	capacity := min(totalOccurrences, publicationBaseMaxUnionKeys)
 	keys := make(map[model.EntryKey]struct{}, capacity)
 	addKey := func(key model.EntryKey) bool {
 		keys[key] = struct{}{}
@@ -386,6 +469,11 @@ func publicationBaseWithinBounds(base []model.Entry, local syncengine.LocalView,
 	return true
 }
 
-func publicationBaseFailure(ctx context.Context, stage publicationReconciliationStage, reason publicationBaseReason, cause error) error {
+func publicationBaseFailure(
+	ctx context.Context,
+	stage publicationReconciliationStage,
+	reason publicationBaseReason,
+	cause error,
+) error {
 	return publicationReconciliationFailure(ctx, stage, publicationReconciliationReason(reason), cause)
 }

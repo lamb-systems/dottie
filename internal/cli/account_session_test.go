@@ -24,13 +24,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -49,7 +50,10 @@ type memoryOAuthKeyring struct {
 }
 
 func newMemoryOAuthKeyring() *memoryOAuthKeyring {
-	return &memoryOAuthKeyring{memoryAccountKeyring: &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}}, items: make(map[string][]byte)}
+	return &memoryOAuthKeyring{
+		memoryAccountKeyring: &memoryAccountKeyring{items: map[string]vault.DeviceMaterial{}},
+		items:                make(map[string][]byte),
+	}
 }
 
 func (k *memoryOAuthKeyring) Save(_ context.Context, name string, payload []byte) error {
@@ -133,13 +137,13 @@ type cliRewriteTransport struct {
 }
 
 func (r cliRewriteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	copy := request.Clone(request.Context())
-	copy.Header = request.Header.Clone()
-	copy.Header.Set("X-Original-Host", request.URL.Host)
-	copy.URL.Scheme = r.server.Scheme
-	copy.URL.Host = r.server.Host
-	copy.Host = request.URL.Host
-	return r.transport.RoundTrip(copy)
+	cloned := request.Clone(request.Context())
+	cloned.Header = request.Header.Clone()
+	cloned.Header.Set("X-Original-Host", request.URL.Host)
+	cloned.URL.Scheme = r.server.Scheme
+	cloned.URL.Host = r.server.Host
+	cloned.Host = request.URL.Host
+	return r.transport.RoundTrip(cloned)
 }
 
 func newCLIOAuthFake(t *testing.T) *cliOAuthFake {
@@ -162,7 +166,12 @@ func newCLIOAuthFake(t *testing.T) *cliOAuthFake {
 
 func (f *cliOAuthFake) httpClient() *http.Client {
 	serverURL, _ := url.Parse(f.server.URL)
-	return &http.Client{Transport: cliRewriteTransport{server: serverURL, transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}}
+	return &http.Client{
+		Transport: cliRewriteTransport{
+			server:    serverURL,
+			transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		},
+	}
 }
 
 func (f *cliOAuthFake) serveHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -174,11 +183,33 @@ func (f *cliOAuthFake) serveHTTP(writer http.ResponseWriter, request *http.Reque
 	case host == accountTestHandle && request.URL.Path == "/.well-known/atproto-did":
 		_, _ = io.WriteString(writer, f.did)
 	case host == "plc.directory" && strings.HasPrefix(request.URL.Path, "/did:"):
-		writeCLIJSON(writer, map[string]any{"id": f.documentID, "alsoKnownAs": []string{"at://" + accountTestHandle}, "service": []map[string]string{{"id": f.documentID + "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": f.pds}}})
+		writeCLIJSON(
+			writer,
+			map[string]any{
+				"id":          f.documentID,
+				"alsoKnownAs": []string{"at://" + accountTestHandle},
+				"service": []map[string]string{
+					{
+						"id":              f.documentID + "#atproto_pds",
+						"type":            "AtprotoPersonalDataServer",
+						"serviceEndpoint": f.pds,
+					},
+				},
+			},
+		)
 	case host == "pds.example" && request.URL.Path == "/.well-known/oauth-protected-resource":
 		writeCLIJSON(writer, map[string]any{"resource": f.pds, "authorization_servers": []string{f.issuer}})
 	case host == "issuer.example" && request.URL.Path == "/.well-known/oauth-authorization-server":
-		writeCLIJSON(writer, map[string]any{"issuer": f.issuer, "authorization_endpoint": f.issuer + "/authorize", "token_endpoint": f.tokenEndpoint, "pushed_authorization_request_endpoint": f.issuer + "/par", "revocation_endpoint": f.revocationEndpoint})
+		writeCLIJSON(
+			writer,
+			map[string]any{
+				"issuer":                                f.issuer,
+				"authorization_endpoint":                f.issuer + "/authorize",
+				"token_endpoint":                        f.tokenEndpoint,
+				"pushed_authorization_request_endpoint": f.issuer + "/par",
+				"revocation_endpoint":                   f.revocationEndpoint,
+			},
+		)
 	case host == "issuer.example" && request.URL.Path == "/par":
 		_ = request.ParseForm()
 		f.parForm = request.Form
@@ -196,7 +227,16 @@ func (f *cliOAuthFake) serveHTTP(writer http.ResponseWriter, request *http.Reque
 			_, _ = io.WriteString(writer, f.tokenBody)
 			return
 		}
-		writeCLIJSON(writer, map[string]any{"access_token": f.tokenAccess, "refresh_token": f.tokenRefresh, "token_type": "DPoP", "scope": f.tokenScope, "sub": accountTestDID})
+		writeCLIJSON(
+			writer,
+			map[string]any{
+				"access_token":  f.tokenAccess,
+				"refresh_token": f.tokenRefresh,
+				"token_type":    "DPoP",
+				"scope":         f.tokenScope,
+				"sub":           accountTestDID,
+			},
+		)
 	case host == "issuer.example" && request.URL.Path == "/revoke":
 		f.revokeRequests++
 		if f.revokeRequests == 1 && f.revokeStatus != 0 {
@@ -243,14 +283,24 @@ func writeCLIJSON(writer http.ResponseWriter, value any) {
 
 func cliSessionOptions(fake *cliOAuthFake) accountSessionOptions {
 	return accountSessionOptions{
-		oauthOptions: []atproto.ClientOption{atproto.WithHTTPClient(fake.httpClient()), atproto.WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errors.New("not found") })},
-		browser:      func(string) error { return fake.sendCallback() },
-		env:          os.Getenv,
-		sessionLock:  func(context.Context, string) (func() error, error) { return func() error { return nil }, nil },
+		oauthOptions: []atproto.ClientOption{
+			atproto.WithHTTPClient(fake.httpClient()),
+			atproto.WithTXTLookup(
+				func(context.Context, string) ([]string, error) { return nil, errors.New("not found") },
+			),
+		},
+		browser:     func(string) error { return fake.sendCallback() },
+		env:         os.Getenv,
+		sessionLock: func(context.Context, string) (func() error, error) { return func() error { return nil }, nil },
 	}
 }
 
-func runAccountWithSession(args []string, open accountKeyringFactory, options accountSessionOptions, stdout, stderr *bytes.Buffer) int {
+func runAccountWithSession(
+	args []string,
+	open accountKeyringFactory,
+	options accountSessionOptions,
+	stdout, stderr *bytes.Buffer,
+) int {
 	exitCode := 0
 	command := newAccountCommandWithSession(stdout, stderr, open, &exitCode, options)
 	ctx := context.Background()
@@ -266,7 +316,13 @@ func TestAccountLoginPersistsFullScopesAndPrintsSafeFollowups(t *testing.T) {
 	keyring := newMemoryOAuthKeyring()
 	options := cliSessionOptions(fake)
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"login", "--handle", accountTestHandle}, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
+	code := runAccountWithSession(
+		[]string{"login", "--handle", accountTestHandle},
+		func() (accountKeyring, error) { return keyring, nil },
+		options,
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 0, code)
 	assert.Empty(t, stderr.String())
 	assert.Contains(t, stdout.String(), "authorization URL:")
@@ -315,15 +371,27 @@ func TestAccountLoginNoBrowserAndBrowserFailureStillComplete(t *testing.T) {
 					callbackDone <- fake.sendCallback()
 				}()
 				var stdout, stderr bytes.Buffer
-				code := runAccountWithSession(test.args, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
+				code := runAccountWithSession(
+					test.args,
+					func() (accountKeyring, error) { return keyring, nil },
+					options,
+					&stdout,
+					&stderr,
+				)
 				require.Equal(t, 0, code)
-				assert.NoError(t, <-callbackDone)
+				require.NoError(t, <-callbackDone)
 				assert.Equal(t, 0, browserCalls)
 				assert.Empty(t, stderr.String())
 				return
 			}
 			var stdout, stderr bytes.Buffer
-			code := runAccountWithSession(test.args, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
+			code := runAccountWithSession(
+				test.args,
+				func() (accountKeyring, error) { return keyring, nil },
+				options,
+				&stdout,
+				&stderr,
+			)
 			require.Equal(t, 0, code)
 			assert.Equal(t, 1, browserCalls)
 			assert.Contains(t, stderr.String(), "could not open a browser")
@@ -335,9 +403,15 @@ func TestAccountLoginNoBrowserAndBrowserFailureStillComplete(t *testing.T) {
 func TestAccountLoginTimeoutBoundsAreValidatedBeforeKeyringAccess(t *testing.T) {
 	for _, timeout := range []string{"0s", "16m", "not-a-duration"} {
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"login", "--handle", accountTestHandle, "--timeout", timeout}, func() (accountKeyring, error) {
-			return nil, errors.New("keyring must not be opened")
-		}, accountSessionOptions{}, &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"login", "--handle", accountTestHandle, "--timeout", timeout},
+			func() (accountKeyring, error) {
+				return nil, errors.New("keyring must not be opened")
+			},
+			accountSessionOptions{},
+			&stdout,
+			&stderr,
+		)
 		assert.Equal(t, 2, code)
 		assert.Contains(t, stderr.String(), "--timeout must be between 1s and 15m")
 	}
@@ -350,7 +424,13 @@ func TestAccountLoginTimeoutExitsWithoutSession(t *testing.T) {
 	options := cliSessionOptions(fake)
 	options.browser = func(string) error { return nil }
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"login", "--handle", accountTestHandle, "--no-browser", "--timeout", "1s"}, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
+	code := runAccountWithSession(
+		[]string{"login", "--handle", accountTestHandle, "--no-browser", "--timeout", "1s"},
+		func() (accountKeyring, error) { return keyring, nil },
+		options,
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "authorization timed out")
 	assert.Contains(t, stderr.String(), "no session was stored")
@@ -369,8 +449,14 @@ func TestAccountLoginOAuthFailureIsActionableAndDoesNotLeakBody(t *testing.T) {
 		callbackDone <- fake.sendCallback()
 	}()
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"login", "--handle", accountTestHandle, "--no-browser"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
-	assert.NoError(t, <-callbackDone)
+	code := runAccountWithSession(
+		[]string{"login", "--handle", accountTestHandle, "--no-browser"},
+		func() (accountKeyring, error) { return keyring, nil },
+		cliSessionOptions(fake),
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, <-callbackDone)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "HTTP 400 (invalid_grant)")
 	assert.Contains(t, stderr.String(), "no session was stored")
@@ -389,8 +475,14 @@ func TestAccountLoginPersistenceUncertaintyDoesNotClaimNothingStored(t *testing.
 		callbackDone <- fake.sendCallback()
 	}()
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"login", "--handle", accountTestHandle, "--no-browser"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
-	assert.NoError(t, <-callbackDone)
+	code := runAccountWithSession(
+		[]string{"login", "--handle", accountTestHandle, "--no-browser"},
+		func() (accountKeyring, error) { return keyring, nil },
+		cliSessionOptions(fake),
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, <-callbackDone)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "keyring persistence is uncertain")
 	assert.NotContains(t, stderr.String(), "no session was stored")
@@ -398,7 +490,13 @@ func TestAccountLoginPersistenceUncertaintyDoesNotClaimNothingStored(t *testing.
 	assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
 	stdout.Reset()
 	stderr.Reset()
-	code = runAccountWithSession([]string{"status", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+	code = runAccountWithSession(
+		[]string{"status", "--did", accountTestDID},
+		func() (accountKeyring, error) { return keyring, nil },
+		cliSessionOptions(fake),
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout.String(), "authorization: usable")
 }
@@ -414,8 +512,14 @@ func TestAccountLoginBusyLockIsNotPersistenceUncertain(t *testing.T) {
 		callbackDone <- fake.sendCallback()
 	}()
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"login", "--handle", accountTestHandle, "--no-browser"}, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
-	assert.NoError(t, <-callbackDone)
+	code := runAccountWithSession(
+		[]string{"login", "--handle", accountTestHandle, "--no-browser"},
+		func() (accountKeyring, error) { return keyring, nil },
+		options,
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, <-callbackDone)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "another dottie command")
 	assert.NotContains(t, stderr.String(), "persistence is uncertain")
@@ -423,7 +527,11 @@ func TestAccountLoginBusyLockIsNotPersistenceUncertain(t *testing.T) {
 }
 
 func TestAccountRefreshFailurePersistenceUncertaintyGuidance(t *testing.T) {
-	failure := accountRefreshFailure(fmt.Errorf("%w: lost reply", atproto.ErrSessionPersistenceUncertain), "", accountTestDID)
+	failure := accountRefreshFailure(
+		fmt.Errorf("%w: lost reply", atproto.ErrSessionPersistenceUncertain),
+		"",
+		accountTestDID,
+	)
 	assert.Contains(t, failure.Error(), "keyring persistence is uncertain")
 	assert.Contains(t, failure.Error(), accountTestDID)
 	assert.NotContains(t, failure.Error(), "sign in again")
@@ -459,7 +567,13 @@ func TestAccountStatusOfflineUsablePendingMissingCorruptAndKeyringErrors(t *test
 			}
 			keyring.loadErr = test.loadErr
 			var stdout, stderr bytes.Buffer
-			code := runAccountWithSession([]string{"status", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+			code := runAccountWithSession(
+				[]string{"status", "--did", accountTestDID},
+				func() (accountKeyring, error) { return keyring, nil },
+				cliSessionOptions(fake),
+				&stdout,
+				&stderr,
+			)
 			require.Equal(t, test.wantCode, code)
 			if test.wantCode == 0 {
 				assert.Contains(t, stdout.String(), test.wantText)
@@ -478,7 +592,13 @@ func TestAccountStatusHandleResolutionAndRefreshOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"status", "--handle", accountTestHandle}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"status", "--handle", accountTestHandle},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 0, code)
 		assert.Contains(t, stdout.String(), "authorization: usable")
 		assert.NotEmpty(t, fake.requests)
@@ -489,7 +609,13 @@ func TestAccountStatusHandleResolutionAndRefreshOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"status", "--did", accountTestDID, "--refresh"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"status", "--did", accountTestDID, "--refresh"},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 0, code)
 		assert.Contains(t, stdout.String(), "pds: https://pds.example")
 		assert.Contains(t, stdout.String(), "refresh token: present")
@@ -526,7 +652,13 @@ func TestAccountStatusHandleResolutionAndRefreshOutcomes(t *testing.T) {
 			seedCLISession(t, keyring, atproto.SessionStateUsable)
 			test.setup(fake, keyring, &options)
 			var stdout, stderr bytes.Buffer
-			code := runAccountWithSession([]string{"status", "--did", accountTestDID, "--refresh"}, func() (accountKeyring, error) { return keyring, nil }, options, &stdout, &stderr)
+			code := runAccountWithSession(
+				[]string{"status", "--did", accountTestDID, "--refresh"},
+				func() (accountKeyring, error) { return keyring, nil },
+				options,
+				&stdout,
+				&stderr,
+			)
 			require.Equal(t, 1, code)
 			assert.Contains(t, stderr.String(), test.wantText)
 			assert.Contains(t, stderr.String(), "pending local changes are preserved")
@@ -555,7 +687,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 				seedCLISession(t, keyring, atproto.SessionStateUsable)
 			}
 			var stdout, stderr bytes.Buffer
-			code := runAccountWithSession([]string{"logout", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+			code := runAccountWithSession(
+				[]string{"logout", "--did", accountTestDID},
+				func() (accountKeyring, error) { return keyring, nil },
+				cliSessionOptions(fake),
+				&stdout,
+				&stderr,
+			)
 			require.Equal(t, 0, code)
 			assert.Contains(t, stdout.String(), "local authorization deleted")
 			assert.Empty(t, stderr.String())
@@ -569,7 +707,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		keyring.deleteErr = platform.ErrKeyringLocked
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--did", accountTestDID}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--did", accountTestDID},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "keyring is locked")
 		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
@@ -581,7 +725,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--did", accountTestDID, "--remote"},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 0, code)
 		assert.Contains(t, stdout.String(), "revocation request accepted")
 		assert.Contains(t, stdout.String(), "previously issued access tokens may remain valid")
@@ -595,7 +745,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--did", accountTestDID, "--remote"},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "HTTP 400")
 		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
@@ -606,7 +762,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--handle", accountTestHandle}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--handle", accountTestHandle},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 0, code)
 		assert.Contains(t, stdout.String(), "local authorization deleted")
 		assert.NotEmpty(t, fake.requests)
@@ -618,7 +780,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		keyring := newMemoryOAuthKeyring()
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--did", accountTestDID, "--remote"},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "does not advertise a revocation endpoint")
 		assert.NotEmpty(t, keyring.items[cliSessionItemName(accountTestDID)])
@@ -630,7 +798,13 @@ func TestAccountLogoutLocalCorruptPendingUsableAndRemoteOutcomes(t *testing.T) {
 		seedCLISession(t, keyring, atproto.SessionStateUsable)
 		keyring.deleteErr = errors.New("synthetic delete failure")
 		var stdout, stderr bytes.Buffer
-		code := runAccountWithSession([]string{"logout", "--did", accountTestDID, "--remote"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+		code := runAccountWithSession(
+			[]string{"logout", "--did", accountTestDID, "--remote"},
+			func() (accountKeyring, error) { return keyring, nil },
+			cliSessionOptions(fake),
+			&stdout,
+			&stderr,
+		)
 		require.Equal(t, 1, code)
 		assert.Contains(t, stderr.String(), "revocation request accepted")
 		assert.Contains(t, stderr.String(), "local authorization could not be deleted")
@@ -669,12 +843,35 @@ func TestAccountStatusCommandsPreservePendingStateDirectoryBytes(t *testing.T) {
 	require.NoError(t, err)
 	store, err := state.Open(paths)
 	require.NoError(t, err)
-	descriptor := state.TargetDescriptor{ID: "target", Version: 1, Source: model.SourceFiles, SourceVersion: model.SourceVersion, LogicalBase: model.RootHome, LogicalPath: "prefs", Kind: model.SelectionDirectory, Mode: "review", CreatedAt: 1}
+	descriptor := state.TargetDescriptor{
+		ID:            "target",
+		Version:       1,
+		Source:        model.SourceFiles,
+		SourceVersion: model.SourceVersion,
+		LogicalBase:   model.RootHome,
+		LogicalPath:   "prefs",
+		Kind:          model.SelectionDirectory,
+		Mode:          "review",
+		CreatedAt:     1,
+	}
 	require.NoError(t, store.PutTarget(context.Background(), descriptor))
 	identity := model.EntryKey{TargetID: "target", Source: model.SourceFiles, FilePath: "prefs/settings.toml"}
 	preimage := state.NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("before"))
 	postimage := state.NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("after"))
-	_, err = store.AppendJournal(context.Background(), state.JournalEntry{ID: "pending-change", Operation: "replace", State: "pending", Stage: state.JournalStagePending, Identity: identity, Preimage: preimage, Postimage: postimage, CreatedAt: 1}, []byte("before"))
+	_, err = store.AppendJournal(
+		context.Background(),
+		state.JournalEntry{
+			ID:        "pending-change",
+			Operation: "replace",
+			State:     "pending",
+			Stage:     state.JournalStagePending,
+			Identity:  identity,
+			Preimage:  preimage,
+			Postimage: postimage,
+			CreatedAt: 1,
+		},
+		[]byte("before"),
+	)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	before := snapshotStateTree(t, paths.AppStateDir())
@@ -684,7 +881,13 @@ func TestAccountStatusCommandsPreservePendingStateDirectoryBytes(t *testing.T) {
 	keyring := newMemoryOAuthKeyring()
 	seedCLISession(t, keyring, atproto.SessionStateUsable)
 	var stdout, stderr bytes.Buffer
-	code := runAccountWithSession([]string{"status", "--did", accountTestDID, "--refresh"}, func() (accountKeyring, error) { return keyring, nil }, cliSessionOptions(fake), &stdout, &stderr)
+	code := runAccountWithSession(
+		[]string{"status", "--did", accountTestDID, "--refresh"},
+		func() (accountKeyring, error) { return keyring, nil },
+		cliSessionOptions(fake),
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "pending local changes are preserved")
 	after := snapshotStateTree(t, paths.AppStateDir())
@@ -702,7 +905,12 @@ func TestAccountStatusCommandsPreservePendingStateDirectoryBytes(t *testing.T) {
 
 func TestAccountRootHelpListsLoginLogoutStatusButTopLevelLoginStaysUnsupported(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	root := newAccountCommand(&stdout, &stderr, func() (accountKeyring, error) { return newMemoryOAuthKeyring(), nil }, new(int))
+	root := newAccountCommand(
+		&stdout,
+		&stderr,
+		func() (accountKeyring, error) { return newMemoryOAuthKeyring(), nil },
+		new(int),
+	)
 	err := root.Run(context.Background(), []string{"account", "--help"})
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "login")
@@ -734,7 +942,15 @@ func seedCLISession(t *testing.T, keyring *memoryOAuthKeyring, sessionState stri
 func seedCLISessionDID(t *testing.T, keyring *memoryOAuthKeyring, did, sessionState string) {
 	t.Helper()
 	if sessionState == atproto.SessionStateRefreshPending {
-		envelope := cliSessionEnvelope{Version: 1, DID: did, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: sessionState}
+		envelope := cliSessionEnvelope{
+			Version:       1,
+			DID:           did,
+			Handle:        accountTestHandle,
+			Issuer:        "https://issuer.example",
+			TokenEndpoint: "https://issuer.example/token",
+			Scopes:        atproto.VaultScopes(),
+			State:         sessionState,
+		}
 		encoded, err := json.Marshal(envelope)
 		require.NoError(t, err)
 		keyring.items[cliSessionItemName(did)] = encoded
@@ -744,7 +960,17 @@ func seedCLISessionDID(t *testing.T, keyring *memoryOAuthKeyring, did, sessionSt
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	require.NoError(t, err)
-	envelope := cliSessionEnvelope{Version: 1, DID: did, Handle: accountTestHandle, Issuer: "https://issuer.example", TokenEndpoint: "https://issuer.example/token", Scopes: atproto.VaultScopes(), State: atproto.SessionStateUsable, RefreshToken: "stored-refresh-token", DPoPPrivateKey: base64.RawURLEncoding.EncodeToString(der)}
+	envelope := cliSessionEnvelope{
+		Version:        1,
+		DID:            did,
+		Handle:         accountTestHandle,
+		Issuer:         "https://issuer.example",
+		TokenEndpoint:  "https://issuer.example/token",
+		Scopes:         atproto.VaultScopes(),
+		State:          atproto.SessionStateUsable,
+		RefreshToken:   "stored-refresh-token",
+		DPoPPrivateKey: base64.RawURLEncoding.EncodeToString(der),
+	}
 	encoded, err := json.Marshal(envelope)
 	require.NoError(t, err)
 	keyring.items[cliSessionItemName(did)] = encoded

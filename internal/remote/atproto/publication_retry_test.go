@@ -14,10 +14,11 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/state"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type retryApplyResult struct {
@@ -58,7 +59,12 @@ func (io *publicationRetryTestIO) ReadCurrent(_ context.Context) (*Revision, vau
 	return revision, io.predecessor, err
 }
 
-func (io *publicationRetryTestIO) StageCandidate(_ context.Context, data []byte, _ vault.Policy, _ [][]byte) (json.RawMessage, string, error) {
+func (io *publicationRetryTestIO) StageCandidate(
+	_ context.Context,
+	data []byte,
+	_ vault.Policy,
+	_ [][]byte,
+) (json.RawMessage, string, error) {
 	io.stageCount++
 	io.stageBytes = append(io.stageBytes, bytes.Clone(data))
 	blobCID := cid.NewCidV1(cid.Raw, mustTransitionMultihash(data)).String()
@@ -74,11 +80,21 @@ func (io *publicationRetryTestIO) StageCandidate(_ context.Context, data []byte,
 			<-io.stageRelease
 		})
 	}
-	blob, err := json.Marshal(atdata.Blob{Ref: atdata.CIDLink(cid.NewCidV1(cid.Raw, mustTransitionMultihash(data))), MimeType: "application/octet-stream", Size: int64(len(data))})
+	blob, err := json.Marshal(
+		atdata.Blob{
+			Ref:      atdata.CIDLink(cid.NewCidV1(cid.Raw, mustTransitionMultihash(data))),
+			MimeType: "application/octet-stream",
+			Size:     int64(len(data)),
+		},
+	)
 	return blob, blobCID, err
 }
 
-func (io *publicationRetryTestIO) applyPublication(_ context.Context, _ *Revision, publication FencedSnapshotPublication) (string, error) {
+func (io *publicationRetryTestIO) applyPublication(
+	_ context.Context,
+	_ *Revision,
+	publication FencedSnapshotPublication,
+) (string, error) {
 	io.applyCount++
 	outcome := retryApplyResult{write: true, commitCID: "bafy-commit-result"}
 	if len(io.applyResults) > 0 {
@@ -101,18 +117,34 @@ func retryTestOptions(store TransitionAttemptStore) PublicationRetryOptions {
 	}
 }
 
-func currentPublicationRevision(t *testing.T, publication vault.Publication, signer ed25519.PrivateKey, predecessor vault.Predecessor) *Revision {
+func currentPublicationRevision(
+	t *testing.T,
+	publication vault.Publication,
+	signer ed25519.PrivateKey,
+	predecessor vault.Predecessor,
+) *Revision {
 	t.Helper()
 	base, err := publicationRevisionForPredecessor(predecessor)
 	require.NoError(t, err)
-	candidate, err := snapshotPublication(publication, signer, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), base, predecessor)
+	candidate, err := snapshotPublication(
+		publication,
+		signer,
+		blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)),
+		base,
+		predecessor,
+	)
 	require.NoError(t, err)
 	revision := publicationResolutionRevision(candidate)
 	require.NotNil(t, revision)
 	return revision
 }
 
-func retryAttemptFor(t *testing.T, publication vault.Publication, signer ed25519.PrivateKey, outcome, disposition string) state.TransitionAttempt {
+func retryAttemptFor(
+	t *testing.T,
+	publication vault.Publication,
+	signer ed25519.PrivateKey,
+	outcome, disposition string,
+) state.TransitionAttempt {
 	t.Helper()
 	marker, recordCID, err := publicationMarker(publication, signer)
 	require.NoError(t, err)
@@ -122,10 +154,16 @@ func retryAttemptFor(t *testing.T, publication vault.Publication, signer ed25519
 	})
 	require.NoError(t, err)
 	return state.TransitionAttempt{
-		ID: "retry-attempt", MarkerCollection: marker.Collection, MarkerRKey: marker.RKey,
-		ExpectedRecordCID: recordCID, CandidateBlobCID: cid.NewCidV1(cid.Raw, mustTransitionMultihash(publication.Snapshot)).String(),
-		EpochSeq: publication.Predecessor.EpochSeq, PolicyDigest: hex.EncodeToString(publication.PolicyDigest[:]),
-		Outcome: outcome, Evidence: string(evidence), CreatedAt: 1,
+		ID:                "retry-attempt",
+		MarkerCollection:  marker.Collection,
+		MarkerRKey:        marker.RKey,
+		ExpectedRecordCID: recordCID,
+		CandidateBlobCID:  cid.NewCidV1(cid.Raw, mustTransitionMultihash(publication.Snapshot)).String(),
+		EpochSeq:          publication.Predecessor.EpochSeq,
+		PolicyDigest:      hex.EncodeToString(publication.PolicyDigest[:]),
+		Outcome:           outcome,
+		Evidence:          string(evidence),
+		CreatedAt:         1,
 	}
 }
 
@@ -186,13 +224,20 @@ func TestPublishWithRetryCurrentMarkerOutcomesDoNotWrite(t *testing.T) {
 				tc.mutate(t, io.current, marker.RKey)
 			}
 			store := newTransitionTestStore()
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			assert.Equal(t, tc.wantStatus, result.Status)
 			assert.Equal(t, tc.wantNoOp, result.NoOp)
 			if tc.wantErr == nil {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			} else {
-				assert.ErrorIs(t, err, tc.wantErr)
+				require.ErrorIs(t, err, tc.wantErr)
 			}
 			assert.Zero(t, io.stageCount)
 			assert.Zero(t, io.applyCount)
@@ -217,10 +262,21 @@ func TestPublishWithRetryHistoricalRowsAndDispositionPrecedence(t *testing.T) {
 			_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 			io := newPublicationRetryTestIO(predecessor)
 			store := newTransitionTestStore()
-			addRetryAttempt(t, store, retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeNotLanded, tc.disposition))
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			addRetryAttempt(
+				t,
+				store,
+				retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeNotLanded, tc.disposition),
+			)
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			assert.Equal(t, tc.status, result.Status)
-			assert.ErrorIs(t, err, tc.wantErr)
+			require.ErrorIs(t, err, tc.wantErr)
 			assert.Zero(t, io.stageCount)
 			assert.Zero(t, io.applyCount)
 		})
@@ -234,9 +290,16 @@ func TestPublishWithRetryHistoricalRowWithDifferentRecordCIDIsIDReuse(t *testing
 	attempt := retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeNotLanded, retryDispositionAmbiguous)
 	attempt.ExpectedRecordCID = "bafy-different-record"
 	addRetryAttempt(t, store, attempt)
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	assert.Equal(t, PublicationRejected, result.Status)
-	assert.ErrorIs(t, err, ErrPublicationIDReuse)
+	require.ErrorIs(t, err, ErrPublicationIDReuse)
 	assert.Zero(t, io.stageCount)
 	assert.Zero(t, io.applyCount)
 }
@@ -258,7 +321,11 @@ func TestPublishWithRetryCommittedAndUnavailableRowsUseCurrentEvidenceReadOnly(t
 			_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 			io := newPublicationRetryTestIO(predecessor)
 			store := newTransitionTestStore()
-			addRetryAttempt(t, store, retryAttemptFor(t, publication, signer.Signing, tc.outcome, retryDispositionAmbiguous))
+			addRetryAttempt(
+				t,
+				store,
+				retryAttemptFor(t, publication, signer.Signing, tc.outcome, retryDispositionAmbiguous),
+			)
 			if tc.outcome == TransitionOutcomeUnavailable || tc.moveHead {
 				io.current = currentPublicationRevision(t, publication, signer.Signing, predecessor)
 				if tc.moveHead {
@@ -272,18 +339,33 @@ func TestPublishWithRetryCommittedAndUnavailableRowsUseCurrentEvidenceReadOnly(t
 					require.NoError(t, addPublicationTestRecord(io.current, headKey, headRecord))
 				}
 			}
-			before, err := store.TransitionAttemptsByMarker(context.Background(), VaultSnapshotNSID, publicationMarkerRKey(mustPublicationID(t, publication)))
+			before, err := store.TransitionAttemptsByMarker(
+				context.Background(),
+				VaultSnapshotNSID,
+				publicationMarkerRKey(mustPublicationID(t, publication)),
+			)
 			require.NoError(t, err)
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			assert.Equal(t, tc.status, result.Status)
 			if tc.wantErr == nil {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			} else {
-				assert.ErrorIs(t, err, tc.wantErr)
+				require.ErrorIs(t, err, tc.wantErr)
 			}
 			assert.Zero(t, io.stageCount)
 			assert.Zero(t, io.applyCount)
-			after, queryErr := store.TransitionAttemptsByMarker(context.Background(), VaultSnapshotNSID, publicationMarkerRKey(mustPublicationID(t, publication)))
+			after, queryErr := store.TransitionAttemptsByMarker(
+				context.Background(),
+				VaultSnapshotNSID,
+				publicationMarkerRKey(mustPublicationID(t, publication)),
+			)
 			require.NoError(t, queryErr)
 			assert.Equal(t, before, after, "read-only terminal recovery must not rewrite attempt rows")
 		})
@@ -342,9 +424,16 @@ func TestPublishWithRetryMissingOrUnknownDispositionFailsClosed(t *testing.T) {
 				attempt.Evidence = string(encoded)
 			}
 			addRetryAttempt(t, store, attempt)
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			assert.Equal(t, tc.wantStatus, result.Status)
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Zero(t, io.stageCount)
 			assert.Zero(t, io.applyCount)
 		})
@@ -359,10 +448,21 @@ func TestPublishWithRetryPendingAttemptsAndReadErrorStrata(t *testing.T) {
 			store := newTransitionTestStore()
 			attempt := retryAttemptFor(t, publication, signer.Signing, outcome, retryDispositionAmbiguous)
 			addRetryAttempt(t, store, attempt)
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			require.NoError(t, err)
 			assert.Equal(t, PublicationCommitted, result.Status)
-			attempts, err := store.TransitionAttemptsByMarker(context.Background(), attempt.MarkerCollection, attempt.MarkerRKey)
+			attempts, err := store.TransitionAttemptsByMarker(
+				context.Background(),
+				attempt.MarkerCollection,
+				attempt.MarkerRKey,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, TransitionOutcomeNotLanded, attempts[0].Outcome)
 			assert.Equal(t, 1, io.stageCount)
@@ -392,9 +492,9 @@ func TestPublishWithRetryPendingAttemptsAndReadErrorStrata(t *testing.T) {
 			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, options)
 			assert.Equal(t, tc.status, result.Status)
 			if tc.wantErr != nil {
-				assert.ErrorIs(t, err, tc.wantErr)
+				require.ErrorIs(t, err, tc.wantErr)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 			assert.Equal(t, tc.reads, result.Attempts)
 			if tc.name == "transient read retries" {
@@ -411,20 +511,41 @@ func TestPublishWithRetryLocalUploadLimitDoesNotSignalDisclosure(t *testing.T) {
 	io := newPublicationRetryTestIO(predecessor)
 	io.stageErrors = []error{ErrCandidateExceedsBlobUploadLimit}
 	store := newTransitionTestStore()
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.ErrorIs(t, err, ErrPublicationRejected)
 	assert.Equal(t, PublicationRejected, result.Status)
-	assert.NotErrorIs(t, err, ErrCandidateMayBeDisclosed)
+	require.NotErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Zero(t, io.applyCount)
 }
 
 func TestPublishWithRetryAmbiguousAbsenceRetriesSameCandidate(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
-	io.applyResults = []retryApplyResult{{write: false, err: errors.Join(ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)}, {write: true}}
+	io.applyResults = []retryApplyResult{
+		{write: false, err: errors.Join(ErrAmbiguousTransport, ErrCandidateMayBeDisclosed)},
+		{write: true},
+	}
 	store := newTransitionTestStore()
-	addRetryAttempt(t, store, retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeNotLanded, retryDispositionAmbiguous))
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	addRetryAttempt(
+		t,
+		store,
+		retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeNotLanded, retryDispositionAmbiguous),
+	)
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationCommitted, result.Status)
 	assert.Equal(t, 2, result.Attempts)
@@ -440,8 +561,19 @@ func TestPublishWithRetryUnavailableAmbiguousAbsenceRetries(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
 	store := newTransitionTestStore()
-	addRetryAttempt(t, store, retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeUnavailable, retryDispositionAmbiguous))
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	addRetryAttempt(
+		t,
+		store,
+		retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeUnavailable, retryDispositionAmbiguous),
+	)
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationCommitted, result.Status)
 	assert.Equal(t, 1, io.stageCount)
@@ -451,9 +583,19 @@ func TestPublishWithRetryUnavailableAmbiguousAbsenceRetries(t *testing.T) {
 func TestPublishWithRetryExpiredTemporaryUploadReuploadsSameCID(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
-	io.applyResults = []retryApplyResult{{write: false, err: errors.Join(ErrAmbiguousTransport, errors.New("temporary blob expired"))}, {write: true}}
+	io.applyResults = []retryApplyResult{
+		{write: false, err: errors.Join(ErrAmbiguousTransport, errors.New("temporary blob expired"))},
+		{write: true},
+	}
 	store := newTransitionTestStore()
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationCommitted, result.Status)
 	assert.Equal(t, 2, io.stageCount)
@@ -485,9 +627,16 @@ func TestPublishWithRetryQueuedProviderOutcomesDoNotApplyOrRetry(t *testing.T) {
 				io.applyResults = []retryApplyResult{{write: false, err: tc.applyError}}
 			}
 			store := newTransitionTestStore()
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			require.ErrorIs(t, err, ErrPublicationQueued)
-			assert.ErrorIs(t, err, tc.want)
+			require.ErrorIs(t, err, tc.want)
 			assert.Equal(t, PublicationQueued, result.Status)
 			assert.Equal(t, tc.applyCount, io.applyCount)
 			assert.Equal(t, 1, io.stageCount)
@@ -498,9 +647,18 @@ func TestPublishWithRetryQueuedProviderOutcomesDoNotApplyOrRetry(t *testing.T) {
 func TestPublishWithRetryTimeoutAfterCommitUsesCurrentEvidence(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
-	io.applyResults = []retryApplyResult{{write: true, err: errors.Join(ErrAmbiguousTransport, context.DeadlineExceeded)}}
+	io.applyResults = []retryApplyResult{
+		{write: true, err: errors.Join(ErrAmbiguousTransport, context.DeadlineExceeded)},
+	}
 	store := newTransitionTestStore()
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationCommitted, result.Status)
 	assert.Equal(t, 1, io.stageCount)
@@ -531,11 +689,18 @@ func TestPublishWithRetryDefinitiveRejectionDoesNotRetry(t *testing.T) {
 	io := newPublicationRetryTestIO(predecessor)
 	io.applyResults = []retryApplyResult{{write: false, err: errors.Join(ErrBatchRejected, ErrCandidateMayBeDisclosed)}}
 	store := newTransitionTestStore()
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	assert.Equal(t, PublicationRejected, result.Status)
-	assert.ErrorIs(t, err, ErrPublicationRejected)
-	assert.ErrorIs(t, err, ErrBatchRejected)
-	assert.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
+	require.ErrorIs(t, err, ErrPublicationRejected)
+	require.ErrorIs(t, err, ErrBatchRejected)
+	require.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, 1, io.stageCount)
 	assert.Equal(t, 1, io.applyCount)
 }
@@ -545,9 +710,16 @@ func TestPublishWithRetryInvalidSwapIsFenceLost(t *testing.T) {
 	io := newPublicationRetryTestIO(predecessor)
 	io.applyResults = []retryApplyResult{{write: false, err: ErrFenceLost}}
 	store := newTransitionTestStore()
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.ErrorIs(t, err, ErrPublicationRetryFenceLost)
-	assert.ErrorIs(t, err, ErrFenceLost)
+	require.ErrorIs(t, err, ErrFenceLost)
 	assert.Equal(t, PublicationFenceLost, result.Status)
 	assert.Equal(t, 1, io.stageCount)
 	assert.Equal(t, 1, io.applyCount)
@@ -570,7 +742,14 @@ func TestPublishWithRetryTwoXxWithoutCommitCIDUsesCurrentEvidence(t *testing.T) 
 			io := newPublicationRetryTestIO(predecessor)
 			io.applyResults = []retryApplyResult{{write: tc.write, commitCID: tc.commitCID}, {write: true}}
 			store := newTransitionTestStore()
-			result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+			result, err := publishWithRetry(
+				context.Background(),
+				publication,
+				signer.Signing,
+				io,
+				store,
+				retryTestOptions(store),
+			)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantStatus, result.Status)
 			assert.Equal(t, tc.wantStages, io.stageCount)
@@ -581,8 +760,18 @@ func TestPublishWithRetryTwoXxWithoutCommitCIDUsesCurrentEvidence(t *testing.T) 
 func TestPublishWithRetryPersistsDispositionBeforeFailedOutcomeUpdate(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
-	store := &failPublicationOutcomeStore{transitionTestStore: newTransitionTestStore(), failOutcome: TransitionOutcomeCommitted}
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	store := &failPublicationOutcomeStore{
+		transitionTestStore: newTransitionTestStore(),
+		failOutcome:         TransitionOutcomeCommitted,
+	}
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.ErrorIs(t, err, ErrPublicationState)
 	assert.Equal(t, PublicationQueued, result.Status)
 	marker, _, markerErr := publicationMarker(publication, signer.Signing)
@@ -602,12 +791,16 @@ type failPublicationDispositionStore struct {
 	failed    bool
 }
 
-func (s *failPublicationDispositionStore) UpdateTransitionAttempt(ctx context.Context, id, outcome, evidence string) error {
+func (s *failPublicationDispositionStore) UpdateTransitionAttempt(
+	ctx context.Context,
+	id, outcome, evidence string,
+) error {
 	if !s.failed {
 		var parsed struct {
 			RetryDisposition *retryDispositionEvidence `json:"retryDisposition"`
 		}
-		if json.Unmarshal([]byte(evidence), &parsed) == nil && parsed.RetryDisposition != nil && parsed.RetryDisposition.Value == s.failValue {
+		if json.Unmarshal([]byte(evidence), &parsed) == nil && parsed.RetryDisposition != nil &&
+			parsed.RetryDisposition.Value == s.failValue {
 			s.failed = true
 			return errors.New("synthetic disposition persistence failure")
 		}
@@ -641,7 +834,12 @@ func TestResolvePublicationAttemptWaitsForMarkerLock(t *testing.T) {
 	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err = ResolvePublicationAttempt(ctx, ATProtoPublicationIO{Reader: RevisionReader{Transport: &proofTransport{}}, DID: testDID}, store, attempt.ID)
+	_, err = ResolvePublicationAttempt(
+		ctx,
+		PublicationIO{Reader: RevisionReader{Transport: &proofTransport{}}, DID: testDID},
+		store,
+		attempt.ID,
+	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -649,8 +847,18 @@ func TestPublishWithRetryDispositionWriteFailureStopsWithoutRetry(t *testing.T) 
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
 	io.applyResults = []retryApplyResult{{write: false, err: errors.Join(ErrBatchRejected, ErrCandidateMayBeDisclosed)}}
-	store := &failPublicationDispositionStore{transitionTestStore: newTransitionTestStore(), failValue: retryDispositionRejected}
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	store := &failPublicationDispositionStore{
+		transitionTestStore: newTransitionTestStore(),
+		failValue:           retryDispositionRejected,
+	}
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.ErrorIs(t, err, ErrPublicationState)
 	require.ErrorIs(t, err, ErrCandidateMayBeDisclosed)
 	assert.Equal(t, PublicationQueued, result.Status)
@@ -670,8 +878,18 @@ func TestPublishWithRetryDispositionWriteFailureStopsWithoutRetry(t *testing.T) 
 func TestPublishWithRetryPreDispatchDispositionFailureStops(t *testing.T) {
 	_, signer, predecessor, publication := newAtprotoPublicationFixture(t)
 	io := newPublicationRetryTestIO(predecessor)
-	store := &failPublicationDispositionStore{transitionTestStore: newTransitionTestStore(), failValue: retryDispositionAmbiguous}
-	result, err := publishWithRetry(context.Background(), publication, signer.Signing, io, store, retryTestOptions(store))
+	store := &failPublicationDispositionStore{
+		transitionTestStore: newTransitionTestStore(),
+		failValue:           retryDispositionAmbiguous,
+	}
+	result, err := publishWithRetry(
+		context.Background(),
+		publication,
+		signer.Signing,
+		io,
+		store,
+		retryTestOptions(store),
+	)
 	require.ErrorIs(t, err, ErrPublicationState)
 	assert.Equal(t, PublicationQueued, result.Status)
 	assert.Equal(t, 1, io.stageCount)
@@ -687,11 +905,14 @@ func TestResolveSubmittedPublicationClassifiesReadVsStateFailure(t *testing.T) {
 	addRetryAttempt(t, store, attempt)
 	_, err := resolveSubmittedPublication(context.Background(), io, store, attempt, attempt.Evidence)
 	require.ErrorIs(t, err, ErrTransitionUnavailable)
-	assert.NotErrorIs(t, err, ErrPublicationState)
+	require.NotErrorIs(t, err, ErrPublicationState)
 
 	io = newPublicationRetryTestIO(predecessor)
 	io.readErrors[1] = ErrAmbiguousTransport
-	failingStore := &failPublicationOutcomeStore{transitionTestStore: newTransitionTestStore(), failOutcome: TransitionOutcomeUnavailable}
+	failingStore := &failPublicationOutcomeStore{
+		transitionTestStore: newTransitionTestStore(),
+		failOutcome:         TransitionOutcomeUnavailable,
+	}
 	attempt = retryAttemptFor(t, publication, signer.Signing, TransitionOutcomeSubmitted, retryDispositionAmbiguous)
 	addRetryAttempt(t, failingStore.transitionTestStore, attempt)
 	_, err = resolveSubmittedPublication(context.Background(), io, failingStore, attempt, attempt.Evidence)
@@ -770,8 +991,22 @@ func mustPublicationID(t *testing.T, publication vault.Publication) [16]byte {
 }
 
 func TestPublishWithRetryPolicyDefaultsAndDelayBounds(t *testing.T) {
-	assert.Equal(t, RetryPolicy{MaxAttempts: 3, BaseDelay: 250 * time.Millisecond, MaxDelay: 5 * time.Second, MaxElapsed: 10 * time.Second}, DefaultRetryPolicy())
-	policy := RetryPolicy{MaxAttempts: 3, BaseDelay: 250 * time.Millisecond, MaxDelay: 400 * time.Millisecond, MaxElapsed: time.Second}
+	assert.Equal(
+		t,
+		RetryPolicy{
+			MaxAttempts: 3,
+			BaseDelay:   250 * time.Millisecond,
+			MaxDelay:    5 * time.Second,
+			MaxElapsed:  10 * time.Second,
+		},
+		DefaultRetryPolicy(),
+	)
+	policy := RetryPolicy{
+		MaxAttempts: 3,
+		BaseDelay:   250 * time.Millisecond,
+		MaxDelay:    400 * time.Millisecond,
+		MaxElapsed:  time.Second,
+	}
 	started := time.Unix(1, 0)
 	clock := func() time.Time { return started }
 	var sleeps []time.Duration

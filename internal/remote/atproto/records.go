@@ -11,8 +11,9 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/multiformats/go-multihash"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 const (
@@ -556,7 +557,13 @@ func VerifySnapshotRecordSignature(record SnapshotRecord, publicKey ed25519.Publ
 		return RecordSignatureError{}
 	}
 	preimage, err := SnapshotRecordSigningPreimage(record)
-	if err != nil || ed25519.VerifyWithOptions(publicKey, preimage, record.Signature, &ed25519.Options{Context: RecordSignatureContext}) != nil {
+	if err != nil ||
+		ed25519.VerifyWithOptions(
+			publicKey,
+			preimage,
+			record.Signature,
+			&ed25519.Options{Context: RecordSignatureContext},
+		) != nil {
 		return RecordSignatureError{}
 	}
 	return nil
@@ -647,7 +654,8 @@ func verifyControlBinding(value ControlRecord, object vault.Control) error {
 		return &RecordBindingError{Field: "revoked"}
 	}
 	for index := range object.Revoked {
-		if value.Revoked[index].DeviceID != object.Revoked[index].DeviceID || value.Revoked[index].CertEpoch != object.Revoked[index].CertEpoch {
+		if value.Revoked[index].DeviceID != object.Revoked[index].DeviceID ||
+			value.Revoked[index].CertEpoch != object.Revoked[index].CertEpoch {
 			return &RecordBindingError{Field: "revoked"}
 		}
 	}
@@ -674,7 +682,8 @@ func verifyPolicyBinding(value PolicyRecord, object vault.Policy) error {
 		return &RecordBindingError{Field: "roles"}
 	}
 	for index := range object.Roles {
-		if value.Roles[index].DeviceID != object.Roles[index].DeviceID || value.Roles[index].Role != uint8(object.Roles[index].Role) {
+		if value.Roles[index].DeviceID != object.Roles[index].DeviceID ||
+			value.Roles[index].Role != uint8(object.Roles[index].Role) {
 			return &RecordBindingError{Field: "roles"}
 		}
 	}
@@ -682,7 +691,9 @@ func verifyPolicyBinding(value PolicyRecord, object vault.Policy) error {
 		return &RecordBindingError{Field: "recipients"}
 	}
 	for index := range object.Recipients {
-		if value.Recipients[index].DeviceID != object.Recipients[index].DeviceID || !bytes.Equal(value.Recipients[index].KeyID, object.Recipients[index].KeyID) || !bytes.Equal(value.Recipients[index].PublicKey, object.Recipients[index].PublicKey[:]) {
+		if value.Recipients[index].DeviceID != object.Recipients[index].DeviceID ||
+			!bytes.Equal(value.Recipients[index].KeyID, object.Recipients[index].KeyID) ||
+			!bytes.Equal(value.Recipients[index].PublicKey, object.Recipients[index].PublicKey[:]) {
 			return &RecordBindingError{Field: "recipients"}
 		}
 	}
@@ -726,7 +737,11 @@ func verifyCertificateBinding(value CertificateRecord, object vault.Certificate)
 	if err := bindingBytes("signingPublicKey", value.SigningPublicKey, object.SigningPublicKey[:]); err != nil {
 		return err
 	}
-	if err := bindingBytes("encryptionPublicKey", value.EncryptionPublicKey, object.EncryptionPublicKey[:]); err != nil {
+	if err := bindingBytes(
+		"encryptionPublicKey",
+		value.EncryptionPublicKey,
+		object.EncryptionPublicKey[:],
+	); err != nil {
 		return err
 	}
 	if value.Role != uint8(object.Role) {
@@ -801,7 +816,8 @@ func verifyAttestationBinding(value AttestationRecord, object vault.Attestation)
 		return &RecordBindingError{Field: "recoveryPoints"}
 	}
 	for index, point := range object.RecoveryPoints {
-		if value.RecoveryPoints[index].Epoch != point.Epoch || !bytes.Equal(value.RecoveryPoints[index].SnapshotCID, point.SnapshotCID) {
+		if value.RecoveryPoints[index].Epoch != point.Epoch ||
+			!bytes.Equal(value.RecoveryPoints[index].SnapshotCID, point.SnapshotCID) {
 			return &RecordBindingError{Field: "recoveryPoints"}
 		}
 	}
@@ -832,7 +848,11 @@ func policyFromRecord(record PolicyRecord) vault.Policy {
 	}
 	policy.Recipients = make([]vault.PolicyRecipient, len(record.Recipients))
 	for index, recipient := range record.Recipients {
-		policy.Recipients[index] = vault.PolicyRecipient{DeviceID: recipient.DeviceID, KeyID: bytes.Clone(recipient.KeyID), PublicKey: [32]byte(recipient.PublicKey)}
+		policy.Recipients[index] = vault.PolicyRecipient{
+			DeviceID:  recipient.DeviceID,
+			KeyID:     bytes.Clone(recipient.KeyID),
+			PublicKey: [32]byte(recipient.PublicKey),
+		}
 	}
 	return policy
 }

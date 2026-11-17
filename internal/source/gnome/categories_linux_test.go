@@ -9,10 +9,11 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
-	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 )
 
 type fixtureValue struct {

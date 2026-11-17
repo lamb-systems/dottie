@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,7 +38,7 @@ func TestBuildAttestationVersionTwoCanonicalRecoveryPointsAndSignature(t *testin
 	tampered, err := EncodeAttestation(attestation)
 	require.NoError(t, err)
 	_, err = VerifyAttestation(tampered, fixture.verify)
-	assert.ErrorIs(t, err, ErrSignature)
+	require.ErrorIs(t, err, ErrSignature)
 
 	unknownBodyVersion := bytes.Clone(encoded)
 	unknownBodyVersion[5], unknownBodyVersion[6] = 0, 3
@@ -79,7 +80,7 @@ func TestAttestationVersionTwoRejectsNoncanonicalAndInconsistentRecoveryPoints(t
 		{name: "oversized cid", mutate: func(value *Attestation) {
 			value.RecoveryPoints[0].SnapshotCID = bytes.Repeat([]byte{1}, MaxParentBytes+1)
 		}},
-		{name: "unsafe epoch", mutate: func(value *Attestation) { value.RecoveryPoints[0].Epoch = uint64(^uint64(0)>>1) + 1 }},
+		{name: "unsafe epoch", mutate: func(value *Attestation) { value.RecoveryPoints[0].Epoch = math.MaxInt64 + 1 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			value := base

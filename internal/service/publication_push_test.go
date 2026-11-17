@@ -7,13 +7,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type memoryProposalStore struct {
@@ -106,7 +107,11 @@ type publicationPushFixture struct {
 
 func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 	t.Helper()
-	binding := publicationstate.Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x61}}
+	binding := publicationstate.Binding{
+		AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x61},
+	}
 	binding.Repository = "at://" + binding.AccountDID
 	directory := t.TempDir()
 	require.NoError(t, os.Chmod(directory, 0o700))
@@ -115,10 +120,18 @@ func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	paths := materialTestPaths(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "config"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(paths.Home, "config", "init.lua"), []byte("synthetic push payload"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(paths.Home, "config", "init.lua"), []byte("synthetic push payload"), 0o600),
+	)
 	coordinator, err := NewCoordinator(Dependencies{State: openCoordinatorState(t), Paths: paths})
 	require.NoError(t, err)
-	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x71}, SelectionRevision: 1, ApprovalDigest: [32]byte{0x72}, ApprovalRevision: 1}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest:   [32]byte{0x71},
+		SelectionRevision: 1,
+		ApprovalDigest:    [32]byte{0x72},
+		ApprovalRevision:  1,
+	}
 	return &publicationPushFixture{
 		binding: binding, store: store, transport: newMaterialTestTransport(binding), coordinator: coordinator,
 		paths: paths, reviews: newMaterialReviewSource(review), records: newMemoryProposalStore(),
@@ -130,7 +143,10 @@ func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 	}
 }
 
-func (fixture *publicationPushFixture) request(publicationID [16]byte, record *PublicationProposalRecord) PublicationPushRequest {
+func (fixture *publicationPushFixture) request(
+	publicationID [16]byte,
+	record *PublicationProposalRecord,
+) PublicationPushRequest {
 	return PublicationPushRequest{
 		Store: fixture.store, Transport: fixture.transport, Reader: fixture.reader, Records: fixture.records,
 		Binding: fixture.binding, Configuration: fixture.configuration, Reviews: fixture.reviews,
@@ -144,7 +160,12 @@ func (fixture *publicationPushFixture) publish(t *testing.T) PublicationPushPrep
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	require.False(t, preparation.NoOp)
-	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return preparation
 }
@@ -172,10 +193,18 @@ func TestPreparePublicationPushIssuesOneRetainedRecordAndReprintsTheSameConfirma
 	assert.Zero(t, fixture.transport.sendCount(), "a review-only preparation dispatched writes")
 
 	retained := record
-	reattached, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, &retained))
+	reattached, err := fixture.coordinator.PreparePublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, &retained),
+	)
 	require.NoError(t, err)
 	assert.False(t, reattached.Issued)
-	assert.Equal(t, preparation.Proposal.Confirmation, reattached.Proposal.Confirmation, "reattachment recomputed a different confirmation")
+	assert.Equal(
+		t,
+		preparation.Proposal.Confirmation,
+		reattached.Proposal.Confirmation,
+		"reattachment recomputed a different confirmation",
+	)
 	assert.Zero(t, fixture.transport.uploadCount(), "reattachment uploaded a payload")
 }
 
@@ -185,7 +214,12 @@ func TestConfirmPublicationPushPublishesOnceAndDeletesTheRetainedRecord(t *testi
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 
-	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	result, err := fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
 	assert.Equal(t, publicationstate.AttemptRetiredSuccess, result.Attempt.Lifecycle)
@@ -196,7 +230,10 @@ func TestConfirmPublicationPushPublishesOnceAndDeletesTheRetainedRecord(t *testi
 	assert.False(t, found, "the retained record survived a terminal publication")
 
 	require.NoError(t, fixture.records.Issue(ctx, preparation.Record))
-	replayed, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, &preparation.Record))
+	replayed, err := fixture.coordinator.PreparePublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, &preparation.Record),
+	)
 	require.ErrorIs(t, err, ErrPublicationProposalStale, "a retired attempt identity was not refused as stale")
 	assert.Empty(t, replayed.Proposal.Confirmation)
 	assert.Equal(t, 1, fixture.transport.sendCount())
@@ -230,7 +267,12 @@ func TestPreparePublicationPushSurfacesAnActiveAttemptAndRefusesAbandonmentPastS
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	fixture.transport.setFailBeforeCommit()
-	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.Error(t, err)
 
 	_, err = fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x76}, nil))
@@ -249,7 +291,12 @@ func TestConfirmPublicationPushCleansUpAPreSubmissionFailure(t *testing.T) {
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	fixture.transport.setPrepareError(errMaterialTestBatchShape)
-	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.Error(t, err)
 
 	_, has, activeErr := fixture.store.ActiveAttempt(ctx)
@@ -299,7 +346,10 @@ func TestPreparePublicationPushReportsAnUnchangedCandidateAsNoOp(t *testing.T) {
 
 func TestPublicationProposalRecordVerificationRefusesIncompleteRecords(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
-	preparation, err := fixture.coordinator.PreparePublicationPush(context.Background(), fixture.request(fixture.publicationID, nil))
+	preparation, err := fixture.coordinator.PreparePublicationPush(
+		context.Background(),
+		fixture.request(fixture.publicationID, nil),
+	)
 	require.NoError(t, err)
 	record := preparation.Record
 	require.NoError(t, VerifyPublicationProposalRecord(record))
@@ -326,15 +376,18 @@ func TestPublicationProposalRecordVerificationRefusesIncompleteRecords(t *testin
 
 func TestPublicationProposalRecordCarriesNoPayloadBytes(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
-	preparation, err := fixture.coordinator.PreparePublicationPush(context.Background(), fixture.request(fixture.publicationID, nil))
+	preparation, err := fixture.coordinator.PreparePublicationPush(
+		context.Background(),
+		fixture.request(fixture.publicationID, nil),
+	)
 	require.NoError(t, err)
 	record := preparation.Record
 	assert.Equal(t, fixture.binding.Vault, record.Binding.Vault)
 	assert.Empty(t, record.CandidateRecordCID[:0])
-	assert.True(t, len(record.CandidateRecordCID) > 0)
-	assert.True(t, len(record.CandidatePayloadCID) > 0)
-	assert.Equal(t, preparation.Targets, 1)
-	assert.Equal(t, preparation.Entries, 1)
+	assert.Positive(t, len(record.CandidateRecordCID))
+	assert.Positive(t, len(record.CandidatePayloadCID))
+	assert.Equal(t, 1, preparation.Targets)
+	assert.Equal(t, 1, preparation.Entries)
 }
 
 func TestPreparePublicationPushBindsOneConfirmationToTheReviewAndCandidate(t *testing.T) {
@@ -344,19 +397,54 @@ func TestPreparePublicationPushBindsOneConfirmationToTheReviewAndCandidate(t *te
 	require.NoError(t, err)
 	second, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x7b, 0x7c}, nil))
 	require.NoError(t, err)
-	assert.NotEqual(t, first.Proposal.Confirmation, second.Proposal.Confirmation, "a different publication identity reproduced the same confirmation")
+	assert.NotEqual(
+		t,
+		first.Proposal.Confirmation,
+		second.Proposal.Confirmation,
+		"a different publication identity reproduced the same confirmation",
+	)
 
-	fixture.reviews.set(publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x7d}, SelectionRevision: 2, ApprovalDigest: [32]byte{0x7e}, ApprovalRevision: 2}, config.Token{0x7f})
+	fixture.reviews.set(
+		publicationstate.LocalReviewContext{
+			SelectionDigest:   [32]byte{0x7d},
+			SelectionRevision: 2,
+			ApprovalDigest:    [32]byte{0x7e},
+			ApprovalRevision:  2,
+		},
+		config.Token{0x7f},
+	)
 	third, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x7b, 0x7c}, nil))
 	require.NoError(t, err)
-	assert.NotEqual(t, second.Proposal.Confirmation, third.Proposal.Confirmation, "a changed review identity reproduced the same confirmation")
+	assert.NotEqual(
+		t,
+		second.Proposal.Confirmation,
+		third.Proposal.Confirmation,
+		"a changed review identity reproduced the same confirmation",
+	)
 
-	require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "config", "init.lua"), []byte("changed candidate payload"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(fixture.paths.Home, "config", "init.lua"),
+			[]byte("changed candidate payload"),
+			0o600,
+		),
+	)
 	fourth, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x7b, 0x7c}, nil))
 	require.NoError(t, err)
-	assert.NotEqual(t, third.Proposal.Confirmation, fourth.Proposal.Confirmation, "a changed candidate reproduced the same confirmation")
+	assert.NotEqual(
+		t,
+		third.Proposal.Confirmation,
+		fourth.Proposal.Confirmation,
+		"a changed candidate reproduced the same confirmation",
+	)
 
-	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request([16]byte{0x7b, 0x7c}, nil), fourth, third.Proposal.Confirmation)
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request([16]byte{0x7b, 0x7c}, nil),
+		fourth,
+		third.Proposal.Confirmation,
+	)
 	require.ErrorIs(t, err, ErrPublicationProposalStale)
 	assert.Zero(t, fixture.transport.sendCount(), "a stale confirmation dispatched writes")
 }

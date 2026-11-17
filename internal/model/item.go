@@ -149,7 +149,8 @@ func (s SettingEntry) Validate() error {
 	}
 	switch s.State {
 	case SettingPresent:
-		if s.Value == nil || !validText(s.Value.Type, MaxVariantTypeBytes) || !validText(s.Value.Text, MaxVariantTextBytes) {
+		if s.Value == nil || !validText(s.Value.Type, MaxVariantTypeBytes) ||
+			!validText(s.Value.Text, MaxVariantTextBytes) {
 			return errors.New("invalid present setting payload")
 		}
 	case SettingReset:
@@ -170,7 +171,7 @@ func validSettingLocator(schemaID, path, key string) bool {
 }
 
 func containsSlash(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == '/' {
 			return true
 		}

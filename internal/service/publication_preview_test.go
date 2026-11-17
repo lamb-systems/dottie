@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -17,8 +20,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPreviewPublicationTargetNoBaseAndEstablishedContinuity(t *testing.T) {
@@ -54,11 +55,18 @@ func TestPreviewPublicationTargetNoBaseAndEstablishedContinuity(t *testing.T) {
 
 func TestPreviewPublicationTargetClassifiesIndependentDisjointEditsAgainstRetainedBase(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	baseEntries := publicationPreviewFileEntries(target.ID, map[string]string{"local-only": "A", "remote-only": "A"})
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries})
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries},
+	)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
 	capturedEntries := clonePublicationProjectionEntriesForTest(baseEntries)
@@ -66,7 +74,11 @@ func TestPreviewPublicationTargetClassifiesIndependentDisjointEditsAgainstRetain
 		observations := make([]model.Observation, len(capturedEntries))
 		for index := range capturedEntries {
 			entry := clonePublicationProjectionEntry(capturedEntries[index])
-			observations[index] = model.Observation{State: model.ObservationPresent, Identity: entry.Identity(), Entry: &entry}
+			observations[index] = model.Observation{
+				State:    model.ObservationPresent,
+				Identity: entry.Identity(),
+				Entry:    &entry,
+			}
 		}
 		return files.Result{Observations: observations}, nil
 	})
@@ -80,7 +92,11 @@ func TestPreviewPublicationTargetClassifiesIndependentDisjointEditsAgainstRetain
 	beforeBase := clonePublicationProjectionEntriesForTest(base.entries)
 
 	remoteEntries := publicationPreviewFileEntries(target.ID, map[string]string{"local-only": "A", "remote-only": "B"})
-	record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries})
+	record, payload, floor := publicationPreviewAcceptSuccessor(
+		t,
+		accepted,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries},
+	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
 	request.Payload = payload
@@ -101,11 +117,21 @@ func TestPreviewPublicationTargetClassifiesIndependentDisjointEditsAgainstRetain
 
 func TestPreviewPublicationTargetClassifiesPartialLocalStateAgainstRetainedBase(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
-	baseEntries := publicationPreviewFileEntries(target.ID, map[string]string{"already-remote": "A", "untouched": "A", "divergent": "A"})
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries})
+	baseEntries := publicationPreviewFileEntries(
+		target.ID,
+		map[string]string{"already-remote": "A", "untouched": "A", "divergent": "A"},
+	)
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries},
+	)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
 	capturedEntries := clonePublicationProjectionEntriesForTest(baseEntries)
@@ -113,7 +139,11 @@ func TestPreviewPublicationTargetClassifiesPartialLocalStateAgainstRetainedBase(
 		observations := make([]model.Observation, len(capturedEntries))
 		for index := range capturedEntries {
 			entry := clonePublicationProjectionEntry(capturedEntries[index])
-			observations[index] = model.Observation{State: model.ObservationPresent, Identity: entry.Identity(), Entry: &entry}
+			observations[index] = model.Observation{
+				State:    model.ObservationPresent,
+				Identity: entry.Identity(),
+				Entry:    &entry,
+			}
 		}
 		return files.Result{Observations: observations}, nil
 	})
@@ -126,13 +156,23 @@ func TestPreviewPublicationTargetClassifiesPartialLocalStateAgainstRetainedBase(
 	require.NoError(t, err)
 	beforeBase := clonePublicationProjectionEntriesForTest(base.entries)
 
-	remoteEntries := publicationPreviewFileEntries(target.ID, map[string]string{"already-remote": "B", "untouched": "B", "divergent": "B"})
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries}
+	remoteEntries := publicationPreviewFileEntries(
+		target.ID,
+		map[string]string{"already-remote": "B", "untouched": "B", "divergent": "B"},
+	)
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{portable},
+		Entries: remoteEntries,
+	}
 	record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, snapshot)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
 	request.Payload = payload
-	capturedEntries = publicationPreviewFileEntries(target.ID, map[string]string{"already-remote": "B", "untouched": "A", "divergent": "C"})
+	capturedEntries = publicationPreviewFileEntries(
+		target.ID,
+		map[string]string{"already-remote": "B", "untouched": "A", "divergent": "C"},
+	)
 
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
 	require.NoError(t, err)
@@ -153,7 +193,19 @@ func TestPreviewPublicationTargetClassifiesPartialLocalStateAgainstRetainedBase(
 func publicationPreviewFileEntries(targetID string, values map[string]string) []model.Entry {
 	entries := make([]model.Entry, 0, len(values))
 	for path, value := range values {
-		entries = append(entries, model.Entry{TargetID: targetID, File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: model.FileRegular, Content: []byte(value), Mode: 0o600}})
+		entries = append(
+			entries,
+			model.Entry{
+				TargetID: targetID,
+				File: &model.FileEntry{
+					Path:    path,
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(value),
+					Mode:    0o600,
+				},
+			},
+		)
 	}
 	return entries
 }
@@ -174,12 +226,32 @@ func TestPreviewPublicationTargetNoBaseInspectsLocalChangeWithoutEstablishing(t 
 
 func TestPreviewPublicationTargetOmitsRawContentAndDoesNotRereadInputsAfterSelection(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	canary := []byte("preview-private-content-canary")
-	remote := model.Entry{TargetID: target.ID, File: &model.FileEntry{Path: "secret.ini", State: model.FilePresent, Kind: model.FileRegular, Content: bytes.Clone(canary), Mode: 0o600}}
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: []model.Entry{remote}})
+	remote := model.Entry{
+		TargetID: target.ID,
+		File: &model.FileEntry{
+			Path:    "secret.ini",
+			State:   model.FilePresent,
+			Kind:    model.FileRegular,
+			Content: bytes.Clone(canary),
+			Mode:    0o600,
+		},
+	}
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{portable},
+			Entries: []model.Entry{remote},
+		},
+	)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "secret.ini"), canary, 0o600))
@@ -190,12 +262,14 @@ func TestPreviewPublicationTargetOmitsRawContentAndDoesNotRereadInputsAfterSelec
 	require.NotEmpty(t, request.Payload)
 	require.Len(t, request.Configuration.Targets, 1)
 	require.NotNil(t, request.Configuration.Targets[0].Root)
-	capture := publicationCapturePortFunc(func(ctx context.Context, selected config.Target, path string) (files.Result, error) {
-		request.SnapshotRecord[0] ^= 0xff
-		request.Payload[0] ^= 0xff
-		request.Configuration.Targets[0].Root.Path = "changed-after-selection"
-		return (LocalFilesCapture{}).Capture(ctx, selected, path)
-	})
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, selected config.Target, path string) (files.Result, error) {
+			request.SnapshotRecord[0] ^= 0xff
+			request.Payload[0] ^= 0xff
+			request.Configuration.Targets[0].Root.Path = "changed-after-selection"
+			return (LocalFilesCapture{}).Capture(ctx, selected, path)
+		},
+	)
 	local, err := NewPublicationLocalContext(selectionFixture.paths, capture, nil)
 	require.NoError(t, err)
 	request.Local = local
@@ -224,7 +298,12 @@ func TestPreviewPublicationTargetRejectsMalformedBaseAndModeDrift(t *testing.T) 
 	preview, disposition, err = PreviewPublicationTarget(context.Background(), request, base)
 	assert.Equal(t, syncengine.Preview{}, preview)
 	assert.Empty(t, disposition)
-	publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+	publicationBaseAssertFailure(
+		t,
+		err,
+		string(publicationBaseEligibilityStage),
+		string(publicationBaseEligibilitySelection),
+	)
 }
 
 func TestPreviewPublicationTargetStopsAtCurrentAndRetainedGNOMEUntrackedBarriers(t *testing.T) {
@@ -248,7 +327,18 @@ func TestPreviewPublicationTargetStopsAtCurrentAndRetainedGNOMEUntrackedBarriers
 		}
 		base, err := EstablishLocalReconciliationBase(context.Background(), fixture.request)
 		require.NoError(t, err)
-		base.entries = append(base.entries, model.Entry{TargetID: fixture.target.ID, Setting: &model.SettingEntry{SchemaID: "org.example.Foreign", Path: "/synthetic/", Key: "foreign", State: model.SettingReset}})
+		base.entries = append(
+			base.entries,
+			model.Entry{
+				TargetID: fixture.target.ID,
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Foreign",
+					Path:     "/synthetic/",
+					Key:      "foreign",
+					State:    model.SettingReset,
+				},
+			},
+		)
 		settings.captureCalls = 0
 		preview, disposition, err := PreviewPublicationTarget(context.Background(), fixture.request, base)
 		assert.Equal(t, syncengine.Preview{}, preview)
@@ -289,12 +379,20 @@ func TestPreviewPublicationTargetSnapshotsGNOMESelectionInputsBeforeFirstResolve
 	require.NotNil(t, base.entries[0].Setting)
 	require.NotNil(t, base.entries[0].Setting.Value)
 	baseValue := base.entries[0].Setting.Value.Text
-	updatedSnapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fixture.portable}, Entries: clonePublicationProjectionEntriesForTest(base.entries)}
+	updatedSnapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fixture.portable},
+		Entries: clonePublicationProjectionEntriesForTest(base.entries),
+	}
 	require.Len(t, updatedSnapshot.Entries, len(base.entries))
 	require.NotNil(t, updatedSnapshot.Entries[0].Setting)
 	require.NotNil(t, updatedSnapshot.Entries[0].Setting.Value)
 	updatedSnapshot.Entries[0].Setting.Value = &model.VariantValue{Type: "s", Text: "'remote-new'"}
-	successorRecord, successorPayload, successorFloor := publicationPreviewAcceptSuccessor(t, fixture.accepted, updatedSnapshot)
+	successorRecord, successorPayload, successorFloor := publicationPreviewAcceptSuccessor(
+		t,
+		fixture.accepted,
+		updatedSnapshot,
+	)
 	fixture.request.ExpectedFloor = successorFloor
 	fixture.request.SnapshotRecord = successorRecord
 	fixture.request.Payload = successorPayload
@@ -303,9 +401,11 @@ func TestPreviewPublicationTargetSnapshotsGNOMESelectionInputsBeforeFirstResolve
 	require.NotNil(t, base.entries[0].Setting)
 	require.NotNil(t, base.entries[0].Setting.Value)
 	originalLocal := fixture.request.Local
-	replacementCapture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
-		return files.Result{}, errors.New("replacement capture must not run")
-	})
+	replacementCapture := publicationCapturePortFunc(
+		func(context.Context, config.Target, string) (files.Result, error) {
+			return files.Result{}, errors.New("replacement capture must not run")
+		},
+	)
 	replacementSettings := &publicationCaptureGNOMESettings{}
 	replacement, err := NewPublicationLocalContext(fixture.paths, replacementCapture, replacementSettings)
 	require.NoError(t, err)
@@ -326,7 +426,12 @@ func TestPreviewPublicationTargetSnapshotsGNOMESelectionInputsBeforeFirstResolve
 	}
 	settings.capture = func(_ context.Context, targetID string, got []SettingRef) (SettingsCapture, error) {
 		require.NotEmpty(t, got)
-		entry := publicationCaptureGNOMEEntry(targetID, got[0], model.SettingPresent, &model.VariantValue{Type: "s", Text: baseValue})
+		entry := publicationCaptureGNOMEEntry(
+			targetID,
+			got[0],
+			model.SettingPresent,
+			&model.VariantValue{Type: "s", Text: baseValue},
+		)
 		return SettingsCapture{Entries: []model.Entry{entry}}, nil
 	}
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
@@ -345,14 +450,16 @@ func TestPreviewPublicationTargetSnapshotsGNOMESelectionInputsBeforeFirstResolve
 func TestPreviewPublicationTargetRechecksAcceptedFloorAfterCapture(t *testing.T) {
 	fixture := newPublicationBaseTestFixture(t, nil)
 	request := fixture.request
-	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		captured, err := (LocalFilesCapture{}).Capture(ctx, target, path)
-		if err != nil {
-			return files.Result{}, err
-		}
-		publicationBaseAcceptSamePayloadSuccessor(t, fixture.accepted)
-		return captured, nil
-	})
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			captured, err := (LocalFilesCapture{}).Capture(ctx, target, path)
+			if err != nil {
+				return files.Result{}, err
+			}
+			publicationBaseAcceptSamePayloadSuccessor(t, fixture.accepted)
+			return captured, nil
+		},
+	)
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 	request.Local = local
@@ -364,20 +471,40 @@ func TestPreviewPublicationTargetRechecksAcceptedFloorAfterCapture(t *testing.T)
 
 func TestPreviewPublicationTargetBoundsThreeViewsBeforeReconcile(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	remote := publicationBaseEmptyRegularEntries(target.ID, 0, publicationBaseMaxUnionKeys)
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remote})
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remote},
+	)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
-	localEntry := model.Entry{TargetID: target.ID, File: &model.FileEntry{Path: "local-disjoint", State: model.FilePresent, Kind: model.FileRegular, Content: []byte{}, Mode: 0o600}}
+	localEntry := model.Entry{
+		TargetID: target.ID,
+		File: &model.FileEntry{
+			Path:    "local-disjoint",
+			State:   model.FilePresent,
+			Kind:    model.FileRegular,
+			Content: []byte{},
+			Mode:    0o600,
+		},
+	}
 	calls := 0
 	capture := publicationCapturePortFunc(func(context.Context, config.Target, string) (files.Result, error) {
 		calls++
-		return files.Result{Observations: []model.Observation{{State: model.ObservationPresent, Identity: localEntry.Identity(), Entry: &localEntry}}}, nil
+		return files.Result{
+			Observations: []model.Observation{
+				{State: model.ObservationPresent, Identity: localEntry.Identity(), Entry: &localEntry},
+			},
+		}, nil
 	})
 	local, err := NewPublicationLocalContext(selectionFixture.paths, capture, nil)
 	require.NoError(t, err)
@@ -391,11 +518,18 @@ func TestPreviewPublicationTargetBoundsThreeViewsBeforeReconcile(t *testing.T) {
 
 func TestPreviewPublicationTargetIncludesRetainedBaseInKeyUnionBound(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	baseEntries := publicationBaseEmptyRegularEntries("base", 0, 10001)
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries})
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: baseEntries},
+	)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
 	capturedEntries := clonePublicationProjectionEntriesForTest(baseEntries)
@@ -405,7 +539,11 @@ func TestPreviewPublicationTargetIncludesRetainedBaseInKeyUnionBound(t *testing.
 		observations := make([]model.Observation, len(capturedEntries))
 		for index := range capturedEntries {
 			entry := clonePublicationProjectionEntry(capturedEntries[index])
-			observations[index] = model.Observation{State: model.ObservationPresent, Identity: entry.Identity(), Entry: &entry}
+			observations[index] = model.Observation{
+				State:    model.ObservationPresent,
+				Identity: entry.Identity(),
+				Entry:    &entry,
+			}
 		}
 		return files.Result{Observations: observations}, nil
 	})
@@ -420,7 +558,11 @@ func TestPreviewPublicationTargetIncludesRetainedBaseInKeyUnionBound(t *testing.
 	beforeBase := clonePublicationProjectionEntriesForTest(base.entries)
 
 	remoteEntries := publicationBaseEmptyRegularEntries("successor", 0, 10000)
-	record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries})
+	record, payload, floor := publicationPreviewAcceptSuccessor(
+		t,
+		accepted,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries},
+	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
 	request.Payload = payload
@@ -452,14 +594,16 @@ func TestPreviewPublicationTargetReturnsZeroOnCancellation(t *testing.T) {
 	t.Run("canceled during capture", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-			captured, err := (LocalFilesCapture{}).Capture(ctx, target, path)
-			if err != nil {
-				return files.Result{}, err
-			}
-			cancel()
-			return captured, nil
-		})
+		capture := publicationCapturePortFunc(
+			func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+				captured, err := (LocalFilesCapture{}).Capture(ctx, target, path)
+				if err != nil {
+					return files.Result{}, err
+				}
+				cancel()
+				return captured, nil
+			},
+		)
 		fixture := newPublicationBaseTestFixture(t, capture)
 		preview, disposition, err := PreviewPublicationTarget(ctx, fixture.request, nil)
 		assert.Equal(t, syncengine.Preview{}, preview)
@@ -476,7 +620,11 @@ type publicationPreviewGNOMEFixture struct {
 	request  PublicationReconciliationRequest
 }
 
-func newPublicationPreviewGNOMEFixture(t *testing.T, settings *publicationCaptureGNOMESettings, untracked bool) publicationPreviewGNOMEFixture {
+func newPublicationPreviewGNOMEFixture(
+	t *testing.T,
+	settings *publicationCaptureGNOMESettings,
+	untracked bool,
+) publicationPreviewGNOMEFixture {
 	t.Helper()
 	selectionFixture := newPublicationSelectionFixture(t)
 	target := newApprovedPublicationGNOMETarget(t, "synthetic-desktop", []string{"clock"})
@@ -487,15 +635,35 @@ func newPublicationPreviewGNOMEFixture(t *testing.T, settings *publicationCaptur
 	require.NotEmpty(t, refs)
 	entries := publicationBaseGNOMEEntries(target.ID, refs)
 	if untracked {
-		entries = append(entries, model.Entry{TargetID: target.ID, Setting: &model.SettingEntry{SchemaID: "org.example.Foreign", Path: "/synthetic/", Key: "foreign", State: model.SettingReset}})
+		entries = append(
+			entries,
+			model.Entry{
+				TargetID: target.ID,
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Foreign",
+					Path:     "/synthetic/",
+					Key:      "foreign",
+					State:    model.SettingReset,
+				},
+			},
+		)
 	}
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: entries})
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: entries},
+	)
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
 	local, err := NewPublicationLocalContext(selectionFixture.paths, selectionFixture.capture, settings)
 	require.NoError(t, err)
 	request := publicationBaseRequestFor(t, accepted, configuration, target.ID, local)
-	return publicationPreviewGNOMEFixture{accepted: accepted, paths: selectionFixture.paths, target: target, portable: portable, request: request}
+	return publicationPreviewGNOMEFixture{
+		accepted: accepted,
+		paths:    selectionFixture.paths,
+		target:   target,
+		portable: portable,
+		request:  request,
+	}
 }
 
 func publicationPreviewEntryFor(t *testing.T, preview syncengine.Preview, path string) syncengine.PreviewEntry {
@@ -510,7 +678,11 @@ func publicationPreviewEntryFor(t *testing.T, preview syncengine.Preview, path s
 	return syncengine.PreviewEntry{}
 }
 
-func publicationPreviewAcceptSuccessor(t *testing.T, fixture acceptedMaterialTestFixture, snapshot model.Snapshot) ([]byte, []byte, publicationstate.Floor) {
+func publicationPreviewAcceptSuccessor(
+	t *testing.T,
+	fixture acceptedMaterialTestFixture,
+	snapshot model.Snapshot,
+) ([]byte, []byte, publicationstate.Floor) {
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -523,22 +695,51 @@ func publicationPreviewAcceptSuccessor(t *testing.T, fixture acceptedMaterialTes
 	old.PublicationSeq++
 	old.Parent = bytes.Clone(parentCID)
 	old.PublicationID[15]++
-	old.Blob = publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}
+	old.Blob = publication.BlobReference{
+		CID:      blobCID,
+		Size:     uint64(len(packed.Payload)),
+		MIMEType: publication.SnapshotBlobMIMEType,
+	}
 	record, err := publication.EncodeSnapshot(old)
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(record)
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(old.PublicationSeq)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: fixture.request.binding.Vault, PublicationSeq: old.PublicationSeq, SnapshotCID: cid, BlobCID: blobCID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          fixture.request.binding.Vault,
+			PublicationSeq: old.PublicationSeq,
+			SnapshotCID:    cid,
+			BlobCID:        blobCID,
+		},
+	)
 	require.NoError(t, err)
 	observation := publicationstate.Observation{
-		Origin: fixture.request.binding, SuppliedContext: fixture.request.expectedFloor.SuppliedContext, Head: head,
-		Snapshots: []publicationstate.SnapshotBlock{{Key: fixture.request.expectedFloor.SnapshotKey, Raw: bytes.Clone(fixture.request.snapshotRecord)}, {Key: key, Raw: bytes.Clone(record)}},
+		Origin:          fixture.request.binding,
+		SuppliedContext: fixture.request.expectedFloor.SuppliedContext,
+		Head:            head,
+		Snapshots: []publicationstate.SnapshotBlock{
+			{Key: fixture.request.expectedFloor.SnapshotKey, Raw: bytes.Clone(fixture.request.snapshotRecord)},
+			{Key: key, Raw: bytes.Clone(record)},
+		},
 	}
-	proposal, err := fixture.store.Prepare(context.Background(), publicationstate.ModeAdvance, observation, packed.Payload)
+	proposal, err := fixture.store.Prepare(
+		context.Background(),
+		publicationstate.ModeAdvance,
+		observation,
+		packed.Payload,
+	)
 	require.NoError(t, err)
-	floor, err := fixture.store.Accept(context.Background(), publicationstate.ModeAdvance, proposal.StateToken, observation, packed.Payload, [32]byte{})
+	floor, err := fixture.store.Accept(
+		context.Background(),
+		publicationstate.ModeAdvance,
+		proposal.StateToken,
+		observation,
+		packed.Payload,
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	return record, packed.Payload, floor
 }

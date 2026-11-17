@@ -5,9 +5,10 @@ import (
 	"testing"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestAttestationLexiconKeepsRecoveryPointsOptionalAndVersioned(t *testing.T) {
@@ -29,7 +30,7 @@ func TestAttestationLexiconKeepsRecoveryPointsOptionalAndVersioned(t *testing.T)
 	assert.Equal(t, float64(65535), points["maxLength"])
 	item := points["items"].(map[string]any)
 	assert.Equal(t, []any{"epoch", "snapshotCid"}, item["required"])
-	assert.Equal(t, 2, len(item["properties"].(map[string]any)))
+	assert.Len(t, item["properties"].(map[string]any), 2)
 }
 
 func TestAttestationVersionTwoRecordBindingContextAndLexiconStrictness(t *testing.T) {
@@ -57,9 +58,9 @@ func TestAttestationVersionTwoRecordBindingContextAndLexiconStrictness(t *testin
 	record := decoded.(AttestationRecord)
 	assert.Equal(t, int64(2), record.SchemaVersion)
 	assert.Len(t, record.RecoveryPoints, 3)
-	assert.NoError(t, VerifyRecordBinding(recordBytes, objectBytes))
+	require.NoError(t, VerifyRecordBinding(recordBytes, objectBytes))
 	_, err = VerifyAttestationRecord(recordBytes, verification)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	control, err := vault.DecodeControl(verification.State.Control)
 	require.NoError(t, err)
@@ -77,7 +78,7 @@ func TestAttestationVersionTwoRecordBindingContextAndLexiconStrictness(t *testin
 	missingList, err := atdata.MarshalCBOR(objectMap)
 	require.NoError(t, err)
 	_, err = DecodeRecord(missingList)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	objectMap, err = atdata.UnmarshalCBOR(recordBytes)
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func TestAttestationVersionTwoRecordBindingContextAndLexiconStrictness(t *testin
 	outOfOrder, err := atdata.MarshalCBOR(objectMap)
 	require.NoError(t, err)
 	_, err = DecodeRecord(outOfOrder)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	objectMap, err = atdata.UnmarshalCBOR(recordBytes)
 	require.NoError(t, err)
@@ -95,18 +96,18 @@ func TestAttestationVersionTwoRecordBindingContextAndLexiconStrictness(t *testin
 	unknownField, err := atdata.MarshalCBOR(objectMap)
 	require.NoError(t, err)
 	_, err = DecodeRecord(unknownField)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	mismatched := attestationRecordFromVault(object)
 	mismatched.RecoveryPoints = mismatched.RecoveryPoints[:2]
 	_, err = EncodeRecord(mismatched)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	mismatched = attestationRecordFromVault(object)
 	mismatched.RecoveryPoints[0].SnapshotCID = []byte("other-snapshot")
 	mismatchedBytes, err := EncodeRecord(mismatched)
 	require.NoError(t, err)
-	assert.Error(t, VerifyRecordBinding(mismatchedBytes, objectBytes))
+	require.Error(t, VerifyRecordBinding(mismatchedBytes, objectBytes))
 
 	tampered := bytes.Clone(objectBytes)
 	tampered[len(tampered)-1] ^= 0x80

@@ -29,12 +29,28 @@ type publicationRemoteSource func(target config.Target) ([]model.Entry, []model.
 
 type publicationLocalSource func(target config.Target, entries []model.Entry) []model.Entry
 
-func (coordinator *Coordinator) composePublicationSnapshot(ctx context.Context, configuration config.Config, base publicationBaseSource, remote publicationRemoteSource, blocked []model.EntryKey) (model.Snapshot, []config.Target, error) {
+func (coordinator *Coordinator) composePublicationSnapshot(
+	ctx context.Context,
+	configuration config.Config,
+	base publicationBaseSource,
+	remote publicationRemoteSource,
+	blocked []model.EntryKey,
+) (model.Snapshot, []config.Target, error) {
 	return coordinator.composePublicationSnapshotWithLocal(ctx, configuration, base, remote, nil, blocked)
 }
 
-func (coordinator *Coordinator) composePublicationSnapshotWithLocal(ctx context.Context, configuration config.Config, base publicationBaseSource, remote publicationRemoteSource, local publicationLocalSource, blocked []model.EntryKey) (model.Snapshot, []config.Target, error) {
-	candidate := model.Snapshot{Version: model.SnapshotVersion, Targets: make([]model.Target, 0, len(configuration.Targets))}
+func (coordinator *Coordinator) composePublicationSnapshotWithLocal(
+	ctx context.Context,
+	configuration config.Config,
+	base publicationBaseSource,
+	remote publicationRemoteSource,
+	local publicationLocalSource,
+	blocked []model.EntryKey,
+) (model.Snapshot, []config.Target, error) {
+	candidate := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: make([]model.Target, 0, len(configuration.Targets)),
+	}
 	composed := make([]config.Target, 0, len(configuration.Targets))
 	blocked = append([]model.EntryKey(nil), blocked...)
 	for _, target := range configuration.Targets {
@@ -118,7 +134,9 @@ func newPushBlockedError(identities []model.EntryKey) error {
 }
 
 func identitySortKey(identity model.EntryKey) string {
-	return identity.TargetID + "\x00" + string(identity.Source) + "\x00" + identity.FilePath + "\x00" + identity.SchemaID + "\x00" + identity.SettingsPath + "\x00" + identity.SettingKey
+	return identity.TargetID + "\x00" + string(
+		identity.Source,
+	) + "\x00" + identity.FilePath + "\x00" + identity.SchemaID + "\x00" + identity.SettingsPath + "\x00" + identity.SettingKey
 }
 
 func formatEntryIdentities(identities []model.EntryKey) string {
@@ -127,7 +145,17 @@ func formatEntryIdentities(identities []model.EntryKey) string {
 		if identity.Source == model.SourceFiles {
 			parts = append(parts, fmt.Sprintf("%s/%s:%s", identity.TargetID, identity.Source, identity.FilePath))
 		} else {
-			parts = append(parts, fmt.Sprintf("%s/%s:%s:%s:%s", identity.TargetID, identity.Source, identity.SchemaID, identity.SettingsPath, identity.SettingKey))
+			parts = append(
+				parts,
+				fmt.Sprintf(
+					"%s/%s:%s:%s:%s",
+					identity.TargetID,
+					identity.Source,
+					identity.SchemaID,
+					identity.SettingsPath,
+					identity.SettingKey,
+				),
+			)
 		}
 	}
 	return fmt.Sprintf("%v", parts)

@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const incomingMaterialExpectedSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))"
@@ -44,7 +45,14 @@ func incomingMaterialHistoricalLifecycle(t *testing.T, store *Store, f fixture) 
 	require.Equal(t, ModeAdvance, advanceProposal.Mode)
 	require.Equal(t, Reason(""), advanceProposal.Reason)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	second, err := store.Accept(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, f.payload, advanceProposal.Confirmation)
+	second, err := store.Accept(
+		ctx,
+		ModeAdvance,
+		advanceProposal.StateToken,
+		advanceObservation,
+		f.payload,
+		advanceProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	replacementObservation := f.observation(1)
 	replacementProposal, err := store.Prepare(ctx, ModeReplaceFloor, replacementObservation, f.payload)
@@ -52,7 +60,14 @@ func incomingMaterialHistoricalLifecycle(t *testing.T, store *Store, f fixture) 
 	require.Equal(t, ModeReplaceFloor, replacementProposal.Mode)
 	require.Equal(t, ReasonRollback, replacementProposal.Reason)
 	require.Equal(t, "rollback", replacementProposal.Stop)
-	third, err := store.Accept(ctx, ModeReplaceFloor, replacementProposal.StateToken, replacementObservation, f.payload, replacementProposal.Confirmation)
+	third, err := store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacementProposal.StateToken,
+		replacementObservation,
+		f.payload,
+		replacementProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 	require.Equal(t, uint64(2), second.Revision)
@@ -97,9 +112,24 @@ func incomingMaterialCreateTable(t *testing.T, ctx context.Context, tx *sql.Tx) 
 	require.NoError(t, err)
 }
 
-func incomingMaterialInsertCatalog(t *testing.T, ctx context.Context, tx *sql.Tx, cid []byte, size int64, name string, logical int64) {
+func incomingMaterialInsertCatalog(
+	t *testing.T,
+	ctx context.Context,
+	tx *sql.Tx,
+	cid []byte,
+	size int64,
+	name string,
+	logical int64,
+) {
 	t.Helper()
-	_, err := tx.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)", cid, size, name, logical)
+	_, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)",
+		cid,
+		size,
+		name,
+		logical,
+	)
 	require.NoError(t, err)
 }
 
@@ -110,9 +140,22 @@ func incomingMaterialValidCatalog(t *testing.T, ctx context.Context, tx *sql.Tx,
 	incomingMaterialInsertCatalog(t, ctx, tx, cid, int64(size), name, int64(size))
 }
 
-func incomingMaterialInsertRef(t *testing.T, ctx context.Context, tx *sql.Tx, revision int64, recordCID any, blobCID any) {
+func incomingMaterialInsertRef(
+	t *testing.T,
+	ctx context.Context,
+	tx *sql.Tx,
+	revision int64,
+	recordCID any,
+	blobCID any,
+) {
 	t.Helper()
-	_, err := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", revision, recordCID, blobCID)
+	_, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+		revision,
+		recordCID,
+		blobCID,
+	)
 	require.NoError(t, err)
 }
 
@@ -132,7 +175,10 @@ func incomingMaterialTransaction(t *testing.T, store *Store, deferred bool) (*sq
 			var foreignKeys, stillDeferred int64
 			assert.NoError(t, store.conn.QueryRowContext(diagnosticContext, "PRAGMA foreign_keys").Scan(&foreignKeys))
 			assert.Equal(t, int64(1), foreignKeys)
-			assert.NoError(t, store.conn.QueryRowContext(diagnosticContext, "PRAGMA defer_foreign_keys").Scan(&stillDeferred))
+			assert.NoError(
+				t,
+				store.conn.QueryRowContext(diagnosticContext, "PRAGMA defer_foreign_keys").Scan(&stillDeferred),
+			)
 			assert.Equal(t, int64(0), stillDeferred)
 		}
 	})
@@ -166,14 +212,24 @@ func incomingMaterialCount(t *testing.T, ctx context.Context, q queryer, query s
 func incomingMaterialRequireBoundedCounts(t *testing.T, ctx context.Context, q queryer, limit uint32) (int64, int64) {
 	t.Helper()
 	var eventCount, refCount int64
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM accepted_events),(SELECT COUNT(*) FROM accepted_material_refs)").Scan(&eventCount, &refCount))
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM accepted_events),(SELECT COUNT(*) FROM accepted_material_refs)").
+			Scan(&eventCount, &refCount),
+	)
 	require.GreaterOrEqual(t, refCount, int64(0))
 	require.GreaterOrEqual(t, eventCount, refCount)
 	require.LessOrEqual(t, eventCount, int64(limit))
 	return eventCount, refCount
 }
 
-func incomingMaterialRequireReadState(t *testing.T, ctx context.Context, store *Store, q queryer, stage Stage) stateSnapshot {
+func incomingMaterialRequireReadState(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	q queryer,
+	stage Stage,
+) stateSnapshot {
 	t.Helper()
 	state, err := store.readState(ctx, q, stage)
 	require.NoError(t, err)
@@ -218,7 +274,10 @@ func incomingMaterialRequireForeignKeyViolation(t *testing.T, ctx context.Contex
 
 func incomingMaterialRowSnapshot(t *testing.T, ctx context.Context, q queryer) [][]any {
 	t.Helper()
-	rows, err := q.QueryContext(ctx, "SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision")
+	rows, err := q.QueryContext(
+		ctx,
+		"SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision",
+	)
 	require.NoError(t, err)
 	snapshot := make([][]any, 0)
 	for rows.Next() {
@@ -235,8 +294,26 @@ func incomingMaterialSecondPayloadCID(t *testing.T) ([]byte, uint64) {
 	t.Helper()
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "other.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("second synthetic incoming material payload"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "other.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("second synthetic incoming material payload"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	blob, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -244,7 +321,10 @@ func incomingMaterialSecondPayloadCID(t *testing.T) ([]byte, uint64) {
 	require.NoError(t, err)
 	cid, err := publication.RawPayloadCID(blob.Payload)
 	require.NoError(t, err)
-	decoded, err := publication.DecodePayload(blob.Payload, publication.BlobReference{CID: cid, Size: uint64(len(blob.Payload))})
+	decoded, err := publication.DecodePayload(
+		blob.Payload,
+		publication.BlobReference{CID: cid, Size: uint64(len(blob.Payload))},
+	)
 	require.NoError(t, err)
 	require.Len(t, decoded.Targets, 1)
 	require.Len(t, decoded.Entries, 1)
@@ -265,7 +345,11 @@ func TestIncomingMaterialSchemaDefinitionAndSource2Isolation(t *testing.T) {
 	tx, txContext := incomingMaterialTransaction(t, store, false)
 	incomingMaterialCreateTable(t, txContext, tx)
 	var storedSQL any
-	require.NoError(t, tx.QueryRowContext(txContext, "SELECT sql FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").Scan(&storedSQL))
+	require.NoError(
+		t,
+		tx.QueryRowContext(txContext, "SELECT sql FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").
+			Scan(&storedSQL),
+	)
 	storedText, ok := storedSQL.(string)
 	require.True(t, ok)
 	assert.Equal(t, incomingMaterialSchemaStatement, strings.TrimSpace(storedText))
@@ -307,15 +391,31 @@ func TestIncomingMaterialSchemaDefinitionAndSource2Isolation(t *testing.T) {
 	}
 	require.NoError(t, foreignRows.Err())
 	require.NoError(t, foreignRows.Close())
-	assert.Equal(t, map[string]string{"accepted_revision": "accepted_events", "record_cid": "accepted_records", "blob_cid": "payload_objects"}, parents)
+	assert.Equal(
+		t,
+		map[string]string{
+			"accepted_revision": "accepted_events",
+			"record_cid":        "accepted_records",
+			"blob_cid":          "payload_objects",
+		},
+		parents,
+	)
 
 	var auxiliaryObjects int64
-	require.NoError(t, tx.QueryRowContext(txContext, "SELECT COUNT(*) FROM sqlite_master WHERE tbl_name='accepted_material_refs' AND type IN ('index','trigger')").Scan(&auxiliaryObjects))
+	require.NoError(
+		t,
+		tx.QueryRowContext(txContext, "SELECT COUNT(*) FROM sqlite_master WHERE tbl_name='accepted_material_refs' AND type IN ('index','trigger')").
+			Scan(&auxiliaryObjects),
+	)
 	assert.Zero(t, auxiliaryObjects)
 	incomingMaterialRollback(t, txContext, store, tx)
 
 	var tableCount int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").Scan(&tableCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").
+			Scan(&tableCount),
+	)
 	assert.Zero(t, tableCount)
 	require.NoError(t, checkSchemaVersion(ctx, store.conn, 2))
 	assert.Equal(t, 2, store.schemaVersion)
@@ -397,7 +497,11 @@ func TestIncomingMaterialRefsEmpty(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, emptyStore.Close()) })
 	tx, txContext := incomingMaterialTransaction(t, emptyStore, false)
 	var tableCount int64
-	require.NoError(t, tx.QueryRowContext(txContext, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").Scan(&tableCount))
+	require.NoError(
+		t,
+		tx.QueryRowContext(txContext, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='accepted_material_refs'").
+			Scan(&tableCount),
+	)
 	require.Zero(t, tableCount)
 	incomingMaterialCreateTable(t, txContext, tx)
 	incomingMaterialRequireReadState(t, txContext, emptyStore, tx, StageLoad)
@@ -467,7 +571,7 @@ func TestIncomingMaterialRefsHistoricalSharedMetadataOnly(t *testing.T) {
 	assert.Equal(t, beforeState.token, afterState.token)
 	assert.Equal(t, beforeState.revision, afterState.revision)
 	assert.Equal(t, beforeState.generation, afterState.generation)
-	assert.Equal(t, 3, len(afterRows["accepted_events"]))
+	assert.Len(t, afterRows["accepted_events"], 3)
 	require.Equal(t, -1, store.payloadFD)
 	requirePayloadDirectoryAbsent(t, directory)
 	incomingMaterialRollback(t, txContext, store, tx)
@@ -541,14 +645,86 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 		recordLength int64
 		blobLength   int64
 	}{
-		{name: "record cid text", revision: 1, recordCID: "not-a-cid", blobCID: first.BlobCID, recordType: "text", blobType: "blob", recordLength: 9, blobLength: int64(len(first.BlobCID))},
-		{name: "record cid empty", revision: 1, recordCID: []byte{}, blobCID: first.BlobCID, recordType: "blob", blobType: "blob", recordLength: 0, blobLength: int64(len(first.BlobCID))},
-		{name: "record cid 129 bytes", revision: 1, recordCID: make([]byte, 129), blobCID: first.BlobCID, recordType: "blob", blobType: "blob", recordLength: 129, blobLength: int64(len(first.BlobCID))},
-		{name: "blob cid empty", revision: 1, recordCID: first.RecordCID, blobCID: []byte{}, recordType: "blob", blobType: "blob", recordLength: int64(len(first.RecordCID)), blobLength: 0},
-		{name: "blob cid 129 bytes", revision: 1, recordCID: first.RecordCID, blobCID: make([]byte, 129), recordType: "blob", blobType: "blob", recordLength: int64(len(first.RecordCID)), blobLength: 129},
-		{name: "revision zero", revision: 0, recordCID: first.RecordCID, blobCID: first.BlobCID, recordType: "blob", blobType: "blob", recordLength: int64(len(first.RecordCID)), blobLength: int64(len(first.BlobCID))},
-		{name: "revision negative", revision: -1, recordCID: first.RecordCID, blobCID: first.BlobCID, recordType: "blob", blobType: "blob", recordLength: int64(len(first.RecordCID)), blobLength: int64(len(first.BlobCID))},
-		{name: "revision above max sequence", revision: int64(publication.MaxSequence) + 1, recordCID: first.RecordCID, blobCID: first.BlobCID, recordType: "blob", blobType: "blob", recordLength: int64(len(first.RecordCID)), blobLength: int64(len(first.BlobCID))},
+		{
+			name:         "record cid text",
+			revision:     1,
+			recordCID:    "not-a-cid",
+			blobCID:      first.BlobCID,
+			recordType:   "text",
+			blobType:     "blob",
+			recordLength: 9,
+			blobLength:   int64(len(first.BlobCID)),
+		},
+		{
+			name:         "record cid empty",
+			revision:     1,
+			recordCID:    []byte{},
+			blobCID:      first.BlobCID,
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: 0,
+			blobLength:   int64(len(first.BlobCID)),
+		},
+		{
+			name:         "record cid 129 bytes",
+			revision:     1,
+			recordCID:    make([]byte, 129),
+			blobCID:      first.BlobCID,
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: 129,
+			blobLength:   int64(len(first.BlobCID)),
+		},
+		{
+			name:         "blob cid empty",
+			revision:     1,
+			recordCID:    first.RecordCID,
+			blobCID:      []byte{},
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: int64(len(first.RecordCID)),
+			blobLength:   0,
+		},
+		{
+			name:         "blob cid 129 bytes",
+			revision:     1,
+			recordCID:    first.RecordCID,
+			blobCID:      make([]byte, 129),
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: int64(len(first.RecordCID)),
+			blobLength:   129,
+		},
+		{
+			name:         "revision zero",
+			revision:     0,
+			recordCID:    first.RecordCID,
+			blobCID:      first.BlobCID,
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: int64(len(first.RecordCID)),
+			blobLength:   int64(len(first.BlobCID)),
+		},
+		{
+			name:         "revision negative",
+			revision:     -1,
+			recordCID:    first.RecordCID,
+			blobCID:      first.BlobCID,
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: int64(len(first.RecordCID)),
+			blobLength:   int64(len(first.BlobCID)),
+		},
+		{
+			name:         "revision above max sequence",
+			revision:     int64(publication.MaxSequence) + 1,
+			recordCID:    first.RecordCID,
+			blobCID:      first.BlobCID,
+			recordType:   "blob",
+			blobType:     "blob",
+			recordLength: int64(len(first.RecordCID)),
+			blobLength:   int64(len(first.BlobCID)),
+		},
 	}
 	for _, test := range shapes {
 		t.Run(test.name, func(t *testing.T) {
@@ -557,7 +733,11 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 			incomingMaterialInsertRef(t, txContext, tx, test.revision, test.recordCID, test.blobCID)
 			var revisionType, recordType, blobType string
 			var recordLength, blobLength int64
-			require.NoError(t, tx.QueryRowContext(txContext, "SELECT typeof(accepted_revision),typeof(record_cid),length(CAST(record_cid AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)) FROM accepted_material_refs WHERE accepted_revision=?", test.revision).Scan(&revisionType, &recordType, &recordLength, &blobType, &blobLength))
+			require.NoError(
+				t,
+				tx.QueryRowContext(txContext, "SELECT typeof(accepted_revision),typeof(record_cid),length(CAST(record_cid AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)) FROM accepted_material_refs WHERE accepted_revision=?", test.revision).
+					Scan(&revisionType, &recordType, &recordLength, &blobType, &blobLength),
+			)
 			require.Equal(t, "integer", revisionType)
 			require.Equal(t, test.recordType, recordType)
 			require.Equal(t, test.recordLength, recordLength)
@@ -566,7 +746,13 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 			events, refs := incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
 			require.Equal(t, int64(1), events)
 			require.Equal(t, int64(1), refs)
-			requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+			requireErrorMetadata(
+				t,
+				store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+				ErrSchema,
+				StageLoad,
+				ReasonCorrupt,
+			)
 		})
 	}
 
@@ -581,14 +767,24 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 		incomingMaterialHistoricalLifecycle(t, boundedStore, threeEvents)
 		tx, txContext := incomingMaterialTransaction(t, boundedStore, false)
 		incomingMaterialCreateTable(t, txContext, tx)
-		_, err := tx.ExecContext(txContext, "INSERT INTO accepted_events(revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes) SELECT ?,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events WHERE revision=1", int64(4))
+		_, err := tx.ExecContext(
+			txContext,
+			"INSERT INTO accepted_events(revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes) SELECT ?,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events WHERE revision=1",
+			int64(4),
+		)
 		require.NoError(t, err)
 		events := incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_events")
 		refs := incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs")
 		require.Equal(t, int64(4), events)
 		require.Greater(t, events, int64(limits.AcceptedEventCount))
 		require.Zero(t, refs)
-		requireErrorMetadata(t, boundedStore.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			boundedStore.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("ref count exceeds event count", func(t *testing.T) {
@@ -611,15 +807,33 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 		require.Equal(t, int64(3), events)
 		require.Equal(t, int64(4), refs)
 		require.Greater(t, refs, events)
-		requireErrorMetadata(t, boundedStore.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			boundedStore.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("integer primary key refuses non-integer values", func(t *testing.T) {
 		tx, txContext := incomingMaterialTransaction(t, store, false)
 		incomingMaterialCreateTable(t, txContext, tx)
-		_, err := tx.ExecContext(txContext, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", 1.5, first.RecordCID, first.BlobCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+			1.5,
+			first.RecordCID,
+			first.BlobCID,
+		)
 		require.Error(t, err)
-		_, err = tx.ExecContext(txContext, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", "one", first.RecordCID, first.BlobCID)
+		_, err = tx.ExecContext(
+			txContext,
+			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+			"one",
+			first.RecordCID,
+			first.BlobCID,
+		)
 		require.Error(t, err)
 		require.Zero(t, incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
 	})
@@ -627,7 +841,13 @@ func TestIncomingMaterialRefsRejectsShapesAndBounds(t *testing.T) {
 	t.Run("not null refuses null cid", func(t *testing.T) {
 		tx, txContext := incomingMaterialTransaction(t, store, false)
 		incomingMaterialCreateTable(t, txContext, tx)
-		_, err := tx.ExecContext(txContext, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(1), nil, first.BlobCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+			int64(1),
+			nil,
+			first.BlobCID,
+		)
 		require.Error(t, err)
 		require.Zero(t, incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
 	})
@@ -648,12 +868,22 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		for _, floor := range []Floor{first, second, third} {
 			incomingMaterialInsertRef(t, txContext, tx, int64(floor.Revision), floor.RecordCID, floor.BlobCID)
 		}
-		_, err := tx.ExecContext(txContext, "UPDATE accepted_material_refs SET record_cid=? WHERE accepted_revision=1", second.RecordCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"UPDATE accepted_material_refs SET record_cid=? WHERE accepted_revision=1",
+			second.RecordCID,
+		)
 		require.NoError(t, err)
 		incomingMaterialRequireReadState(t, txContext, store, tx, StageLoad)
 		incomingMaterialRequireNoForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("wrong existing blob", func(t *testing.T) {
@@ -665,12 +895,22 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		for _, floor := range []Floor{first, second, third} {
 			incomingMaterialInsertRef(t, txContext, tx, int64(floor.Revision), floor.RecordCID, floor.BlobCID)
 		}
-		_, err := tx.ExecContext(txContext, "UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=1", otherCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=1",
+			otherCID,
+		)
 		require.NoError(t, err)
 		incomingMaterialRequireReadState(t, txContext, store, tx, StageLoad)
 		incomingMaterialRequireNoForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("missing event", func(t *testing.T) {
@@ -682,10 +922,20 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		_, err := tx.ExecContext(txContext, "DELETE FROM accepted_events WHERE revision=1")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_events"))
-		require.Equal(t, int64(2), incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(
+			t,
+			int64(2),
+			incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"),
+		)
 		incomingMaterialRequireForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("missing record", func(t *testing.T) {
@@ -698,10 +948,20 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		_, err := tx.ExecContext(txContext, "DELETE FROM accepted_records WHERE cid=?", first.RecordCID)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_events"))
-		require.Equal(t, int64(3), incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(
+			t,
+			int64(3),
+			incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"),
+		)
 		incomingMaterialRequireForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("missing catalog", func(t *testing.T) {
@@ -711,10 +971,20 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
 		_, err := tx.ExecContext(txContext, "DELETE FROM payload_objects WHERE blob_cid=?", first.BlobCID)
 		require.NoError(t, err)
-		require.Equal(t, int64(1), incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialCount(t, txContext, tx, "SELECT COUNT(*) FROM accepted_material_refs"),
+		)
 		incomingMaterialRequireForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("dangling record cid refuses at floor equality", func(t *testing.T) {
@@ -725,7 +995,13 @@ func TestIncomingMaterialRefsRejectsDanglingAndWrongJoins(t *testing.T) {
 		incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), missingCID, first.BlobCID)
 		incomingMaterialRequireForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 }
 
@@ -744,10 +1020,18 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 		incomingMaterialCreateTable(t, txContext, tx)
 		incomingMaterialValidCatalog(t, txContext, tx, first.BlobCID, first.BlobSize)
 		incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
-		_, err := tx.ExecContext(txContext, "UPDATE payload_objects SET size=size+1,logical_bytes=logical_bytes+1 WHERE blob_cid=?", first.BlobCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"UPDATE payload_objects SET size=size+1,logical_bytes=logical_bytes+1 WHERE blob_cid=?",
+			first.BlobCID,
+		)
 		require.NoError(t, err)
 		var size, logical int64
-		require.NoError(t, tx.QueryRowContext(txContext, "SELECT size,logical_bytes FROM payload_objects WHERE blob_cid=?", first.BlobCID).Scan(&size, &logical))
+		require.NoError(
+			t,
+			tx.QueryRowContext(txContext, "SELECT size,logical_bytes FROM payload_objects WHERE blob_cid=?", first.BlobCID).
+				Scan(&size, &logical),
+		)
 		require.Equal(t, originalSize+1, size)
 		require.Equal(t, size, logical)
 		require.LessOrEqual(t, uint64(size), publication.MaxBlobBytes)
@@ -755,7 +1039,13 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 		incomingMaterialRequireReadState(t, txContext, store, tx, StageLoad)
 		incomingMaterialRequireNoForeignKeyViolation(t, txContext, tx)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("logical bytes differ from size", func(t *testing.T) {
@@ -763,11 +1053,27 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 		incomingMaterialCreateTable(t, txContext, tx)
 		incomingMaterialValidCatalog(t, txContext, tx, first.BlobCID, first.BlobSize)
 		incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
-		_, err := tx.ExecContext(txContext, "UPDATE payload_objects SET logical_bytes=logical_bytes+1 WHERE blob_cid=?", first.BlobCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"UPDATE payload_objects SET logical_bytes=logical_bytes+1 WHERE blob_cid=?",
+			first.BlobCID,
+		)
 		require.NoError(t, err)
-		requireErrorMetadata(t, func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 
 	t.Run("size type and range", func(t *testing.T) {
@@ -777,11 +1083,20 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 				incomingMaterialCreateTable(t, txContext, tx)
 				incomingMaterialValidCatalog(t, txContext, tx, first.BlobCID, first.BlobSize)
 				incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
-				_, err := tx.ExecContext(txContext, "UPDATE payload_objects SET size=? WHERE blob_cid=?", value, first.BlobCID)
+				_, err := tx.ExecContext(
+					txContext,
+					"UPDATE payload_objects SET size=? WHERE blob_cid=?",
+					value,
+					first.BlobCID,
+				)
 				require.NoError(t, err)
 				var sizeType string
 				var size any
-				require.NoError(t, tx.QueryRowContext(txContext, "SELECT typeof(size),CASE WHEN typeof(size)='integer' THEN size END FROM payload_objects WHERE blob_cid=?", first.BlobCID).Scan(&sizeType, &size))
+				require.NoError(
+					t,
+					tx.QueryRowContext(txContext, "SELECT typeof(size),CASE WHEN typeof(size)='integer' THEN size END FROM payload_objects WHERE blob_cid=?", first.BlobCID).
+						Scan(&sizeType, &size),
+				)
 				if _, ok := value.(string); ok {
 					require.Equal(t, "text", sizeType)
 					require.Nil(t, size)
@@ -789,9 +1104,21 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 					require.Equal(t, "integer", sizeType)
 					require.Equal(t, value, size)
 				}
-				requireErrorMetadata(t, func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(), ErrSchema, StageLoad, ReasonCorrupt)
+				requireErrorMetadata(
+					t,
+					func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(),
+					ErrSchema,
+					StageLoad,
+					ReasonCorrupt,
+				)
 				incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-				requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+				requireErrorMetadata(
+					t,
+					store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+					ErrSchema,
+					StageLoad,
+					ReasonCorrupt,
+				)
 			})
 		}
 	})
@@ -807,16 +1134,37 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 				incomingMaterialCreateTable(t, txContext, tx)
 				incomingMaterialValidCatalog(t, txContext, tx, first.BlobCID, first.BlobSize)
 				incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
-				_, err := tx.ExecContext(txContext, "UPDATE payload_objects SET basename=? WHERE blob_cid=?", test.basename, first.BlobCID)
+				_, err := tx.ExecContext(
+					txContext,
+					"UPDATE payload_objects SET basename=? WHERE blob_cid=?",
+					test.basename,
+					first.BlobCID,
+				)
 				require.NoError(t, err)
 				var nameType string
 				var nameLength int64
-				require.NoError(t, tx.QueryRowContext(txContext, "SELECT typeof(basename),length(CAST(basename AS BLOB)) FROM payload_objects WHERE blob_cid=?", first.BlobCID).Scan(&nameType, &nameLength))
+				require.NoError(
+					t,
+					tx.QueryRowContext(txContext, "SELECT typeof(basename),length(CAST(basename AS BLOB)) FROM payload_objects WHERE blob_cid=?", first.BlobCID).
+						Scan(&nameType, &nameLength),
+				)
 				require.Equal(t, "text", nameType)
 				require.Equal(t, int64(len(test.basename)), nameLength)
-				requireErrorMetadata(t, func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(), ErrSchema, StageLoad, ReasonCorrupt)
+				requireErrorMetadata(
+					t,
+					func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(),
+					ErrSchema,
+					StageLoad,
+					ReasonCorrupt,
+				)
 				incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-				requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+				requireErrorMetadata(
+					t,
+					store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+					ErrSchema,
+					StageLoad,
+					ReasonCorrupt,
+				)
 			})
 		}
 	})
@@ -826,16 +1174,37 @@ func TestIncomingMaterialRefsRejectsCatalogMetadata(t *testing.T) {
 		incomingMaterialCreateTable(t, txContext, tx)
 		incomingMaterialValidCatalog(t, txContext, tx, first.BlobCID, first.BlobSize)
 		incomingMaterialInsertRef(t, txContext, tx, int64(first.Revision), first.RecordCID, first.BlobCID)
-		_, err := tx.ExecContext(txContext, "UPDATE payload_objects SET basename=? WHERE blob_cid=?", []byte(wantedName), first.BlobCID)
+		_, err := tx.ExecContext(
+			txContext,
+			"UPDATE payload_objects SET basename=? WHERE blob_cid=?",
+			[]byte(wantedName),
+			first.BlobCID,
+		)
 		require.NoError(t, err)
 		var nameType string
 		var nameLength int64
-		require.NoError(t, tx.QueryRowContext(txContext, "SELECT typeof(basename),length(CAST(basename AS BLOB)) FROM payload_objects WHERE blob_cid=?", first.BlobCID).Scan(&nameType, &nameLength))
+		require.NoError(
+			t,
+			tx.QueryRowContext(txContext, "SELECT typeof(basename),length(CAST(basename AS BLOB)) FROM payload_objects WHERE blob_cid=?", first.BlobCID).
+				Scan(&nameType, &nameLength),
+		)
 		require.Equal(t, "blob", nameType)
 		require.Equal(t, int64(len(wantedName)), nameLength)
-		requireErrorMetadata(t, func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			func() error { _, readErr := store.readState(txContext, tx, StageLoad); return readErr }(),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 		incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+			ErrSchema,
+			StageLoad,
+			ReasonCorrupt,
+		)
 	})
 }
 
@@ -855,7 +1224,14 @@ func TestIncomingMaterialRefsRejectsDuplicateRetainedRevision(t *testing.T) {
 	require.Equal(t, ModeAdvance, advanceProposal.Mode)
 	require.Equal(t, Reason(""), advanceProposal.Reason)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	second, err := store.Accept(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, f.payload, advanceProposal.Confirmation)
+	second, err := store.Accept(
+		ctx,
+		ModeAdvance,
+		advanceProposal.StateToken,
+		advanceObservation,
+		f.payload,
+		advanceProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	replacementObservation := f.observation(1)
 	replacementProposal, err := store.Prepare(ctx, ModeReplaceFloor, replacementObservation, f.payload)
@@ -863,7 +1239,14 @@ func TestIncomingMaterialRefsRejectsDuplicateRetainedRevision(t *testing.T) {
 	require.Equal(t, ModeReplaceFloor, replacementProposal.Mode)
 	require.Equal(t, ReasonRollback, replacementProposal.Reason)
 	require.Equal(t, "rollback", replacementProposal.Stop)
-	third, err := store.Accept(ctx, ModeReplaceFloor, replacementProposal.StateToken, replacementObservation, f.payload, replacementProposal.Confirmation)
+	third, err := store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacementProposal.StateToken,
+		replacementObservation,
+		f.payload,
+		replacementProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, first.RecordCID, third.RecordCID)
 	require.Equal(t, uint64(1), first.Revision)
@@ -877,7 +1260,11 @@ func TestIncomingMaterialRefsRejectsDuplicateRetainedRevision(t *testing.T) {
 	require.Equal(t, first.BlobCID, third.BlobCID)
 	incomingMaterialRequireLifecycleHistory(t, store, []Floor{first, second, third})
 	var retainedRevision int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE record_cid=?", first.RecordCID).Scan(&retainedRevision))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE record_cid=?", first.RecordCID).
+			Scan(&retainedRevision),
+	)
 	require.Equal(t, int64(1), retainedRevision)
 
 	tx, txContext := incomingMaterialTransaction(t, store, false)
@@ -893,7 +1280,13 @@ func TestIncomingMaterialRefsRejectsDuplicateRetainedRevision(t *testing.T) {
 	incomingMaterialRequireReadState(t, txContext, store, tx, StageLoad)
 	incomingMaterialRequireNoForeignKeyViolation(t, txContext, tx)
 	incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-	requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
+	requireErrorMetadata(
+		t,
+		store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+		ErrSchema,
+		StageLoad,
+		ReasonCorrupt,
+	)
 	incomingMaterialRollback(t, txContext, store, tx)
 }
 
@@ -912,11 +1305,39 @@ func TestIncomingMaterialRefsChecksCanonicalMetadataAndErrors(t *testing.T) {
 		column   string
 		expected int64
 	}{
-		{name: "event floor 65537 bytes", query: "UPDATE accepted_events SET new_floor=zeroblob(65537) WHERE revision=1", column: "SELECT length(CAST(new_floor AS BLOB)) FROM accepted_events WHERE revision=1", expected: 65537},
-		{name: "event digest short", query: "UPDATE accepted_events SET digest=zeroblob(31) WHERE revision=1", column: "SELECT length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1", expected: 31},
-		{name: "accepted record raw 2049 bytes", query: "UPDATE accepted_records SET raw=zeroblob(2049) WHERE cid=?", args: []any{first.RecordCID}, column: "SELECT length(CAST(raw AS BLOB)) FROM accepted_records WHERE cid=?", expected: 2049},
-		{name: "accepted record key 17 bytes", query: "UPDATE accepted_records SET record_key=? WHERE cid=?", args: []any{strings.Repeat("k", 17), first.RecordCID}, column: "SELECT length(CAST(record_key AS BLOB)) FROM accepted_records WHERE cid=?", expected: 17},
-		{name: "accepted record sequence negative", query: "UPDATE accepted_records SET sequence=-1 WHERE cid=?", args: []any{first.RecordCID}, column: "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END FROM accepted_records WHERE cid=?", expected: -1},
+		{
+			name:     "event floor 65537 bytes",
+			query:    "UPDATE accepted_events SET new_floor=zeroblob(65537) WHERE revision=1",
+			column:   "SELECT length(CAST(new_floor AS BLOB)) FROM accepted_events WHERE revision=1",
+			expected: 65537,
+		},
+		{
+			name:     "event digest short",
+			query:    "UPDATE accepted_events SET digest=zeroblob(31) WHERE revision=1",
+			column:   "SELECT length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1",
+			expected: 31,
+		},
+		{
+			name:     "accepted record raw 2049 bytes",
+			query:    "UPDATE accepted_records SET raw=zeroblob(2049) WHERE cid=?",
+			args:     []any{first.RecordCID},
+			column:   "SELECT length(CAST(raw AS BLOB)) FROM accepted_records WHERE cid=?",
+			expected: 2049,
+		},
+		{
+			name:     "accepted record key 17 bytes",
+			query:    "UPDATE accepted_records SET record_key=? WHERE cid=?",
+			args:     []any{strings.Repeat("k", 17), first.RecordCID},
+			column:   "SELECT length(CAST(record_key AS BLOB)) FROM accepted_records WHERE cid=?",
+			expected: 17,
+		},
+		{
+			name:     "accepted record sequence negative",
+			query:    "UPDATE accepted_records SET sequence=-1 WHERE cid=?",
+			args:     []any{first.RecordCID},
+			column:   "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END FROM accepted_records WHERE cid=?",
+			expected: -1,
+		},
 	}
 	for _, corruption := range corruptions {
 		t.Run(corruption.name, func(t *testing.T) {
@@ -934,8 +1355,20 @@ func TestIncomingMaterialRefsChecksCanonicalMetadataAndErrors(t *testing.T) {
 			require.NoError(t, tx.QueryRowContext(txContext, corruption.column, columnArgs...).Scan(&observed))
 			require.Equal(t, corruption.expected, observed)
 			incomingMaterialRequireBoundedCounts(t, txContext, tx, store.limits.AcceptedEventCount)
-			requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageLoad), ErrSchema, StageLoad, ReasonCorrupt)
-			requireErrorMetadata(t, store.checkIncomingMaterialRefs(txContext, tx, StageOpen), ErrSchema, StageOpen, ReasonCorrupt)
+			requireErrorMetadata(
+				t,
+				store.checkIncomingMaterialRefs(txContext, tx, StageLoad),
+				ErrSchema,
+				StageLoad,
+				ReasonCorrupt,
+			)
+			requireErrorMetadata(
+				t,
+				store.checkIncomingMaterialRefs(txContext, tx, StageOpen),
+				ErrSchema,
+				StageOpen,
+				ReasonCorrupt,
+			)
 		})
 	}
 
@@ -963,14 +1396,26 @@ func TestIncomingMaterialRefsChecksCanonicalMetadataAndErrors(t *testing.T) {
 		tx, txContext := incomingMaterialTransaction(t, store, false)
 		incomingMaterialCreateTable(t, txContext, tx)
 		var nilContext context.Context
-		requireErrorMetadata(t, store.checkIncomingMaterialRefs(nilContext, tx, StageLoad), ErrInvalid, StageLoad, ReasonContext)
+		requireErrorMetadata(
+			t,
+			store.checkIncomingMaterialRefs(nilContext, tx, StageLoad),
+			ErrInvalid,
+			StageLoad,
+			ReasonContext,
+		)
 	})
 
 	t.Run("closed store", func(t *testing.T) {
 		closedStore, _ := newSchema2UnitStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, closedStore.Close()) })
 		require.NoError(t, closedStore.Close())
-		requireErrorMetadata(t, closedStore.checkIncomingMaterialRefs(ctx, closedStore.conn, StageOpen), ErrClosed, StageOpen, ReasonClosed)
+		requireErrorMetadata(
+			t,
+			closedStore.checkIncomingMaterialRefs(ctx, closedStore.conn, StageOpen),
+			ErrClosed,
+			StageOpen,
+			ReasonClosed,
+		)
 	})
 
 	t.Run("closed independent queryer", func(t *testing.T) {
@@ -985,7 +1430,7 @@ func TestIncomingMaterialRefsChecksCanonicalMetadataAndErrors(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, decoyDB.Close()) })
 		checkErr := store.checkIncomingMaterialRefs(txContext, decoyConn, StageLoad)
 		requireErrorMetadata(t, checkErr, ErrStorage, StageLoad, ReasonIO)
-		assert.False(t, errors.Is(checkErr, sql.ErrConnDone))
+		require.NotErrorIs(t, checkErr, sql.ErrConnDone)
 		assert.NotContains(t, checkErr.Error(), "database is closed")
 	})
 }
@@ -1006,11 +1451,20 @@ func TestIncomingMaterialRawRecordCorruptionRefused(t *testing.T) {
 	require.True(t, healthyFile.Exists)
 
 	var original []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT raw FROM accepted_records WHERE cid=?", floor.RecordCID).Scan(&original))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT raw FROM accepted_records WHERE cid=?", floor.RecordCID).
+			Scan(&original),
+	)
 	require.NotEmpty(t, original)
 	corrupted := bytes.Clone(original)
 	corrupted[0] ^= 0xff
-	result, err := store.conn.ExecContext(ctx, "UPDATE accepted_records SET raw=? WHERE cid=?", corrupted, floor.RecordCID)
+	result, err := store.conn.ExecContext(
+		ctx,
+		"UPDATE accepted_records SET raw=? WHERE cid=?",
+		corrupted,
+		floor.RecordCID,
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -1026,7 +1480,12 @@ func TestIncomingMaterialRawRecordCorruptionRefused(t *testing.T) {
 	faultedFile := incomingRolePayloadFileState(t, directory, f.payload)
 	assert.Equal(t, healthyFile, faultedFile)
 
-	result, err = store.conn.ExecContext(ctx, "UPDATE accepted_records SET raw=? WHERE cid=?", original, floor.RecordCID)
+	result, err = store.conn.ExecContext(
+		ctx,
+		"UPDATE accepted_records SET raw=? WHERE cid=?",
+		original,
+		floor.RecordCID,
+	)
 	require.NoError(t, err)
 	affected, err = result.RowsAffected()
 	require.NoError(t, err)
@@ -1057,11 +1516,20 @@ func TestIncomingMaterialRawFloorCorruptionRefused(t *testing.T) {
 	require.True(t, healthyFile.Exists)
 
 	var original []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT new_floor FROM accepted_events WHERE revision=?", int64(floor.Revision)).Scan(&original))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT new_floor FROM accepted_events WHERE revision=?", int64(floor.Revision)).
+			Scan(&original),
+	)
 	require.NotEmpty(t, original)
 	corrupted := bytes.Clone(original)
 	corrupted[0] ^= 0xff
-	result, err := store.conn.ExecContext(ctx, "UPDATE accepted_events SET new_floor=? WHERE revision=?", corrupted, int64(floor.Revision))
+	result, err := store.conn.ExecContext(
+		ctx,
+		"UPDATE accepted_events SET new_floor=? WHERE revision=?",
+		corrupted,
+		int64(floor.Revision),
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -1077,7 +1545,12 @@ func TestIncomingMaterialRawFloorCorruptionRefused(t *testing.T) {
 	faultedFile := incomingRolePayloadFileState(t, directory, f.payload)
 	assert.Equal(t, healthyFile, faultedFile)
 
-	result, err = store.conn.ExecContext(ctx, "UPDATE accepted_events SET new_floor=? WHERE revision=?", original, int64(floor.Revision))
+	result, err = store.conn.ExecContext(
+		ctx,
+		"UPDATE accepted_events SET new_floor=? WHERE revision=?",
+		original,
+		int64(floor.Revision),
+	)
 	require.NoError(t, err)
 	affected, err = result.RowsAffected()
 	require.NoError(t, err)

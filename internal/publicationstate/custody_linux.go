@@ -17,8 +17,9 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/multiformats/go-multihash"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 const payloadDirectoryName = "payloads"
@@ -43,7 +44,13 @@ func defaultCustodyOperations() custodyOperations {
 		write: unix.Write,
 		sync:  unix.Fsync,
 		link: func(fd, directoryFD int, name string) error {
-			return unix.Linkat(unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", fd), directoryFD, name, unix.AT_SYMLINK_FOLLOW)
+			return unix.Linkat(
+				unix.AT_FDCWD,
+				fmt.Sprintf("/proc/self/fd/%d", fd),
+				directoryFD,
+				name,
+				unix.AT_SYMLINK_FOLLOW,
+			)
 		},
 	}
 }
@@ -54,7 +61,11 @@ func openStoreRoot(path string) (int, error) {
 		return -1, err
 	}
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 || stat.Mode&0o7000 != 0 {
+	if err := unix.Fstat(
+		fd,
+		&stat,
+	); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 ||
+		stat.Mode&0o7000 != 0 {
 		_ = unix.Close(fd)
 		return -1, errors.New("unsafe root")
 	}
@@ -65,12 +76,21 @@ func (s *Store) openPayloadDirectoryForRead() error {
 	if s.payloadFD >= 0 {
 		return s.validatePinnedPayloadDirectory()
 	}
-	fd, err := unix.Openat(s.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	fd, err := unix.Openat(
+		s.rootFD,
+		payloadDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return err
 	}
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 || stat.Mode&0o7000 != 0 {
+	if err := unix.Fstat(
+		fd,
+		&stat,
+	); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 ||
+		stat.Mode&0o7000 != 0 {
 		_ = unix.Close(fd)
 		return errors.New("unsafe payload directory")
 	}
@@ -88,12 +108,21 @@ func (s *Store) ensurePayloadDirectory() error {
 	} else if !errors.Is(err, unix.EEXIST) {
 		return err
 	}
-	fd, err := unix.Openat(s.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	fd, err := unix.Openat(
+		s.rootFD,
+		payloadDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return err
 	}
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o7000 != 0 {
+	if err := unix.Fstat(
+		fd,
+		&stat,
+	); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) ||
+		stat.Mode&0o7000 != 0 {
 		_ = unix.Close(fd)
 		return errors.New("unsafe payload directory")
 	}
@@ -116,7 +145,11 @@ func (s *Store) ensurePayloadDirectory() error {
 
 func (s *Store) validatePinnedPayloadDirectory() error {
 	var stat unix.Stat_t
-	if err := unix.Fstat(s.payloadFD, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 || stat.Mode&0o7000 != 0 {
+	if err := unix.Fstat(
+		s.payloadFD,
+		&stat,
+	); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 ||
+		stat.Mode&0o7000 != 0 {
 		return errors.New("unsafe payload directory")
 	}
 	var named unix.Stat_t
@@ -177,7 +210,12 @@ func readValidatedPayloadFD(fd int, blob publication.BlobReference) ([]byte, err
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, err
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o600 || stat.Mode&0o7000 != 0 || stat.Nlink != 1 || stat.Size <= 0 || uint64(stat.Size) != blob.Size || blob.Size > publication.MaxBlobBytes {
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o600 ||
+		stat.Mode&0o7000 != 0 ||
+		stat.Nlink != 1 ||
+		stat.Size <= 0 ||
+		uint64(stat.Size) != blob.Size ||
+		blob.Size > publication.MaxBlobBytes {
 		return nil, errUnsafePayloadObject
 	}
 	length := int(blob.Size)
@@ -209,7 +247,12 @@ func readValidatedPayloadFD(fd int, blob publication.BlobReference) ([]byte, err
 	return data, nil
 }
 
-func (s *Store) writeAnonymousPayload(ctx context.Context, payload []byte, blob publication.BlobReference, name string) (result error) {
+func (s *Store) writeAnonymousPayload(
+	ctx context.Context,
+	payload []byte,
+	blob publication.BlobReference,
+	name string,
+) (result error) {
 	fd, err := s.custodyOps.openTemp(s.payloadFD, 0o600)
 	if err != nil {
 		return err
@@ -226,10 +269,7 @@ func (s *Store) writeAnonymousPayload(ctx context.Context, payload []byte, blob 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		end := offset + 64*1024
-		if end > len(payload) {
-			end = len(payload)
-		}
+		end := min(offset+64*1024, len(payload))
 		written, err := s.custodyOps.write(fd, payload[offset:end])
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
@@ -312,12 +352,18 @@ func (s *Store) inventoryPayloads() (map[string]uint64, uint64, error) {
 	if err := s.ensurePayloadDirectory(); err != nil {
 		return nil, 0, err
 	}
-	dup, err := unix.Openat(s.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	dup, err := unix.Openat(
+		s.rootFD,
+		payloadDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return nil, 0, err
 	}
 	var named, pinned unix.Stat_t
-	if unix.Fstat(dup, &named) != nil || unix.Fstat(s.payloadFD, &pinned) != nil || named.Dev != pinned.Dev || named.Ino != pinned.Ino {
+	if unix.Fstat(dup, &named) != nil || unix.Fstat(s.payloadFD, &pinned) != nil || named.Dev != pinned.Dev ||
+		named.Ino != pinned.Ino {
 		_ = unix.Close(dup)
 		return nil, 0, errors.New("changed payload directory")
 	}
@@ -346,7 +392,13 @@ func (s *Store) inventoryPayloads() (map[string]uint64, uint64, error) {
 		var stat unix.Stat_t
 		statErr := unix.Fstat(fd, &stat)
 		closeErr := unix.Close(fd)
-		if statErr != nil || closeErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o600 || stat.Mode&0o7000 != 0 || stat.Nlink != 1 || stat.Size <= 0 || uint64(stat.Size) > publication.MaxBlobBytes {
+		if statErr != nil || closeErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG ||
+			stat.Uid != uint32(os.Geteuid()) ||
+			stat.Mode&0o777 != 0o600 ||
+			stat.Mode&0o7000 != 0 ||
+			stat.Nlink != 1 ||
+			stat.Size <= 0 ||
+			uint64(stat.Size) > publication.MaxBlobBytes {
 			return nil, 0, errors.New("unsafe payload object")
 		}
 		size := uint64(stat.Size)
@@ -363,9 +415,20 @@ func (s *Store) checkPayloadCapacity(ctx context.Context, name string, size uint
 	return s.checkPayloadCapacityWithQueryer(ctx, s.conn, name, size, createDirectory)
 }
 
-func (s *Store) checkPayloadCapacityWithQueryer(ctx context.Context, q queryer, name string, size uint64, createDirectory bool) error {
+func (s *Store) checkPayloadCapacityWithQueryer(
+	ctx context.Context,
+	q queryer,
+	name string,
+	size uint64,
+	createDirectory bool,
+) error {
 	if s.payloadFD < 0 && !createDirectory {
-		fd, openErr := unix.Openat(s.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		fd, openErr := unix.Openat(
+			s.rootFD,
+			payloadDirectoryName,
+			unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+			0,
+		)
 		if errors.Is(openErr, unix.ENOENT) {
 			var catalogued any
 			if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&catalogued); err != nil {
@@ -381,7 +444,11 @@ func (s *Store) checkPayloadCapacityWithQueryer(ctx context.Context, q queryer, 
 			return openErr
 		}
 		var stat unix.Stat_t
-		if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 || stat.Mode&0o7000 != 0 {
+		if err := unix.Fstat(
+			fd,
+			&stat,
+		); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o700 ||
+			stat.Mode&0o7000 != 0 {
 			_ = unix.Close(fd)
 			return errors.New("unsafe payload directory")
 		}
@@ -407,7 +474,8 @@ func (s *Store) checkPayloadCapacityWithQueryer(ctx context.Context, q queryer, 
 		blobCID, cidOK := rawBytes(cidValue)
 		storedSize, ok := rawInt64(stored)
 		wantedName, nameErr := payloadBasenameFromCID(blobCID)
-		if !cidOK || !ok || storedSize <= 0 || !validPayloadBasename(basename) || nameErr != nil || wantedName != basename {
+		if !cidOK || !ok || storedSize <= 0 || !validPayloadBasename(basename) || nameErr != nil ||
+			wantedName != basename {
 			_ = rows.Close()
 			return errStoredValue
 		}
@@ -441,14 +509,20 @@ func (s *Store) checkPayloadCapacityWithQueryer(ctx context.Context, q queryer, 
 		}
 		return nil
 	}
-	if uint32(len(objects)) >= s.attemptLimits.ManagedObjects || size > s.attemptLimits.CustodyBytes || total > s.attemptLimits.CustodyBytes-size {
+	if uint32(len(objects)) >= s.attemptLimits.ManagedObjects || size > s.attemptLimits.CustodyBytes ||
+		total > s.attemptLimits.CustodyBytes-size {
 		return errors.New("payload capacity")
 	}
 	return nil
 }
 
 func validatePayloadForCustody(payload []byte, blob publication.BlobReference, name string) error {
-	if len(payload) == 0 || uint64(len(payload)) > publication.MaxBlobBytes || blob.Size == 0 || blob.Size > publication.MaxBlobBytes || uint64(len(payload)) != blob.Size || len(blob.CID) == 0 || len(blob.CID) > publication.MaxCIDBytes || len(name) != 64+len(payloadSuffix) {
+	if len(payload) == 0 || uint64(len(payload)) > publication.MaxBlobBytes || blob.Size == 0 ||
+		blob.Size > publication.MaxBlobBytes ||
+		uint64(len(payload)) != blob.Size ||
+		len(blob.CID) == 0 ||
+		len(blob.CID) > publication.MaxCIDBytes ||
+		len(name) != 64+len(payloadSuffix) {
 		return errInvalidPayloadInput
 	}
 	canonicalName, err := payloadBasenameFromCID(blob.CID)
@@ -465,10 +539,22 @@ func validatePayloadForCustody(payload []byte, blob publication.BlobReference, n
 }
 
 func (s *Store) persistCandidatePayload(ctx context.Context, candidate validatedCandidate) (string, []byte, error) {
-	return s.persistPayload(ctx, s.conn, candidate.payload, attemptPayloadReference(candidate), payloadBasename(candidate.payload))
+	return s.persistPayload(
+		ctx,
+		s.conn,
+		candidate.payload,
+		attemptPayloadReference(candidate),
+		payloadBasename(candidate.payload),
+	)
 }
 
-func (s *Store) persistPayload(ctx context.Context, q queryer, payload []byte, blob publication.BlobReference, name string) (string, []byte, error) {
+func (s *Store) persistPayload(
+	ctx context.Context,
+	q queryer,
+	payload []byte,
+	blob publication.BlobReference,
+	name string,
+) (string, []byte, error) {
 	if err := validatePayloadForCustody(payload, blob, name); err != nil {
 		return "", nil, err
 	}
@@ -477,7 +563,8 @@ func (s *Store) persistPayload(ctx context.Context, q queryer, payload []byte, b
 	}
 	var cataloguedName string
 	var cataloguedSize any
-	err := q.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&cataloguedName, &cataloguedSize)
+	err := q.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", blob.CID).
+		Scan(&cataloguedName, &cataloguedSize)
 	if err == nil {
 		size, ok := rawInt64(cataloguedSize)
 		if !ok || size <= 0 || uint64(size) != blob.Size || cataloguedName != name {

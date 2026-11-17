@@ -28,9 +28,14 @@ func newRetentionDeclarationFixture(t *testing.T) retentionDeclarationFixture {
 		Signer: Signer{DeviceID: base.certificate.DeviceID, KeyID: bytes.Clone(base.certificate.KeyID)},
 	}, base.publisherKey)
 	control := signControlValue(t, Control{
-		Vault: base.policy.Vault, EpochSeq: base.policy.EpochSeq, PolicyDigest: base.prepared.PolicyDigest,
+		Vault:           base.policy.Vault,
+		EpochSeq:        base.policy.EpochSeq,
+		PolicyDigest:    base.prepared.PolicyDigest,
 		HeadSnapshotCID: snapshotCID,
-		Signer:          Signer{DeviceID: base.rootCertificate.DeviceID, KeyID: bytes.Clone(base.rootCertificate.KeyID)},
+		Signer: Signer{
+			DeviceID: base.rootCertificate.DeviceID,
+			KeyID:    bytes.Clone(base.rootCertificate.KeyID),
+		},
 	}, base.signingKey)
 	controlCID, err := rawCID(control)
 	require.NoError(t, err)
@@ -50,7 +55,10 @@ func newRetentionDeclarationFixture(t *testing.T) retentionDeclarationFixture {
 	}
 }
 
-func retentionOrdinaryPointEvidence(t *testing.T, fixture retentionDeclarationFixture) (RetentionRecoveryPoint, RetentionRecoveryPointEvidence) {
+func retentionOrdinaryPointEvidence(
+	t *testing.T,
+	fixture retentionDeclarationFixture,
+) (RetentionRecoveryPoint, RetentionRecoveryPointEvidence) {
 	t.Helper()
 	prepared := fixture.base.prepared
 	prepared.Parent = bytes.Clone(fixture.point.SnapshotCID)
@@ -77,15 +85,22 @@ func retentionOrdinaryPointEvidence(t *testing.T, fixture retentionDeclarationFi
 		PolicyDigest: fixture.base.prepared.PolicyDigest, ControlCID: bytes.Clone(fixture.point.ControlCID),
 	}
 	return point, RetentionRecoveryPointEvidence{
-		Point: point, Position: fixture.state,
-		EpochStartHead: fixture.pointEvidence.EpochStartHead, EpochStartSnapshot: fixture.pointEvidence.EpochStartSnapshot,
-		Head: ordinaryHead, Ciphertext: ordinaryBody,
+		Point:              point,
+		Position:           fixture.state,
+		EpochStartHead:     fixture.pointEvidence.EpochStartHead,
+		EpochStartSnapshot: fixture.pointEvidence.EpochStartSnapshot,
+		Head:               ordinaryHead,
+		Ciphertext:         ordinaryBody,
 	}
 }
 
 func TestVerifyRetentionSnapshotPositionRequiresTrustAnchor(t *testing.T) {
 	fixture := newRetentionDeclarationFixture(t)
-	position, _, err := verifyControlPositionEvidence(fixture.base.policy.Vault, fixture.base.trustAnchor, fixture.state)
+	position, _, err := verifyControlPositionEvidence(
+		fixture.base.policy.Vault,
+		fixture.base.trustAnchor,
+		fixture.state,
+	)
 	require.NoError(t, err)
 
 	for _, test := range []struct {
@@ -113,7 +128,11 @@ func TestVerifyRetentionSnapshotPositionRequiresTrustAnchor(t *testing.T) {
 
 func TestRetentionSnapshotAuthenticationEnforcesPointAuthorization(t *testing.T) {
 	fixture := newRetentionDeclarationFixture(t)
-	position, _, err := verifyControlPositionEvidence(fixture.base.policy.Vault, fixture.base.trustAnchor, fixture.state)
+	position, _, err := verifyControlPositionEvidence(
+		fixture.base.policy.Vault,
+		fixture.base.trustAnchor,
+		fixture.state,
+	)
 	require.NoError(t, err)
 	_, ordinaryEvidence := retentionOrdinaryPointEvidence(t, fixture)
 
@@ -127,16 +146,35 @@ func TestRetentionSnapshotAuthenticationEnforcesPointAuthorization(t *testing.T)
 	t.Run("revoked by point control", func(t *testing.T) {
 		control, err := DecodeControl(fixture.state.Control)
 		require.NoError(t, err)
-		control.Revoked = append(control.Revoked, RevokedDevice{DeviceID: fixture.base.certificate.DeviceID, CertEpoch: fixture.base.certificate.CertEpoch})
+		control.Revoked = append(
+			control.Revoked,
+			RevokedDevice{DeviceID: fixture.base.certificate.DeviceID, CertEpoch: fixture.base.certificate.CertEpoch},
+		)
 		hostileState := fixture.state
 		hostileState.Control = signControlValue(t, control, fixture.base.signingKey)
-		hostilePosition, _, err := verifyControlPositionEvidence(fixture.base.policy.Vault, fixture.base.trustAnchor, hostileState)
+		hostilePosition, _, err := verifyControlPositionEvidence(
+			fixture.base.policy.Vault,
+			fixture.base.trustAnchor,
+			hostileState,
+		)
 		require.NoError(t, err)
-		_, _, _, err = verifyRetentionSnapshotPosition(hostilePosition, fixture.base.trustAnchor, hostileState.Certificates,
-			fixture.pointEvidence.EpochStartHead, fixture.pointEvidence.EpochStartSnapshot, true)
-		assert.ErrorIs(t, err, ErrAuthorization)
-		_, _, _, err = verifyRetentionSnapshotPosition(hostilePosition, fixture.base.trustAnchor, hostileState.Certificates,
-			ordinaryEvidence.Head, ordinaryEvidence.Ciphertext, false)
+		_, _, _, err = verifyRetentionSnapshotPosition(
+			hostilePosition,
+			fixture.base.trustAnchor,
+			hostileState.Certificates,
+			fixture.pointEvidence.EpochStartHead,
+			fixture.pointEvidence.EpochStartSnapshot,
+			true,
+		)
+		require.ErrorIs(t, err, ErrAuthorization)
+		_, _, _, err = verifyRetentionSnapshotPosition(
+			hostilePosition,
+			fixture.base.trustAnchor,
+			hostileState.Certificates,
+			ordinaryEvidence.Head,
+			ordinaryEvidence.Ciphertext,
+			false,
+		)
 		assert.ErrorIs(t, err, ErrAuthorization)
 	})
 
@@ -167,11 +205,21 @@ func TestRetentionSnapshotAuthenticationEnforcesPointAuthorization(t *testing.T)
 		hostileState := fixture.state
 		hostileState.Policy = policyBytes
 		hostileState.Control = signControlValue(t, control, fixture.base.signingKey)
-		hostilePosition, _, err := verifyControlPositionEvidence(fixture.base.policy.Vault, fixture.base.trustAnchor, hostileState)
+		hostilePosition, _, err := verifyControlPositionEvidence(
+			fixture.base.policy.Vault,
+			fixture.base.trustAnchor,
+			hostileState,
+		)
 		require.NoError(t, err)
-		_, _, _, err = verifyRetentionSnapshotPosition(hostilePosition, fixture.base.trustAnchor, hostileState.Certificates,
-			startHeadBytes, startBody, true)
-		assert.ErrorIs(t, err, ErrAuthorization)
+		_, _, _, err = verifyRetentionSnapshotPosition(
+			hostilePosition,
+			fixture.base.trustAnchor,
+			hostileState.Certificates,
+			startHeadBytes,
+			startBody,
+			true,
+		)
+		require.ErrorIs(t, err, ErrAuthorization)
 		envelope, err := DecodeEnvelope(ordinaryEvidence.Ciphertext)
 		require.NoError(t, err)
 		envelope.PolicyDigest = policyDigest
@@ -186,8 +234,14 @@ func TestRetentionSnapshotAuthenticationEnforcesPointAuthorization(t *testing.T)
 		head.SnapshotCID = bodyCID
 		head.BlobCID = bodyCID
 		headBytes := signHeadValue(t, head, fixture.base.publisherKey)
-		_, _, _, err = verifyRetentionSnapshotPosition(hostilePosition, fixture.base.trustAnchor, hostileState.Certificates,
-			headBytes, body, false)
+		_, _, _, err = verifyRetentionSnapshotPosition(
+			hostilePosition,
+			fixture.base.trustAnchor,
+			hostileState.Certificates,
+			headBytes,
+			body,
+			false,
+		)
 		assert.ErrorIs(t, err, ErrAuthorization)
 	})
 
@@ -239,7 +293,6 @@ func TestRetentionSnapshotAuthenticationEnforcesPointAuthorization(t *testing.T)
 			headBytes, ordinaryEvidence.Ciphertext, false)
 		assert.ErrorIs(t, err, ErrAuthorization)
 	})
-
 }
 
 func TestEvaluateRetentionDeclarationReportsPolicyFloor(t *testing.T) {
@@ -303,7 +356,7 @@ func TestEvaluateRetentionDeclarationRejectsOrdinaryPointParentAndCIDMismatch(t 
 	}{
 		{
 			name: "parent",
-			mutate: func(t *testing.T, point *RetentionRecoveryPoint, evidence *RetentionRecoveryPointEvidence, fixture retentionDeclarationFixture) {
+			mutate: func(t *testing.T, _ *RetentionRecoveryPoint, evidence *RetentionRecoveryPointEvidence, fixture retentionDeclarationFixture) {
 				head, err := DecodeHead(evidence.Head)
 				require.NoError(t, err)
 				head.PrevHeadCID = []byte("different-parent")
@@ -344,10 +397,15 @@ func TestEvaluateRetentionDeclarationRejectsUnverifiablePointControl(t *testing.
 	fixture := newRetentionDeclarationFixture(t)
 	baseSnapshotCID := bytes.Clone(fixture.point.SnapshotCID)
 	alternateControl := signControlValue(t, Control{
-		Vault: fixture.base.policy.Vault, EpochSeq: fixture.base.policy.EpochSeq,
-		PolicyDigest: fixture.base.prepared.PolicyDigest, HeadSnapshotCID: baseSnapshotCID,
-		PrevControlCID: []byte("missing-control"),
-		Signer:         Signer{DeviceID: fixture.base.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.base.rootCertificate.KeyID)},
+		Vault:           fixture.base.policy.Vault,
+		EpochSeq:        fixture.base.policy.EpochSeq,
+		PolicyDigest:    fixture.base.prepared.PolicyDigest,
+		HeadSnapshotCID: baseSnapshotCID,
+		PrevControlCID:  []byte("missing-control"),
+		Signer: Signer{
+			DeviceID: fixture.base.rootCertificate.DeviceID,
+			KeyID:    bytes.Clone(fixture.base.rootCertificate.KeyID),
+		},
 	}, fixture.base.signingKey)
 	alternateControlCID, err := rawCID(alternateControl)
 	require.NoError(t, err)

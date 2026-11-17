@@ -16,8 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/lamb-systems/dottie/internal/platform"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 const journalApplicationID = 0x44544a31
@@ -164,7 +165,17 @@ type JournalBlockedError struct {
 }
 
 func (e *JournalBlockedError) Error() string {
-	return fmt.Sprintf("publication state: %s/%s/%s: entry %d is %s/%s at seen floor revision %d above %d", className(ErrContinuity), StageJournal, ReasonJournalBlocked, e.Entry, e.State, e.Stage, e.SeenFloorRevision, e.FloorRevision)
+	return fmt.Sprintf(
+		"publication state: %s/%s/%s: entry %d is %s/%s at seen floor revision %d above %d",
+		className(ErrContinuity),
+		StageJournal,
+		ReasonJournalBlocked,
+		e.Entry,
+		e.State,
+		e.Stage,
+		e.SeenFloorRevision,
+		e.FloorRevision,
+	)
 }
 
 func (e *JournalBlockedError) Unwrap() error {
@@ -234,8 +245,7 @@ func OpenJournal(directory string) (*Journal, error) {
 	}
 	probe, err := probeJournalSchema(databasePath)
 	if err != nil {
-		var classifiedErr *Error
-		if errors.As(err, &classifiedErr) {
+		if _, ok := errors.AsType[*Error](err); ok {
 			return nil, err
 		}
 		return nil, storageFailure(context.Background(), StageJournalOpen, err)
@@ -372,8 +382,7 @@ func (j *Journal) withTx(ctx context.Context, stage Stage, fn func(*sql.Tx) erro
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return canceled(stage, ctxErr)
 		}
-		var classifiedErr *Error
-		if errors.As(err, &classifiedErr) {
+		if _, ok := errors.AsType[*Error](err); ok {
 			return err
 		}
 		return storageFailure(ctx, stage, err)
@@ -428,7 +437,13 @@ func (j *Journal) BeginJournal(ctx context.Context, intent JournalIntent) (Journ
 				if total < 0 || backupSize < 0 || total > journalMaxTotalBytes-backupSize {
 					return classified(ErrLimit, StageJournal, ReasonCapacity)
 				}
-				if _, err := tx.ExecContext(ctx, "INSERT INTO backups(digest,size,data) VALUES (?,?,?)", intent.Preimage.Digest[:], backupSize, intent.PreimageBytes); err != nil {
+				if _, err := tx.ExecContext(
+					ctx,
+					"INSERT INTO backups(digest,size,data) VALUES (?,?,?)",
+					intent.Preimage.Digest[:],
+					backupSize,
+					intent.PreimageBytes,
+				); err != nil {
 					return err
 				}
 			}
@@ -444,12 +459,27 @@ func (j *Journal) BeginJournal(ctx context.Context, intent JournalIntent) (Journ
 			postimageDigest = intent.Postimage.Digest[:]
 			postimageSize = int64(intent.Postimage.Size)
 		}
-		result, err := tx.ExecContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			intent.Vault[:], intent.Operation, string(JournalStageApplyPending), string(JournalStatePending),
-			[]byte(intent.DestinationDir), intent.DestinationPath,
-			[]byte(intent.Anchor.Path), intent.Anchor.Device, intent.Anchor.Inode,
-			preimageDigest, preimageSize,
-			postimageDigest, postimageSize, backupDigest, int64(intent.SeenFloorRevision), now, now)
+		result, err := tx.ExecContext(
+			ctx,
+			"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			intent.Vault[:],
+			intent.Operation,
+			string(JournalStageApplyPending),
+			string(JournalStatePending),
+			[]byte(intent.DestinationDir),
+			intent.DestinationPath,
+			[]byte(intent.Anchor.Path),
+			intent.Anchor.Device,
+			intent.Anchor.Inode,
+			preimageDigest,
+			preimageSize,
+			postimageDigest,
+			postimageSize,
+			backupDigest,
+			int64(intent.SeenFloorRevision),
+			now,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -481,19 +511,43 @@ func (j *Journal) CompleteJournal(ctx context.Context, entry JournalEntry, obser
 		if !observedFileMatches(current.Postimage, observed) {
 			return classified(ErrInvalid, StageJournal, ReasonJournalObservation)
 		}
-		return transitionJournalEntry(ctx, tx, entry.Entry, JournalStatePending, JournalStageApplyPending, JournalStateApplied, JournalStageApplyComplete)
+		return transitionJournalEntry(
+			ctx,
+			tx,
+			entry.Entry,
+			JournalStatePending,
+			JournalStageApplyPending,
+			JournalStateApplied,
+			JournalStageApplyComplete,
+		)
 	})
 }
 
 func (j *Journal) MarkIndeterminate(ctx context.Context, entry JournalEntry) error {
 	return j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-		return transitionJournalEntry(ctx, tx, entry.Entry, JournalStatePending, JournalStageApplyPending, JournalStateIndeterminate, JournalStageIndeterminate)
+		return transitionJournalEntry(
+			ctx,
+			tx,
+			entry.Entry,
+			JournalStatePending,
+			JournalStageApplyPending,
+			JournalStateIndeterminate,
+			JournalStageIndeterminate,
+		)
 	})
 }
 
 func (j *Journal) BeginRollback(ctx context.Context, entry JournalEntry) error {
 	return j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-		return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateApplied, JournalStageApplyComplete, JournalStateApplied, JournalStageRollbackPending)
+		return transitionJournalEntry(
+			ctx,
+			tx,
+			entry.Entry,
+			JournalStateApplied,
+			JournalStageApplyComplete,
+			JournalStateApplied,
+			JournalStageRollbackPending,
+		)
 	})
 }
 
@@ -512,11 +566,23 @@ func (j *Journal) CompleteRollback(ctx context.Context, entry JournalEntry, obse
 		if !observedPreimageMatches(current.Preimage, observed) {
 			return classified(ErrInvalid, StageJournal, ReasonJournalObservation)
 		}
-		return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateApplied, JournalStageRollbackPending, JournalStateRolledBack, JournalStageRollbackComplete)
+		return transitionJournalEntry(
+			ctx,
+			tx,
+			entry.Entry,
+			JournalStateApplied,
+			JournalStageRollbackPending,
+			JournalStateRolledBack,
+			JournalStageRollbackComplete,
+		)
 	})
 }
 
-func (j *Journal) ResolveIndeterminate(ctx context.Context, entry JournalEntry, observed ObservedFile) (JournalState, error) {
+func (j *Journal) ResolveIndeterminate(
+	ctx context.Context,
+	entry JournalEntry,
+	observed ObservedFile,
+) (JournalState, error) {
 	if err := validateObservedFile(observed, StageJournal); err != nil {
 		return "", err
 	}
@@ -532,10 +598,26 @@ func (j *Journal) ResolveIndeterminate(ctx context.Context, entry JournalEntry, 
 		switch {
 		case observedFileMatches(current.Postimage, observed):
 			resolved = JournalStateApplied
-			return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateIndeterminate, JournalStageIndeterminate, JournalStateApplied, JournalStageApplyComplete)
+			return transitionJournalEntry(
+				ctx,
+				tx,
+				entry.Entry,
+				JournalStateIndeterminate,
+				JournalStageIndeterminate,
+				JournalStateApplied,
+				JournalStageApplyComplete,
+			)
 		case observedPreimageMatches(current.Preimage, observed):
 			resolved = JournalStateFailed
-			return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateIndeterminate, JournalStageIndeterminate, JournalStateFailed, JournalStageApplyFailed)
+			return transitionJournalEntry(
+				ctx,
+				tx,
+				entry.Entry,
+				JournalStateIndeterminate,
+				JournalStageIndeterminate,
+				JournalStateFailed,
+				JournalStageApplyFailed,
+			)
 		default:
 			return classified(ErrInvalid, StageJournal, ReasonJournalObservation)
 		}
@@ -550,7 +632,13 @@ func (j *Journal) CheckAdmission(ctx context.Context, floorRevision uint64) erro
 	if err := j.checkContext(ctx, StageJournal); err != nil {
 		return err
 	}
-	rows, err := j.conn.QueryContext(ctx, "SELECT entry,state,stage,seen_floor_revision FROM journal WHERE state IN (?,?,?) ORDER BY entry", string(JournalStatePending), string(JournalStateApplied), string(JournalStateIndeterminate))
+	rows, err := j.conn.QueryContext(
+		ctx,
+		"SELECT entry,state,stage,seen_floor_revision FROM journal WHERE state IN (?,?,?) ORDER BY entry",
+		string(JournalStatePending),
+		string(JournalStateApplied),
+		string(JournalStateIndeterminate),
+	)
 	if err != nil {
 		return storageFailure(ctx, StageJournal, err)
 	}
@@ -574,7 +662,13 @@ func (j *Journal) CheckAdmission(ctx context.Context, floorRevision uint64) erro
 		}
 		blocking := state != JournalStateApplied || stage == JournalStageRollbackPending || uint64(seen) > floorRevision
 		if blocking {
-			return &JournalBlockedError{Entry: id, State: state, Stage: stage, SeenFloorRevision: uint64(seen), FloorRevision: floorRevision}
+			return &JournalBlockedError{
+				Entry:             id,
+				State:             state,
+				Stage:             stage,
+				SeenFloorRevision: uint64(seen),
+				FloorRevision:     floorRevision,
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -583,7 +677,10 @@ func (j *Journal) CheckAdmission(ctx context.Context, floorRevision uint64) erro
 	return nil
 }
 
-func (j *Journal) ResolveInterrupted(ctx context.Context, observe func(JournalEntry) (ObservedFile, error)) ([]JournalResolution, error) {
+func (j *Journal) ResolveInterrupted(
+	ctx context.Context,
+	observe func(JournalEntry) (ObservedFile, error),
+) ([]JournalResolution, error) {
 	if observe == nil {
 		return nil, classified(ErrInvalid, StageJournal, ReasonBinding)
 	}
@@ -612,7 +709,11 @@ func (j *Journal) ResolveInterrupted(ctx context.Context, observe func(JournalEn
 	return resolutions, nil
 }
 
-func (j *Journal) resolveObserved(ctx context.Context, entry JournalEntry, observed ObservedFile) (JournalOutcome, error) {
+func (j *Journal) resolveObserved(
+	ctx context.Context,
+	entry JournalEntry,
+	observed ObservedFile,
+) (JournalOutcome, error) {
 	postimage := observedFileMatches(entry.Postimage, observed)
 	preimage := observedPreimageMatches(entry.Preimage, observed)
 	switch entry.State {
@@ -620,26 +721,66 @@ func (j *Journal) resolveObserved(ctx context.Context, entry JournalEntry, obser
 		switch {
 		case postimage:
 			return JournalOutcomeApplied, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStatePending, JournalStageApplyPending, JournalStateApplied, JournalStageApplyComplete)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStatePending,
+					JournalStageApplyPending,
+					JournalStateApplied,
+					JournalStageApplyComplete,
+				)
 			})
 		case preimage:
 			return JournalOutcomeFailed, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStatePending, JournalStageApplyPending, JournalStateFailed, JournalStageApplyFailed)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStatePending,
+					JournalStageApplyPending,
+					JournalStateFailed,
+					JournalStageApplyFailed,
+				)
 			})
 		default:
 			return JournalOutcomeIndeterminate, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStatePending, JournalStageApplyPending, JournalStateIndeterminate, JournalStageIndeterminate)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStatePending,
+					JournalStageApplyPending,
+					JournalStateIndeterminate,
+					JournalStageIndeterminate,
+				)
 			})
 		}
 	case JournalStateIndeterminate:
 		switch {
 		case postimage:
 			return JournalOutcomeApplied, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateIndeterminate, JournalStageIndeterminate, JournalStateApplied, JournalStageApplyComplete)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStateIndeterminate,
+					JournalStageIndeterminate,
+					JournalStateApplied,
+					JournalStageApplyComplete,
+				)
 			})
 		case preimage:
 			return JournalOutcomeFailed, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateIndeterminate, JournalStageIndeterminate, JournalStateFailed, JournalStageApplyFailed)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStateIndeterminate,
+					JournalStageIndeterminate,
+					JournalStateFailed,
+					JournalStageApplyFailed,
+				)
 			})
 		default:
 			return JournalOutcomeIndeterminate, nil
@@ -647,7 +788,15 @@ func (j *Journal) resolveObserved(ctx context.Context, entry JournalEntry, obser
 	case JournalStateApplied:
 		if preimage {
 			return JournalOutcomeRolledBack, j.withTx(ctx, StageJournal, func(tx *sql.Tx) error {
-				return transitionJournalEntry(ctx, tx, entry.Entry, JournalStateApplied, JournalStageRollbackPending, JournalStateRolledBack, JournalStageRollbackComplete)
+				return transitionJournalEntry(
+					ctx,
+					tx,
+					entry.Entry,
+					JournalStateApplied,
+					JournalStageRollbackPending,
+					JournalStateRolledBack,
+					JournalStageRollbackComplete,
+				)
 			})
 		}
 		return JournalOutcomeRollbackPending, nil
@@ -661,7 +810,8 @@ func (j *Journal) BackupBytes(ctx context.Context, digest [32]byte) ([]byte, err
 		return nil, err
 	}
 	var sizeValue, lengthValue any
-	err := j.conn.QueryRowContext(ctx, "SELECT size,length(data) FROM backups WHERE digest=?", digest[:]).Scan(&sizeValue, &lengthValue)
+	err := j.conn.QueryRowContext(ctx, "SELECT size,length(data) FROM backups WHERE digest=?", digest[:]).
+		Scan(&sizeValue, &lengthValue)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, classified(ErrInvalid, StageJournal, ReasonJournalBackup)
 	}
@@ -674,7 +824,8 @@ func (j *Journal) BackupBytes(ctx context.Context, digest [32]byte) ([]byte, err
 		return nil, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
 	var dataValue any
-	if err := j.conn.QueryRowContext(ctx, "SELECT data FROM backups WHERE digest=?", digest[:]).Scan(&dataValue); err != nil {
+	if err := j.conn.QueryRowContext(ctx, "SELECT data FROM backups WHERE digest=?", digest[:]).
+		Scan(&dataValue); err != nil {
 		return nil, storageFailure(ctx, StageJournal, err)
 	}
 	data, dataOK := rawBytes(dataValue)
@@ -688,7 +839,14 @@ func (j *Journal) BackupBytes(ctx context.Context, digest [32]byte) ([]byte, err
 }
 
 func (j *Journal) liveEntries(ctx context.Context) ([]JournalEntry, error) {
-	rows, err := j.conn.QueryContext(ctx, "SELECT "+journalEntryColumns+" FROM journal WHERE state=? OR state=? OR (state=? AND stage=?) ORDER BY entry", string(JournalStatePending), string(JournalStateIndeterminate), string(JournalStateApplied), string(JournalStageRollbackPending))
+	rows, err := j.conn.QueryContext(
+		ctx,
+		"SELECT "+journalEntryColumns+" FROM journal WHERE state=? OR state=? OR (state=? AND stage=?) ORDER BY entry",
+		string(JournalStatePending),
+		string(JournalStateIndeterminate),
+		string(JournalStateApplied),
+		string(JournalStageRollbackPending),
+	)
 	if err != nil {
 		return nil, storageFailure(ctx, StageJournal, err)
 	}
@@ -726,7 +884,26 @@ func scanJournalEntry(source interface{ Scan(...any) error }) (JournalEntry, err
 	var anchorDeviceValue, anchorInodeValue any
 	var preimageDigestValue, preimageSizeValue, postimageDigestValue, postimageSizeValue, backupDigestValue any
 	var seenValue, createdValue, updatedValue any
-	if err := source.Scan(&entryValue, &vaultValue, &operationValue, &stageValue, &stateValue, &directoryValue, &pathValue, &anchorValue, &anchorDeviceValue, &anchorInodeValue, &preimageDigestValue, &preimageSizeValue, &postimageDigestValue, &postimageSizeValue, &backupDigestValue, &seenValue, &createdValue, &updatedValue); err != nil {
+	if err := source.Scan(
+		&entryValue,
+		&vaultValue,
+		&operationValue,
+		&stageValue,
+		&stateValue,
+		&directoryValue,
+		&pathValue,
+		&anchorValue,
+		&anchorDeviceValue,
+		&anchorInodeValue,
+		&preimageDigestValue,
+		&preimageSizeValue,
+		&postimageDigestValue,
+		&postimageSizeValue,
+		&backupDigestValue,
+		&seenValue,
+		&createdValue,
+		&updatedValue,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return JournalEntry{}, err
 		}
@@ -748,13 +925,41 @@ func scanJournalEntry(source interface{ Scan(...any) error }) (JournalEntry, err
 	seen, seenOK := rawInt64(seenValue)
 	created, createdOK := rawInt64(createdValue)
 	updated, updatedOK := rawInt64(updatedValue)
-	if !idOK || !vaultOK || !directoryOK || !anchorOK || !anchorDeviceOK || !anchorInodeOK || !pathOK || !operationOK || !stageOK || !stateOK || !preimageOK || !postimageOK || !backupOK || !seenOK || !createdOK || !updatedOK {
+	if !idOK || !vaultOK || !directoryOK || !anchorOK || !anchorDeviceOK || !anchorInodeOK || !pathOK || !operationOK ||
+		!stageOK ||
+		!stateOK ||
+		!preimageOK ||
+		!postimageOK ||
+		!backupOK ||
+		!seenOK ||
+		!createdOK ||
+		!updatedOK {
 		return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
-	if len(vault) != 32 || !journalPathValid(string(directory)) || !journalPathValid(string(anchor)) || anchorDevice < 0 || anchorInode <= 0 || !journalRelativePathValid(path) || len(operation) == 0 || len(operation) > journalMaxTextBytes || !utf8.ValidString(operation) || seen < 0 || created < 0 || updated < 0 {
+	if len(vault) != 32 || !journalPathValid(string(directory)) || !journalPathValid(string(anchor)) ||
+		anchorDevice < 0 ||
+		anchorInode <= 0 ||
+		!journalRelativePathValid(path) ||
+		len(operation) == 0 ||
+		len(operation) > journalMaxTextBytes ||
+		!utf8.ValidString(operation) ||
+		seen < 0 ||
+		created < 0 ||
+		updated < 0 {
 		return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
-	read := JournalEntry{Entry: id, Operation: operation, Stage: JournalStage(stage), State: JournalState(state), DestinationDir: string(directory), DestinationPath: path, Anchor: JournalAnchor{Path: string(anchor), Device: anchorDevice, Inode: anchorInode}, SeenFloorRevision: uint64(seen), Created: created, Updated: updated}
+	read := JournalEntry{
+		Entry:             id,
+		Operation:         operation,
+		Stage:             JournalStage(stage),
+		State:             JournalState(state),
+		DestinationDir:    string(directory),
+		DestinationPath:   path,
+		Anchor:            JournalAnchor{Path: string(anchor), Device: anchorDevice, Inode: anchorInode},
+		SeenFloorRevision: uint64(seen),
+		Created:           created,
+		Updated:           updated,
+	}
 	copy(read.Vault[:], vault)
 	if !journalPairLegal(read.State, read.Stage) {
 		return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
@@ -796,8 +1001,25 @@ func journalStoredDigest(value any) ([32]byte, bool, bool) {
 	return digest, true, true
 }
 
-func transitionJournalEntry(ctx context.Context, tx *sql.Tx, entry int64, fromState JournalState, fromStage JournalStage, toState JournalState, toStage JournalStage) error {
-	result, err := tx.ExecContext(ctx, "UPDATE journal SET state=?,stage=?,updated=? WHERE entry=? AND state=? AND stage=?", string(toState), string(toStage), time.Now().Unix(), entry, string(fromState), string(fromStage))
+func transitionJournalEntry(
+	ctx context.Context,
+	tx *sql.Tx,
+	entry int64,
+	fromState JournalState,
+	fromStage JournalStage,
+	toState JournalState,
+	toStage JournalStage,
+) error {
+	result, err := tx.ExecContext(
+		ctx,
+		"UPDATE journal SET state=?,stage=?,updated=? WHERE entry=? AND state=? AND stage=?",
+		string(toState),
+		string(toStage),
+		time.Now().Unix(),
+		entry,
+		string(fromState),
+		string(fromStage),
+	)
 	if err != nil {
 		return err
 	}
@@ -829,7 +1051,8 @@ func readBackupSize(ctx context.Context, tx *sql.Tx, digest [32]byte) (int64, bo
 
 func readBackupData(ctx context.Context, tx *sql.Tx, digest [32]byte, size int64) ([]byte, error) {
 	var lengthValue any
-	if err := tx.QueryRowContext(ctx, "SELECT length(data) FROM backups WHERE digest=?", digest[:]).Scan(&lengthValue); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT length(data) FROM backups WHERE digest=?", digest[:]).
+		Scan(&lengthValue); err != nil {
 		return nil, err
 	}
 	length, lengthOK := rawInt64(lengthValue)
@@ -837,7 +1060,8 @@ func readBackupData(ctx context.Context, tx *sql.Tx, digest [32]byte, size int64
 		return nil, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
 	var dataValue any
-	if err := tx.QueryRowContext(ctx, "SELECT data FROM backups WHERE digest=?", digest[:]).Scan(&dataValue); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT data FROM backups WHERE digest=?", digest[:]).
+		Scan(&dataValue); err != nil {
 		return nil, err
 	}
 	data, dataOK := rawBytes(dataValue)
@@ -851,7 +1075,8 @@ func validateJournalIntent(intent JournalIntent) error {
 	if allZero(intent.Vault[:]) {
 		return classified(ErrInvalid, StageJournal, ReasonBinding)
 	}
-	if len(intent.Operation) == 0 || len(intent.Operation) > journalMaxTextBytes || !utf8.ValidString(intent.Operation) {
+	if len(intent.Operation) == 0 || len(intent.Operation) > journalMaxTextBytes ||
+		!utf8.ValidString(intent.Operation) {
 		return classified(ErrInvalid, StageJournal, ReasonJournalIntent)
 	}
 	if !journalPathValid(intent.DestinationDir) || !journalRelativePathValid(intent.DestinationPath) {
@@ -878,7 +1103,8 @@ func validateJournalIntent(intent JournalIntent) error {
 	if intent.Preimage.Size > uint64(journalMaxBackupBytes) {
 		return classified(ErrLimit, StageJournal, ReasonCapacity)
 	}
-	if int64(len(intent.PreimageBytes)) != int64(intent.Preimage.Size) || sha256.Sum256(intent.PreimageBytes) != intent.Preimage.Digest {
+	if int64(len(intent.PreimageBytes)) != int64(intent.Preimage.Size) ||
+		sha256.Sum256(intent.PreimageBytes) != intent.Preimage.Digest {
 		return classified(ErrInvalid, StageJournal, ReasonJournalObservation)
 	}
 	return nil
@@ -926,7 +1152,8 @@ func journalPairLegal(state JournalState, stage JournalStage) bool {
 }
 
 func journalPathValid(path string) bool {
-	return path != "" && len(path) <= journalMaxPathBytes && utf8.ValidString(path) && filepath.IsAbs(path) && filepath.Clean(path) == path
+	return path != "" && len(path) <= journalMaxPathBytes && utf8.ValidString(path) && filepath.IsAbs(path) &&
+		filepath.Clean(path) == path
 }
 
 func journalAnchorValid(anchor JournalAnchor) bool {
@@ -934,7 +1161,9 @@ func journalAnchorValid(anchor JournalAnchor) bool {
 }
 
 func journalRelativePathValid(path string) bool {
-	return path != "" && len(path) <= journalMaxPathBytes && utf8.ValidString(path) && !filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.HasPrefix(path, "..")
+	return path != "" && len(path) <= journalMaxPathBytes && utf8.ValidString(path) && !filepath.IsAbs(path) &&
+		filepath.Clean(path) == path &&
+		!strings.HasPrefix(path, "..")
 }
 
 func rawText(value any) (string, bool) {
@@ -1012,7 +1241,8 @@ func probeJournalSchema(path string) (schemaProbe, error) {
 	if appID == 0 && version == 0 && len(objects) == 0 {
 		return schemaProbe{initial: true}, nil
 	}
-	recognized := appID == journalApplicationID && version == journalSchemaVersion && sameObjects(objects, journalSchemaObjects)
+	recognized := appID == journalApplicationID && version == journalSchemaVersion &&
+		sameObjects(objects, journalSchemaObjects)
 	if recognized {
 		for _, statement := range journalSchemaStatements {
 			if strings.TrimSpace(definitions[statementTableName(statement)]) != statement {

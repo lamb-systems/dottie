@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -15,7 +16,9 @@ const LatestSchemaVersion = 15
 const MaxLocalHistoryTargets = 4096
 const MaxRetentionInventoryRows = 10000
 const MaxRetentionInventoryFiles = 10000
+
 const PayloadRetention = "Pruning requires classified material below the oldest retained recovery-point boundary, no retained-point association, no base, intent or conflict reference, and an expired verified journal backup when pruning a backup."
+
 const RetentionPruneScope = "Epoch-scoped material pruning requires complete payload and backup associations for every retained recovery point; the current sync path does not yet populate those inventories."
 
 var ErrStateLocked = errors.New("state is already locked")
@@ -25,7 +28,10 @@ var ErrCheckpointBackwards = errors.New("vault checkpoint update would move back
 var ErrVaultCheckpointNotFound = errors.New("vault checkpoint not found")
 var ErrAuthenticatedPositionEvidenceNotFound = errors.New("authenticated position evidence not found")
 var ErrAuthenticatedPositionEvidenceAmbiguous = errors.New("authenticated position evidence is ambiguous at epoch")
-var ErrAuthenticatedPositionHistoryConflict = errors.New("authenticated position history identity conflicts with stored evidence")
+
+var ErrAuthenticatedPositionHistoryConflict = errors.New(
+	"authenticated position history identity conflicts with stored evidence",
+)
 var ErrVaultSelectionExists = errors.New("vault selection already exists")
 var ErrOnboardingStateConflict = errors.New("onboarding state conflicts with existing local vault state")
 var ErrVaultSelectionNotFound = errors.New("vault selection not found")
@@ -34,15 +40,27 @@ var ErrVaultPublicationBackwards = errors.New("vault publication observation wou
 var ErrVaultPublicationGap = errors.New("vault publication observation has a count gap")
 var ErrVaultPublicationConflict = errors.New("vault publication count and head CID conflict")
 var ErrPublicationAncestry = errors.New("vault publication ancestry does not match the observed head")
-var ErrVaultPublicationControlAncestry = errors.New("vault publication control ancestry does not match the observed control")
-var ErrVaultPublicationControlReplacement = errors.New("vault publication observation would replace the observed control within an epoch")
+
+var ErrVaultPublicationControlAncestry = errors.New(
+	"vault publication control ancestry does not match the observed control",
+)
+
+var ErrVaultPublicationControlReplacement = errors.New(
+	"vault publication observation would replace the observed control within an epoch",
+)
 var ErrInvalidJournalTransition = errors.New("invalid apply journal transition")
 var ErrRetentionDeclarationNotFound = errors.New("retention declaration not found")
 var ErrRetentionBoundaryNotVerified = errors.New("retention boundary is not pinned by a matching verified checkpoint")
 var ErrRetentionLiveHead = errors.New("retention boundary may not include or exceed the live head epoch")
 var ErrRetentionConfirmationRequired = errors.New("retention pruning requires explicit confirmation")
-var ErrRetentionRecoveryPointInventoryUnknown = errors.New("retention recovery-point material inventory is missing or incomplete")
-var ErrRetentionBoundaryNewerThanFloor = errors.New("retention boundary is newer than the oldest retained recovery point")
+
+var ErrRetentionRecoveryPointInventoryUnknown = errors.New(
+	"retention recovery-point material inventory is missing or incomplete",
+)
+
+var ErrRetentionBoundaryNewerThanFloor = errors.New(
+	"retention boundary is newer than the oldest retained recovery point",
+)
 var ErrRetentionInventoryLimit = errors.New("retention inventory exceeds its bounded query limit")
 
 type TargetDescriptor struct {
@@ -89,9 +107,24 @@ type Fingerprint struct {
 	Digest     string
 }
 
-func NewFingerprint(state string, kind model.FileKind, mode uint32, linkTarget, valueType, valueText string, payload []byte) Fingerprint {
+func NewFingerprint(
+	state string,
+	kind model.FileKind,
+	mode uint32,
+	linkTarget, valueType, valueText string,
+	payload []byte,
+) Fingerprint {
 	digest := sha256.Sum256(payload)
-	return Fingerprint{State: state, Kind: kind, Mode: mode, LinkTarget: linkTarget, ValueType: valueType, ValueText: valueText, Size: int64(len(payload)), Digest: hex.EncodeToString(digest[:])}
+	return Fingerprint{
+		State:      state,
+		Kind:       kind,
+		Mode:       mode,
+		LinkTarget: linkTarget,
+		ValueType:  valueType,
+		ValueText:  valueText,
+		Size:       int64(len(payload)),
+		Digest:     hex.EncodeToString(digest[:]),
+	}
 }
 
 func NewSettingFingerprint(state model.SettingState, valueType, valueText string) Fingerprint {
@@ -109,7 +142,10 @@ func (f Fingerprint) Validate(identity model.EntryKey) error {
 	if f.Size < 0 || len(f.Digest) != sha256.Size*2 {
 		return errors.New("invalid fingerprint size or digest")
 	}
-	if decoded, err := hex.DecodeString(f.Digest); err != nil || len(decoded) != sha256.Size || strings.ToLower(f.Digest) != f.Digest {
+	if decoded, err := hex.DecodeString(
+		f.Digest,
+	); err != nil || len(decoded) != sha256.Size ||
+		strings.ToLower(f.Digest) != f.Digest {
 		return errors.New("invalid fingerprint digest")
 	}
 	if err := identity.Validate(); err != nil {
@@ -125,7 +161,8 @@ func (f Fingerprint) Validate(identity model.EntryKey) error {
 					return errors.New("invalid regular-file fingerprint")
 				}
 			case model.FileDirectory:
-				if f.LinkTarget != "" || f.ValueType != "" || f.ValueText != "" || f.Mode&^uint32(0o777) != 0 || f.Size != 0 {
+				if f.LinkTarget != "" || f.ValueType != "" || f.ValueText != "" || f.Mode&^uint32(0o777) != 0 ||
+					f.Size != 0 {
 					return errors.New("invalid directory fingerprint")
 				}
 			case model.FileSymlink:
@@ -139,7 +176,8 @@ func (f Fingerprint) Validate(identity model.EntryKey) error {
 				return errors.New("invalid present-file fingerprint kind")
 			}
 		case string(model.FileDeleted):
-			if f.Kind != "" || f.Mode != 0 || f.LinkTarget != "" || f.ValueType != "" || f.ValueText != "" || f.Size != 0 {
+			if f.Kind != "" || f.Mode != 0 || f.LinkTarget != "" || f.ValueType != "" || f.ValueText != "" ||
+				f.Size != 0 {
 				return errors.New("invalid deleted-file fingerprint")
 			}
 		default:
@@ -440,7 +478,8 @@ func validateTransitionAttempt(attempt TransitionAttempt) error {
 			return err
 		}
 	}
-	if strings.IndexByte(attempt.MarkerCollection, 0) >= 0 || strings.IndexByte(attempt.MarkerRKey, 0) >= 0 || attempt.EpochSeq > uint64(^uint64(0)>>1) {
+	if strings.IndexByte(attempt.MarkerCollection, 0) >= 0 || strings.IndexByte(attempt.MarkerRKey, 0) >= 0 ||
+		attempt.EpochSeq > math.MaxInt64 {
 		return errors.New("invalid transition attempt identity or epoch")
 	}
 	digest, err := hex.DecodeString(attempt.PolicyDigest)
@@ -452,7 +491,14 @@ func validateTransitionAttempt(attempt TransitionAttempt) error {
 
 func validTransitionAttemptOutcome(outcome string) bool {
 	switch outcome {
-	case TransitionAttemptPrepared, TransitionAttemptStaged, TransitionAttemptSubmitted, TransitionAttemptCommitted, TransitionAttemptSuperseded, TransitionAttemptNotLanded, TransitionAttemptUnavailable, TransitionAttemptFenceLost:
+	case TransitionAttemptPrepared,
+		TransitionAttemptStaged,
+		TransitionAttemptSubmitted,
+		TransitionAttemptCommitted,
+		TransitionAttemptSuperseded,
+		TransitionAttemptNotLanded,
+		TransitionAttemptUnavailable,
+		TransitionAttemptFenceLost:
 		return true
 	default:
 		return false
@@ -465,11 +511,22 @@ func validTransitionAttemptOutcomeChange(current, next string) bool {
 	}
 	switch current {
 	case TransitionAttemptPrepared:
-		return next == TransitionAttemptStaged || next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+		return next == TransitionAttemptStaged || next == TransitionAttemptCommitted ||
+			next == TransitionAttemptSuperseded ||
+			next == TransitionAttemptNotLanded ||
+			next == TransitionAttemptUnavailable ||
+			next == TransitionAttemptFenceLost
 	case TransitionAttemptStaged:
-		return next == TransitionAttemptSubmitted || next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+		return next == TransitionAttemptSubmitted || next == TransitionAttemptCommitted ||
+			next == TransitionAttemptSuperseded ||
+			next == TransitionAttemptNotLanded ||
+			next == TransitionAttemptUnavailable ||
+			next == TransitionAttemptFenceLost
 	case TransitionAttemptSubmitted:
-		return next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded || next == TransitionAttemptNotLanded || next == TransitionAttemptUnavailable || next == TransitionAttemptFenceLost
+		return next == TransitionAttemptCommitted || next == TransitionAttemptSuperseded ||
+			next == TransitionAttemptNotLanded ||
+			next == TransitionAttemptUnavailable ||
+			next == TransitionAttemptFenceLost
 	default:
 		return false
 	}

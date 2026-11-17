@@ -17,9 +17,51 @@ func TestResolve(t *testing.T) {
 		want Paths
 		bad  bool
 	}{
-		{name: "defaults", env: map[string]string{"HOME": home}, want: Paths{Home: home, ConfigHome: filepath.Join(home, ".config"), StateHome: filepath.Join(home, ".local", "state"), CacheHome: filepath.Join(home, ".cache"), DataHome: filepath.Join(home, ".local", "share")}},
-		{name: "empty and relative XDG values ignored", env: map[string]string{"HOME": home, "XDG_CONFIG_HOME": "", "XDG_STATE_HOME": "relative", "XDG_CACHE_HOME": "cache", "XDG_DATA_HOME": "data/"}, want: Paths{Home: home, ConfigHome: filepath.Join(home, ".config"), StateHome: filepath.Join(home, ".local", "state"), CacheHome: filepath.Join(home, ".cache"), DataHome: filepath.Join(home, ".local", "share")}},
-		{name: "absolute relocated values", env: map[string]string{"HOME": home, "XDG_CONFIG_HOME": "/tmp/config/../config/", "XDG_STATE_HOME": "/tmp/state", "XDG_CACHE_HOME": "/tmp/cache", "XDG_DATA_HOME": "/tmp/data"}, want: Paths{Home: home, ConfigHome: "/tmp/config", StateHome: "/tmp/state", CacheHome: "/tmp/cache", DataHome: "/tmp/data"}},
+		{
+			name: "defaults",
+			env:  map[string]string{"HOME": home},
+			want: Paths{
+				Home:       home,
+				ConfigHome: filepath.Join(home, ".config"),
+				StateHome:  filepath.Join(home, ".local", "state"),
+				CacheHome:  filepath.Join(home, ".cache"),
+				DataHome:   filepath.Join(home, ".local", "share"),
+			},
+		},
+		{
+			name: "empty and relative XDG values ignored",
+			env: map[string]string{
+				"HOME":            home,
+				"XDG_CONFIG_HOME": "",
+				"XDG_STATE_HOME":  "relative",
+				"XDG_CACHE_HOME":  "cache",
+				"XDG_DATA_HOME":   "data/",
+			},
+			want: Paths{
+				Home:       home,
+				ConfigHome: filepath.Join(home, ".config"),
+				StateHome:  filepath.Join(home, ".local", "state"),
+				CacheHome:  filepath.Join(home, ".cache"),
+				DataHome:   filepath.Join(home, ".local", "share"),
+			},
+		},
+		{
+			name: "absolute relocated values",
+			env: map[string]string{
+				"HOME":            home,
+				"XDG_CONFIG_HOME": "/tmp/config/../config/",
+				"XDG_STATE_HOME":  "/tmp/state",
+				"XDG_CACHE_HOME":  "/tmp/cache",
+				"XDG_DATA_HOME":   "/tmp/data",
+			},
+			want: Paths{
+				Home:       home,
+				ConfigHome: "/tmp/config",
+				StateHome:  "/tmp/state",
+				CacheHome:  "/tmp/cache",
+				DataHome:   "/tmp/data",
+			},
+		},
 		{name: "missing home", env: map[string]string{}, bad: true},
 		{name: "relative home", env: map[string]string{"HOME": "relative"}, bad: true},
 	}
@@ -47,14 +89,14 @@ func TestAppDirectories(t *testing.T) {
 
 func TestRealPathLongestExistingAncestor(t *testing.T) {
 	root := t.TempDir()
-	real := filepath.Join(root, "real")
-	require.NoError(t, os.Mkdir(real, 0o700))
+	realRoot := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(realRoot, 0o700))
 	link := filepath.Join(root, "linked")
-	require.NoError(t, os.Symlink(real, link))
+	require.NoError(t, os.Symlink(realRoot, link))
 
 	got, err := RealPath(filepath.Join(link, "not-yet", "child"))
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(real, "not-yet", "child"), got, "RealPath()")
+	assert.Equal(t, filepath.Join(realRoot, "not-yet", "child"), got, "RealPath()")
 }
 
 func TestRealPathFailsClosed(t *testing.T) {
@@ -66,7 +108,7 @@ func TestRealPathFailsClosed(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, "regular"), []byte("x"), 0o600))
 		}
 		_, err := RealPath(path)
-		assert.Error(t, err, "RealPath(%q) succeeded", path)
+		require.Error(t, err, "RealPath(%q) succeeded", path)
 	}
 	_, err := RealPath("relative")
 	assert.Error(t, err, "relative path succeeded")

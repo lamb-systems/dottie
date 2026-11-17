@@ -17,10 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestOpenRequiresExplicitPositionSchemaUpgradeAndPreservesHistory(t *testing.T) {
@@ -77,17 +78,38 @@ func TestOpenRequiresExplicitPositionSchemaUpgradeAndPreservesHistory(t *testing
 	review := attemptReview()
 	proposal, err := reopened.PrepareAttempt(ctx, candidate, predecessorView, review)
 	require.NoError(t, err)
-	attempt, err := reopened.CreateAttempt(ctx, proposal.StateToken, candidate, predecessorView, review, proposal.Confirmation)
+	attempt, err := reopened.CreateAttempt(
+		ctx,
+		proposal.StateToken,
+		candidate,
+		predecessorView,
+		review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, AttemptPrepared, attempt.Lifecycle)
 	uploadProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, predecessorView, review)
 	require.NoError(t, err)
-	upload, err := reopened.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, predecessorView, review, uploadProposal.Confirmation)
+	upload, err := reopened.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		predecessorView,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, f.payload, upload.Payload)
 	submissionProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, predecessorView, review)
 	require.NoError(t, err)
-	_, err = reopened.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, predecessorView, review, submissionProposal.Confirmation)
+	_, err = reopened.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		predecessorView,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(3), false)
 	loadedAttempt, err := reopened.LoadAttempt(ctx, attempt.ID)
@@ -100,11 +122,24 @@ func TestOpenRequiresExplicitPositionSchemaUpgradeAndPreservesHistory(t *testing
 	assert.Equal(t, uint64(3), finalized.Floor.Revision)
 
 	var retainedRows, payloadObjects, oldRetained, reservations, payloadReferences int
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&retainedRows))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&retainedRows),
+	)
 	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&payloadObjects))
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE sequence<2").Scan(&oldRetained))
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations").Scan(&reservations))
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&payloadReferences))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE sequence<2").
+			Scan(&oldRetained),
+	)
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations").Scan(&reservations),
+	)
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&payloadReferences),
+	)
 	assert.Equal(t, 1, retainedRows)
 	assert.Equal(t, 1, payloadObjects)
 	assert.Zero(t, oldRetained)
@@ -112,14 +147,21 @@ func TestOpenRequiresExplicitPositionSchemaUpgradeAndPreservesHistory(t *testing
 	assert.Zero(t, payloadReferences)
 	var retainedRecord, retainedBlob []byte
 	var retainedSequence, retainedSize int64
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT record_cid,sequence,blob_cid,size FROM retained_publications").Scan(&retainedRecord, &retainedSequence, &retainedBlob, &retainedSize))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT record_cid,sequence,blob_cid,size FROM retained_publications").
+			Scan(&retainedRecord, &retainedSequence, &retainedBlob, &retainedSize),
+	)
 	assert.Equal(t, attempt.SnapshotRecordCID, retainedRecord)
 	assert.Equal(t, int64(2), retainedSequence)
 	assert.Equal(t, attempt.BlobCID, retainedBlob)
 	assert.Equal(t, int64(attempt.BlobSize), retainedSize)
 	var payloadCID []byte
 	var payloadSize int64
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects").Scan(&payloadCID, &payloadSize))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects").Scan(&payloadCID, &payloadSize),
+	)
 	assert.Equal(t, attempt.BlobCID, payloadCID)
 	assert.Equal(t, int64(attempt.BlobSize), payloadSize)
 	_, present, err := reopened.ActiveAttempt(ctx)
@@ -266,16 +308,37 @@ func TestPublicationStateUpgradeFromBaselineSchemaOneFixturePreservesRawRows(t *
 	review := attemptReview()
 	proposal, err := reopened.PrepareAttempt(ctx, candidate, preflight, review)
 	require.NoError(t, err)
-	attempt, err := reopened.CreateAttempt(ctx, proposal.StateToken, candidate, preflight, review, proposal.Confirmation)
+	attempt, err := reopened.CreateAttempt(
+		ctx,
+		proposal.StateToken,
+		candidate,
+		preflight,
+		review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	uploadProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	upload, err := reopened.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	upload, err := reopened.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, payloadFixture, upload.Payload)
 	submissionProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = reopened.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = reopened.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(3), false)
 	loadedAttempt, err := reopened.LoadAttempt(ctx, attempt.ID)
@@ -288,26 +351,43 @@ func TestPublicationStateUpgradeFromBaselineSchemaOneFixturePreservesRawRows(t *
 	assert.Equal(t, uint64(3), finalized.Floor.Revision)
 
 	var retainedRows, payloadObjects, oldRetained int
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&retainedRows))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&retainedRows),
+	)
 	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&payloadObjects))
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE sequence<2").Scan(&oldRetained))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE sequence<2").
+			Scan(&oldRetained),
+	)
 	assert.Equal(t, 1, retainedRows)
 	assert.Equal(t, 1, payloadObjects)
 	assert.Zero(t, oldRetained)
 	var retainedRecord, retainedBlob []byte
 	var retainedSequence, retainedSize int64
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT record_cid,sequence,blob_cid,size FROM retained_publications").Scan(&retainedRecord, &retainedSequence, &retainedBlob, &retainedSize))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT record_cid,sequence,blob_cid,size FROM retained_publications").
+			Scan(&retainedRecord, &retainedSequence, &retainedBlob, &retainedSize),
+	)
 	assert.Equal(t, attempt.SnapshotRecordCID, retainedRecord)
 	assert.Equal(t, int64(2), retainedSequence)
 	assert.Equal(t, attempt.BlobCID, retainedBlob)
 	assert.Equal(t, int64(attempt.BlobSize), retainedSize)
 	var payloadCID []byte
 	var payloadSize int64
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects").Scan(&payloadCID, &payloadSize))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects").Scan(&payloadCID, &payloadSize),
+	)
 	assert.Equal(t, attempt.BlobCID, payloadCID)
 	assert.Equal(t, int64(attempt.BlobSize), payloadSize)
 	var payloadReferences int
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&payloadReferences))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&payloadReferences),
+	)
 	assert.Zero(t, payloadReferences)
 	assertSchema1OldRowsStillPresent(t, baselineRows, readLogicalRows(t, reopened.conn))
 	assertSchema1StableMetadataAfterAdvance(t, baselineRows, readLogicalRows(t, reopened.conn))
@@ -320,7 +400,10 @@ func TestPublicationStateUpgradeFromBaselineSchemaOneFixturePreservesRawRows(t *
 	require.NoError(t, err)
 	require.Equal(t, 3, finalStore.schemaVersion)
 	require.Equal(t, int64(1), incomingMaterialUpgradeIncomingTableRows(t, ctx, finalStore.conn))
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, finalStore.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, finalStore.conn, "SELECT COUNT(*) FROM accepted_material_refs"),
+	)
 	finalFloor, present, err := finalStore.Load(ctx)
 	require.NoError(t, err)
 	require.True(t, present)
@@ -435,7 +518,16 @@ func TestPublicationStateUpgradeAbortsEverySchemaStageWithoutLosingPositions(t *
 			if refused != nil {
 				t.Cleanup(func() { assert.NoError(t, refused.Close()) })
 			}
-			incomingMaterialPublicRollbackRequireFailed(t, refused, err, recorder, expectedReached, canary, directory, fd0)
+			incomingMaterialPublicRollbackRequireFailed(
+				t,
+				refused,
+				err,
+				recorder,
+				expectedReached,
+				canary,
+				directory,
+				fd0,
+			)
 			require.Zero(t, commits)
 			requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonIO)
 			require.Nil(t, refused)
@@ -525,7 +617,13 @@ type attemptSchemaFixtureSnapshot struct {
 	payload  []byte
 }
 
-func attemptSchemaFixtureSnapshotV1(t *testing.T, ctx context.Context, f fixture, databasePath string, companionRows map[string]string) attemptSchemaFixtureSnapshot {
+func attemptSchemaFixtureSnapshotV1(
+	t *testing.T,
+	ctx context.Context,
+	f fixture,
+	databasePath string,
+	companionRows map[string]string,
+) attemptSchemaFixtureSnapshot {
 	t.Helper()
 	conn, closeConn := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, databasePath)
 	require.Equal(t, 1, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -582,7 +680,15 @@ func attemptSchemaFixtureSnapshotV1(t *testing.T, ctx context.Context, f fixture
 	decoded, err := publication.DecodePayload(payload, reference)
 	require.NoError(t, err)
 	require.NotEmpty(t, decoded.Entries)
-	view := &Store{binding: f.binding, limits: DefaultLimits(), databaseID: state.floor.DatabaseID, schemaVersion: 1, rootFD: -1, payloadFD: -1, conn: conn}
+	view := &Store{
+		binding:       f.binding,
+		limits:        DefaultLimits(),
+		databaseID:    state.floor.DatabaseID,
+		schemaVersion: 1,
+		rootFD:        -1,
+		payloadFD:     -1,
+		conn:          conn,
+	}
 	history, err := view.History(ctx, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, history.Events, 2)
@@ -608,7 +714,15 @@ func attemptSchemaFixtureSnapshotV1(t *testing.T, ctx context.Context, f fixture
 		require.Equal(t, uint64(sequence), evidence.Reference.Sequence)
 	}
 	closeConn(t)
-	return attemptSchemaFixtureSnapshot{rows: rows, typed: typed, metadata: metadata, objects: objects, state: state, history: history, payload: payload}
+	return attemptSchemaFixtureSnapshot{
+		rows:     rows,
+		typed:    typed,
+		metadata: metadata,
+		objects:  objects,
+		state:    state,
+		history:  history,
+		payload:  payload,
+	}
 }
 
 func attemptSchemaCompanionPayload(t *testing.T, directory string) []byte {
@@ -621,7 +735,13 @@ func attemptSchemaCompanionPayload(t *testing.T, directory string) []byte {
 	return state.bytes
 }
 
-func attemptSchemaRequireCurrent3(t *testing.T, ctx context.Context, store *Store, f fixture, source attemptSchemaFixtureSnapshot) {
+func attemptSchemaRequireCurrent3(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	f fixture,
+	source attemptSchemaFixtureSnapshot,
+) {
 	t.Helper()
 	require.NotNil(t, store)
 	require.False(t, store.closed)
@@ -634,7 +754,13 @@ func attemptSchemaRequireCurrent3(t *testing.T, ctx context.Context, store *Stor
 	var appID int
 	require.NoError(t, store.conn.QueryRowContext(ctx, "PRAGMA application_id").Scan(&appID))
 	require.Equal(t, applicationID, appID)
-	destination := incomingMaterialUpgradeSource{version: 1, binding: f.binding, limits: DefaultLimits(), attemptLimits: DefaultAttemptLimits(), metadata: source.metadata}
+	destination := incomingMaterialUpgradeSource{
+		version:       1,
+		binding:       f.binding,
+		limits:        DefaultLimits(),
+		attemptLimits: DefaultAttemptLimits(),
+		metadata:      source.metadata,
+	}
 	require.NoError(t, checkIncomingMaterialUpgradeDestination(ctx, store.conn, destination))
 	metadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 	require.Len(t, metadata, 7)

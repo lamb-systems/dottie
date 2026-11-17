@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
-	"github.com/stretchr/testify/require"
 )
 
 func TestLiveOAuthHarness(t *testing.T) {
@@ -20,7 +21,7 @@ func TestLiveOAuthHarness(t *testing.T) {
 	}
 	handle := os.Getenv("DOTTIE_HANDLE")
 	if handle == "" {
-		require.NotEqual(t, "", handle, "DOTTIE_HANDLE is required when the live OAuth harness is enabled")
+		require.NotEmpty(t, handle, "DOTTIE_HANDLE is required when the live OAuth harness is enabled")
 	}
 	keyring, err := platform.NewKeyring()
 	if err != nil {
@@ -56,7 +57,14 @@ func TestLiveOAuthHarness(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err)
 	}
-	fmt.Printf("OAuth identifiers: handle=%s did=%s issuer=%s pds=%s scopes=%s\n", handle, session.DID, session.Issuer, identity.PDS, strings.Join(session.Scopes, " "))
+	fmt.Printf(
+		"OAuth identifiers: handle=%s did=%s issuer=%s pds=%s scopes=%s\n",
+		handle,
+		session.DID,
+		session.Issuer,
+		identity.PDS,
+		strings.Join(session.Scopes, " "),
+	)
 
 	restarted, err := atproto.NewClient("https://dottie.lamb.systems/client-metadata.json", keyring)
 	if err != nil {
@@ -75,9 +83,28 @@ func TestLiveOAuthHarness(t *testing.T) {
 		require.NoError(t, err, "reload session after refresh: %v", err)
 	}
 	if refreshed.Issuer != session.Issuer || refreshedIdentity.DID != session.DID || reloaded.DID != session.DID {
-		require.Equal(t, session.Issuer, refreshed.Issuer, "refresh changed identity binding: issuer=%q did=%q", refreshed.Issuer, reloaded.DID)
+		require.Equal(
+			t,
+			session.Issuer,
+			refreshed.Issuer,
+			"refresh changed identity binding: issuer=%q did=%q",
+			refreshed.Issuer,
+			reloaded.DID,
+		)
 		require.Equal(t, session.DID, refreshedIdentity.DID, "refresh changed discovered identity binding")
-		require.Equal(t, session.DID, reloaded.DID, "refresh changed identity binding: issuer=%q did=%q", refreshed.Issuer, reloaded.DID)
+		require.Equal(
+			t,
+			session.DID,
+			reloaded.DID,
+			"refresh changed identity binding: issuer=%q did=%q",
+			refreshed.Issuer,
+			reloaded.DID,
+		)
 	}
-	fmt.Printf("restart=ok refreshed=ok issuer=%s did=%s scopes=%d\n", refreshed.Issuer, reloaded.DID, len(reloaded.Scopes))
+	fmt.Printf(
+		"restart=ok refreshed=ok issuer=%s did=%s scopes=%d\n",
+		refreshed.Issuer,
+		reloaded.DID,
+		len(reloaded.Scopes),
+	)
 }

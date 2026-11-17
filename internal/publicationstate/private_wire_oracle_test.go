@@ -3,8 +3,8 @@ package publicationstate
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -126,13 +126,63 @@ type oracleConsent struct {
 }
 
 func TestPrivateWireIndependentTokenOracles(t *testing.T) {
-	binding := Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: BackendSpaces, Repository: "at://did:plc:abcdefghijklmnopqrstuvwx/systems.lamb.dottie.vaultSnapshotV2/record"}
+	binding := Binding{
+		AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+		Backend:    BackendSpaces,
+		Repository: "at://did:plc:abcdefghijklmnopqrstuvwx/systems.lamb.dottie.vaultSnapshotV2/record",
+	}
 	for i := range binding.Vault {
 		binding.Vault[i] = byte(i + 1)
 	}
-	ctx := SuppliedContext{RepositoryRevision: "r<>&", RepositoryDigest: []byte{0, 1, 2, 255}, Policy: &Policy{Revision: "p<>&", Identity: []byte{4, 5, 6, 7}, OwnerOnly: true}}
-	set := [32]byte{0x89, 0xf3, 0x1e, 0x35, 0xa0, 0x20, 0x74, 0xe8, 0xdb, 0x7c, 0xf6, 0x06, 0x2b, 0x8f, 0x4e, 0x5c, 0x3f, 0x9a, 0xb8, 0x8c, 0x5e, 0x7e, 0xc3, 0x4b, 0x5f, 0xfc, 0x74, 0xd4, 0x64, 0xad, 0xce, 0x7b}
-	obsBody := oracleJSON(t, oracleObservation{Version: 1, Origin: oracleBind(binding), SuppliedContext: oracleCtx(ctx), Head: []byte{1, 2, 3, 4}, SuppliedSetDigest: bytes.Clone(set[:])})
+	ctx := SuppliedContext{
+		RepositoryRevision: "r<>&",
+		RepositoryDigest:   []byte{0, 1, 2, 255},
+		Policy:             &Policy{Revision: "p<>&", Identity: []byte{4, 5, 6, 7}, OwnerOnly: true},
+	}
+	set := [32]byte{
+		0x89,
+		0xf3,
+		0x1e,
+		0x35,
+		0xa0,
+		0x20,
+		0x74,
+		0xe8,
+		0xdb,
+		0x7c,
+		0xf6,
+		0x06,
+		0x2b,
+		0x8f,
+		0x4e,
+		0x5c,
+		0x3f,
+		0x9a,
+		0xb8,
+		0x8c,
+		0x5e,
+		0x7e,
+		0xc3,
+		0x4b,
+		0x5f,
+		0xfc,
+		0x74,
+		0xd4,
+		0x64,
+		0xad,
+		0xce,
+		0x7b,
+	}
+	obsBody := oracleJSON(
+		t,
+		oracleObservation{
+			Version:           1,
+			Origin:            oracleBind(binding),
+			SuppliedContext:   oracleCtx(ctx),
+			Head:              []byte{1, 2, 3, 4},
+			SuppliedSetDigest: bytes.Clone(set[:]),
+		},
+	)
 	obsExpected := oracleHash("systems.lamb.dottie.local-observation.v1", obsBody)
 	obsActual, err := makeObservationDigest(binding, ctx, []byte{1, 2, 3, 4}, set)
 	require.NoError(t, err)
@@ -155,8 +205,36 @@ func TestPrivateWireIndependentTokenOracles(t *testing.T) {
 		cid[i] = byte(i + 128)
 		blob[i] = byte(i + 160)
 	}
-	old := Floor{DatabaseID: dbid, Revision: 7, Generation: 2, Provenance: ProvenanceFirst, AnchorCID: []byte{1, 2, 3}, Binding: binding, SuppliedContext: ctx, Head: []byte{0, 1, 2}, SnapshotKey: "0000000000000001", Sequence: 1, PublicationID: pubid, RecordCID: bytes.Clone(cid[:]), BlobCID: bytes.Clone(blob[:]), BlobSize: 123, ObservationDigest: oldDigest, AcceptedEventDigest: oldEvent}
-	stateBody := oracleJSON(t, oracleState{Version: 1, DatabaseID: bytes.Clone(dbid[:]), Revision: 7, Generation: 2, Binding: oracleBind(binding), Limits: oracleLimitsFrom(DefaultLimits()), Floor: oracleFloorFrom(&old)})
+	old := Floor{
+		DatabaseID:          dbid,
+		Revision:            7,
+		Generation:          2,
+		Provenance:          ProvenanceFirst,
+		AnchorCID:           []byte{1, 2, 3},
+		Binding:             binding,
+		SuppliedContext:     ctx,
+		Head:                []byte{0, 1, 2},
+		SnapshotKey:         "0000000000000001",
+		Sequence:            1,
+		PublicationID:       pubid,
+		RecordCID:           bytes.Clone(cid[:]),
+		BlobCID:             bytes.Clone(blob[:]),
+		BlobSize:            123,
+		ObservationDigest:   oldDigest,
+		AcceptedEventDigest: oldEvent,
+	}
+	stateBody := oracleJSON(
+		t,
+		oracleState{
+			Version:    1,
+			DatabaseID: bytes.Clone(dbid[:]),
+			Revision:   7,
+			Generation: 2,
+			Binding:    oracleBind(binding),
+			Limits:     oracleLimitsFrom(DefaultLimits()),
+			Floor:      oracleFloorFrom(&old),
+		},
+	)
 	stateExpected := oracleHash("systems.lamb.dottie.local-publication-state.v1", stateBody)
 	stateActual, err := makeStateToken(dbid, 7, 2, binding, DefaultLimits(), &old)
 	require.NoError(t, err)
@@ -168,20 +246,75 @@ func TestPrivateWireIndependentTokenOracles(t *testing.T) {
 	newFloor.ObservationDigest = obsActual
 	newFloor.AcceptedEventDigest = [32]byte{}
 	trace := []RecordReference{{Key: "0000000000000001", CID: []byte{1, 0x71, 1}, Sequence: 1}}
-	eventBody := oracleJSON(t, oracleEvent{Version: 1, Mode: string(ModeReplaceFloor), Reason: string(ReasonFork), OldFloor: oracleFloorFrom(&old), NewFloor: oracleCoreFrom(newFloor), Trace: oracleRefs(trace), Stop: "fork", ObservationDigest: bytes.Clone(obsActual[:]), SuppliedSetDigest: bytes.Clone(set[:])})
+	eventBody := oracleJSON(
+		t,
+		oracleEvent{
+			Version:           1,
+			Mode:              string(ModeReplaceFloor),
+			Reason:            string(ReasonFork),
+			OldFloor:          oracleFloorFrom(&old),
+			NewFloor:          oracleCoreFrom(newFloor),
+			Trace:             oracleRefs(trace),
+			Stop:              "fork",
+			ObservationDigest: bytes.Clone(obsActual[:]),
+			SuppliedSetDigest: bytes.Clone(set[:]),
+		},
+	)
 	eventExpected := oracleHash("systems.lamb.dottie.local-publication-event.v1", eventBody)
 	productionEvent, err := makeEventBody(ModeReplaceFloor, ReasonFork, &old, newFloor, trace, "fork", obsActual, set)
 	require.NoError(t, err)
 	assert.Equal(t, eventBody, productionEvent)
-	assert.Equal(t, "456a3184c852aa40a19c110a3c02a724d32b71e57435a9fd65e2577dd19f7388", fmt.Sprintf("%x", eventExpected[:]))
-	confirmationBody := oracleJSON(t, oracleConsent{Version: 1, DatabaseID: bytes.Clone(dbid[:]), Binding: oracleBind(binding), Mode: string(ModeReplaceFloor), OldFloor: oracleFloorFrom(&old), StateToken: bytes.Clone(stateActual[:]), ObservationDigest: bytes.Clone(obsActual[:]), Trace: oracleRefs(trace), Stop: "fork", Reason: string(ReasonFork), Warning: WarningReplacement})
+	assert.Equal(
+		t,
+		"456a3184c852aa40a19c110a3c02a724d32b71e57435a9fd65e2577dd19f7388",
+		hex.EncodeToString(eventExpected[:]),
+	)
+	confirmationBody := oracleJSON(
+		t,
+		oracleConsent{
+			Version:           1,
+			DatabaseID:        bytes.Clone(dbid[:]),
+			Binding:           oracleBind(binding),
+			Mode:              string(ModeReplaceFloor),
+			OldFloor:          oracleFloorFrom(&old),
+			StateToken:        bytes.Clone(stateActual[:]),
+			ObservationDigest: bytes.Clone(obsActual[:]),
+			Trace:             oracleRefs(trace),
+			Stop:              "fork",
+			Reason:            string(ReasonFork),
+			Warning:           WarningReplacement,
+		},
+	)
 	confirmationExpected := oracleHash("systems.lamb.dottie.local-publication-consent.v1", confirmationBody)
-	confirmationActual, err := makeConfirmation(dbid, binding, ModeReplaceFloor, &old, stateActual, obsActual, trace, "fork", ReasonFork, WarningReplacement)
+	confirmationActual, err := makeConfirmation(
+		dbid,
+		binding,
+		ModeReplaceFloor,
+		&old,
+		stateActual,
+		obsActual,
+		trace,
+		"fork",
+		ReasonFork,
+		WarningReplacement,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, confirmationExpected, confirmationActual)
-	assert.Equal(t, "f2747ef4cf13d485c9accbb64e03da4e1e19be26bece8539a1226ce4ba610d44", fmt.Sprintf("%x", stateExpected[:]))
-	assert.Equal(t, "456a3184c852aa40a19c110a3c02a724d32b71e57435a9fd65e2577dd19f7388", fmt.Sprintf("%x", eventExpected[:]))
-	assert.Equal(t, "b19251e57a85c3f4c65a4bda64c169c93f05de8580a79d6fcd962f7659a6ba4c", fmt.Sprintf("%x", confirmationExpected[:]))
+	assert.Equal(
+		t,
+		"f2747ef4cf13d485c9accbb64e03da4e1e19be26bece8539a1226ce4ba610d44",
+		hex.EncodeToString(stateExpected[:]),
+	)
+	assert.Equal(
+		t,
+		"456a3184c852aa40a19c110a3c02a724d32b71e57435a9fd65e2577dd19f7388",
+		hex.EncodeToString(eventExpected[:]),
+	)
+	assert.Equal(
+		t,
+		"b19251e57a85c3f4c65a4bda64c169c93f05de8580a79d6fcd962f7659a6ba4c",
+		hex.EncodeToString(confirmationExpected[:]),
+	)
 }
 
 func oracleJSON(t *testing.T, value any) []byte {
@@ -210,17 +343,52 @@ func oracleCtx(c SuppliedContext) oracleContext {
 	return o
 }
 func oracleCoreFrom(f Floor) oracleFloorCore {
-	return oracleFloorCore{1, bytes.Clone(f.DatabaseID[:]), f.Revision, f.Generation, string(f.Provenance), bytes.Clone(f.AnchorCID), oracleBind(f.Binding), oracleCtx(f.SuppliedContext), bytes.Clone(f.Head), f.SnapshotKey, f.Sequence, bytes.Clone(f.PublicationID[:]), bytes.Clone(f.RecordCID), bytes.Clone(f.BlobCID), f.BlobSize, bytes.Clone(f.ObservationDigest[:])}
+	return oracleFloorCore{
+		1,
+		bytes.Clone(f.DatabaseID[:]),
+		f.Revision,
+		f.Generation,
+		string(f.Provenance),
+		bytes.Clone(f.AnchorCID),
+		oracleBind(f.Binding),
+		oracleCtx(f.SuppliedContext),
+		bytes.Clone(f.Head),
+		f.SnapshotKey,
+		f.Sequence,
+		bytes.Clone(f.PublicationID[:]),
+		bytes.Clone(f.RecordCID),
+		bytes.Clone(f.BlobCID),
+		f.BlobSize,
+		bytes.Clone(f.ObservationDigest[:]),
+	}
 }
 func oracleFloorFrom(f *Floor) *oracleFloor {
 	if f == nil {
 		return nil
 	}
 	c := oracleCoreFrom(*f)
-	return &oracleFloor{c.Version, c.DatabaseID, c.Revision, c.Generation, c.Provenance, c.AnchorCID, c.Binding, c.SuppliedContext, c.Head, c.SnapshotKey, c.Sequence, c.PublicationID, c.RecordCID, c.BlobCID, c.BlobSize, c.ObservationDigest, bytes.Clone(f.AcceptedEventDigest[:])}
+	return &oracleFloor{
+		c.Version,
+		c.DatabaseID,
+		c.Revision,
+		c.Generation,
+		c.Provenance,
+		c.AnchorCID,
+		c.Binding,
+		c.SuppliedContext,
+		c.Head,
+		c.SnapshotKey,
+		c.Sequence,
+		c.PublicationID,
+		c.RecordCID,
+		c.BlobCID,
+		c.BlobSize,
+		c.ObservationDigest,
+		bytes.Clone(f.AcceptedEventDigest[:]),
+	}
 }
 func oracleLimitsFrom(l Limits) oracleLimits {
-	return oracleLimits{l.SuppliedSnapshotCount, l.SuppliedTotalBytes, l.SuppliedContextBytes, l.MaxLineageLinks, l.CacheRecordCount, l.CacheObservationCount, l.CacheLogicalBytes, l.AcceptedRecordCount, l.AcceptedEventCount, l.AcceptedLogicalBytes, l.HistoryPageEvents, l.HistoryEvidenceBytes}
+	return oracleLimits(l)
 }
 func oracleRefs(refs []RecordReference) []oracleReference {
 	out := make([]oracleReference, 0, len(refs))

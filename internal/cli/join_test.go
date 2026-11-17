@@ -14,6 +14,9 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
@@ -23,8 +26,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -38,7 +39,11 @@ type joinGateKeyring struct {
 	devices map[string]vault.DeviceMaterial
 }
 
-func (keyring *joinGateKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, device vault.DeviceMaterial) error {
+func (keyring *joinGateKeyring) StoreDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	device vault.DeviceMaterial,
+) error {
 	if vaultID == ([32]byte{}) || device.DeviceID == "" {
 		return errors.New("invalid synthetic device keys")
 	}
@@ -49,7 +54,11 @@ func (keyring *joinGateKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]b
 	return nil
 }
 
-func (keyring *joinGateKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+func (keyring *joinGateKeyring) LoadDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	deviceID string,
+) (vault.DeviceMaterial, error) {
 	device, ok := keyring.devices[deviceID]
 	if !ok || vaultID == ([32]byte{}) {
 		return vault.DeviceMaterial{}, platform.ErrKeyringItemNotFound
@@ -101,9 +110,14 @@ func newJoinGate(t *testing.T) *joinGate {
 	method := pds.VerificationMethod()
 	identity := atproto.Identity{
 		DID: joinGateDID, DIDDocumentID: joinGateDID, Handle: "join.example.test",
-		VerificationMethods: []atproto.VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 	root := t.TempDir()
 	return &joinGate{
@@ -180,7 +194,7 @@ func (gate *joinGate) bootstrap(t *testing.T, machine *joinGateMachine) string {
 	machine.setEnvironment(t)
 	var stdout, stderr bytes.Buffer
 	code := 0
-	factory := func(ctx context.Context, _ *urfave.Command) (bootstrapCoordinator, func(), error) {
+	factory := func(_ context.Context, _ *urfave.Command) (bootstrapCoordinator, func(), error) {
 		paths, err := platform.Resolve(os.Getenv)
 		if err != nil {
 			return nil, func() {}, err
@@ -203,7 +217,11 @@ func (gate *joinGate) bootstrap(t *testing.T, machine *joinGateMachine) string {
 		return gate.keyring, nil
 	}, &code, accountSessionOptions{browser: func(string) error { return nil }, env: os.Getenv}, factory)
 	ctx := context.Background()
-	if err := command.Run(ctx, []string{"account", "bootstrap", "--vault-name", "join", "--device-id", joinGateDeviceID, "--did", joinGateDID}); err != nil && code == 0 {
+	if err := command.Run(
+		ctx,
+		[]string{"account", "bootstrap", "--vault-name", "join", "--device-id", joinGateDeviceID, "--did", joinGateDID},
+	); err != nil &&
+		code == 0 {
 		command.ExitErrHandler(ctx, command, err)
 	}
 	require.Equal(t, 0, code, stderr.String())
@@ -256,8 +274,16 @@ func (gate *joinGate) pushSources(ctx context.Context) (publicationPushSources, 
 		return publicationPushSources{}, err
 	}
 	reader, err := service.NewPublicationReader(service.PublicationReaderConfig{
-		Binding: binding, DID: joinGateDID, Session: gate.session(), Adapter: adapter,
-		Blobs: atproto.VaultReader{Transport: gate.pds, ObservationStore: store, Budgets: atproto.DefaultBudgets(), Clock: time.Now},
+		Binding: binding,
+		DID:     joinGateDID,
+		Session: gate.session(),
+		Adapter: adapter,
+		Blobs: atproto.VaultReader{
+			Transport:        gate.pds,
+			ObservationStore: store,
+			Budgets:          atproto.DefaultBudgets(),
+			Clock:            time.Now,
+		},
 	})
 	if err != nil {
 		closeStore()
@@ -270,7 +296,12 @@ func (gate *joinGate) pushSources(ctx context.Context) (publicationPushSources, 
 	}, nil
 }
 
-func (gate *joinGate) pullRemotes(_ context.Context, _ *urfave.Command, _ pushSession, binding publicationstate.Binding) (pullRemote, error) {
+func (gate *joinGate) pullRemotes(
+	_ context.Context,
+	_ *urfave.Command,
+	_ pushSession,
+	binding publicationstate.Binding,
+) (pullRemote, error) {
 	adapter, err := service.NewATProtoMaterialTransport(service.ATProtoMaterialConfig{
 		Binding: binding, DID: joinGateDID, Reader: gate.revisionReader(), Transport: gate.pds,
 		BlobUploadLimit: int64(publication.MaxBlobBytes),
@@ -332,7 +363,17 @@ func (gate *joinGate) pull(t *testing.T, machine *joinGateMachine, args ...strin
 	sessions := func(context.Context, *urfave.Command) (pushSession, error) {
 		return pushSession{Session: gate.session()}, nil
 	}
-	command := newPullCommand(&stdout, &stderr, &code, sessions, gate.pullRemotes, gate.pullVaults, productionPullApplySourcesFactory(os.Getenv), pushTestDIDs(gate.session().DID), os.Getenv)
+	command := newPullCommand(
+		&stdout,
+		&stderr,
+		&code,
+		sessions,
+		gate.pullRemotes,
+		gate.pullVaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		pushTestDIDs(gate.session().DID),
+		os.Getenv,
+	)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "pull"}, args...)); err != nil && code == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -367,11 +408,15 @@ func TestJoinGateBootstrapPushAndNewcomerPull(t *testing.T) {
 	assert.Contains(t, stdout, "pull: first-use\n")
 	assert.Contains(t, stdout, fmt.Sprintf("apply: write init.lua size=%d\n", len(joinGateContent)))
 	assert.Contains(t, stdout, "pull: plan only; nothing was applied; repeat with --confirm ")
-	inspection, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	inspection, err := publicationstate.Inspect(
+		context.Background(),
+		gate.b.paths.PublicationStateDir(),
+		joinGateBinding(t, vaultHex),
+	)
 	require.NoError(t, err)
 	assert.False(t, inspection.Present, "the unconfirmed newcomer pull accepted a floor")
 	_, statErr = os.Lstat(gate.b.trackedPath())
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull applied a target file")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull applied a target file")
 	token := pullTestConfirmation(t, stdout)
 
 	code, stdout, stderr = gate.pull(t, gate.b, "--did", joinGateDID, "--vault", vaultHex, "--confirm", token)
@@ -382,7 +427,11 @@ func TestJoinGateBootstrapPushAndNewcomerPull(t *testing.T) {
 	applied, err := os.ReadFile(gate.b.trackedPath())
 	require.NoError(t, err)
 	assert.Equal(t, joinGateContent, string(applied))
-	adopted, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	adopted, err := publicationstate.Inspect(
+		context.Background(),
+		gate.b.paths.PublicationStateDir(),
+		joinGateBinding(t, vaultHex),
+	)
 	require.NoError(t, err)
 	require.True(t, adopted.Present)
 	assert.Equal(t, uint64(1), adopted.Floor.Revision)
@@ -391,7 +440,11 @@ func TestJoinGateBootstrapPushAndNewcomerPull(t *testing.T) {
 	code, stdout, stderr = gate.pull(t, gate.b, "--did", joinGateDID, "--vault", vaultHex)
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "pull: matches\n", stdout)
-	unchanged, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	unchanged, err := publicationstate.Inspect(
+		context.Background(),
+		gate.b.paths.PublicationStateDir(),
+		joinGateBinding(t, vaultHex),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, adopted.Floor, unchanged.Floor, "the second pull moved the adopted floor")
 }
@@ -450,7 +503,7 @@ func TestJoinGateNewcomerPullsWithoutBeingToldTheVault(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, inspection.Present, "the unconfirmed newcomer pull accepted a floor")
 	_, payloadErr := os.Lstat(filepath.Join(gate.b.paths.PublicationStateDir(), "payloads"))
-	assert.ErrorIs(t, payloadErr, os.ErrNotExist, "the unconfirmed newcomer pull retained accepted material")
+	require.ErrorIs(t, payloadErr, os.ErrNotExist, "the unconfirmed newcomer pull retained accepted material")
 	_, statErr = os.Lstat(gate.b.trackedPath())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull applied a target file")
 }
@@ -475,7 +528,11 @@ func TestJoinGateNewcomerConfirmsTheFirstUseJoin(t *testing.T) {
 	applied, err := os.ReadFile(gate.b.trackedPath())
 	require.NoError(t, err)
 	assert.Equal(t, joinGateContent, string(applied))
-	joined, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	joined, err := publicationstate.Inspect(
+		context.Background(),
+		gate.b.paths.PublicationStateDir(),
+		joinGateBinding(t, vaultHex),
+	)
 	require.NoError(t, err)
 	require.True(t, joined.Present)
 	assert.Equal(t, uint64(1), joined.Floor.Revision)
@@ -484,7 +541,11 @@ func TestJoinGateNewcomerConfirmsTheFirstUseJoin(t *testing.T) {
 	code, stdout, stderr = gate.pull(t, gate.b, "--did", joinGateDID)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: matches\n")
-	unchanged, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), joinGateBinding(t, vaultHex))
+	unchanged, err := publicationstate.Inspect(
+		context.Background(),
+		gate.b.paths.PublicationStateDir(),
+		joinGateBinding(t, vaultHex),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, joined.Floor, unchanged.Floor, "the second pull moved the joined floor")
 }
@@ -513,7 +574,7 @@ func TestJoinGateNewcomerRefusesAnAccountWithNoPublication(t *testing.T) {
 	assert.Contains(t, stderr, "the account publishes no v2 position record at self")
 	assert.Contains(t, stderr, "pass --vault to name the vault this command acts on")
 	_, statErr := os.Lstat(gate.b.paths.PublicationStateDir())
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the position store")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the position store")
 	_, statErr = os.Lstat(gate.b.trackedPath())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal applied a target file")
 }
@@ -535,7 +596,12 @@ func TestJoinGateStoredBindingThatDiffersFromThePublishedHeadRefuses(t *testing.
 	inspection, err := publicationstate.Inspect(context.Background(), gate.b.paths.PublicationStateDir(), wrong)
 	require.NoError(t, err)
 	assert.False(t, inspection.Present, "the refused pull adopted the published floor")
-	assert.NotEqual(t, wrong, joinGateBinding(t, vaultHex), "the fixture wrote the published vault instead of the differing one")
+	assert.NotEqual(
+		t,
+		wrong,
+		joinGateBinding(t, vaultHex),
+		"the fixture wrote the published vault instead of the differing one",
+	)
 	_, statErr := os.Lstat(gate.b.trackedPath())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refused pull applied a target file")
 }

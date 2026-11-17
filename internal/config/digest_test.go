@@ -19,7 +19,10 @@ var (
 
 func digestTestConfig() Config {
 	gnome := Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{
-		Approval: GNOMEApprovalApproved, Categories: []string{"appearance", "clock"}, MatrixVersion: 1, KeyDigest: digestTestKey,
+		Approval:      GNOMEApprovalApproved,
+		Categories:    []string{"appearance", "clock"},
+		MatrixVersion: 1,
+		KeyDigest:     digestTestKey,
 	}}
 	nvim := filesTarget("nvim", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	nvim.Root.Exclude = []string{".git", ".git/**"}
@@ -43,20 +46,45 @@ func TestSelectionDigestIgnoresOrderingCommentsAndImplicitDefaults(t *testing.T)
 
 	sortedCategories := digestTestConfig()
 	sortedCategories.Targets[1].GNOMEPolicy.Categories = []string{"clock", "appearance"}
-	assert.Equal(t, selectionDigest(base), selectionDigest(sortedCategories), "category order moved the selection digest")
+	assert.Equal(
+		t,
+		selectionDigest(base),
+		selectionDigest(sortedCategories),
+		"category order moved the selection digest",
+	)
 
 	duplicatedCategory := digestTestConfig()
 	duplicatedCategory.Targets[1].GNOMEPolicy.Categories = []string{"clock", "appearance", "appearance"}
-	assert.Equal(t, selectionDigest(base), selectionDigest(duplicatedCategory), "duplicate category moved the selection digest")
-	assert.Equal(t, approvalDigest(base), approvalDigest(duplicatedCategory), "duplicate category moved the approval digest")
+	assert.Equal(
+		t,
+		selectionDigest(base),
+		selectionDigest(duplicatedCategory),
+		"duplicate category moved the selection digest",
+	)
+	assert.Equal(
+		t,
+		approvalDigest(base),
+		approvalDigest(duplicatedCategory),
+		"duplicate category moved the approval digest",
+	)
 
 	implicitDefault := digestTestConfig()
 	implicitDefault.Defaults.Mode = ""
-	assert.Equal(t, selectionDigest(base), selectionDigest(implicitDefault), "omitted default mode moved the selection digest")
+	assert.Equal(
+		t,
+		selectionDigest(base),
+		selectionDigest(implicitDefault),
+		"omitted default mode moved the selection digest",
+	)
 
 	implicitTargetMode := digestTestConfig()
 	implicitTargetMode.Targets[2].Mode = Review
-	assert.Equal(t, selectionDigest(base), selectionDigest(implicitTargetMode), "explicit default target mode moved the selection digest")
+	assert.Equal(
+		t,
+		selectionDigest(base),
+		selectionDigest(implicitTargetMode),
+		"explicit default target mode moved the selection digest",
+	)
 }
 
 func TestSelectionDigestIgnoresFileComments(t *testing.T) {
@@ -166,8 +194,18 @@ func TestApprovalDigestCoversOnlyApprovalFields(t *testing.T) {
 	selectionOnly.Targets[0].Mode = AutoApply
 	selectionOnly.Targets[0].Root.Exclude = []string{".git"}
 	selectionOnly.Targets[2].Root.Path = "moved"
-	assert.NotEqual(t, selectionDigest(base), selectionDigest(selectionOnly), "selection digest ignored a selection-only change")
-	assert.Equal(t, approvalDigest(base), approvalDigest(selectionOnly), "approval digest moved for a selection-only change")
+	assert.NotEqual(
+		t,
+		selectionDigest(base),
+		selectionDigest(selectionOnly),
+		"selection digest ignored a selection-only change",
+	)
+	assert.Equal(
+		t,
+		approvalDigest(base),
+		approvalDigest(selectionOnly),
+		"approval digest moved for a selection-only change",
+	)
 
 	added := digestTestConfig()
 	added.Targets = append(added.Targets, filesTarget("extra", model.RootHome, "extra", model.SelectionDirectory))
@@ -182,7 +220,12 @@ func TestApprovalDigestDistinguishesTargets(t *testing.T) {
 	assert.NotEqual(t, approvalDigest(left), approvalDigest(right), "approval digest ignored the target id")
 
 	withoutPolicies := Config{Version: Version, Defaults: Defaults{Mode: Review}}
-	assert.Equal(t, approvalDigest(withoutPolicies), approvalDigest(Config{Version: Version}), "approval digest depends on non-approval fields")
+	assert.Equal(
+		t,
+		approvalDigest(withoutPolicies),
+		approvalDigest(Config{Version: Version}),
+		"approval digest depends on non-approval fields",
+	)
 }
 
 func TestRevisionOnlyEditChangesTokenAndStaleness(t *testing.T) {
@@ -192,7 +235,12 @@ func TestRevisionOnlyEditChangesTokenAndStaleness(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), before.Selection.Revision, "raw document revision")
 
-	edited := strings.Replace(digestTestDocument(""), "config_version = 2", "config_version = 2\nselection_revision = 41", 1)
+	edited := strings.Replace(
+		digestTestDocument(""),
+		"config_version = 2",
+		"config_version = 2\nselection_revision = 41",
+		1,
+	)
 	require.NoError(t, os.WriteFile(filepath.Join(paths.AppConfigDir(), FileName), []byte(edited), 0o600))
 	after, err := OpenSnapshot(paths)
 	require.NoError(t, err)

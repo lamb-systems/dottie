@@ -41,11 +41,16 @@ func TestCategoryMatrixIsBoundedAndClosed(t *testing.T) {
 		for _, key := range category.Keys {
 			require.NoError(t, key.KeyRef.Validate())
 			assert.LessOrEqual(t, key.Since, ReviewedMax)
-			assert.True(t, key.Since == 0 || key.Since >= ReviewedMin, "introduction %d is below the reviewed floor", key.Since)
+			assert.True(
+				t,
+				key.Since == 0 || key.Since >= ReviewedMin,
+				"introduction %d is below the reviewed floor",
+				key.Since,
+			)
 			previous, duplicate := seen[key.KeyRef]
 			assert.False(t, duplicate, "key is owned by %q and %q", previous, category.ID)
 			seen[key.KeyRef] = category.ID
-			assert.NotEqual(t, "", key.Type)
+			assert.NotEmpty(t, key.Type)
 			total++
 		}
 	}
@@ -65,8 +70,8 @@ func TestCategoryVersionFloors(t *testing.T) {
 	assert.Equal(t, map[string]uint32{"appearance": 47, "clock": 42, "fonts": 42}, floors)
 
 	synthetic := Category{ID: "later", Keys: []CategoryKey{
-		{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "one"}, Type: "b", Since: 47},
-		{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "two"}, Type: "b", Since: 50},
+		{SchemaID: interfaceSchema, Key: "one", Type: "b", Since: 47},
+		{SchemaID: interfaceSchema, Key: "two", Type: "b", Since: 50},
 	}}
 	assert.Equal(t, uint32(50), synthetic.VersionFloor())
 }
@@ -149,7 +154,14 @@ func TestVendorFixtureMatchesSurfaceAndChangesDefaults(t *testing.T) {
 			assert.True(t, canonicalFound)
 			assert.True(t, vendorFound)
 			assert.Equal(t, canonicalType, vendorType)
-			assert.NotEqual(t, canonicalKey.Default, vendorKey.Default, "vendor fixture default must differ for %s/%s", schemaID, canonicalKey.Name)
+			assert.NotEqual(
+				t,
+				canonicalKey.Default,
+				vendorKey.Default,
+				"vendor fixture default must differ for %s/%s",
+				schemaID,
+				canonicalKey.Name,
+			)
 		}
 	}
 	assert.Equal(t, "'Adwaita'", fixtureKeyDefault(t, canonical[interfaceSchema], "icon-theme"))
@@ -229,12 +241,12 @@ func TestValidateCategoryMatrixRejectsMalformedMatrices(t *testing.T) {
 		{name: "duplicate category identifier", matrix: []Category{{ID: "appearance", Keys: []CategoryKey{matrixKey("one")}}, {ID: "appearance", Keys: []CategoryKey{matrixKey("two")}}}, want: "duplicated"},
 		{name: "duplicate reference within category", matrix: categoryWith("appearance", matrixKey("one"), matrixKey("one")), want: "duplicate setting reference"},
 		{name: "duplicate reference across categories", matrix: []Category{{ID: "appearance", Keys: []CategoryKey{matrixKey("one")}}, {ID: "fonts", Keys: []CategoryKey{matrixKey("one")}}}, want: "duplicate setting reference"},
-		{name: "empty schema identifier", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{Key: "one"}, Type: "b"}), want: "invalid GSettings reference"},
-		{name: "key containing slash", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "one/two"}, Type: "b"}), want: "invalid GSettings reference"},
-		{name: "relative path", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Path: "relative/", Key: "one"}, Type: "b"}), want: "reference path"},
-		{name: "unsupported type", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "one"}, Type: "u"}), want: "unsupported variant type"},
-		{name: "introduction below floor", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "one"}, Type: "b", Since: ReviewedMin - 1}), want: "outside the reviewed range"},
-		{name: "introduction above reviewed surface", matrix: categoryWith("appearance", CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "one"}, Type: "b", Since: ReviewedMax + 1}), want: "outside the reviewed range"},
+		{name: "empty schema identifier", matrix: categoryWith("appearance", CategoryKey{Key: "one", Type: "b"}), want: "invalid GSettings reference"},
+		{name: "key containing slash", matrix: categoryWith("appearance", CategoryKey{SchemaID: interfaceSchema, Key: "one/two", Type: "b"}), want: "invalid GSettings reference"},
+		{name: "relative path", matrix: categoryWith("appearance", CategoryKey{SchemaID: interfaceSchema, Path: "relative/", Key: "one", Type: "b"}), want: "reference path"},
+		{name: "unsupported type", matrix: categoryWith("appearance", CategoryKey{SchemaID: interfaceSchema, Key: "one", Type: "u"}), want: "unsupported variant type"},
+		{name: "introduction below floor", matrix: categoryWith("appearance", CategoryKey{SchemaID: interfaceSchema, Key: "one", Type: "b", Since: ReviewedMin - 1}), want: "outside the reviewed range"},
+		{name: "introduction above reviewed surface", matrix: categoryWith("appearance", CategoryKey{SchemaID: interfaceSchema, Key: "one", Type: "b", Since: ReviewedMax + 1}), want: "outside the reviewed range"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := validateCategoryMatrix(test.matrix)
@@ -308,7 +320,7 @@ func categoryWith(id string, keys ...CategoryKey) []Category {
 }
 
 func matrixKey(name string) CategoryKey {
-	return CategoryKey{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: name}, Type: "b"}
+	return CategoryKey{SchemaID: interfaceSchema, Key: name, Type: "b"}
 }
 
 func syntheticMatrix(count int) []Category {

@@ -2,7 +2,6 @@ package vault
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,7 +75,13 @@ func TestVerifyControlPositionEvidenceRequiresRootPolicySigner(t *testing.T) {
 		Certificates: cloneByteSlices(fixture.transition.Recipients),
 	}
 
-	assertControlPositionRefusalCodeForTrust(t, fixture.bootstrap.Vault, fixture.bootstrap.Anchor, evidence, "policy-signer-chain")
+	assertControlPositionRefusalCodeForTrust(
+		t,
+		fixture.bootstrap.Vault,
+		fixture.bootstrap.Anchor,
+		evidence,
+		"policy-signer-chain",
+	)
 }
 
 func TestVerifyControlPositionEvidenceRequiresMatchingPolicyAndControlSigner(t *testing.T) {
@@ -120,11 +125,16 @@ func assertControlPositionRefusalCode(t *testing.T, fixture checkpointFixture, e
 	assertControlPositionRefusalCodeForTrust(t, fixture.vaultID, fixture.anchor, evidence, code)
 }
 
-func assertControlPositionRefusalCodeForTrust(t *testing.T, vaultID, anchor [32]byte, evidence ControlEvidence, code string) {
+func assertControlPositionRefusalCodeForTrust(
+	t *testing.T,
+	vaultID, anchor [32]byte,
+	evidence ControlEvidence,
+	code string,
+) {
 	t.Helper()
 	_, _, err := verifyControlPositionEvidence(vaultID, anchor, evidence)
 	require.Error(t, err)
 	var refusal *VerificationRefusal
-	require.True(t, errors.As(err, &refusal))
+	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, code, refusal.Code)
 }

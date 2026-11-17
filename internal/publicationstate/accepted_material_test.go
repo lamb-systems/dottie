@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialFinalizedOwnerSurvivesReopen(t *testing.T) {
@@ -104,13 +105,13 @@ func TestPublicationReadAcceptedMaterialRequiresExistingFloorAndValidContext(t *
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, Floor{})
 	requireErrorMetadata(t, err, ErrContinuity, StageReadAcceptedMaterial, ReasonFirstUseRequired)
 	assert.Equal(t, AcceptedMaterial{}, material)
-	assert.NoError(t, assertPayloadDirectoryAbsent(directory))
+	require.NoError(t, assertPayloadDirectoryAbsent(directory))
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	material, err = store.ReadAcceptedMaterial(canceled, f.binding, Floor{})
 	requireErrorMetadata(t, err, ErrStorage, StageReadAcceptedMaterial, ReasonCanceled)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, AcceptedMaterial{}, material)
 
 	material, err = store.ReadAcceptedMaterial(nil, f.binding, Floor{})
@@ -217,7 +218,11 @@ func TestPublicationReadAcceptedMaterialFencedUntilExplicitReadback(t *testing.T
 			resolution, err := store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, current)
 			require.NoError(t, err)
 			if mode == "rollback-then-error" {
-				installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_material_finalize_commit AFTER INSERT ON main.retained_publications BEGIN INSERT INTO attempt_commit_child(id) VALUES(1); END")
+				installDeferredAttemptCommitFailure(
+					t,
+					store,
+					"CREATE TEMP TRIGGER fail_material_finalize_commit AFTER INSERT ON main.retained_publications BEGIN INSERT INTO attempt_commit_child(id) VALUES(1); END",
+				)
 			}
 			var prospective Floor
 			var captureErr error
@@ -247,7 +252,7 @@ func TestPublicationReadAcceptedMaterialFencedUntilExplicitReadback(t *testing.T
 			finalized, err := store.FinalizeAttempt(ctx, attempt.ID, resolution.Attempt.StateDigest, current)
 			requireErrorMetadata(t, err, ErrStorage, StageFinalize, ReasonCommitUnknown)
 			assert.Equal(t, Finalization{}, finalized)
-			assert.NoError(t, captureErr)
+			require.NoError(t, captureErr)
 			assert.NotEqual(t, Floor{}, prospective)
 			assert.True(t, store.needsReadback)
 
@@ -299,7 +304,14 @@ func acceptedMaterialObservedState(t *testing.T, store *Store, attemptID [16]byt
 	require.NoError(t, err)
 	candidate, err := store.ReadCandidate(ctx, attemptID)
 	require.NoError(t, err)
-	return acceptedMaterialState{Floor: floor, HasFloor: hasFloor, History: history, Attempt: attempt, AttemptHistory: attemptHistory, Candidate: candidate}
+	return acceptedMaterialState{
+		Floor:          floor,
+		HasFloor:       hasFloor,
+		History:        history,
+		Attempt:        attempt,
+		AttemptHistory: attemptHistory,
+		Candidate:      candidate,
+	}
 }
 
 func acceptedMaterialPositionState(t *testing.T, store *Store) (Floor, HistoryPage) {
@@ -314,7 +326,8 @@ func acceptedMaterialPositionState(t *testing.T, store *Store) (Floor, HistoryPa
 
 func acceptedMaterialFloorInTransaction(tx *sql.Tx) (Floor, error) {
 	var encoded []byte
-	if err := tx.QueryRowContext(context.Background(), "SELECT floor FROM active_floor WHERE singleton=1").Scan(&encoded); err != nil {
+	if err := tx.QueryRowContext(context.Background(), "SELECT floor FROM active_floor WHERE singleton=1").
+		Scan(&encoded); err != nil {
 		return Floor{}, err
 	}
 	return decodeFloor(encoded)

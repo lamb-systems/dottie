@@ -13,7 +13,11 @@ const incomingCommitFailureTrigger = "fail_incoming_commit"
 
 func installIncomingCommitFailure(t *testing.T, store *Store) {
 	t.Helper()
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER "+incomingCommitFailureTrigger+" AFTER UPDATE ON main.store_meta WHEN OLD.key='revision' BEGIN INSERT INTO attempt_commit_child(id) VALUES(201); END")
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER "+incomingCommitFailureTrigger+" AFTER UPDATE ON main.store_meta WHEN OLD.key='revision' BEGIN INSERT INTO attempt_commit_child(id) VALUES(201); END",
+	)
 }
 
 func removeIncomingCommitFailure(t *testing.T, store *Store) {
@@ -49,13 +53,27 @@ func TestAcceptMaterialCommitSucceededThenErrorReconcilesWithoutReopen(t *testin
 		return commitThenReturnError(tx)
 	}
 
-	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	assert.Equal(t, Floor{}, floor)
 	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 	assert.Equal(t, 1, commits)
 	assert.True(t, store.needsReadback)
 
-	fenced, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	fenced, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	assert.Equal(t, Floor{}, fenced)
 	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 	assert.Equal(t, 1, commits)
@@ -102,7 +120,14 @@ func TestAcceptMaterialCommitFailedWithoutCommitReconcilesWithoutReopen(t *testi
 	commits := countIncomingCommits(t, store)
 	installIncomingCommitFailure(t, store)
 
-	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	assert.Equal(t, Floor{}, floor)
 	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 	assert.Equal(t, 1, *commits)
@@ -110,7 +135,14 @@ func TestAcceptMaterialCommitFailedWithoutCommitReconcilesWithoutReopen(t *testi
 	requireIncomingMaterialRowsAbsent(t, ctx, store)
 
 	removeIncomingCommitFailure(t, store)
-	probe, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	probe, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	assert.Equal(t, Floor{}, probe)
 	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 	assert.Equal(t, 1, *commits)
@@ -119,7 +151,14 @@ func TestAcceptMaterialCommitFailedWithoutCommitReconcilesWithoutReopen(t *testi
 
 	requireIncomingMaterialLoadAbsent(t, ctx, store)
 	assert.False(t, store.needsReadback)
-	floor, err = store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err = store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), floor.Revision)
 	assert.Equal(t, 2, *commits)

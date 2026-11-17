@@ -7,8 +7,9 @@ import (
 	"errors"
 	"io"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 const (
@@ -25,7 +26,11 @@ type AcceptedMaterial struct {
 	Payload        []byte
 }
 
-func (s *Store) ReadAcceptedMaterial(ctx context.Context, binding Binding, expectedFloor Floor) (AcceptedMaterial, error) {
+func (s *Store) ReadAcceptedMaterial(
+	ctx context.Context,
+	binding Binding,
+	expectedFloor Floor,
+) (AcceptedMaterial, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx == nil {
@@ -74,7 +79,15 @@ func validateExpectedAcceptedFloor(floor Floor, binding Binding, limits Limits, 
 	if validateBinding(floor.Binding) != nil || !sameBinding(floor.Binding, binding) {
 		return classified(ErrInvalid, stage, ReasonBinding)
 	}
-	if len(floor.AnchorCID) == 0 || len(floor.AnchorCID) > publication.MaxCIDBytes || len(floor.Head) == 0 || len(floor.Head) > publication.MaxRecordBytes || len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes || len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes || len(floor.SnapshotKey) != publication.SequenceKeyLength || (floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace) || allZero(floor.DatabaseID[:]) {
+	if len(floor.AnchorCID) == 0 || len(floor.AnchorCID) > publication.MaxCIDBytes || len(floor.Head) == 0 ||
+		len(floor.Head) > publication.MaxRecordBytes ||
+		len(floor.RecordCID) == 0 ||
+		len(floor.RecordCID) > publication.MaxCIDBytes ||
+		len(floor.BlobCID) == 0 ||
+		len(floor.BlobCID) > publication.MaxCIDBytes ||
+		len(floor.SnapshotKey) != publication.SequenceKeyLength ||
+		(floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace) ||
+		allZero(floor.DatabaseID[:]) {
 		return classified(ErrInvalid, stage, ReasonRecordSet)
 	}
 	if err := validatePersistedFloor(floor, binding, floor.DatabaseID, limits); err != nil {
@@ -103,17 +116,29 @@ func sameAcceptedFloor(left, right Floor) bool {
 }
 
 func sameAcceptedContext(left, right SuppliedContext) bool {
-	if left.RepositoryRevision != right.RepositoryRevision || !bytes.Equal(left.RepositoryDigest, right.RepositoryDigest) {
+	if left.RepositoryRevision != right.RepositoryRevision ||
+		!bytes.Equal(left.RepositoryDigest, right.RepositoryDigest) {
 		return false
 	}
 	if left.Policy == nil || right.Policy == nil {
 		return left.Policy == nil && right.Policy == nil
 	}
-	return left.Policy.Revision == right.Policy.Revision && left.Policy.OwnerOnly == right.Policy.OwnerOnly && bytes.Equal(left.Policy.Identity, right.Policy.Identity)
+	return left.Policy.Revision == right.Policy.Revision && left.Policy.OwnerOnly == right.Policy.OwnerOnly &&
+		bytes.Equal(left.Policy.Identity, right.Policy.Identity)
 }
 
-func (s *Store) acceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
-	count, err := queryInt64(ctx, q, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(floor.Revision))
+func (s *Store) acceptedMaterialOwner(
+	ctx context.Context,
+	q queryer,
+	floor Floor,
+	stage Stage,
+) (string, []byte, publication.BlobReference, error) {
+	count, err := queryInt64(
+		ctx,
+		q,
+		"SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?",
+		int64(floor.Revision),
+	)
 	if err != nil {
 		return "", nil, publication.BlobReference{}, queryReadError(ctx, stage, err)
 	}
@@ -123,7 +148,12 @@ func (s *Store) acceptedMaterialOwner(ctx context.Context, q queryer, floor Floo
 
 	incomingCount := int64(0)
 	if s.schemaVersion == 3 {
-		incomingCount, err = queryInt64(ctx, q, "SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision))
+		incomingCount, err = queryInt64(
+			ctx,
+			q,
+			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?",
+			int64(floor.Revision),
+		)
 		if err != nil {
 			return "", nil, publication.BlobReference{}, queryReadError(ctx, stage, err)
 		}
@@ -143,7 +173,12 @@ func (s *Store) acceptedMaterialOwner(ctx context.Context, q queryer, floor Floo
 	return s.incomingAcceptedMaterialOwner(ctx, q, floor, stage)
 }
 
-func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
+func (s *Store) finalizedAcceptedMaterialOwner(
+	ctx context.Context,
+	q queryer,
+	floor Floor,
+	stage Stage,
+) (string, []byte, publication.BlobReference, error) {
 	var idValue, idLengthValue, recordValue, recordLengthValue, blobValue, blobLengthValue any
 	var sequenceValue, sizeValue, revisionValue any
 	var lifecycleValue, lifecycleLengthValue, outcomeValue, outcomeLengthValue, blockedValue, blockedLengthValue any
@@ -210,7 +245,10 @@ func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, f
 		!objectCIDOK || !objectCIDLengthOK || objectCIDLength <= 0 || objectCIDLength > publication.MaxCIDBytes || int64(len(objectCID)) != objectCIDLength ||
 		!objectSizeOK || objectSize <= 0 || uint64(objectSize) != floor.BlobSize ||
 		!basenameOK || !basenameLengthOK || basenameLength != 72 || int64(len(basename)) != basenameLength ||
-		!bytes.Equal(recordCID, floor.RecordCID) || !bytes.Equal(blobCID, floor.BlobCID) || !bytes.Equal(objectCID, floor.BlobCID) {
+		!bytes.Equal(
+			recordCID,
+			floor.RecordCID,
+		) || !bytes.Equal(blobCID, floor.BlobCID) || !bytes.Equal(objectCID, floor.BlobCID) {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 
@@ -231,8 +269,10 @@ func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, f
 		return "", nil, publication.BlobReference{}, err
 	}
 	snapshot, err := publication.DecodeSnapshot(record.raw)
-	if err != nil || snapshot.Vault != floor.Binding.Vault || snapshot.PublicationSeq != floor.Sequence || snapshot.PublicationID != floor.PublicationID ||
-		!bytes.Equal(snapshot.Blob.CID, floor.BlobCID) || snapshot.Blob.Size != floor.BlobSize ||
+	if err != nil || snapshot.Vault != floor.Binding.Vault || snapshot.PublicationSeq != floor.Sequence ||
+		snapshot.PublicationID != floor.PublicationID ||
+		!bytes.Equal(snapshot.Blob.CID, floor.BlobCID) ||
+		snapshot.Blob.Size != floor.BlobSize ||
 		!bytes.Equal(attempt.core.SnapshotRecord, record.raw) {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -243,12 +283,18 @@ func (s *Store) finalizedAcceptedMaterialOwner(ctx context.Context, q queryer, f
 	return basename, record.raw, blobReference(record.raw), nil
 }
 
-func (s *Store) incomingAcceptedMaterialOwner(ctx context.Context, q queryer, floor Floor, stage Stage) (string, []byte, publication.BlobReference, error) {
+func (s *Store) incomingAcceptedMaterialOwner(
+	ctx context.Context,
+	q queryer,
+	floor Floor,
+	stage Stage,
+) (string, []byte, publication.BlobReference, error) {
 	var revisionTypeValue, revisionValue, recordTypeValue, recordLengthValue, recordValue any
 	var blobTypeValue, blobLengthValue, blobValue any
-	err := q.QueryRowContext(ctx, "SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).Scan(
-		&revisionTypeValue, &revisionValue, &recordTypeValue, &recordLengthValue, &recordValue,
-		&blobTypeValue, &blobLengthValue, &blobValue)
+	err := q.QueryRowContext(ctx, "SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).
+		Scan(
+			&revisionTypeValue, &revisionValue, &recordTypeValue, &recordLengthValue, &recordValue,
+			&blobTypeValue, &blobLengthValue, &blobValue)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -263,10 +309,27 @@ func (s *Store) incomingAcceptedMaterialOwner(ctx context.Context, q queryer, fl
 	blobType, blobTypeOK := blobTypeValue.(string)
 	blobLength, blobLengthOK := rawInt64(blobLengthValue)
 	blobCID, blobOK := rawBytes(blobValue)
-	if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 || uint64(revision) != floor.Revision ||
-		!recordTypeOK || recordType != "blob" || !recordLengthOK || recordLength < 1 || recordLength > publication.MaxCIDBytes || !recordOK || int64(len(recordCID)) != recordLength ||
-		!blobTypeOK || blobType != "blob" || !blobLengthOK || blobLength < 1 || blobLength > publication.MaxCIDBytes || !blobOK || int64(len(blobCID)) != blobLength ||
-		!bytes.Equal(recordCID, floor.RecordCID) || !bytes.Equal(blobCID, floor.BlobCID) {
+	if !revisionTypeOK ||
+		revisionType != "integer" ||
+		!revisionOK ||
+		revision < 1 ||
+		uint64(revision) != floor.Revision ||
+		!recordTypeOK ||
+		recordType != "blob" ||
+		!recordLengthOK ||
+		recordLength < 1 ||
+		recordLength > publication.MaxCIDBytes ||
+		!recordOK ||
+		int64(len(recordCID)) != recordLength ||
+		!blobTypeOK ||
+		blobType != "blob" ||
+		!blobLengthOK ||
+		blobLength < 1 ||
+		blobLength > publication.MaxCIDBytes ||
+		!blobOK ||
+		int64(len(blobCID)) != blobLength ||
+		!bytes.Equal(recordCID, floor.RecordCID) ||
+		!bytes.Equal(blobCID, floor.BlobCID) {
 		return "", nil, publication.BlobReference{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	ref := incomingMaterialRef{revision: revision, recordCID: bytes.Clone(recordCID), blobCID: bytes.Clone(blobCID)}

@@ -13,11 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 type incomingMaterialUpgradeOutcomeOwner struct {
@@ -31,9 +32,17 @@ type incomingMaterialUpgradeOutcomeOwner struct {
 	closed       bool
 }
 
-func incomingMaterialUpgradeOutcomeOpen(t *testing.T, ctx context.Context, directory string) *incomingMaterialUpgradeOutcomeOwner {
+func incomingMaterialUpgradeOutcomeOpen(
+	t *testing.T,
+	ctx context.Context,
+	directory string,
+) *incomingMaterialUpgradeOutcomeOwner {
 	t.Helper()
-	owner := &incomingMaterialUpgradeOutcomeOwner{directory: directory, databasePath: filepath.Join(directory, "publication.db"), rootFD: -1}
+	owner := &incomingMaterialUpgradeOutcomeOwner{
+		directory:    directory,
+		databasePath: filepath.Join(directory, "publication.db"),
+		rootFD:       -1,
+	}
 	t.Cleanup(func() { owner.close(t) })
 	require.NoError(t, checkPrivateDirectory(directory))
 	for _, name := range []string{"publication.db.lock", "publication.db", "publication.db-wal", "publication.db-shm"} {
@@ -141,7 +150,11 @@ type incomingMaterialUpgradeOutcomeCase struct {
 	payloads      map[string]incomingMaterialUpgradeFixturePayload
 }
 
-func incomingMaterialUpgradeOutcomePrepare(t *testing.T, ctx context.Context, image string) *incomingMaterialUpgradeOutcomeCase {
+func incomingMaterialUpgradeOutcomePrepare(
+	t *testing.T,
+	ctx context.Context,
+	image string,
+) *incomingMaterialUpgradeOutcomeCase {
 	t.Helper()
 	switch image {
 	case "positions-v1":
@@ -162,7 +175,14 @@ func incomingMaterialUpgradeOutcomePrepareV1(t *testing.T, ctx context.Context) 
 	require.Equal(t, 1, incomingMaterialUpgradeUserVersion(t, ctx, owner.conn))
 	require.NoError(t, checkSchemaVersion(ctx, owner.conn, 1))
 	require.Equal(t, companionRows, readLogicalRows(t, owner.conn))
-	source, err := readIncomingMaterialUpgradeSource(ctx, owner.conn, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+	source, err := readIncomingMaterialUpgradeSource(
+		ctx,
+		owner.conn,
+		1,
+		f.binding,
+		DefaultLimits(),
+		DefaultAttemptLimits(),
+	)
 	require.NoError(t, err)
 	rows := incomingMaterialUpgradeV1Rows(t, ctx, owner.conn)
 	require.Len(t, rows["store_meta"], 5)
@@ -200,7 +220,11 @@ func incomingMaterialUpgradeOutcomePrepareV1(t *testing.T, ctx context.Context) 
 	}
 }
 
-func incomingMaterialUpgradeOutcomePrepareImage(t *testing.T, ctx context.Context, name string) *incomingMaterialUpgradeOutcomeCase {
+func incomingMaterialUpgradeOutcomePrepareImage(
+	t *testing.T,
+	ctx context.Context,
+	name string,
+) *incomingMaterialUpgradeOutcomeCase {
 	t.Helper()
 	assets := incomingMaterialUpgradeFixtureCopy(t)
 	image := assets.manifest.requireImage(t, name)
@@ -222,7 +246,12 @@ func incomingMaterialUpgradeOutcomePrepareImage(t *testing.T, ctx context.Contex
 	if name == "mixed" {
 		require.Equal(t, 44, incomingMaterialUpgradeFixtureRowTotal(rows))
 		inputs := incomingMaterialUpgradeFixtureInputsData(t, assets.files["mixed-inputs.json"])
-		floorValue := incomingMaterialUpgradeFixtureScanValue(t, ctx, owner.conn, "SELECT floor FROM active_floor WHERE singleton=1")
+		floorValue := incomingMaterialUpgradeFixtureScanValue(
+			t,
+			ctx,
+			owner.conn,
+			"SELECT floor FROM active_floor WHERE singleton=1",
+		)
 		floorRaw, ok := floorValue.([]byte)
 		require.True(t, ok)
 		floor, err := decodeFloor(floorRaw)
@@ -257,13 +286,22 @@ func incomingMaterialUpgradeOutcomePrepareImage(t *testing.T, ctx context.Contex
 func incomingMaterialUpgradeOutcomeRequirePayloads(t *testing.T, c *incomingMaterialUpgradeOutcomeCase) {
 	t.Helper()
 	if c.version == 1 {
-		require.Equal(t, c.payload, incomingMaterialUpgradeFixturePayloadState(t, filepath.Join(c.directory, "schema1-baseline-payload.bin")))
+		require.Equal(
+			t,
+			c.payload,
+			incomingMaterialUpgradeFixturePayloadState(t, filepath.Join(c.directory, "schema1-baseline-payload.bin")),
+		)
 		return
 	}
 	require.Equal(t, c.payloads, incomingMaterialUpgradeFixturePayloadStates(t, filepath.Dir(c.directory)))
 }
 
-func incomingMaterialUpgradeOutcomeRequireCommitted(t *testing.T, ctx context.Context, q queryer, c *incomingMaterialUpgradeOutcomeCase) {
+func incomingMaterialUpgradeOutcomeRequireCommitted(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	c *incomingMaterialUpgradeOutcomeCase,
+) {
 	t.Helper()
 	require.Equal(t, 3, incomingMaterialUpgradeUserVersion(t, ctx, q))
 	objects := incomingMaterialUpgradeFixtureObjects(t, ctx, q)
@@ -308,7 +346,12 @@ func incomingMaterialUpgradeOutcomeRequireCommitted(t *testing.T, ctx context.Co
 	require.NoError(t, checkIncomingMaterialUpgradeDestination(ctx, q, c.source))
 }
 
-func incomingMaterialUpgradeOutcomeRequireRestored(t *testing.T, ctx context.Context, q queryer, c *incomingMaterialUpgradeOutcomeCase) {
+func incomingMaterialUpgradeOutcomeRequireRestored(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	c *incomingMaterialUpgradeOutcomeCase,
+) {
 	t.Helper()
 	require.Equal(t, c.version, incomingMaterialUpgradeUserVersion(t, ctx, q))
 	require.NoError(t, checkSchemaVersion(ctx, q, c.version))
@@ -325,7 +368,12 @@ func incomingMaterialUpgradeOutcomeRequireRestored(t *testing.T, ctx context.Con
 	require.Equal(t, c.source, restored)
 }
 
-func incomingMaterialUpgradeOutcomeFinish(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, committed bool) {
+func incomingMaterialUpgradeOutcomeFinish(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	committed bool,
+) {
 	t.Helper()
 	var rootStat unix.Stat_t
 	require.NoError(t, unix.Fstat(c.owner.rootFD, &rootStat))
@@ -386,10 +434,17 @@ func TestIncomingMaterialUpgradeCommitOutcomes(t *testing.T) {
 						return commitErr
 					}
 				}
-				outcome, err := upgradeIncomingMaterial(ctx, c.owner.conn, c.source, c.owner.rootFD, func(point int) error {
-					points = append(points, point)
-					return nil
-				}, hook)
+				outcome, err := upgradeIncomingMaterial(
+					ctx,
+					c.owner.conn,
+					c.source,
+					c.owner.rootFD,
+					func(point int) error {
+						points = append(points, point)
+						return nil
+					},
+					hook,
+				)
 				if c.version == 1 {
 					require.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, points)
 				} else {
@@ -437,13 +492,20 @@ func TestIncomingMaterialUpgradeWrapperRollback(t *testing.T) {
 			c := incomingMaterialUpgradeOutcomePrepare(t, ctx, "positions-v1")
 			counter := &incomingMaterialUpgradeCommitCounter{}
 			var points []int
-			outcome, err := upgradeIncomingMaterial(ctx, c.owner.conn, c.source, c.owner.rootFD, func(reached int) error {
-				points = append(points, reached)
-				if reached == point {
-					return canary
-				}
-				return nil
-			}, counter.hook)
+			outcome, err := upgradeIncomingMaterial(
+				ctx,
+				c.owner.conn,
+				c.source,
+				c.owner.rootFD,
+				func(reached int) error {
+					points = append(points, reached)
+					if reached == point {
+						return canary
+					}
+					return nil
+				},
+				counter.hook,
+			)
 			require.Zero(t, counter.calls)
 			require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 			requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonIO)
@@ -465,13 +527,20 @@ func TestIncomingMaterialUpgradeWrapperRollback(t *testing.T) {
 				c := incomingMaterialUpgradeOutcomePrepare(t, ctx, image)
 				counter := &incomingMaterialUpgradeCommitCounter{}
 				var points []int
-				outcome, err := upgradeIncomingMaterial(ctx, c.owner.conn, c.source, c.owner.rootFD, func(reached int) error {
-					points = append(points, reached)
-					if reached == point {
-						return canary
-					}
-					return nil
-				}, counter.hook)
+				outcome, err := upgradeIncomingMaterial(
+					ctx,
+					c.owner.conn,
+					c.source,
+					c.owner.rootFD,
+					func(reached int) error {
+						points = append(points, reached)
+						if reached == point {
+							return canary
+						}
+						return nil
+					},
+					counter.hook,
+				)
 				require.Zero(t, counter.calls)
 				require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 				requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonIO)
@@ -508,10 +577,17 @@ func TestIncomingMaterialUpgradeWrapperPrecommitRefusals(t *testing.T) {
 			counter := &incomingMaterialUpgradeCommitCounter{}
 			var points []int
 			var nilContext context.Context
-			outcome, err := upgradeIncomingMaterial(nilContext, c.owner.conn, c.source, c.owner.rootFD, func(point int) error {
-				points = append(points, point)
-				return nil
-			}, counter.hook)
+			outcome, err := upgradeIncomingMaterial(
+				nilContext,
+				c.owner.conn,
+				c.source,
+				c.owner.rootFD,
+				func(point int) error {
+					points = append(points, point)
+					return nil
+				},
+				counter.hook,
+			)
 			require.Zero(t, counter.calls)
 			require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 			requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonContext)
@@ -526,10 +602,17 @@ func TestIncomingMaterialUpgradeWrapperPrecommitRefusals(t *testing.T) {
 			cancelRun()
 			counter := &incomingMaterialUpgradeCommitCounter{}
 			var points []int
-			outcome, err := upgradeIncomingMaterial(canceledContext, c.owner.conn, c.source, c.owner.rootFD, func(point int) error {
-				points = append(points, point)
-				return nil
-			}, counter.hook)
+			outcome, err := upgradeIncomingMaterial(
+				canceledContext,
+				c.owner.conn,
+				c.source,
+				c.owner.rootFD,
+				func(point int) error {
+					points = append(points, point)
+					return nil
+				},
+				counter.hook,
+			)
 			require.Zero(t, counter.calls)
 			require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 			require.ErrorIs(t, err, context.Canceled)
@@ -603,13 +686,20 @@ func TestIncomingMaterialUpgradeWrapperPrecommitRefusals(t *testing.T) {
 			operationContext, operationCancel := context.WithCancel(ctx)
 			t.Cleanup(operationCancel)
 			var points []int
-			outcome, err := upgradeIncomingMaterial(operationContext, c.owner.conn, c.source, c.owner.rootFD, func(point int) error {
-				points = append(points, point)
-				if point == 15 {
-					operationCancel()
-				}
-				return nil
-			}, counter.hook)
+			outcome, err := upgradeIncomingMaterial(
+				operationContext,
+				c.owner.conn,
+				c.source,
+				c.owner.rootFD,
+				func(point int) error {
+					points = append(points, point)
+					if point == 15 {
+						operationCancel()
+					}
+					return nil
+				},
+				counter.hook,
+			)
 			require.Zero(t, counter.calls)
 			require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 			require.ErrorIs(t, err, context.Canceled)
@@ -625,13 +715,20 @@ func TestIncomingMaterialUpgradeWrapperPrecommitRefusals(t *testing.T) {
 			operationContext, operationCancel := context.WithCancel(ctx)
 			t.Cleanup(operationCancel)
 			var points []int
-			outcome, err := upgradeIncomingMaterial(operationContext, c.owner.conn, c.source, c.owner.rootFD, func(point int) error {
-				points = append(points, point)
-				if point == 16 {
-					operationCancel()
-				}
-				return nil
-			}, counter.hook)
+			outcome, err := upgradeIncomingMaterial(
+				operationContext,
+				c.owner.conn,
+				c.source,
+				c.owner.rootFD,
+				func(point int) error {
+					points = append(points, point)
+					if point == 16 {
+						operationCancel()
+					}
+					return nil
+				},
+				counter.hook,
+			)
 			require.Zero(t, counter.calls)
 			require.Equal(t, incomingMaterialUpgradeNotAttempted, outcome)
 			require.ErrorIs(t, err, context.Canceled)
@@ -695,20 +792,26 @@ func TestIncomingMaterialUpgradeOpenErrorMapping(t *testing.T) {
 	t.Run("not attempted", func(t *testing.T) {
 		require.NoError(t, incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, nil))
 		mapped := incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, schemaErr)
-		require.True(t, mapped == error(schemaErr))
+		require.Equal(t, mapped, schemaErr)
 		mapped = incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, bindingErr)
-		require.True(t, mapped == error(bindingErr))
+		require.Equal(t, mapped, bindingErr)
 		mapped = incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, ioErr)
-		require.True(t, mapped == error(ioErr))
+		require.Equal(t, mapped, ioErr)
 		mapped = incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, cancelErr)
-		require.True(t, mapped == error(cancelErr))
+		require.Equal(t, mapped, cancelErr)
 		require.ErrorIs(t, mapped, context.Canceled)
 		mapped = incomingMaterialOpenError(incomingMaterialUpgradeNotAttempted, canary)
 		require.ErrorIs(t, mapped, canary)
 	})
 
 	t.Run("commit unknown", func(t *testing.T) {
-		requireErrorMetadata(t, incomingMaterialOpenError(incomingMaterialUpgradeCommitUnknown, nil), ErrStorage, StageOpen, ReasonCommitUnknown)
+		requireErrorMetadata(
+			t,
+			incomingMaterialOpenError(incomingMaterialUpgradeCommitUnknown, nil),
+			ErrStorage,
+			StageOpen,
+			ReasonCommitUnknown,
+		)
 		for _, entry := range []struct {
 			name string
 			err  error
@@ -756,7 +859,13 @@ func TestIncomingMaterialUpgradeOpenErrorMapping(t *testing.T) {
 			{"three", incomingMaterialUpgradeOutcome(3)},
 		} {
 			t.Run(input.name, func(t *testing.T) {
-				requireErrorMetadata(t, incomingMaterialOpenError(input.outcome, nil), ErrStorage, StageOpen, ReasonCommitUnknown)
+				requireErrorMetadata(
+					t,
+					incomingMaterialOpenError(input.outcome, nil),
+					ErrStorage,
+					StageOpen,
+					ReasonCommitUnknown,
+				)
 				for _, entry := range []struct {
 					name string
 					err  error
@@ -875,7 +984,12 @@ func incomingMaterialUpgradeOpenOwn(t *testing.T, c *incomingMaterialUpgradeOutc
 	return store
 }
 
-func incomingMaterialUpgradeOpenClosedResources(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, returned, provisional *Store) os.FileMode {
+func incomingMaterialUpgradeOpenClosedResources(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	returned, provisional *Store,
+) os.FileMode {
 	t.Helper()
 	var rootStat unix.Stat_t
 	require.ErrorIs(t, unix.Fstat(c.owner.rootFD, &rootStat), unix.EBADF)
@@ -908,7 +1022,11 @@ func incomingMaterialUpgradeOpenPayload(t *testing.T, c *incomingMaterialUpgrade
 	return nil
 }
 
-func incomingMaterialUpgradeOpenExpectedAdditions(t *testing.T, c *incomingMaterialUpgradeOutcomeCase, extra ...string) ([]string, int) {
+func incomingMaterialUpgradeOpenExpectedAdditions(
+	t *testing.T,
+	c *incomingMaterialUpgradeOutcomeCase,
+	extra ...string,
+) ([]string, int) {
 	t.Helper()
 	expected := append([]string{"accepted_material_refs"}, extra...)
 	autoIndexes := 0
@@ -921,7 +1039,11 @@ func incomingMaterialUpgradeOpenExpectedAdditions(t *testing.T, c *incomingMater
 	return expected, autoIndexes
 }
 
-func incomingMaterialUpgradeOpenHealthyReadback(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase) {
+func incomingMaterialUpgradeOpenHealthyReadback(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+) {
 	t.Helper()
 	conn, closeReadOnly := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, c.databasePath)
 	require.Equal(t, 3, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -967,7 +1089,12 @@ func incomingMaterialUpgradeCanceledFinish(t *testing.T, ctx context.Context, c 
 	incomingMaterialUpgradeOutcomeRequirePayloads(t, c)
 }
 
-func incomingMaterialUpgradeOpenRequireReadAPIs(t *testing.T, ctx context.Context, store *Store, c *incomingMaterialUpgradeOutcomeCase) {
+func incomingMaterialUpgradeOpenRequireReadAPIs(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	c *incomingMaterialUpgradeOutcomeCase,
+) {
 	t.Helper()
 	floor, present, err := store.Load(ctx)
 	require.NoError(t, err)
@@ -1066,10 +1193,18 @@ func incomingMaterialUpgradeOpenRequireReadAPIs(t *testing.T, ctx context.Contex
 		var expectedConflictID [32]byte
 		copy(expectedConflictID[:], incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.ID))
 		require.Equal(t, expectedConflictID, conflict.ID)
-		require.Equal(t, incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.Envelope), conflict.Evidence)
+		require.Equal(
+			t,
+			incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.Envelope),
+			conflict.Evidence,
+		)
 		require.Equal(t, incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.Head), conflict.Head)
 		require.Equal(t, inputs.Results.FirstConflict.HeadKey, conflict.HeadKey)
-		require.Equal(t, incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.HeadRecord), conflict.HeadRecord)
+		require.Equal(
+			t,
+			incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.FirstConflict.HeadRecord),
+			conflict.HeadRecord,
+		)
 		require.Equal(t, uint64(1), conflict.HeadSequence)
 		material, err := store.ReadAcceptedMaterial(ctx, c.binding, floor)
 		require.Equal(t, AcceptedMaterial{}, material)
@@ -1086,10 +1221,16 @@ func incomingMaterialUpgradeOpenSuccess(t *testing.T, image string) {
 	incomingMaterialUpgradeOpenCommit(t, ctx, c)
 	store := incomingMaterialUpgradeOpenOwn(t, c)
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(ctx, store, c.source, incomingMaterialUpgradeCommitted, func(point int) error {
-		points = append(points, point)
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		ctx,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(point int) error {
+			points = append(points, point)
+			return nil
+		},
+	)
 	require.NoError(t, err)
 	require.Equal(t, []int{1, 2, 3, 4}, points)
 	require.NotNil(t, completed)
@@ -1149,13 +1290,19 @@ func incomingMaterialUpgradeOpenIntervalFault(t *testing.T, image string, point 
 	store := incomingMaterialUpgradeOpenOwn(t, c)
 	canary := errors.New("injected completion interval canary")
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(ctx, store, c.source, incomingMaterialUpgradeCommitted, func(reached int) error {
-		points = append(points, reached)
-		if reached == point {
-			return canary
-		}
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		ctx,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(reached int) error {
+			points = append(points, reached)
+			if reached == point {
+				return canary
+			}
+			return nil
+		},
+	)
 	require.Error(t, err)
 	expected := make([]int, 0, point)
 	for reached := 1; reached <= point; reached++ {
@@ -1175,24 +1322,40 @@ func incomingMaterialUpgradeOpenSchemaPostguard(t *testing.T, image string) {
 	c := incomingMaterialUpgradeOutcomePrepare(t, ctx, image)
 	counter := &incomingMaterialUpgradeCommitCounter{}
 	var indexErr error
-	outcome, err := upgradeIncomingMaterial(ctx, c.owner.conn, c.source, c.owner.rootFD, nil, func(candidate *sql.Tx) error {
-		counter.calls++
-		if commitErr := candidate.Commit(); commitErr != nil {
-			return commitErr
-		}
-		_, indexErr = c.owner.conn.ExecContext(ctx, "CREATE INDEX incoming_material_postguard_extra ON accepted_records(sequence)")
-		return indexErr
-	})
+	outcome, err := upgradeIncomingMaterial(
+		ctx,
+		c.owner.conn,
+		c.source,
+		c.owner.rootFD,
+		nil,
+		func(candidate *sql.Tx) error {
+			counter.calls++
+			if commitErr := candidate.Commit(); commitErr != nil {
+				return commitErr
+			}
+			_, indexErr = c.owner.conn.ExecContext(
+				ctx,
+				"CREATE INDEX incoming_material_postguard_extra ON accepted_records(sequence)",
+			)
+			return indexErr
+		},
+	)
 	require.Equal(t, 1, counter.calls)
 	require.NoError(t, indexErr)
 	require.Equal(t, incomingMaterialUpgradeCommitted, outcome)
 	require.NoError(t, err)
 	store := incomingMaterialUpgradeOpenOwn(t, c)
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(ctx, store, c.source, incomingMaterialUpgradeCommitted, func(point int) error {
-		points = append(points, point)
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		ctx,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(point int) error {
+			points = append(points, point)
+			return nil
+		},
+	)
 	require.Error(t, err)
 	require.Equal(t, []int{1}, points)
 	incomingMaterialUpgradeOpenClosedResources(t, ctx, c, completed, store)
@@ -1207,13 +1370,19 @@ func incomingMaterialUpgradeOpenFinalPreflight(t *testing.T, image string) {
 	incomingMaterialUpgradeOpenCommit(t, ctx, c)
 	store := incomingMaterialUpgradeOpenOwn(t, c)
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(ctx, store, c.source, incomingMaterialUpgradeCommitted, func(point int) error {
-		points = append(points, point)
-		if point == 4 {
-			require.NoError(t, os.Chmod(filepath.Join(c.directory, "publication.db.lock"), 0o640))
-		}
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		ctx,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(point int) error {
+			points = append(points, point)
+			if point == 4 {
+				require.NoError(t, os.Chmod(filepath.Join(c.directory, "publication.db.lock"), 0o640))
+			}
+			return nil
+		},
+	)
 	require.Error(t, err)
 	require.Equal(t, []int{1, 2, 3, 4}, points)
 	mode := incomingMaterialUpgradeOpenClosedResources(t, ctx, c, completed, store)
@@ -1236,10 +1405,16 @@ func incomingMaterialUpgradeOpenContextRefusal(t *testing.T, image string, cance
 		completionContext = operationContext
 	}
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(completionContext, store, c.source, incomingMaterialUpgradeCommitted, func(point int) error {
-		points = append(points, point)
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		completionContext,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(point int) error {
+			points = append(points, point)
+			return nil
+		},
+	)
 	require.Error(t, err)
 	incomingMaterialUpgradeOpenClosedResources(t, ctx, c, completed, store)
 	require.Empty(t, points)
@@ -1247,7 +1422,12 @@ func incomingMaterialUpgradeOpenContextRefusal(t *testing.T, image string, cance
 	incomingMaterialUpgradeOpenHealthyReadback(t, ctx, c)
 }
 
-func incomingMaterialUpgradeOpenRequireExtraIndexReadback(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, indexName string) {
+func incomingMaterialUpgradeOpenRequireExtraIndexReadback(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	indexName string,
+) {
 	t.Helper()
 	conn, closeReadOnly := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, c.databasePath)
 	require.Equal(t, 3, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -1280,7 +1460,11 @@ func incomingMaterialUpgradeOpenRequireExtraIndexReadback(t *testing.T, ctx cont
 	require.Equal(t, expectedNamed, namedAdditions)
 	require.Equal(t, expectedAuto, autoIndexAdditions)
 	require.Equal(t, "index", objects[indexName].kind)
-	require.Equal(t, "CREATE INDEX incoming_material_postguard_extra ON accepted_records(sequence)", objects[indexName].sql)
+	require.Equal(
+		t,
+		"CREATE INDEX incoming_material_postguard_extra ON accepted_records(sequence)",
+		objects[indexName].sql,
+	)
 	require.Equal(t, incomingMaterialSchemaStatement, objects["accepted_material_refs"].sql)
 	if c.version == 1 {
 		for _, statement := range attemptSchemaStatements {
@@ -1332,13 +1516,19 @@ func incomingMaterialUpgradeOpenCancellationPoint(t *testing.T, image string, po
 	t.Cleanup(completionCancel)
 	store := incomingMaterialUpgradeOpenOwn(t, c)
 	var points []int
-	completed, err := completeIncomingMaterialUpgradeOpen(completionContext, store, c.source, incomingMaterialUpgradeCommitted, func(reached int) error {
-		points = append(points, reached)
-		if reached == point {
-			completionCancel()
-		}
-		return nil
-	})
+	completed, err := completeIncomingMaterialUpgradeOpen(
+		completionContext,
+		store,
+		c.source,
+		incomingMaterialUpgradeCommitted,
+		func(reached int) error {
+			points = append(points, reached)
+			if reached == point {
+				completionCancel()
+			}
+			return nil
+		},
+	)
 	if completed != nil {
 		incomingMaterialUpgradeOutcomeCleanupStore(t, completed)
 	}

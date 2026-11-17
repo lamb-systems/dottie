@@ -53,7 +53,13 @@ func runPush(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, sources pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
+func newPushCommand(
+	stdout, stderr io.Writer,
+	exitCode *int,
+	sessions pushSessionFactory,
+	sources pushSourcesFactory,
+	dids sessionDIDSource,
+) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -78,11 +84,12 @@ func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			return runPushCommand(ctx, command, sessions, sources, dids)
 		},
 	})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push}, Writer: stdout, ErrWriter: stderr})
+	root := configure(
+		&urfave.Command{Name: "dottie", Commands: []*urfave.Command{push}, Writer: stdout, ErrWriter: stderr},
+	)
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code != 2 && code != 3 && code != 4 {
@@ -96,14 +103,21 @@ func newPushCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, sources pushSourcesFactory, dids sessionDIDSource) error {
+func runPushCommand(
+	ctx context.Context,
+	command *urfave.Command,
+	sessions pushSessionFactory,
+	sources pushSourcesFactory,
+	dids sessionDIDSource,
+) error {
 	if command.NArg() != 0 {
 		return usageExit("push takes no positional arguments")
 	}
 	if command.IsSet("handle") {
 		return usageExit("push requires --did; a handle cannot be resolved before the publication scope check")
 	}
-	if command.IsSet("vault") && command.String("vault") == "" || command.IsSet("device-id") && command.String("device-id") == "" {
+	if command.IsSet("vault") && command.String("vault") == "" ||
+		command.IsSet("device-id") && command.String("device-id") == "" {
 		return usageExit("vault or device selector value is missing")
 	}
 	resolved, err := resolveAccountDID(ctx, command, dids)
@@ -170,7 +184,12 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	if preparation.NoOp {
 		output := "push: no-op\nnothing to publish; the accepted position already holds the reviewed snapshot\n"
 		if preparation.Present {
-			output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", preparation.Floor.Revision, preparation.Floor.Generation, preparation.Floor.Sequence)
+			output += fmt.Sprintf(
+				"floor: revision=%d generation=%d sequence=%d\n",
+				preparation.Floor.Revision,
+				preparation.Floor.Generation,
+				preparation.Floor.Sequence,
+			)
 		}
 		return writeCommandOutput(command, output)
 	}
@@ -179,18 +198,31 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		if err := writeCommandOutput(command, output); err != nil {
 			return err
 		}
-		return urfave.Exit("review the publication above, then repeat with --confirm "+hex.EncodeToString(preparation.Proposal.Confirmation[:]), 3)
+		return urfave.Exit(
+			"review the publication above, then repeat with --confirm "+hex.EncodeToString(
+				preparation.Proposal.Confirmation[:],
+			),
+			3,
+		)
 	}
 	if preparation.Proposal.Confirmation != confirmation {
 		if err := writeCommandOutput(command, output); err != nil {
 			return err
 		}
-		return urfave.Exit("push refused: the reviewed proposal is stale; state changed since review; re-run dottie push", 3)
+		return urfave.Exit(
+			"push refused: the reviewed proposal is stale; state changed since review; re-run dottie push",
+			3,
+		)
 	}
 	result, publishErr := ports.Coordinator.ConfirmPublicationPush(ctx, request, preparation, confirmation)
 	status := pushMaterialStatus(publishErr)
 	if status == service.StatusCommitted {
-		output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", result.Floor.Revision, result.Floor.Generation, result.Floor.Sequence)
+		output += fmt.Sprintf(
+			"floor: revision=%d generation=%d sequence=%d\n",
+			result.Floor.Revision,
+			result.Floor.Generation,
+			result.Floor.Sequence,
+		)
 	}
 	if publishErr != nil {
 		output += renderPushFailure(status, publishErr)
@@ -202,7 +234,10 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	}
 	if err := writeCommandOutput(command, output); err != nil {
 		if status == service.StatusCommitted {
-			fmt.Fprintln(command.Root().ErrWriter, "dottie: the publication committed but its result could not be written")
+			fmt.Fprintln(
+				command.Root().ErrWriter,
+				"dottie: the publication committed but its result could not be written",
+			)
 			return urfave.Exit("publication committed but its output could not be written", 4)
 		}
 		return err
@@ -213,7 +248,12 @@ func runPushCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	return pushExit(status)
 }
 
-func selectPublicationProposal(records []service.PublicationProposalRecord, binding publicationstate.Binding, confirmed bool, confirmation [32]byte) (*service.PublicationProposalRecord, error) {
+func selectPublicationProposal(
+	records []service.PublicationProposalRecord,
+	binding publicationstate.Binding,
+	confirmed bool,
+	_ [32]byte,
+) (*service.PublicationProposalRecord, error) {
 	if confirmed {
 		var retained *service.PublicationProposalRecord
 		matches := 0
@@ -263,8 +303,7 @@ func selectPublicationProposal(records []service.PublicationProposalRecord, bind
 
 func pushScopeRefusal(err error, did string) string {
 	message := "push refused: " + escapeErrorMessage(err.Error())
-	var scopeError *atproto.PublicationScopeError
-	if errors.As(err, &scopeError) {
+	if _, ok := errors.AsType[*atproto.PublicationScopeError](err); ok {
 		message = "push refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it"
 	}
 	return message + "; account " + escapeField(did) + " is unchanged"
@@ -286,7 +325,9 @@ func pushStoreFailure(err error) string {
 	}
 	var storeFailure publicationStoreFailure
 	if errors.As(err, &storeFailure) {
-		return "push refused: the local publication position store is unusable (" + escapeField(string(storeFailure.Reason())) + "); it was left unchanged"
+		return "push refused: the local publication position store is unusable (" + escapeField(
+			string(storeFailure.Reason()),
+		) + "); it was left unchanged"
 	}
 	return "push refused: the local publication position store cannot be opened; it was left unchanged"
 }
@@ -300,7 +341,9 @@ func pushPreparationFailure(command *urfave.Command, paths platform.Paths, err e
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	case errors.Is(err, service.ErrPublicationProposalStale):
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
-	case errors.Is(err, service.ErrPublicationProposal), errors.Is(err, service.ErrReviewMismatch), errors.Is(err, service.ErrConfigChangedSincePrepare):
+	case errors.Is(err, service.ErrPublicationProposal),
+		errors.Is(err, service.ErrReviewMismatch),
+		errors.Is(err, service.ErrConfigChangedSincePrepare):
 		return urfave.Exit("push refused: the publication cannot be prepared from the current configuration", 3)
 	}
 	status := pushMaterialStatus(err)
@@ -349,7 +392,9 @@ func pushMaterialStatus(err error) service.StatusState {
 	var storeFailure publicationStoreFailure
 	if errors.As(err, &storeFailure) {
 		switch storeFailure.Reason() {
-		case publicationstate.ReasonActiveAttempt, publicationstate.ReasonConfirmation, publicationstate.ReasonTransition:
+		case publicationstate.ReasonActiveAttempt,
+			publicationstate.ReasonConfirmation,
+			publicationstate.ReasonTransition:
 			return service.StatusRejected
 		case publicationstate.ReasonCommitUnknown:
 			return service.StatusUnavailable
@@ -367,11 +412,23 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	}
 	fmt.Fprintf(&output, "targets: %d\nentries: %d\n", preparation.Targets, preparation.Entries)
 	if preparation.Present {
-		fmt.Fprintf(&output, "accepted floor: revision=%d generation=%d sequence=%d\n", preparation.Floor.Revision, preparation.Floor.Generation, preparation.Floor.Sequence)
+		fmt.Fprintf(
+			&output,
+			"accepted floor: revision=%d generation=%d sequence=%d\n",
+			preparation.Floor.Revision,
+			preparation.Floor.Generation,
+			preparation.Floor.Sequence,
+		)
 	} else {
 		output.WriteString("accepted floor: none (first publication)\n")
 	}
-	fmt.Fprintf(&output, "candidate record: %x\ncandidate payload: %x size=%d\n", preparation.Proposal.Proposal.CandidateRecordCID, preparation.Proposal.Proposal.CandidateBlobCID, preparation.Proposal.Blob.Size)
+	fmt.Fprintf(
+		&output,
+		"candidate record: %x\ncandidate payload: %x size=%d\n",
+		preparation.Proposal.Proposal.CandidateRecordCID,
+		preparation.Proposal.Proposal.CandidateBlobCID,
+		preparation.Proposal.Blob.Size,
+	)
 	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
 		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,
 		preparation.Proposal.Review.ApprovalDigest, preparation.Proposal.Review.ApprovalRevision)
@@ -412,7 +469,14 @@ func productionPushSourcesFactory(openKeyring accountKeyringFactory, env func(st
 	}
 }
 
-func openPublicationPushSources(ctx context.Context, command *urfave.Command, session pushSession, selection service.VaultSelection, openKeyring accountKeyringFactory, env func(string) string) (publicationPushSources, error) {
+func openPublicationPushSources(
+	ctx context.Context,
+	_ *urfave.Command,
+	session pushSession,
+	selection service.VaultSelection,
+	openKeyring accountKeyringFactory,
+	env func(string) string,
+) (publicationPushSources, error) {
 	{
 		paths, err := platform.Resolve(env)
 		if err != nil {
@@ -480,8 +544,14 @@ func openPublicationPushSources(ctx context.Context, command *urfave.Command, se
 			return publicationPushSources{}, err
 		}
 		adapter, err := service.NewATProtoMaterialTransport(service.ATProtoMaterialConfig{
-			Binding: binding, DID: identity.DID,
-			Reader:          atproto.RevisionReader{Transport: transport, Budgets: atproto.DefaultBudgets(), DIDDocumentID: identity.DIDDocumentID, VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...)},
+			Binding: binding,
+			DID:     identity.DID,
+			Reader: atproto.RevisionReader{
+				Transport:           transport,
+				Budgets:             atproto.DefaultBudgets(),
+				DIDDocumentID:       identity.DIDDocumentID,
+				VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...),
+			},
 			Transport:       transport,
 			BlobUploadLimit: limit,
 		})
@@ -490,8 +560,16 @@ func openPublicationPushSources(ctx context.Context, command *urfave.Command, se
 			return publicationPushSources{}, err
 		}
 		reader, err := service.NewPublicationReader(service.PublicationReaderConfig{
-			Binding: binding, DID: identity.DID, Session: session.Session, Adapter: adapter,
-			Blobs: atproto.VaultReader{Transport: transport, ObservationStore: store, Budgets: atproto.DefaultBudgets(), Clock: time.Now},
+			Binding: binding,
+			DID:     identity.DID,
+			Session: session.Session,
+			Adapter: adapter,
+			Blobs: atproto.VaultReader{
+				Transport:        transport,
+				ObservationStore: store,
+				Budgets:          atproto.DefaultBudgets(),
+				Clock:            time.Now,
+			},
 		})
 		if err != nil {
 			closeResources()
@@ -517,10 +595,22 @@ func writeUnresolvedAttemptHint(command *urfave.Command, directory string) {
 	writer := command.Root().ErrWriter
 	fmt.Fprintln(writer, "dottie: push: a publication attempt is unresolved past submission and blocks this review")
 	fmt.Fprintf(writer, "dottie: local state: %s\n", escapeField(directory))
-	fmt.Fprintln(writer, "dottie: the local state cannot prove whether that attempt published a record; its provider outcome is unknown")
-	fmt.Fprintln(writer, "dottie: local, not provider, surgery: deleting that directory clears the blocking attempt and retracts nothing at the provider")
-	fmt.Fprintln(writer, "dottie: it discards the pending review, the accepted position and the attempt history held there")
-	fmt.Fprintln(writer, "dottie: after deleting it, run dottie pull to re-record the provider position, then dottie push to review a fresh candidate")
+	fmt.Fprintln(
+		writer,
+		"dottie: the local state cannot prove whether that attempt published a record; its provider outcome is unknown",
+	)
+	fmt.Fprintln(
+		writer,
+		"dottie: local, not provider, surgery: deleting that directory clears the blocking attempt and retracts nothing at the provider",
+	)
+	fmt.Fprintln(
+		writer,
+		"dottie: it discards the pending review, the accepted position and the attempt history held there",
+	)
+	fmt.Fprintln(
+		writer,
+		"dottie: after deleting it, run dottie pull to re-record the provider position, then dottie push to review a fresh candidate",
+	)
 }
 
 func renderPush(status service.StatusState) string {

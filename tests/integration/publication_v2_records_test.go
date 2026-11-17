@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T) {
@@ -16,12 +17,35 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
 		Targets: []model.Target{
-			{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}},
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
 			{ID: "settings", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
 		},
 		Entries: []model.Entry{
-			{TargetID: "files", File: &model.FileEntry{Path: "editor/init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: bytes.Clone(fileContent), Mode: 0o600}},
-			{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/", Key: "color-scheme", State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "'prefer-dark'"}}},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "editor/init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: bytes.Clone(fileContent),
+					Mode:    0o600,
+				},
+			},
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.gnome.desktop.interface",
+					Path:     "/org/gnome/desktop/interface/",
+					Key:      "color-scheme",
+					State:    model.SettingPresent,
+					Value:    &model.VariantValue{Type: "s", Text: "'prefer-dark'"},
+				},
+			},
 		},
 	}
 	packed, err := vault.Pack(snapshot)
@@ -40,7 +64,11 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 		PublicationID:  publicationID,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob:           publication.BlobReference{CID: payloadCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		Blob: publication.BlobReference{
+			CID:      payloadCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	snapshotBytes, err := publication.EncodeSnapshot(snapshotRecord)
 	require.NoError(t, err)
@@ -67,7 +95,8 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 			assert.Equal(t, fileContent, entry.File.Content)
 			assert.Equal(t, model.FilePresent, entry.File.State)
 		}
-		if entry.Setting != nil && entry.Setting.SchemaID == "org.gnome.desktop.interface" && entry.Setting.Key == "color-scheme" {
+		if entry.Setting != nil && entry.Setting.SchemaID == "org.gnome.desktop.interface" &&
+			entry.Setting.Key == "color-scheme" {
 			foundSetting = true
 			assert.Equal(t, model.SettingPresent, entry.Setting.State)
 			assert.Equal(t, &model.VariantValue{Type: "s", Text: "'prefer-dark'"}, entry.Setting.Value)

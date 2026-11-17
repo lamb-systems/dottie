@@ -28,7 +28,13 @@ func TestRevisionReaderRejectsRecordBytesMismatchBeforeMembershipChecks(t *testi
 	}
 	require.True(t, found, "fixture did not contain record block %s", recordPath)
 	transport := &proofTransport{
-		carBytes: encodeProofCAR(t, fixture.root, blocks), latestCIDs: []string{fixture.root.String()}, streamStatus: 200,
+		carBytes: encodeProofCAR(
+			t,
+			fixture.root,
+			blocks,
+		),
+		latestCIDs:   []string{fixture.root.String()},
+		streamStatus: 200,
 	}
 
 	_, err = proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)

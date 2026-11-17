@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"strings"
 
@@ -30,18 +31,22 @@ var (
 	ErrFenceLost                   = errors.New("publication commit fence was lost")
 	ErrBatchRejected               = errors.New("publication batch was rejected")
 	ErrAmbiguousTransport          = errors.New("publication or read transport outcome is ambiguous")
-	ErrCandidateMayBeDisclosed     = errors.New("a rejected publication may have left the staged candidate retrievable by CID")
-	ErrPublicationQuota            = errors.New("provider quota or storage limit rejected the publication")
-	ErrPublicationRateLimited      = errors.New("provider rate limit rejected the publication")
-	ErrPublicationBatchTooLarge    = errors.New("publication batch exceeds a provider request limit")
-	ErrPublicationIDReuse          = errors.New("publication marker already exists with different content")
-	ErrPublicationStarved          = errors.New("publication retry budget exhausted after ambiguous outcomes")
-	ErrPublicationQueued           = errors.New("publication remains queued pending provider availability or authorization")
-	ErrPublicationUnavailable      = errors.New("publication outcome could not be verified")
-	ErrPublicationRejected         = errors.New("publication was rejected")
-	ErrPublicationSuperseded       = errors.New("publication was committed but its head was superseded")
-	ErrPublicationRetryFenceLost   = errors.New("publication retry lost its commit fence")
-	ErrPublicationState            = errors.New("publication attempt state could not be persisted")
+	ErrCandidateMayBeDisclosed     = errors.New(
+		"a rejected publication may have left the staged candidate retrievable by CID",
+	)
+	ErrPublicationQuota         = errors.New("provider quota or storage limit rejected the publication")
+	ErrPublicationRateLimited   = errors.New("provider rate limit rejected the publication")
+	ErrPublicationBatchTooLarge = errors.New("publication batch exceeds a provider request limit")
+	ErrPublicationIDReuse       = errors.New("publication marker already exists with different content")
+	ErrPublicationStarved       = errors.New("publication retry budget exhausted after ambiguous outcomes")
+	ErrPublicationQueued        = errors.New(
+		"publication remains queued pending provider availability or authorization",
+	)
+	ErrPublicationUnavailable    = errors.New("publication outcome could not be verified")
+	ErrPublicationRejected       = errors.New("publication was rejected")
+	ErrPublicationSuperseded     = errors.New("publication was committed but its head was superseded")
+	ErrPublicationRetryFenceLost = errors.New("publication retry lost its commit fence")
+	ErrPublicationState          = errors.New("publication attempt state could not be persisted")
 )
 
 type ReadStatusError struct {
@@ -80,7 +85,14 @@ func safeProviderCode(body []byte) string {
 
 func safeStatusText(code string) string {
 	switch code {
-	case "InvalidSwap", "QuotaExceeded", "StorageQuotaExceeded", "RateLimitExceeded", "BlobTooLarge", "RequestTooLarge", "PayloadTooLarge", "AuthRequired":
+	case "InvalidSwap",
+		"QuotaExceeded",
+		"StorageQuotaExceeded",
+		"RateLimitExceeded",
+		"BlobTooLarge",
+		"RequestTooLarge",
+		"PayloadTooLarge",
+		"AuthRequired":
 		return code
 	default:
 		return ""
@@ -106,16 +118,13 @@ func safeTransportCause(err error) error {
 			return sentinel
 		}
 	}
-	var readStatus *ReadStatusError
-	if errors.As(err, &readStatus) {
+	if readStatus, ok := errors.AsType[*ReadStatusError](err); ok {
 		return &ReadStatusError{StatusCode: readStatus.StatusCode, Code: safeStatusText(readStatus.Code)}
 	}
-	var providerStatus *ProviderStatusError
-	if errors.As(err, &providerStatus) {
+	if providerStatus, ok := errors.AsType[*ProviderStatusError](err); ok {
 		return &ProviderStatusError{StatusCode: providerStatus.StatusCode, Code: safeStatusText(providerStatus.Code)}
 	}
-	var authStatus *AuthStatusError
-	if errors.As(err, &authStatus) {
+	if authStatus, ok := errors.AsType[*AuthStatusError](err); ok {
 		return &AuthStatusError{StatusCode: authStatus.StatusCode, Err: errSafeTransport}
 	}
 	return errSafeTransport
@@ -140,7 +149,13 @@ func DefaultBudgets() Budgets {
 }
 
 type Transport interface {
-	Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error)
+	Do(
+		ctx context.Context,
+		method, endpoint string,
+		query url.Values,
+		body []byte,
+		contentType string,
+	) (int, []byte, error)
 	OpenStream(ctx context.Context, endpoint string, query url.Values) (status int, body io.ReadCloser, err error)
 }
 
@@ -188,9 +203,7 @@ func (r *Revision) Membership() map[RecordKey]string {
 		return nil
 	}
 	membership := make(map[RecordKey]string, len(r.membership))
-	for key, value := range r.membership {
-		membership[key] = value
-	}
+	maps.Copy(membership, r.membership)
 	return membership
 }
 
@@ -239,7 +252,7 @@ func (r RevisionReader) Read(ctx context.Context, did string) (*Revision, error)
 	if err := validateBudgets(budgets); err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		before, err := r.latest(ctx, did)
 		if err != nil {
 			return nil, err
@@ -281,7 +294,13 @@ func (r RevisionReader) Read(ctx context.Context, did string) (*Revision, error)
 			return nil, err
 		}
 		if before.CID == commitCID && commitCID == after.CID {
-			return &Revision{did: did, commitCID: commitCID, rev: commit.Rev, membership: membership, records: records}, nil
+			return &Revision{
+				did:        did,
+				commitCID:  commitCID,
+				rev:        commit.Rev,
+				membership: membership,
+				records:    records,
+			}, nil
 		}
 	}
 	return nil, ErrRevisionMoving
@@ -299,9 +318,20 @@ func (r RevisionReader) IsCurrent(ctx context.Context, did string, cached *Revis
 }
 
 func (r RevisionReader) latest(ctx context.Context, did string) (latestCommit, error) {
-	status, body, err := r.Transport.Do(ctx, "GET", "com.atproto.sync.getLatestCommit", url.Values{"did": {did}}, nil, "")
+	status, body, err := r.Transport.Do(
+		ctx,
+		"GET",
+		"com.atproto.sync.getLatestCommit",
+		url.Values{"did": {did}},
+		nil,
+		"",
+	)
 	if err != nil {
-		return latestCommit{}, fmt.Errorf("%w: getLatestCommit request failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
+		return latestCommit{}, fmt.Errorf(
+			"%w: getLatestCommit request failed: %w",
+			ErrAmbiguousTransport,
+			safeTransportCause(err),
+		)
 	}
 	if status < 200 || status >= 300 {
 		statusErr := &ReadStatusError{StatusCode: status, Code: safeProviderCode(body)}
@@ -325,7 +355,11 @@ func (r RevisionReader) latest(ctx context.Context, did string) (latestCommit, e
 func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([]byte, cid.Cid, error) {
 	status, stream, err := r.Transport.OpenStream(ctx, "com.atproto.sync.getRepo", url.Values{"did": {did}})
 	if err != nil {
-		return nil, cid.Undef, fmt.Errorf("%w: getRepo request failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
+		return nil, cid.Undef, fmt.Errorf(
+			"%w: getRepo request failed: %w",
+			ErrAmbiguousTransport,
+			safeTransportCause(err),
+		)
 	}
 	if stream == nil {
 		return nil, cid.Undef, fmt.Errorf("%w: getRepo returned no response body", ErrAmbiguousTransport)
@@ -344,7 +378,11 @@ func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([
 		return nil, cid.Undef, untrustedBound("MaxCarBytes", len(carBytes))
 	}
 	if err != nil {
-		return nil, cid.Undef, fmt.Errorf("%w: getRepo response stream failed: %w", ErrAmbiguousTransport, safeTransportCause(err))
+		return nil, cid.Undef, fmt.Errorf(
+			"%w: getRepo response stream failed: %w",
+			ErrAmbiguousTransport,
+			safeTransportCause(err),
+		)
 	}
 	root, err := validateCARBudgets(carBytes, budgets)
 	if err != nil {
@@ -354,7 +392,10 @@ func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([
 }
 
 func validateBudgets(budgets Budgets) error {
-	if budgets.MaxCarBytes <= 0 || budgets.MaxCarBytes == int64(^uint64(0)>>1) || budgets.MaxBlocks <= 0 || budgets.MaxBlockBytes <= 0 || budgets.MaxMembershipRecords <= 0 || budgets.MaxMSTDepth <= 0 {
+	if budgets.MaxCarBytes <= 0 || budgets.MaxCarBytes == int64(^uint64(0)>>1) || budgets.MaxBlocks <= 0 ||
+		budgets.MaxBlockBytes <= 0 ||
+		budgets.MaxMembershipRecords <= 0 ||
+		budgets.MaxMSTDepth <= 0 {
 		return fmt.Errorf("%w: invalid CAR budgets", ErrUntrustedCar)
 	}
 	return nil
@@ -422,7 +463,10 @@ func repositorySigningKey(methods []VerificationMethod, did string) (atcrypto.Pu
 		selected = method
 	}
 	if selected == nil || selected.Controller != did || selected.PublicKeyMultibase == "" {
-		return nil, fmt.Errorf("%w: exactly one controller-bound #atproto method with publicKeyMultibase is required", ErrKeyBinding)
+		return nil, fmt.Errorf(
+			"%w: exactly one controller-bound #atproto method with publicKeyMultibase is required",
+			ErrKeyBinding,
+		)
 	}
 	switch selected.Type {
 	case "Multikey", "EcdsaSecp256r1VerificationKey2019", "EcdsaSecp256k1VerificationKey2019":
@@ -469,7 +513,11 @@ func mstDepth(root *mst.Node) int {
 	return maximum
 }
 
-func verifiedMembership(ctx context.Context, loaded *repo.Repo, budgets Budgets) (map[RecordKey]string, map[RecordKey]ProvenRecord, error) {
+func verifiedMembership(
+	ctx context.Context,
+	loaded *repo.Repo,
+	budgets Budgets,
+) (map[RecordKey]string, map[RecordKey]ProvenRecord, error) {
 	membership := make(map[RecordKey]string)
 	records := make(map[RecordKey]ProvenRecord)
 	err := loaded.MST.Walk(func(path []byte, recordCID cid.Cid) error {

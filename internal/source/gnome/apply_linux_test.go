@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
-	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
 func useApplyOpener(t *testing.T, opener func(string, string) (*Settings, error)) {
@@ -52,7 +53,11 @@ func TestSettingsBackendObserveSetResetAndReadBack(t *testing.T) {
 	require.NoError(t, backend.Set(context.Background(), key, "s", "'adapter-value'"))
 	present, err := backend.Observe(context.Background(), key)
 	require.NoError(t, err)
-	require.Equal(t, syncengine.SettingValue{Present: true, Type: "s", Text: "'adapter-value'", Writable: true}, present)
+	require.Equal(
+		t,
+		syncengine.SettingValue{Present: true, Type: "s", Text: "'adapter-value'", Writable: true},
+		present,
+	)
 
 	require.Error(t, backend.Set(context.Background(), key, "b", "true"), "wrong-type setting write was accepted")
 	unchanged, err := backend.Observe(context.Background(), key)
@@ -82,7 +87,11 @@ func TestSettingsBackendCanonicalize(t *testing.T) {
 			key := applySettingKey("org.dottie.Test", "/org/dottie/test/", testCase.key)
 			value, err := backend.Canonicalize(context.Background(), key, testCase.typeName, testCase.text)
 			require.NoError(t, err)
-			require.Equal(t, syncengine.SettingValue{Present: true, Type: testCase.typeName, Text: testCase.want}, value)
+			require.Equal(
+				t,
+				syncengine.SettingValue{Present: true, Type: testCase.typeName, Text: testCase.want},
+				value,
+			)
 		})
 	}
 }

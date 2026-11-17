@@ -75,7 +75,13 @@ func TestExpectedRefusalPolicyDecoderOutOfRangeBounds(t *testing.T) {
 			require.ErrorIs(t, transitionErr, ErrTransitionSignature,
 				"vault transition validation rejects out-of-range %s", check.name)
 			assert.ErrorIs(t, transitionErr, ErrLimit, "vault transition preserves the policy range error")
-			assert.ErrorContains(t, transitionErr, check.field, "vault transition identifies out-of-range %s", check.field)
+			assert.ErrorContains(
+				t,
+				transitionErr,
+				check.field,
+				"vault transition identifies out-of-range %s",
+				check.field,
+			)
 		})
 	}
 }
@@ -115,7 +121,10 @@ func TestExpectedRefusalCheckpointSkippedPolicyChain(t *testing.T) {
 	assert.Equal(t, oneCID, twoControl.PrevControlCID)
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
-	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}})
+	result, err := VerifyControlState(
+		trustedContext,
+		VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}},
+	)
 	require.ErrorIs(t, err, ErrInvalidVerification,
 		"the checkpoint verifier must refuse a descendant whose policy chain skips an epoch")
 	var refusal *VerificationRefusal
@@ -146,7 +155,13 @@ func TestCaseMatrixMatchesRefusalTests(t *testing.T) {
 		require.True(t, ok, "frozen defect %s has no matrix row", frozen.id)
 		require.NotEmpty(t, row.refusal, "frozen defect %s has no refusal test name", frozen.id)
 		assert.Equal(t, frozen.refusal, row.refusal, "frozen defect %s names a different refusal test", frozen.id)
-		assert.True(t, functions[frozen.refusal], "frozen defect %s refusal test %q does not exist", frozen.id, frozen.refusal)
+		assert.True(
+			t,
+			functions[frozen.refusal],
+			"frozen defect %s refusal test %q does not exist",
+			frozen.id,
+			frozen.refusal,
+		)
 	}
 	for _, entry := range caseMatrix {
 		if _, frozen := frozenByID[entry.id]; !frozen {
@@ -170,7 +185,16 @@ func TestCaseSecurityGateIsClosed(t *testing.T) {
 		}
 	}
 	for _, defect := range knownSecurityDefects {
-		assert.Fail(t, "open security defect", "%s (%s) owner=%s contract=%s observation=%s", defect.caseID, defect.finding, defect.owner, defect.contract, defect.observation)
+		assert.Fail(
+			t,
+			"open security defect",
+			"%s (%s) owner=%s contract=%s observation=%s",
+			defect.caseID,
+			defect.finding,
+			defect.owner,
+			defect.contract,
+			defect.observation,
+		)
 	}
 	assert.Empty(t, open, "the security gate is open while frozen defect rows remain known-defect")
 	assert.Empty(t, knownSecurityDefects, "the security gate is open while the known-defect registry is non-empty")

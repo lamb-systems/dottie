@@ -45,7 +45,7 @@ func TestNewSessionAPIClientRefreshesStoredSessionBeforeRequest(t *testing.T) {
 	api, err := newSessionAPIClient(client, identity, testHandle, stored, roundTripper)
 	require.NoError(t, err)
 	response := doSessionAPIRequest(t, api, "https://shard.example/resource")
-	assert.NoError(t, response.Body.Close())
+	require.NoError(t, response.Body.Close())
 	assert.Equal(t, 1, fake.tokenRequests)
 	require.Len(t, fake.resourceRequests, 1)
 	assert.Equal(t, "DPoP access-secret-value", fake.resourceRequests[0].authorization)
@@ -63,7 +63,7 @@ func TestNewSessionAPIClientUsesOneBoundedInvalidTokenRetry(t *testing.T) {
 	api, err := newSessionAPIClient(client, identity, testHandle, session, roundTripper)
 	require.NoError(t, err)
 	response := doSessionAPIRequest(t, api, "https://shard.example/resource")
-	assert.NoError(t, response.Body.Close())
+	require.NoError(t, response.Body.Close())
 	assert.Equal(t, 1, fake.tokenRequests)
 	require.Len(t, fake.resourceRequests, 2)
 	assert.Equal(t, "DPoP expired-access-token-shape", fake.resourceRequests[0].authorization)
@@ -72,10 +72,20 @@ func TestNewSessionAPIClientUsesOneBoundedInvalidTokenRetry(t *testing.T) {
 
 func TestNewSessionAPIClientRefusesNonReplayableChallengeBody(t *testing.T) {
 	fake, client, identity, session, roundTripper := sessionClientFixture(t, "access-token-shape")
-	fake.resourceResponses = []fakeResourceResponse{{status: http.StatusBadRequest, header: http.Header{"Dpop-Nonce": {"fresh-nonce"}}, body: `{"error":"use_dpop_nonce"}`}}
+	fake.resourceResponses = []fakeResourceResponse{
+		{
+			status: http.StatusBadRequest,
+			header: http.Header{"Dpop-Nonce": {"fresh-nonce"}},
+			body:   `{"error":"use_dpop_nonce"}`,
+		},
+	}
 	api, err := newSessionAPIClient(client, identity, testHandle, session, roundTripper)
 	require.NoError(t, err)
-	request, err := http.NewRequest(http.MethodPost, "https://shard.example/resource", io.NopCloser(strings.NewReader("synthetic body")))
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://shard.example/resource",
+		io.NopCloser(strings.NewReader("synthetic body")),
+	)
 	require.NoError(t, err)
 	request.GetBody = nil
 	_, err = api.Auth.DoWithAuth(api.Client, request, syntax.NSID("com.atproto.repo.applyWrites"))
@@ -97,7 +107,10 @@ func TestNewSessionAPIClientRedactsTransportErrors(t *testing.T) {
 	assert.NotContains(t, err.Error(), "dpop-private")
 }
 
-func sessionClientFixture(t *testing.T, accessToken string) (*fakeOAuth, *Client, Identity, *Session, http.RoundTripper) {
+func sessionClientFixture(
+	t *testing.T,
+	accessToken string,
+) (*fakeOAuth, *Client, Identity, *Session, http.RoundTripper) {
 	t.Helper()
 	fake, client, _ := newFakeOAuth(t)
 	identity, err := client.Discover(context.Background(), testHandle)

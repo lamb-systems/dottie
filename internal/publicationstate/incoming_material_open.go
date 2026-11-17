@@ -31,7 +31,13 @@ func incomingMaterialOpenError(outcome incomingMaterialUpgradeOutcome, err error
 	return classified(ErrStorage, StageOpen, ReasonCommitUnknown)
 }
 
-func completeIncomingMaterialUpgradeOpen(ctx context.Context, owned *Store, source incomingMaterialUpgradeSource, outcome incomingMaterialUpgradeOutcome, fault func(int) error) (*Store, error) {
+func completeIncomingMaterialUpgradeOpen(
+	ctx context.Context,
+	owned *Store,
+	source incomingMaterialUpgradeSource,
+	outcome incomingMaterialUpgradeOutcome,
+	fault func(int) error,
+) (*Store, error) {
 	transferred := false
 	defer func() {
 		if !transferred && owned != nil {

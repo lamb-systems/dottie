@@ -39,7 +39,13 @@ func TestRetentionPruneBoundaryMustMatchDeclaredRecoveryPoint(t *testing.T) {
 			declaration := testRetentionDeclaration(t, vaultID, declaredBoundary, 2, 1_700_000_000)
 			_, err := store.PutRetentionDeclaration(ctx, declaration)
 			require.NoError(t, err)
-			require.NoError(t, store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, requestedBoundary, declaration.PolicyDigest)))
+			require.NoError(
+				t,
+				store.PutVaultCheckpoint(
+					ctx,
+					testRetentionCheckpoint(t, vaultID, requestedBoundary, declaration.PolicyDigest),
+				),
+			)
 			require.NoError(t, store.RecordVaultPublicationObservation(ctx, VaultPublicationObservation{
 				Vault: vaultID, Epoch: 5, HeadCID: []byte("live-head"), ControlCID: []byte("live-control"),
 			}))
@@ -62,16 +68,23 @@ func TestRetentionPrunePlanRevalidatesPayloadDigestsAfterInventory(t *testing.T)
 	boundary := testRetentionPoint(t, vaultID, 2, boundaryBody, [32]byte{7})
 	declaration := testRetentionDeclaration(t, vaultID, boundary, 2, 1_700_000_000)
 	declaration.RecoveryPoints = []RetentionRecoveryPoint{oldPoint, boundary}
-	declaration, err := store.ReplaceRetentionDeclarationWithMaterials(ctx, declaration, []RetentionRecoveryPointMaterials{
-		{Point: oldPoint, Payloads: [][]byte{oldBody}},
-		{Point: boundary, Payloads: [][]byte{boundaryBody}},
-	})
+	declaration, err := store.ReplaceRetentionDeclarationWithMaterials(
+		ctx,
+		declaration,
+		[]RetentionRecoveryPointMaterials{
+			{Point: oldPoint, Payloads: [][]byte{oldBody}},
+			{Point: boundary, Payloads: [][]byte{boundaryBody}},
+		},
+	)
 	require.NoError(t, err)
 	declaration.RecoveryPoints = []RetentionRecoveryPoint{boundary}
 	declaration.DeclaredAt++
 	declaration, err = store.PutRetentionDeclaration(ctx, declaration)
 	require.NoError(t, err)
-	require.NoError(t, store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, boundary, declaration.PolicyDigest)))
+	require.NoError(
+		t,
+		store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, boundary, declaration.PolicyDigest)),
+	)
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, VaultPublicationObservation{
 		Vault: vaultID, Epoch: 5, HeadCID: []byte("live-head"), ControlCID: []byte("live-control"),
 	}))
@@ -87,12 +100,17 @@ func TestRetentionPrunePlanRevalidatesPayloadDigestsAfterInventory(t *testing.T)
 	boundaryPath := filepath.Join(store.payloadDir, boundaryName)
 	require.NoError(t, os.Remove(boundaryPath))
 	oldReference := mustPayloadReference(t, oldBody)
-	request := RetentionPruneRequest{Vault: vaultID, DeviceID: declaration.DeviceID, Boundary: boundary, Now: time.Now()}
+	request := RetentionPruneRequest{
+		Vault:    vaultID,
+		DeviceID: declaration.DeviceID,
+		Boundary: boundary,
+		Now:      time.Now(),
+	}
 
 	_, err = store.PlanRetentionPrune(ctx, request)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = store.ApplyRetentionPrune(ctx, request, true)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	payload, err := store.Payload(oldReference)
 	require.NoError(t, err, "refusal must not delete an evicted payload")
 	assert.Equal(t, oldBody, payload)
@@ -110,7 +128,10 @@ func TestRetentionPruneBoundaryMustBeOldestRetainedRecoveryPoint(t *testing.T) {
 	declaration.RecoveryPoints = []RetentionRecoveryPoint{oldest, newer}
 	declaration, err := store.PutRetentionDeclaration(ctx, declaration)
 	require.NoError(t, err)
-	require.NoError(t, store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, newer, declaration.PolicyDigest)))
+	require.NoError(
+		t,
+		store.PutVaultCheckpoint(ctx, testRetentionCheckpoint(t, vaultID, newer, declaration.PolicyDigest)),
+	)
 	require.NoError(t, store.RecordVaultPublicationObservation(ctx, VaultPublicationObservation{
 		Vault: vaultID, Epoch: 5, HeadCID: []byte("live-head"), ControlCID: []byte("live-control"),
 	}))
@@ -148,7 +169,10 @@ func TestRetentionPruneCheckpointMustMatchBoundaryEpochAndSnapshot(t *testing.T)
 			declaration := testRetentionDeclaration(t, vaultID, boundary, 2, 1_700_000_000)
 			_, err := store.PutRetentionDeclaration(ctx, declaration)
 			require.NoError(t, err)
-			require.NoError(t, store.PutVaultCheckpoint(ctx, check.checkpoint(t, vaultID, boundary, declaration.PolicyDigest)))
+			require.NoError(
+				t,
+				store.PutVaultCheckpoint(ctx, check.checkpoint(t, vaultID, boundary, declaration.PolicyDigest)),
+			)
 			require.NoError(t, store.RecordVaultPublicationObservation(ctx, VaultPublicationObservation{
 				Vault: vaultID, Epoch: 5, HeadCID: []byte("live-head"), ControlCID: []byte("live-control"),
 			}))

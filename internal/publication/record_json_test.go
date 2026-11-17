@@ -32,13 +32,21 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: 7,
 		Parent:         parentCID.Bytes(),
-		Blob:           BlobReference{CID: blobCID.Bytes(), Size: uint64(len("golden publication payload")), MIMEType: SnapshotBlobMIMEType},
+		Blob: BlobReference{
+			CID:      blobCID.Bytes(),
+			Size:     uint64(len("golden publication payload")),
+			MIMEType: SnapshotBlobMIMEType,
+		},
 	}
 	snapshotCBOR, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
 	encoded, err := RecordToJSON(snapshotCBOR)
 	require.NoError(t, err)
-	assert.Equal(t, `{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":"AXESIPjyicQncjD89f05Lp0oZlPWkc//YRNrD9mqVQgC4/44"},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":7,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`, string(encoded))
+	assert.JSONEq(
+		t,
+		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":"AXESIPjyicQncjD89f05Lp0oZlPWkc//YRNrD9mqVQgC4/44"},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":7,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		string(encoded),
+	)
 	assertRecordJSONSDKRoundTrip(t, snapshotCBOR, encoded, recordJSONSnapshotCID)
 
 	genesis := snapshot
@@ -48,7 +56,11 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 	require.NoError(t, err)
 	genesisJSON, err := RecordToJSON(genesisCBOR)
 	require.NoError(t, err)
-	assert.Equal(t, `{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":""},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":0,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`, string(genesisJSON))
+	assert.JSONEq(
+		t,
+		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":""},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":0,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		string(genesisJSON),
+	)
 	assertRecordJSONSDKRoundTrip(t, genesisCBOR, genesisJSON, "")
 
 	snapshotCID, err := cid.Decode(recordJSONSnapshotCID)
@@ -64,7 +76,11 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 	require.NoError(t, err)
 	headJSON, err := RecordToJSON(headCBOR)
 	require.NoError(t, err)
-	assert.Equal(t, `{"$type":"systems.lamb.dottie.vaultHeadV2","blobCid":{"$bytes":"AVUSIJAXX/sqRyG3ddGfdrN3btaVI3oP/PqAt9HKMAhCrpir"},"publicationSeq":7,"schemaVersion":2,"snapshotCid":{"$bytes":"AXESICPv5WpNNP8koZ8qzaUylHxJhj6Rg07OwAoITUygcFqi"},"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`, string(headJSON))
+	assert.JSONEq(
+		t,
+		`{"$type":"systems.lamb.dottie.vaultHeadV2","blobCid":{"$bytes":"AVUSIJAXX/sqRyG3ddGfdrN3btaVI3oP/PqAt9HKMAhCrpir"},"publicationSeq":7,"schemaVersion":2,"snapshotCid":{"$bytes":"AXESICPv5WpNNP8koZ8qzaUylHxJhj6Rg07OwAoITUygcFqi"},"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		string(headJSON),
+	)
 	assertRecordJSONSDKRoundTrip(t, headCBOR, headJSON, recordJSONHeadCID)
 }
 
@@ -150,7 +166,11 @@ func TestRecordToJSONSelfCheckRejectsEmittedCorruption(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: 7,
 		Parent:         parentCID.Bytes(),
-		Blob:           BlobReference{CID: blobCID.Bytes(), Size: uint64(len("golden publication payload")), MIMEType: SnapshotBlobMIMEType},
+		Blob: BlobReference{
+			CID:      blobCID.Bytes(),
+			Size:     uint64(len("golden publication payload")),
+			MIMEType: SnapshotBlobMIMEType,
+		},
 	}
 	snapshotCBOR, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)

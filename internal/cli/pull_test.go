@@ -18,6 +18,9 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -26,8 +29,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const pullTestDID = "did:plc:abcdefghijklmnopqrstuvwx"
@@ -45,7 +46,10 @@ type pullTestReader struct {
 	reads    int
 }
 
-func (reader *pullTestReader) ReadPayload(ctx context.Context, record publication.SnapshotRecord) (model.Snapshot, error) {
+func (reader *pullTestReader) ReadPayload(
+	ctx context.Context,
+	record publication.SnapshotRecord,
+) (model.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Snapshot{}, err
 	}
@@ -113,38 +117,86 @@ func newPullTestFixture(t *testing.T) *pullTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
 		require.NoError(t, os.Chmod(directory, 0o700))
 	}
-	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
 	binding.Repository = "at://" + binding.AccountDID
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(pullTestBaseContent), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(pullTestBaseContent),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
 	block, record := pullTestSnapshot(t, binding, packed.Payload, 0, nil)
 	return &pullTestFixture{
-		paths: paths, binding: binding, payload: packed.Payload, snapshot: snapshot,
-		context: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-pull-revision", RepositoryDigest: []byte{0x51, 0x52, 0x53}},
-		block:   block, record: record, head: pullTestHead(t, binding, block, record),
+		paths:    paths,
+		binding:  binding,
+		payload:  packed.Payload,
+		snapshot: snapshot,
+		context: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-pull-revision",
+			RepositoryDigest:   []byte{0x51, 0x52, 0x53},
+		},
+		block:  block,
+		record: record,
+		head:   pullTestHead(t, binding, block, record),
 	}
 }
 
-func pullTestSnapshot(t *testing.T, binding publicationstate.Binding, payload []byte, sequence uint64, parent []byte) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+func pullTestSnapshot(
+	t *testing.T,
+	binding publicationstate.Binding,
+	payload []byte,
+	sequence uint64,
+	parent []byte,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
 	record := publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
@@ -154,7 +206,12 @@ func pullTestSnapshot(t *testing.T, binding publicationstate.Binding, payload []
 	return publicationstate.SnapshotBlock{Key: key, Raw: raw}, record
 }
 
-func pullTestHead(t *testing.T, binding publicationstate.Binding, block publicationstate.SnapshotBlock, record publication.SnapshotRecord) []byte {
+func pullTestHead(
+	t *testing.T,
+	binding publicationstate.Binding,
+	block publicationstate.SnapshotBlock,
+	record publication.SnapshotRecord,
+) []byte {
 	t.Helper()
 	cid, err := publication.RecordCID(block.Raw)
 	require.NoError(t, err)
@@ -186,10 +243,14 @@ func (fixture *pullTestFixture) divergedView(t *testing.T) publicationstate.Supp
 	payload := append(bytes.Clone(fixture.payload), 0x00)
 	block, record := pullTestSnapshot(t, fixture.binding, payload, 0, nil)
 	return publicationstate.SuppliedRepositoryView{
-		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
-		SuppliedContext: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-pull-revision", RepositoryDigest: []byte{0x51, 0x52, 0x53}},
-		Head:            pullTestHead(t, fixture.binding, block, record),
-		Snapshots:       []publicationstate.SnapshotBlock{{Key: block.Key, Raw: block.Raw}},
+		Origin: fixture.binding,
+		Scope:  publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-pull-revision",
+			RepositoryDigest:   []byte{0x51, 0x52, 0x53},
+		},
+		Head:      pullTestHead(t, fixture.binding, block, record),
+		Snapshots: []publicationstate.SnapshotBlock{{Key: block.Key, Raw: block.Raw}},
 	}
 }
 
@@ -208,7 +269,14 @@ func (fixture *pullTestFixture) accept(t *testing.T) {
 	observation := fixture.observation()
 	proposal, err := store.Prepare(context.Background(), publicationstate.ModeFirstUse, observation, fixture.payload)
 	require.NoError(t, err)
-	_, err = store.Accept(context.Background(), publicationstate.ModeFirstUse, proposal.StateToken, observation, fixture.payload, proposal.Confirmation)
+	_, err = store.Accept(
+		context.Background(),
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		fixture.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 }
@@ -222,11 +290,26 @@ func (fixture *pullTestFixture) payloads() map[uint64]model.Snapshot {
 	return map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot}
 }
 
-func (fixture *pullTestFixture) advancedView(t *testing.T, content string) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
+func (fixture *pullTestFixture) advancedView(
+	t *testing.T,
+	content string,
+) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
 	t.Helper()
 	snapshot := model.Snapshot{
-		Version: model.SnapshotVersion, Targets: fixture.snapshot.Targets,
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: 0o600}}},
+		Version: model.SnapshotVersion,
+		Targets: fixture.snapshot.Targets,
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(content),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -234,12 +317,19 @@ func (fixture *pullTestFixture) advancedView(t *testing.T, content string) (publ
 	require.NoError(t, err)
 	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, fixture.record.PublicationSeq+1, parent)
 	view := publicationstate.SuppliedRepositoryView{
-		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+		Origin:          fixture.binding,
+		Scope:           publicationstate.ViewScopeWholeRepository,
 		SuppliedContext: fixture.context,
 		Head:            pullTestHead(t, fixture.binding, block, record),
-		Snapshots:       []publicationstate.SnapshotBlock{{Key: fixture.block.Key, Raw: bytes.Clone(fixture.block.Raw)}, block},
+		Snapshots: []publicationstate.SnapshotBlock{
+			{Key: fixture.block.Key, Raw: bytes.Clone(fixture.block.Raw)},
+			block,
+		},
 	}
-	payloads := map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot, record.PublicationSeq: snapshot}
+	payloads := map[uint64]model.Snapshot{
+		fixture.record.PublicationSeq: fixture.snapshot,
+		record.PublicationSeq:         snapshot,
+	}
 	return view, payloads
 }
 
@@ -274,20 +364,72 @@ func pullTestConfirmation(t *testing.T, output string) string {
 	return match[1]
 }
 
-func newPullTestCommand(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int) *urfave.Command {
+func newPullTestCommand(
+	t *testing.T,
+	fixture *pullTestFixture,
+	stdout, stderr *bytes.Buffer,
+	exitCode *int,
+	session *atproto.Session,
+	sessionErr error,
+	reader *pullTestReader,
+	factoryCalls *int,
+) *urfave.Command {
 	t.Helper()
-	return newPullTestCommandWithDIDs(t, fixture, stdout, stderr, exitCode, session, sessionErr, reader, factoryCalls, pushTestDIDs(pullTestDID))
+	return newPullTestCommandWithDIDs(
+		t,
+		fixture,
+		stdout,
+		stderr,
+		exitCode,
+		session,
+		sessionErr,
+		reader,
+		factoryCalls,
+		pushTestDIDs(pullTestDID),
+	)
 }
 
-func newPullTestCommandWithDIDs(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int, dids sessionDIDSource) *urfave.Command {
+func newPullTestCommandWithDIDs(
+	t *testing.T,
+	fixture *pullTestFixture,
+	stdout, stderr *bytes.Buffer,
+	exitCode *int,
+	session *atproto.Session,
+	sessionErr error,
+	reader *pullTestReader,
+	factoryCalls *int,
+	dids sessionDIDSource,
+) *urfave.Command {
 	t.Helper()
-	return newPullTestCommandWithVaults(t, fixture, stdout, stderr, exitCode, session, sessionErr, reader, factoryCalls, dids,
+	return newPullTestCommandWithVaults(
+		t,
+		fixture,
+		stdout,
+		stderr,
+		exitCode,
+		session,
+		sessionErr,
+		reader,
+		factoryCalls,
+		dids,
 		func(context.Context, *urfave.Command, pushSession) ([32]byte, error) {
 			return fixture.binding.Vault, nil
-		})
+		},
+	)
 }
 
-func newPullTestCommandWithVaults(t *testing.T, fixture *pullTestFixture, stdout, stderr *bytes.Buffer, exitCode *int, session *atproto.Session, sessionErr error, reader *pullTestReader, factoryCalls *int, dids sessionDIDSource, vaults pullVaultFactory) *urfave.Command {
+func newPullTestCommandWithVaults(
+	t *testing.T,
+	fixture *pullTestFixture,
+	stdout, stderr *bytes.Buffer,
+	exitCode *int,
+	session *atproto.Session,
+	sessionErr error,
+	reader *pullTestReader,
+	factoryCalls *int,
+	dids sessionDIDSource,
+	vaults pullVaultFactory,
+) *urfave.Command {
 	t.Helper()
 	t.Setenv("HOME", fixture.paths.Home)
 	t.Setenv("XDG_CONFIG_HOME", fixture.paths.ConfigHome)
@@ -306,7 +448,17 @@ func newPullTestCommandWithVaults(t *testing.T, fixture *pullTestFixture, stdout
 		}
 		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Close: func() {}}, nil
 	}
-	return newPullCommand(stdout, stderr, exitCode, sessions, remotes, vaults, productionPullApplySourcesFactory(os.Getenv), dids, os.Getenv)
+	return newPullCommand(
+		stdout,
+		stderr,
+		exitCode,
+		sessions,
+		remotes,
+		vaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		dids,
+		os.Getenv,
+	)
 }
 
 func runPullForTest(command *urfave.Command, exitCode *int, args ...string) int {
@@ -368,7 +520,11 @@ func TestPullComparisonClassifiesTheFloorAgainstTheValidatedView(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	recordCID, err := publication.RecordCID(fixture.block.Raw)
 	require.NoError(t, err)
-	accepted := publicationstate.Floor{RecordCID: recordCID, BlobCID: fixture.record.Blob.CID, BlobSize: fixture.record.Blob.Size}
+	accepted := publicationstate.Floor{
+		RecordCID: recordCID,
+		BlobCID:   fixture.record.Blob.CID,
+		BlobSize:  fixture.record.Blob.Size,
+	}
 	for _, test := range []struct {
 		name  string
 		floor publicationstate.Floor
@@ -394,9 +550,21 @@ func TestPullComparisonClassifiesTheFloorAgainstTheValidatedView(t *testing.T) {
 func TestPullRendersOneLinePerFinding(t *testing.T) {
 	assert.Equal(t, "pull: matches\n", renderPullFinding(pullFinding{Kind: pullFindingMatches}))
 	assert.Equal(t, "pull: absent\n", renderPullFinding(pullFinding{Kind: pullFindingAbsent}))
-	assert.Equal(t, "pull: diverges (record_cid)\n", renderPullFinding(pullFinding{Kind: pullFindingDiverges, Reason: pullDivergenceRecordCID}))
-	assert.Equal(t, "pull: unreadable (locked)\n", renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: "locked"}))
-	assert.Equal(t, "pull: unreadable (a\\x1B[2Jb)\n", renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: "a\x1b[2Jb"}))
+	assert.Equal(
+		t,
+		"pull: diverges (record_cid)\n",
+		renderPullFinding(pullFinding{Kind: pullFindingDiverges, Reason: pullDivergenceRecordCID}),
+	)
+	assert.Equal(
+		t,
+		"pull: unreadable (locked)\n",
+		renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: "locked"}),
+	)
+	assert.Equal(
+		t,
+		"pull: unreadable (a\\x1B[2Jb)\n",
+		renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: "a\x1b[2Jb"}),
+	)
 }
 
 func TestPullReportsAMatchingPositionAndWritesNothing(t *testing.T) {
@@ -412,7 +580,12 @@ func TestPullReportsAMatchingPositionAndWritesNothing(t *testing.T) {
 	assert.Equal(t, "pull: matches\n", stdout.String())
 	assert.Empty(t, stderr.String())
 	assert.Equal(t, 1, reader.count())
-	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.PublicationStateDir()), "the inspection changed the position store")
+	assert.Equal(
+		t,
+		before,
+		pullTestDirectoryState(t, fixture.paths.PublicationStateDir()),
+		"the inspection changed the position store",
+	)
 	assert.NotContains(t, stdout.String(), fixture.paths.Home)
 	assert.NotContains(t, stdout.String(), pullTestVaultHex())
 	assert.NotContains(t, stdout.String(), pullTestDID)
@@ -470,7 +643,17 @@ func TestPullRefusesAnUnavailableSessionBeforeTheScopeCheck(t *testing.T) {
 	factoryCalls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, nil, errors.New("synthetic keyring failure"), reader, &factoryCalls)
+	command := newPullTestCommand(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		nil,
+		errors.New("synthetic keyring failure"),
+		reader,
+		&factoryCalls,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code)
 	assert.Zero(t, factoryCalls)
@@ -505,7 +688,19 @@ func TestPullAdoptsThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Equal(t, 1, vaultCalls, "the pull did not resolve the published vault exactly once")
@@ -531,7 +726,19 @@ func TestPullUsesTheExplicitVaultWithoutReadingThePublishedVault(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr.String())
 	assert.Zero(t, vaultCalls, "an explicit --vault still read the published vault")
@@ -550,11 +757,27 @@ func TestPullPrefersTheStoredBindingOverThePublishedVault(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Zero(t, vaultCalls, "a recorded binding still read the published vault")
-	assert.Equal(t, "vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n", stdout.String())
+	assert.Equal(
+		t,
+		"vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n",
+		stdout.String(),
+	)
 }
 
 func TestPullRefusesAnAccountWithNoPublishedVault(t *testing.T) {
@@ -566,7 +789,19 @@ func TestPullRefusesAnAccountWithNoPublishedVault(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		&factoryCalls,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 3, code)
 	assert.Equal(t, "pull: no-publication\n", stdout.String())
@@ -585,7 +820,19 @@ func TestPullTreatsAnUnresolvedPublishedVaultReadAsIndeterminate(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, &pullTestReader{}, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		&pullTestReader{},
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 4, code)
 	assert.Equal(t, "pull: unreadable (head)\n", stdout.String())
@@ -606,7 +853,19 @@ func TestPullWithoutAVaultStillRefusesAnUnusablePositionStore(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, &pullTestReader{}, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		&pullTestReader{},
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 3, code)
 	assert.Equal(t, "pull: unreadable (io)\n", stdout.String())
@@ -658,11 +917,15 @@ func TestPullProvisionsAnAbsentPositionStoreAndAdoptsOnlyOnConfirm(t *testing.T)
 	info, err := os.Stat(fixture.paths.PublicationStateDir())
 	require.NoError(t, err, "the unconfirmed newcomer pull did not provision the position store")
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
-	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	inspection, err := publicationstate.Inspect(
+		context.Background(),
+		fixture.paths.PublicationStateDir(),
+		fixture.binding,
+	)
 	require.NoError(t, err)
 	assert.False(t, inspection.Present, "the unconfirmed newcomer pull accepted a floor")
 	_, statErr := os.Lstat(fixture.targetPath("init.lua"))
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull wrote a target file")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed newcomer pull wrote a target file")
 	token := pullTestConfirmation(t, stdout.String())
 
 	stdout.Reset()
@@ -672,7 +935,11 @@ func TestPullProvisionsAnAbsentPositionStoreAndAdoptsOnlyOnConfirm(t *testing.T)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Contains(t, stdout.String(), "pull: first-use\n")
-	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestBaseContent)))
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestBaseContent)),
+	)
 	assert.Contains(t, stdout.String(), "floor: revision=1 generation=1 sequence=0\n")
 	assert.NotContains(t, stdout.String(), "pull: applied but not accepted")
 	content, err := os.ReadFile(fixture.targetPath("init.lua"))
@@ -707,7 +974,11 @@ func TestPullReportsAnEmptyProviderPositionWithoutAdoptingAnything(t *testing.T)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr.String())
 	assert.Equal(t, "pull: absent\n", stdout.String())
-	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	inspection, err := publicationstate.Inspect(
+		context.Background(),
+		fixture.paths.PublicationStateDir(),
+		fixture.binding,
+	)
 	require.NoError(t, err)
 	assert.False(t, inspection.Present)
 }
@@ -794,11 +1065,27 @@ func TestPullResolvesAnOmittedVaultFromTheStoredBinding(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithVaults(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID), vaults)
+	command := newPullTestCommandWithVaults(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(pullTestDID),
+		vaults,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Zero(t, vaultCalls, "a recorded binding still read the published vault")
-	assert.Equal(t, "vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n", stdout.String())
+	assert.Equal(
+		t,
+		"vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n",
+		stdout.String(),
+	)
 }
 
 func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
@@ -819,7 +1106,17 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := 0
-			command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls)
+			command := newPullTestCommand(
+				t,
+				fixture,
+				&stdout,
+				&stderr,
+				&code,
+				pullTestSession(),
+				nil,
+				reader,
+				&factoryCalls,
+			)
 			code = runPullForTest(command, &code, test.args...)
 			require.Equal(t, 2, code)
 			assert.Contains(t, stderr.String(), test.want)
@@ -830,15 +1127,31 @@ func TestPullRequiresTheAccountAndVaultSelectors(t *testing.T) {
 }
 
 func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *testing.T) {
-	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
 	binding.Repository = "at://" + pullTestDID
 	plan := sha256.Sum256([]byte("prepared plan"))
 	state := sha256.Sum256([]byte("staged state"))
 	observation := sha256.Sum256([]byte("observed position"))
 	token := pullApplyConfirmationToken(binding, plan, state, observation)
-	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation))
-	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation))
-	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation"))))
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation"))),
+	)
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
 	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan, state, observation))
@@ -878,7 +1191,11 @@ func TestPullPrintsTheApplyPlanAndAppliesOnlyThePreparedToken(t *testing.T) {
 	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 0, code, stderr.String())
-	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)))
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)),
+	)
 	content, err = os.ReadFile(target)
 	require.NoError(t, err)
 	assert.Equal(t, pullTestRemoteContent, string(content))
@@ -1029,7 +1346,16 @@ func TestPullAdvancesTheAcceptedFloorAfterAConfirmedApply(t *testing.T) {
 	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 0, code, stderr.String())
-	assert.Contains(t, stdout.String(), fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", before.Revision+1, before.Generation, before.Sequence+1))
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf(
+			"floor: revision=%d generation=%d sequence=%d\n",
+			before.Revision+1,
+			before.Generation,
+			before.Sequence+1,
+		),
+	)
 	assert.NotContains(t, stdout.String(), "applied but not accepted")
 	accepted := fixture.acceptedFloor(t)
 	assert.Equal(t, before.Revision+1, accepted.Revision)
@@ -1084,7 +1410,12 @@ func TestPullRefusesAConfirmationWhoseObservationDigestChanged(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "pull: applied")
 	content, err := os.ReadFile(fixture.targetPath("init.lua"))
 	require.NoError(t, err)
-	assert.Equal(t, pullTestBaseContent, string(content), "a confirmation bound to another observation applied the plan")
+	assert.Equal(
+		t,
+		pullTestBaseContent,
+		string(content),
+		"a confirmation bound to another observation applied the plan",
+	)
 	assert.Equal(t, before.Revision, fixture.acceptedFloor(t).Revision)
 }
 
@@ -1111,13 +1442,22 @@ func TestPullReportsAFailedAcceptAsAppliedButNotAccepted(t *testing.T) {
 	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 3, code)
-	assert.Contains(t, stdout.String(), fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)))
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(pullTestRemoteContent)),
+	)
 	assert.Contains(t, stdout.String(), "pull: applied but not accepted (accept-material/")
 	assert.Contains(t, stderr.String(), "the accepted floor is unchanged")
 	assert.NotContains(t, stderr.String(), fixture.paths.Home)
 	content, err := os.ReadFile(fixture.targetPath("init.lua"))
 	require.NoError(t, err)
-	assert.Equal(t, pullTestRemoteContent, string(content), "the apply did not run before the accepted material was refused")
+	assert.Equal(
+		t,
+		pullTestRemoteContent,
+		string(content),
+		"the apply did not run before the accepted material was refused",
+	)
 	accepted := fixture.acceptedFloor(t)
 	assert.Equal(t, before.Revision, accepted.Revision)
 	assert.Equal(t, before.RecordCID, accepted.RecordCID)
@@ -1129,7 +1469,12 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, &pullTestReader{}, nil)
 	report := "pull: applied changes=1 unchanged=0 bytes=19\n"
-	refused := pullAcceptFailure(command, "pull", report, pullTestStageRefusal{stage: "accept-material", reason: "stale"})
+	refused := pullAcceptFailure(
+		command,
+		"pull",
+		report,
+		pullTestStageRefusal{stage: "accept-material", reason: "stale"},
+	)
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, refused, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
@@ -1151,7 +1496,10 @@ func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
 	assert.Equal(t, 3, exitError.ExitCode())
 	assert.Contains(t, moved.Error(), "the accepted floor changed after the apply plan was prepared")
 
-	refused := pullAcceptStagingFailure("pull", pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"})
+	refused := pullAcceptStagingFailure(
+		"pull",
+		pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"},
+	)
 	require.ErrorAs(t, refused, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
 	assert.Contains(t, refused.Error(), "accept-prepare/proposal_refused")
@@ -1164,11 +1512,26 @@ func TestPullResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
 	reader := &pullTestReader{view: fixture.view()}
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(pullTestDID))
+	command := newPullTestCommandWithDIDs(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(pullTestDID),
+	)
 	code = runPullForTest(command, &code)
 	require.Equal(t, 0, code, stderr.String())
 	assert.Empty(t, stderr.String())
-	assert.Equal(t, "account: "+pullTestDID+" (resolved from the only authorised session; --did was omitted)\nvault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n", stdout.String())
+	assert.Equal(
+		t,
+		"account: "+pullTestDID+" (resolved from the only authorised session; --did was omitted)\nvault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n",
+		stdout.String(),
+	)
 }
 
 func TestPullRefusesWithoutAnyAuthorisedSession(t *testing.T) {
@@ -1177,11 +1540,26 @@ func TestPullRefusesWithoutAnyAuthorisedSession(t *testing.T) {
 	factoryCalls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls, pushTestDIDs())
+	command := newPullTestCommandWithDIDs(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		&factoryCalls,
+		pushTestDIDs(),
+	)
 	code = runPullForTest(command, &code)
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
-	assert.Equal(t, "dottie: pull refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr.String())
+	assert.Equal(
+		t,
+		"dottie: pull refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n",
+		stderr.String(),
+	)
 	assert.Zero(t, factoryCalls, "the refusal constructed the provider reader")
 }
 
@@ -1192,14 +1570,29 @@ func TestPullRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := 0
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, &factoryCalls, pushTestDIDs(pullTestDID, other))
+	command := newPullTestCommandWithDIDs(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		&factoryCalls,
+		pushTestDIDs(pullTestDID, other),
+	)
 	code = runPullForTest(command, &code)
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
-	assert.Equal(t, "dottie: pull refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr.String())
+	assert.Equal(
+		t,
+		"dottie: pull refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n",
+		stderr.String(),
+	)
 	assert.Zero(t, factoryCalls, "the ambiguous refusal constructed the provider reader")
 	_, statErr := os.Lstat(fixture.paths.PublicationStateDir())
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "the ambiguous refusal created the position store")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the ambiguous refusal created the position store")
 	assert.NoFileExists(t, fixture.targetPath("init.lua"), "the ambiguous refusal applied a file")
 }
 
@@ -1210,10 +1603,25 @@ func TestPullProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T
 	var stdout, stderr bytes.Buffer
 	code := 0
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	command := newPullTestCommandWithDIDs(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil, pushTestDIDs(other, pullTestDID))
+	command := newPullTestCommandWithDIDs(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		pullTestSession(),
+		nil,
+		reader,
+		nil,
+		pushTestDIDs(other, pullTestDID),
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID)
 	require.Equal(t, 0, code, stderr.String())
-	assert.Equal(t, "vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n", stdout.String())
+	assert.Equal(
+		t,
+		"vault: "+pullTestVaultHex()+" (resolved from the recorded binding)\npull: matches\n",
+		stdout.String(),
+	)
 }
 
 func TestPullRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
@@ -1222,7 +1630,17 @@ func TestPullRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	factoryCalls := 0
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, nil, atproto.ErrSessionNotFound, reader, &factoryCalls)
+	command := newPullTestCommand(
+		t,
+		fixture,
+		&stdout,
+		&stderr,
+		&code,
+		nil,
+		atproto.ErrSessionNotFound,
+		reader,
+		&factoryCalls,
+	)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())

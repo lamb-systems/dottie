@@ -31,7 +31,7 @@ func (Secret) GoString() string {
 	return redactionMarker
 }
 
-func (Secret) Format(state fmt.State, verb rune) {
+func (Secret) Format(state fmt.State, _ rune) {
 	_, _ = state.Write([]byte(redactionMarker))
 }
 

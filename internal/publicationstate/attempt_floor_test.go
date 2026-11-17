@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestOrdinaryAcceptRefusesExactActiveGenesisAndSuccessor(t *testing.T) {
@@ -17,22 +18,36 @@ func TestOrdinaryAcceptRefusesExactActiveGenesisAndSuccessor(t *testing.T) {
 		store, _ := newStore(t, f)
 		defer store.Close()
 		observation := f.observation(1)
-		position, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
+		_, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
 		require.NoError(t, err)
 		candidate := attemptCandidate(f, 0)
 		view := attemptView(f, observation, true)
 		review := attemptReview()
 		attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 		require.NoError(t, err)
-		_, err = store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+		_, err = store.CreateAttempt(
+			ctx,
+			attemptProposal.StateToken,
+			candidate,
+			view,
+			review,
+			attemptProposal.Confirmation,
+		)
 		require.NoError(t, err)
-		position, err = store.Prepare(ctx, ModeFirstUse, observation, f.payload)
+		position, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
 		require.NoError(t, err)
 		before := readLogicalRows(t, store.conn)
 		floor, present, err := store.Load(ctx)
 		require.NoError(t, err)
 		assert.False(t, present)
-		result, err := store.Accept(ctx, ModeFirstUse, position.StateToken, observation, f.payload, position.Confirmation)
+		result, err := store.Accept(
+			ctx,
+			ModeFirstUse,
+			position.StateToken,
+			observation,
+			f.payload,
+			position.Confirmation,
+		)
 		requireErrorMetadata(t, err, ErrConsent, StageAccept, ReasonActiveAttempt)
 		assert.Equal(t, Floor{}, result)
 		after, present, err := store.Load(ctx)
@@ -54,16 +69,23 @@ func TestOrdinaryAcceptRefusesExactActiveGenesisAndSuccessor(t *testing.T) {
 		_, err = store.Accept(ctx, ModeFirstUse, first.StateToken, genesis, f.payload, first.Confirmation)
 		require.NoError(t, err)
 		observation := f.observation(2)
-		position, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
+		_, err = store.Prepare(ctx, ModeAdvance, observation, f.payload)
 		require.NoError(t, err)
 		candidate := attemptCandidate(f, 1)
 		view := attemptView(f, genesis, false)
 		review := attemptReview()
 		attemptProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 		require.NoError(t, err)
-		_, err = store.CreateAttempt(ctx, attemptProposal.StateToken, candidate, view, review, attemptProposal.Confirmation)
+		_, err = store.CreateAttempt(
+			ctx,
+			attemptProposal.StateToken,
+			candidate,
+			view,
+			review,
+			attemptProposal.Confirmation,
+		)
 		require.NoError(t, err)
-		position, err = store.Prepare(ctx, ModeAdvance, observation, f.payload)
+		position, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 		require.NoError(t, err)
 		before := readLogicalRows(t, store.conn)
 		oldFloor, present, err := store.Load(ctx)
@@ -83,7 +105,7 @@ func TestOrdinaryAcceptRefusesExactActiveGenesisAndSuccessor(t *testing.T) {
 func TestOrdinaryAcceptanceOfDifferentPositionPreservesAttemptButInvalidatesDispatch(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 3; sequence++ {
+	for sequence := range uint64(3) {
 		f.appendRecord(t, sequence)
 	}
 	store, _ := newStore(t, f)
@@ -143,7 +165,14 @@ func TestPublicationAttemptFloorReplacementBlocksAtomically(t *testing.T) {
 	beforeStaleAccept, present, err := store.Load(ctx)
 	require.NoError(t, err)
 	require.True(t, present)
-	_, err = store.Accept(ctx, ModeReplaceFloor, staleReplacement.StateToken, fork, f.payload, staleReplacement.Confirmation)
+	_, err = store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		staleReplacement.StateToken,
+		fork,
+		f.payload,
+		staleReplacement.Confirmation,
+	)
 	requireErrorMetadata(t, err, ErrConsent, StageAccept, ReasonStale)
 	afterStaleAccept, present, err := store.Load(ctx)
 	require.NoError(t, err)
@@ -194,7 +223,10 @@ func TestPublicationAttemptFloorReplacementAbortIsAtomic(t *testing.T) {
 	fork := forkGenesisObservation(t, f)
 	replacement, err := store.Prepare(ctx, ModeReplaceFloor, fork, f.payload)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "CREATE TEMP TRIGGER abort_attempt_block BEFORE UPDATE ON main.publication_attempts WHEN NEW.blocked='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'private-canary-attempt-block'); END")
+	_, err = store.conn.ExecContext(
+		ctx,
+		"CREATE TEMP TRIGGER abort_attempt_block BEFORE UPDATE ON main.publication_attempts WHEN NEW.blocked='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'private-canary-attempt-block'); END",
+	)
 	require.NoError(t, err)
 	_, err = store.Accept(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, replacement.Confirmation)
 	require.ErrorIs(t, err, ErrStorage)
@@ -232,13 +264,34 @@ func TestPublicationAttemptFloorReplacementWriteFailuresRollbackAllRows(t *testi
 		name string
 		ddl  string
 	}{
-		{"accepted-record", "CREATE TEMP TRIGGER fail_replace_record BEFORE INSERT ON main.accepted_records BEGIN SELECT RAISE(ABORT,'replace-record-canary'); END"},
-		{"accepted-event", "CREATE TEMP TRIGGER fail_replace_event BEFORE INSERT ON main.accepted_events BEGIN SELECT RAISE(ABORT,'replace-event-canary'); END"},
-		{"floor", "CREATE TEMP TRIGGER fail_replace_floor BEFORE UPDATE ON main.active_floor BEGIN SELECT RAISE(ABORT,'replace-floor-canary'); END"},
-		{"revision", "CREATE TEMP TRIGGER fail_replace_revision BEFORE UPDATE ON main.store_meta WHEN NEW.key='revision' BEGIN SELECT RAISE(ABORT,'replace-revision-canary'); END"},
-		{"block-event", "CREATE TEMP TRIGGER fail_replace_block_event BEFORE INSERT ON main.attempt_events WHEN NEW.kind='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'replace-block-event-canary'); END"},
-		{"attempt-state", "CREATE TEMP TRIGGER fail_replace_attempt BEFORE UPDATE ON main.publication_attempts WHEN NEW.blocked='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'replace-attempt-canary'); END"},
-		{"reservation", "CREATE TEMP TRIGGER fail_replace_reservation BEFORE UPDATE ON main.attempt_reservations BEGIN SELECT RAISE(ABORT,'replace-reservation-canary'); END"},
+		{
+			"accepted-record",
+			"CREATE TEMP TRIGGER fail_replace_record BEFORE INSERT ON main.accepted_records BEGIN SELECT RAISE(ABORT,'replace-record-canary'); END",
+		},
+		{
+			"accepted-event",
+			"CREATE TEMP TRIGGER fail_replace_event BEFORE INSERT ON main.accepted_events BEGIN SELECT RAISE(ABORT,'replace-event-canary'); END",
+		},
+		{
+			"floor",
+			"CREATE TEMP TRIGGER fail_replace_floor BEFORE UPDATE ON main.active_floor BEGIN SELECT RAISE(ABORT,'replace-floor-canary'); END",
+		},
+		{
+			"revision",
+			"CREATE TEMP TRIGGER fail_replace_revision BEFORE UPDATE ON main.store_meta WHEN NEW.key='revision' BEGIN SELECT RAISE(ABORT,'replace-revision-canary'); END",
+		},
+		{
+			"block-event",
+			"CREATE TEMP TRIGGER fail_replace_block_event BEFORE INSERT ON main.attempt_events WHEN NEW.kind='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'replace-block-event-canary'); END",
+		},
+		{
+			"attempt-state",
+			"CREATE TEMP TRIGGER fail_replace_attempt BEFORE UPDATE ON main.publication_attempts WHEN NEW.blocked='blocked-floor-replaced' BEGIN SELECT RAISE(ABORT,'replace-attempt-canary'); END",
+		},
+		{
+			"reservation",
+			"CREATE TEMP TRIGGER fail_replace_reservation BEFORE UPDATE ON main.attempt_reservations BEGIN SELECT RAISE(ABORT,'replace-reservation-canary'); END",
+		},
 	}
 	for _, fault := range triggers {
 		t.Run(fault.name, func(t *testing.T) {
@@ -254,7 +307,14 @@ func TestPublicationAttemptFloorReplacementWriteFailuresRollbackAllRows(t *testi
 			require.NoError(t, err)
 			_, err = store.conn.ExecContext(ctx, fault.ddl)
 			require.NoError(t, err)
-			_, err = store.Accept(ctx, ModeReplaceFloor, replacement.StateToken, fork, f.payload, replacement.Confirmation)
+			_, err = store.Accept(
+				ctx,
+				ModeReplaceFloor,
+				replacement.StateToken,
+				fork,
+				f.payload,
+				replacement.Confirmation,
+			)
 			require.ErrorIs(t, err, ErrStorage)
 			assert.NotContains(t, err.Error(), "-canary")
 			assert.Equal(t, before, readAttemptLogicalRows(t, store))
@@ -297,11 +357,19 @@ func TestActiveAttemptSuccessReserveDoesNotBlockFloorReplacement(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "blocked-floor-replaced", blocked.Blocked)
 	var acceptedEventReserve int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT accepted_events FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).Scan(&acceptedEventReserve))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT accepted_events FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&acceptedEventReserve),
+	)
 	assert.Equal(t, int64(0), acceptedEventReserve)
 }
 
-func createSuccessorAttempt(t *testing.T, store *Store, f fixture) (Attempt, SuppliedRepositoryView, LocalReviewContext) {
+func createSuccessorAttempt(
+	t *testing.T,
+	store *Store,
+	f fixture,
+) (Attempt, SuppliedRepositoryView, LocalReviewContext) {
 	t.Helper()
 	ctx := context.Background()
 	genesis := f.observation(1)
@@ -329,7 +397,15 @@ func forkGenesisObservation(t *testing.T, f fixture) Observation {
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(raw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 0, SnapshotCID: cid, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          f.binding.Vault,
+			PublicationSeq: 0,
+			SnapshotCID:    cid,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
 	observation := f.observation(1)
 	observation.Head = head
@@ -339,7 +415,11 @@ func forkGenesisObservation(t *testing.T, f fixture) Observation {
 
 func queryAttemptEvents(t *testing.T, store *Store, id [16]byte) ([][]any, error) {
 	t.Helper()
-	rows, err := store.conn.QueryContext(context.Background(), "SELECT ordinal,kind,body,digest FROM attempt_events WHERE attempt_id=? ORDER BY ordinal", id[:])
+	rows, err := store.conn.QueryContext(
+		context.Background(),
+		"SELECT ordinal,kind,body,digest FROM attempt_events WHERE attempt_id=? ORDER BY ordinal",
+		id[:],
+	)
 	if err != nil {
 		return nil, err
 	}

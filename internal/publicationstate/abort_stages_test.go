@@ -25,7 +25,14 @@ func TestAcceptRollsBackOnFloorAndMetadataAbort(t *testing.T) {
 			before := readLogicalRows(t, store.conn)
 			_, err = store.conn.ExecContext(ctx, test.create)
 			require.NoError(t, err)
-			floor, err := store.Accept(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.Accept(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			requireErrorMetadata(t, err, ErrStorage, StageAccept, ReasonIO)
 			assert.Equal(t, Floor{}, floor)
 			assertErrorRedacted(t, err, test.canary)
@@ -38,7 +45,14 @@ func TestAcceptRollsBackOnFloorAndMetadataAbort(t *testing.T) {
 			_, present, err := reopened.Load(ctx)
 			require.NoError(t, err)
 			assert.False(t, present)
-			_, err = reopened.Accept(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			_, err = reopened.Accept(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			require.NoError(t, reopened.Close())
 		})

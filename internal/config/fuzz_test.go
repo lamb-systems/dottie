@@ -68,7 +68,8 @@ func pathsAreWithin(root string, paths platform.Paths) bool {
 	root = filepath.Clean(root)
 	for _, path := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		relative, err := filepath.Rel(root, path)
-		if err != nil || relative == ".." || filepath.IsAbs(relative) || len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
+		if err != nil || relative == ".." || filepath.IsAbs(relative) ||
+			len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
 			return false
 		}
 	}

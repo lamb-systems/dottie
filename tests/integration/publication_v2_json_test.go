@@ -6,20 +6,39 @@ import (
 	"testing"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 	ctx := context.Background()
 	packed, err := vault.Pack(model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic v2 JSON publication candidate"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("synthetic v2 JSON publication candidate"),
+					Mode:    0o600,
+				},
+			},
+		},
 	})
 	require.NoError(t, err)
 
@@ -34,7 +53,11 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x51},
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	genesisCID, err := publication.RecordCID(genesisRecord)
@@ -50,9 +73,12 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 	genesisKey, err := publication.SequenceKey(0)
 	require.NoError(t, err)
 	genesisObservation := publicationstate.Observation{
-		SuppliedContext: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-genesis-revision", RepositoryDigest: []byte{1, 2, 3}},
-		Head:            genesisHead,
-		Snapshots:       []publicationstate.SnapshotBlock{{Key: genesisKey, Raw: genesisRecord}},
+		SuppliedContext: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-genesis-revision",
+			RepositoryDigest:   []byte{1, 2, 3},
+		},
+		Head:      genesisHead,
+		Snapshots: []publicationstate.SnapshotBlock{{Key: genesisKey, Raw: genesisRecord}},
 	}
 
 	successorRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
@@ -61,7 +87,11 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x52},
 		PublicationSeq: 1,
 		Parent:         genesisCID,
-		Blob:           publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	successorCID, err := publication.RecordCID(successorRecord)
@@ -78,8 +108,18 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, publication.VerifySuccessor(genesisRecord, successorRecord, successorKey))
 	require.NoError(t, publication.VerifyHeadBinding(successorHead, successorRecord, successorKey))
-	candidate := publicationstate.CandidateInput{SnapshotKey: successorKey, SnapshotRecord: successorRecord, HeadRecord: successorHead, Payload: packed.Payload}
-	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{1}, SelectionRevision: 1, ApprovalDigest: [32]byte{2}, ApprovalRevision: 1}
+	candidate := publicationstate.CandidateInput{
+		SnapshotKey:    successorKey,
+		SnapshotRecord: successorRecord,
+		HeadRecord:     successorHead,
+		Payload:        packed.Payload,
+	}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest:   [32]byte{1},
+		SelectionRevision: 1,
+		ApprovalDigest:    [32]byte{2},
+		ApprovalRevision:  1,
+	}
 
 	bindings := []struct {
 		name    string
@@ -111,7 +151,18 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 	var outputs [2]candidateRecordJSON
 	for index, test := range bindings {
 		t.Run(test.name, func(t *testing.T) {
-			outputs[index] = exerciseCandidateRecordJSONPreflight(t, ctx, packed.Payload, genesisRecord, genesisHead, genesisObservation, candidate, review, test.binding, test.scope)
+			outputs[index] = exerciseCandidateRecordJSONPreflight(
+				t,
+				ctx,
+				packed.Payload,
+				genesisRecord,
+				genesisHead,
+				genesisObservation,
+				candidate,
+				review,
+				test.binding,
+				test.scope,
+			)
 		})
 	}
 	assert.Equal(t, outputs[0], outputs[1])
@@ -122,12 +173,25 @@ type candidateRecordJSON struct {
 	head     []byte
 }
 
-func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, payload, genesisRecord, genesisHead []byte, genesisObservation publicationstate.Observation, candidate publicationstate.CandidateInput, review publicationstate.LocalReviewContext, binding publicationstate.Binding, scope publicationstate.ViewScope) candidateRecordJSON {
+func exerciseCandidateRecordJSONPreflight(
+	t *testing.T,
+	ctx context.Context,
+	payload, genesisRecord, genesisHead []byte,
+	genesisObservation publicationstate.Observation,
+	candidate publicationstate.CandidateInput,
+	review publicationstate.LocalReviewContext,
+	binding publicationstate.Binding,
+	scope publicationstate.ViewScope,
+) candidateRecordJSON {
 	t.Helper()
 	contextValue := genesisObservation.SuppliedContext
 	contextValue.Policy = nil
 	if binding.Backend == publicationstate.BackendSpaces {
-		contextValue.Policy = &publicationstate.Policy{Revision: "synthetic-policy-revision", Identity: []byte{4, 5, 6}, OwnerOnly: true}
+		contextValue.Policy = &publicationstate.Policy{
+			Revision:  "synthetic-policy-revision",
+			Identity:  []byte{4, 5, 6},
+			OwnerOnly: true,
+		}
 	}
 	genesisObservation.Origin = binding
 	genesisObservation.SuppliedContext = contextValue
@@ -144,7 +208,14 @@ func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, pay
 
 	position, err := store.Prepare(ctx, publicationstate.ModeFirstUse, genesisObservation, payload)
 	require.NoError(t, err)
-	genesisFloor, err := store.Accept(ctx, publicationstate.ModeFirstUse, position.StateToken, genesisObservation, payload, position.Confirmation)
+	genesisFloor, err := store.Accept(
+		ctx,
+		publicationstate.ModeFirstUse,
+		position.StateToken,
+		genesisObservation,
+		payload,
+		position.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), genesisFloor.Sequence)
 	assert.Equal(t, uint64(1), genesisFloor.Generation)
@@ -201,7 +272,14 @@ func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, pay
 
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchUpload, view, review)
 	require.NoError(t, err)
-	upload, err := store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, view, review, uploadProposal.Confirmation)
+	upload, err := store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		view,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, payload, upload.Payload)
 	uploadedAttempt, err := store.LoadAttempt(ctx, attempt.ID)
@@ -211,7 +289,14 @@ func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, pay
 
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchSubmission, view, review)
 	require.NoError(t, err)
-	submission, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	submission, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, attempt.ID, submission.AttemptID)
 	assert.Equal(t, candidate.SnapshotRecord, submission.SnapshotRecord)
@@ -242,7 +327,10 @@ func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, pay
 	require.NoError(t, err)
 	assert.Equal(t, submission.ExpectedSnapshotCID, preflightCID)
 	require.NoError(t, publication.VerifySuccessor(genesisRecord, submission.SnapshotRecord, submission.SnapshotKey))
-	require.NoError(t, publication.VerifyHeadBinding(submission.HeadRecord, submission.SnapshotRecord, submission.SnapshotKey))
+	require.NoError(
+		t,
+		publication.VerifyHeadBinding(submission.HeadRecord, submission.SnapshotRecord, submission.SnapshotKey),
+	)
 
 	submittedAttempt, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -256,7 +344,11 @@ func exerciseCandidateRecordJSONPreflight(t *testing.T, ctx context.Context, pay
 	return reopenedPreflight
 }
 
-func loadCandidateJSONState(t *testing.T, store *publicationstate.Store, attemptID [16]byte) (publicationstate.Floor, publicationstate.Attempt) {
+func loadCandidateJSONState(
+	t *testing.T,
+	store *publicationstate.Store,
+	attemptID [16]byte,
+) (publicationstate.Floor, publicationstate.Attempt) {
 	t.Helper()
 	floor, present, err := store.Load(context.Background())
 	require.NoError(t, err)

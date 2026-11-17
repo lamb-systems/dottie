@@ -70,7 +70,10 @@ func validRelativePath(rel string, allowRoot bool) bool {
 	if rel == "." {
 		return allowRoot
 	}
-	if rel == "" || len(rel) > 4096 || !utf8.ValidString(rel) || strings.ContainsRune(rel, 0) || strings.ContainsRune(rel, '\\') || strings.HasPrefix(rel, "/") || hasDrivePrefix(rel) {
+	if rel == "" || len(rel) > 4096 || !utf8.ValidString(rel) || strings.ContainsRune(rel, 0) ||
+		strings.ContainsRune(rel, '\\') ||
+		strings.HasPrefix(rel, "/") ||
+		hasDrivePrefix(rel) {
 		return false
 	}
 	for _, segment := range strings.Split(rel, "/") {
@@ -82,15 +85,20 @@ func validRelativePath(rel string, allowRoot bool) bool {
 }
 
 func validRelativeName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.ContainsRune(name, '/') && validRelativePath(name, false)
+	return name != "" && name != "." && name != ".." && !strings.ContainsRune(name, '/') &&
+		validRelativePath(name, false)
 }
 
 func hasDrivePrefix(value string) bool {
-	return len(value) >= 2 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':'
+	return len(value) >= 2 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) &&
+		value[1] == ':'
 }
 
 func validLinkTextPath(target string) bool {
-	if target == "" || len(target) > 4096 || !utf8.ValidString(target) || strings.ContainsRune(target, 0) || strings.ContainsRune(target, '\\') || strings.HasPrefix(target, "/") || hasDrivePrefix(target) {
+	if target == "" || len(target) > 4096 || !utf8.ValidString(target) || strings.ContainsRune(target, 0) ||
+		strings.ContainsRune(target, '\\') ||
+		strings.HasPrefix(target, "/") ||
+		hasDrivePrefix(target) {
 		return false
 	}
 	for _, segment := range strings.Split(target, "/") {

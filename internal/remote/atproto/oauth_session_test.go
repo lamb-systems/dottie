@@ -11,9 +11,10 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 func storedRefreshSession(t *testing.T, client *Client) *Session {
@@ -42,7 +43,8 @@ func TestRefreshPersistsPendingBeforeTokenRequest(t *testing.T) {
 	fake.pendingCheck = func() bool {
 		var envelope sessionEnvelope
 		err := json.Unmarshal(store.raw(name), &envelope)
-		return err == nil && envelope.State == SessionStateRefreshPending && envelope.RefreshToken == "" && envelope.DPoPPrivateKey == ""
+		return err == nil && envelope.State == SessionStateRefreshPending && envelope.RefreshToken == "" &&
+			envelope.DPoPPrivateKey == ""
 	}
 	fake.tokenRefresh = "rotated-refresh-token"
 	fake.rejectRefreshReuse = true
@@ -84,7 +86,8 @@ func TestRefreshFinalSaveFailureLeavesPendingAndForbidsReplay(t *testing.T) {
 	fake.rejectRefreshReuse = true
 	store.saveHook = func(_ string, payload []byte) error {
 		var envelope sessionEnvelope
-		if json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable && envelope.RefreshToken == "rotated-refresh-token" {
+		if json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable &&
+			envelope.RefreshToken == "rotated-refresh-token" {
 			return errors.New("synthetic final save failure")
 		}
 		return nil
@@ -171,7 +174,7 @@ func TestRefreshReloadsEnvelopeAfterAcquiringLock(t *testing.T) {
 	newest.DPoPPrivateKey = oldSession.DPoPPrivateKey
 	require.NoError(t, client.saveSession(context.Background(), &newest))
 	close(continueRefresh)
-	assert.NoError(t, <-done)
+	require.NoError(t, <-done)
 	assert.Equal(t, []string{"concurrently-rotated-token"}, fake.presentedRefreshTokens)
 	assert.Equal(t, "newest-token-rotated", fake.tokenRefresh)
 }
@@ -204,7 +207,14 @@ func TestRefreshComposesWithRealFileLockAndReload(t *testing.T) {
 		}
 		return lock.Close, nil
 	}
-	client, err := NewClient(baseClient.ClientID, store, WithHTTPClient(baseClient.HTTPClient), WithClock(baseClient.Clock), WithRandom(&counterReader{}), WithSessionLock(lockFunc))
+	client, err := NewClient(
+		baseClient.ClientID,
+		store,
+		WithHTTPClient(baseClient.HTTPClient),
+		WithClock(baseClient.Clock),
+		WithRandom(&counterReader{}),
+		WithSessionLock(lockFunc),
+	)
 	require.NoError(t, err)
 	lock, err := platform.LockFile(lockPath)
 	require.NoError(t, err)
@@ -263,7 +273,11 @@ func TestFlowCancellationAfterTokenResponseStoresNothing(t *testing.T) {
 	defer flow.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	flow.callback <- callbackResult{code: NewSecret("single-use-code")}
-	client.HTTPClient.Transport = cancelAfterResponseTransport{base: client.HTTPClient.Transport, cancel: cancel, path: "/token"}
+	client.HTTPClient.Transport = cancelAfterResponseTransport{
+		base:   client.HTTPClient.Transport,
+		cancel: cancel,
+		path:   "/token",
+	}
 	_, err = flow.Wait(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "authorization canceled")
@@ -319,7 +333,14 @@ func TestSessionEnvelopeRetainsHandleStateAndAcceptsLegacyWithoutHandle(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, testDID, identity.DID)
 
-	pending := sessionEnvelope{Version: sessionEnvelopeVersion, DID: testDID, Issuer: session.Issuer, TokenEndpoint: session.TokenEndpoint, Scopes: session.Scopes, State: SessionStateRefreshPending}
+	pending := sessionEnvelope{
+		Version:       sessionEnvelopeVersion,
+		DID:           testDID,
+		Issuer:        session.Issuer,
+		TokenEndpoint: session.TokenEndpoint,
+		Scopes:        session.Scopes,
+		State:         SessionStateRefreshPending,
+	}
 	pendingBytes, err := json.Marshal(pending)
 	require.NoError(t, err)
 	require.NoError(t, store.Save(context.Background(), sessionItemName(client.ClientID, testDID), pendingBytes))
@@ -334,10 +355,13 @@ func TestLoadSessionStatusPropagatesKeyringFailureAndRejectsCorruptState(t *test
 	for _, keyringErr := range []error{platform.ErrKeyringLocked, platform.ErrKeyringUnavailable} {
 		store.loadErr = keyringErr
 		_, err := client.LoadSessionStatus(context.Background(), testDID)
-		assert.ErrorIs(t, err, keyringErr)
+		require.ErrorIs(t, err, keyringErr)
 	}
 	store.loadErr = nil
-	require.NoError(t, store.Save(context.Background(), sessionItemName(client.ClientID, testDID), []byte(`{"version":99}`)))
+	require.NoError(
+		t,
+		store.Save(context.Background(), sessionItemName(client.ClientID, testDID), []byte(`{"version":99}`)),
+	)
 	_, err := client.LoadSessionStatus(context.Background(), testDID)
 	require.ErrorIs(t, err, ErrSessionUnavailable)
 }
@@ -358,7 +382,11 @@ func TestRefreshCancellationAfterTokenResponseLeavesPending(t *testing.T) {
 	fake, client, store := newFakeOAuth(t)
 	session := storedRefreshSession(t, client)
 	ctx, cancel := context.WithCancel(context.Background())
-	client.HTTPClient.Transport = cancelAfterResponseTransport{base: client.HTTPClient.Transport, cancel: cancel, path: "/token"}
+	client.HTTPClient.Transport = cancelAfterResponseTransport{
+		base:   client.HTTPClient.Transport,
+		cancel: cancel,
+		path:   "/token",
+	}
 	_, _, err := client.Refresh(ctx, testHandle, session)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "authorization canceled")
@@ -398,7 +426,8 @@ func TestRefreshKeyringFailuresRemainTypedAndFailClosed(t *testing.T) {
 		session := storedRefreshSession(t, client)
 		store.saveHook = func(_ string, payload []byte) error {
 			var envelope sessionEnvelope
-			if json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable && envelope.RefreshToken != "original-refresh-token" {
+			if json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable &&
+				envelope.RefreshToken != "original-refresh-token" {
 				return platform.ErrKeyringUnavailable
 			}
 			return nil
@@ -419,7 +448,8 @@ func TestRefreshFinalSaveUncertaintyLeavesNewUsableEnvelope(t *testing.T) {
 		err:         errors.New("synthetic lost reply"),
 		match: func(payload []byte) bool {
 			var envelope sessionEnvelope
-			return json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable && envelope.RefreshToken == "rotated-refresh-token"
+			return json.Unmarshal(payload, &envelope) == nil && envelope.State == SessionStateUsable &&
+				envelope.RefreshToken == "rotated-refresh-token"
 		},
 	}, WithHTTPClient(baseClient.HTTPClient), WithClock(baseClient.Clock), WithRandom(&counterReader{}),
 		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errors.New("unused") }))

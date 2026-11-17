@@ -24,7 +24,15 @@ type resolvedVault struct {
 	Origin string
 }
 
-func resolvePublicationVault(ctx context.Context, command *urfave.Command, label string, vaults pullVaultFactory, session pushSession, override [32]byte, directory string) (resolvedVault, error) {
+func resolvePublicationVault(
+	ctx context.Context,
+	command *urfave.Command,
+	label string,
+	vaults pullVaultFactory,
+	session pushSession,
+	override [32]byte,
+	directory string,
+) (resolvedVault, error) {
 	if override != ([32]byte{}) {
 		return resolvedVault{Vault: override}, nil
 	}
@@ -66,7 +74,10 @@ func writeResolvedVault(command *urfave.Command, vault resolvedVault) error {
 }
 
 func unreadablePositionExit(command *urfave.Command, label, reason string) error {
-	if err := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason})); err != nil {
+	if err := writeCommandOutput(
+		command,
+		renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason}),
+	); err != nil {
 		return err
 	}
 	return urfave.Exit(label+" refused: the local position store cannot be inspected read-only; nothing was changed", 3)
@@ -74,10 +85,16 @@ func unreadablePositionExit(command *urfave.Command, label, reason string) error
 
 func publishedVaultFailure(command *urfave.Command, label string, err error) error {
 	if errors.Is(err, service.ErrPublicationHeadAbsent) {
-		if writeErr := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingNoPublication})); writeErr != nil {
+		if writeErr := writeCommandOutput(
+			command,
+			renderPullFinding(pullFinding{Kind: pullFindingNoPublication}),
+		); writeErr != nil {
 			return writeErr
 		}
-		return urfave.Exit(label+" refused: the account publishes no v2 position record at self, so there is no vault to adopt; pass --vault to name the vault this command acts on; nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the account publishes no v2 position record at self, so there is no vault to adopt; pass --vault to name the vault this command acts on; nothing was changed",
+			3,
+		)
 	}
 	finding := pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonHead}
 	var reasoned pullViewReasoner
@@ -91,7 +108,10 @@ func publishedVaultFailure(command *urfave.Command, label string, err error) err
 		return urfave.Exit(label+" is indeterminate: the published vault read did not resolve; re-run dottie "+label, 4)
 	}
 	if errors.Is(err, service.ErrPublicationHeadIdentity) || errors.Is(err, service.ErrPublicationHeadInput) {
-		return urfave.Exit(label+" refused: the account identity does not match the authorized session; nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the account identity does not match the authorized session; nothing was changed",
+			3,
+		)
 	}
 	return urfave.Exit(label+" refused: the published vault cannot be read or validated; nothing was changed", 3)
 }

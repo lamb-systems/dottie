@@ -10,11 +10,22 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atclient"
 )
 
-func NewSessionAPIClient(client *Client, identity Identity, handle string, session *Session) (*atclient.APIClient, error) {
+func NewSessionAPIClient(
+	client *Client,
+	identity Identity,
+	handle string,
+	session *Session,
+) (*atclient.APIClient, error) {
 	return newSessionAPIClient(client, identity, handle, session, nil)
 }
 
-func newSessionAPIClient(client *Client, identity Identity, handle string, session *Session, roundTripper http.RoundTripper) (*atclient.APIClient, error) {
+func newSessionAPIClient(
+	client *Client,
+	identity Identity,
+	handle string,
+	session *Session,
+	roundTripper http.RoundTripper,
+) (*atclient.APIClient, error) {
 	origin, err := pdsHTTPSOrigin(identity.PDS)
 	if err != nil {
 		return nil, authMethodError(ErrAuthMethodConfiguration, err)
@@ -26,7 +37,10 @@ func newSessionAPIClient(client *Client, identity Identity, handle string, sessi
 	if roundTripper == nil {
 		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 		if !ok {
-			return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("default HTTP transport cannot be safely cloned"))
+			return nil, authMethodError(
+				ErrAuthMethodConfiguration,
+				errors.New("default HTTP transport cannot be safely cloned"),
+			)
 		}
 		transport := defaultTransport.Clone()
 		transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
@@ -58,8 +72,12 @@ type originPinnedRoundTripper struct {
 }
 
 func (transport originPinnedRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
-	if transport.next == nil || request == nil || request.URL == nil || !requestMatchesOrigin(request, transport.origin) {
-		return nil, authMethodError(ErrAuthMethodHost, errors.New("only HTTPS requests to the discovered PDS origin are allowed"))
+	if transport.next == nil || request == nil || request.URL == nil ||
+		!requestMatchesOrigin(request, transport.origin) {
+		return nil, authMethodError(
+			ErrAuthMethodHost,
+			errors.New("only HTTPS requests to the discovered PDS origin are allowed"),
+		)
 	}
 	return transport.next.RoundTrip(request)
 }

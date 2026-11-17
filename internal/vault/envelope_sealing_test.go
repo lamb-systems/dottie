@@ -44,12 +44,19 @@ func TestSealPreparedRejectsDuplicateRecipientKeyID(t *testing.T) {
 func TestSealAuthorizedRequestVaultIsCheckedByPreparedSeal(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	request := SealRequest{
-		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault, PublicationID: fixture.prepared.PublicationID,
-		EpochSeq: fixture.policy.EpochSeq, PolicyDigest: fixture.prepared.PolicyDigest,
-		Parent: bytes.Clone(fixture.prepared.Parent), DeviceID: fixture.certificate.DeviceID,
-		KeyID: bytes.Clone(fixture.certificate.KeyID), Plaintext: bytes.Clone(fixture.prepared.Plaintext),
-		SigningKey: fixture.publisherKey,
-		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+		Purpose:       PurposeSnapshot,
+		Vault:         fixture.policy.Vault,
+		PublicationID: fixture.prepared.PublicationID,
+		EpochSeq:      fixture.policy.EpochSeq,
+		PolicyDigest:  fixture.prepared.PolicyDigest,
+		Parent:        bytes.Clone(fixture.prepared.Parent),
+		DeviceID:      fixture.certificate.DeviceID,
+		KeyID:         bytes.Clone(fixture.certificate.KeyID),
+		Plaintext:     bytes.Clone(fixture.prepared.Plaintext),
+		SigningKey:    fixture.publisherKey,
+		Recipients: []RecipientPublicKey{
+			{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()},
+		},
 	}
 	request.Vault[0] ^= 1
 

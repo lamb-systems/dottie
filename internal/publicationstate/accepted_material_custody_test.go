@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialRefusesFaultedOwnedPayload(t *testing.T) {
@@ -132,7 +133,7 @@ func TestPublicationReadAcceptedMaterialRefusesFaultedOwnedPayload(t *testing.T)
 			require.NoError(t, err)
 			assert.Equal(t, faultedFile, afterCandidateFile)
 			assert.Equal(t, heldFloor, finalized.Floor)
-			assert.Equal(t, heldFloor, expectedFloor)
+			assert.Equal(t, expectedFloor, heldFloor)
 			assert.Equal(t, heldRecord, candidate.SnapshotRecord)
 			assert.Equal(t, heldPayload, candidate.Payload)
 		})
@@ -148,7 +149,12 @@ type acceptedMaterialCustodyState struct {
 	LogicalRows    map[string]string
 }
 
-func readAcceptedMaterialCustodyState(t *testing.T, store *Store, attemptID [16]byte, expected CandidateInput) acceptedMaterialCustodyState {
+func readAcceptedMaterialCustodyState(
+	t *testing.T,
+	store *Store,
+	attemptID [16]byte,
+	expected CandidateInput,
+) acceptedMaterialCustodyState {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -174,7 +180,12 @@ func readAcceptedMaterialCustodyState(t *testing.T, store *Store, attemptID [16]
 	}
 }
 
-func assertAcceptedMaterialCustodyPublicState(t *testing.T, store *Store, attemptID [16]byte, expected acceptedMaterialCustodyState) {
+func assertAcceptedMaterialCustodyPublicState(
+	t *testing.T,
+	store *Store,
+	attemptID [16]byte,
+	expected acceptedMaterialCustodyState,
+) {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -256,7 +267,7 @@ func observeAcceptedMaterialPayloadFile(path string, maximumBytes int) (accepted
 		return acceptedMaterialPayloadFileState{}, errors.New("fixture payload changed while observed")
 	}
 	return acceptedMaterialPayloadFileState{
-		Exists: true, Device: uint64(stat.Dev), Inode: stat.Ino, UID: stat.Uid,
-		Nlink: uint64(stat.Nlink), Mode: stat.Mode, Size: stat.Size, Bytes: bytes.Clone(buffer[:offset]),
+		Exists: true, Device: stat.Dev, Inode: stat.Ino, UID: stat.Uid,
+		Nlink: stat.Nlink, Mode: stat.Mode, Size: stat.Size, Bytes: bytes.Clone(buffer[:offset]),
 	}, nil
 }

@@ -5,12 +5,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type publicationAcceptRecord struct {
@@ -39,8 +40,12 @@ func newPublicationAcceptFixture(t *testing.T) *publicationAcceptFixture {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	return &publicationAcceptFixture{
-		directory: directory, binding: binding,
-		context: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-accept-revision", RepositoryDigest: []byte{0x11, 0x12}},
+		directory: directory,
+		binding:   binding,
+		context: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-accept-revision",
+			RepositoryDigest:   []byte{0x11, 0x12},
+		},
 	}
 }
 
@@ -52,10 +57,18 @@ func (fixture *publicationAcceptFixture) append(t *testing.T, content string) pu
 			ID: "synthetic-files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
 		}},
-		Entries: []model.Entry{{
-			TargetID: "synthetic-files",
-			File:     &model.FileEntry{Path: "settings.ini", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: 0o600},
-		}},
+		Entries: []model.Entry{
+			{
+				TargetID: "synthetic-files",
+				File: &model.FileEntry{
+					Path:    "settings.ini",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(content),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -68,16 +81,25 @@ func (fixture *publicationAcceptFixture) append(t *testing.T, content string) pu
 		require.NoError(t, err)
 	}
 	record := publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
-		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          fixture.binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	record.PublicationID[15] = byte(sequence + 1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(sequence)
 	require.NoError(t, err)
-	appended := publicationAcceptRecord{block: publicationstate.SnapshotBlock{Key: key, Raw: raw}, payload: packed.Payload}
+	appended := publicationAcceptRecord{
+		block:   publicationstate.SnapshotBlock{Key: key, Raw: raw},
+		payload: packed.Payload,
+	}
 	fixture.records = append(fixture.records, appended)
 	return appended
 }
@@ -115,7 +137,11 @@ func (fixture *publicationAcceptFixture) stage(t *testing.T, floorRevision uint6
 	return proposal
 }
 
-func (fixture *publicationAcceptFixture) accept(t *testing.T, proposal PublicationAcceptProposal, floorRevision uint64) publicationstate.Floor {
+func (fixture *publicationAcceptFixture) accept(
+	t *testing.T,
+	proposal PublicationAcceptProposal,
+	floorRevision uint64,
+) publicationstate.Floor {
 	t.Helper()
 	floor, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
 		Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode, FloorRevision: floorRevision,
@@ -140,7 +166,7 @@ func (fixture *publicationAcceptFixture) loadedFloor(t *testing.T) publicationst
 func assertPublicationAcceptFailure(t *testing.T, err error, stage, reason string) {
 	t.Helper()
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPublicationAccept)
+	require.ErrorIs(t, err, ErrPublicationAccept)
 	var refusal *publicationAcceptError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, stage, refusal.Stage())
@@ -189,7 +215,7 @@ func TestStagePublicationAcceptRefusesAFloorRevisionThatMoved(t *testing.T) {
 		Observation: fixture.observation(t), Payload: fixture.records[1].payload,
 	})
 	assertPublicationAcceptFailure(t, err, "accept-position", "revision_moved")
-	assert.ErrorIs(t, err, errPublicationAcceptRevision)
+	require.ErrorIs(t, err, errPublicationAcceptRevision)
 
 	_, err = AcceptPublication(context.Background(), PublicationAcceptRequest{
 		Directory: fixture.directory, Binding: fixture.binding, Mode: publicationstate.ModeAdvance,
@@ -309,7 +335,7 @@ func TestStagePublicationAcceptRefusesAnUnusablePositionStoreOrPayload(t *testin
 	})
 	assertPublicationAcceptFailure(t, err, "accept-position", "position_absent")
 	_, statErr := os.Lstat(missing + "/publication.db")
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "staging created the position store")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "staging created the position store")
 
 	_, err = StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding, FloorRevision: 0,

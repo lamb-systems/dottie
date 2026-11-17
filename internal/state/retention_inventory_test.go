@@ -5,9 +5,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestRetentionInventoryReportsDeclaredCompletenessAndEvictedMaterial(t *testing.T) {
@@ -56,18 +57,52 @@ func TestRetentionInventoryIncludesBoundBackupsAndFlagsUnboundAndOrphanedHolding
 	pointBody := []byte("retained snapshot body")
 	point := testRetentionPoint(t, vaultID, 4, pointBody, [32]byte{9})
 	declaration := testRetentionDeclaration(t, vaultID, point, 4, 10)
-	_, err := store.ReplaceRetentionDeclarationWithMaterials(ctx, declaration, []RetentionRecoveryPointMaterials{{Point: point, Payloads: [][]byte{pointBody}}})
+	_, err := store.ReplaceRetentionDeclarationWithMaterials(
+		ctx,
+		declaration,
+		[]RetentionRecoveryPointMaterials{{Point: point, Payloads: [][]byte{pointBody}}},
+	)
 	require.NoError(t, err)
-	require.NoError(t, store.PutVaultSelection(ctx, VaultSelection{Vault: vaultID, DeviceID: declaration.DeviceID, RecordedAt: 1}))
-	require.NoError(t, store.PutTarget(ctx, TargetDescriptor{ID: "target", Version: 1, Source: model.SourceFiles, SourceVersion: model.SourceVersion, Mode: "review", LogicalBase: model.RootHome, LogicalPath: "selected", Kind: model.SelectionDirectory, CreatedAt: 1}))
+	require.NoError(
+		t,
+		store.PutVaultSelection(ctx, VaultSelection{Vault: vaultID, DeviceID: declaration.DeviceID, RecordedAt: 1}),
+	)
+	require.NoError(
+		t,
+		store.PutTarget(
+			ctx,
+			TargetDescriptor{
+				ID:            "target",
+				Version:       1,
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Mode:          "review",
+				LogicalBase:   model.RootHome,
+				LogicalPath:   "selected",
+				Kind:          model.SelectionDirectory,
+				CreatedAt:     1,
+			},
+		),
+	)
 
 	identity := fileIdentity("prefs.toml")
 	preimage := NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("before"))
 	postimage := NewFingerprint(string(model.FilePresent), model.FileRegular, 0o600, "", "", "", []byte("after"))
 	bound, err := store.AppendJournal(ctx, JournalEntry{
-		ID: "bound-retention-backup", Operation: "replace", State: "pending", Stage: JournalStagePending,
-		Identity: identity, Preimage: preimage, Postimage: postimage,
-		Retention: &RetentionBinding{Vault: vaultID, Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID), PolicyDigest: point.PolicyDigest, ControlCID: bytes.Clone(point.ControlCID)},
+		ID:        "bound-retention-backup",
+		Operation: "replace",
+		State:     "pending",
+		Stage:     JournalStagePending,
+		Identity:  identity,
+		Preimage:  preimage,
+		Postimage: postimage,
+		Retention: &RetentionBinding{
+			Vault:        vaultID,
+			Epoch:        point.Epoch,
+			SnapshotCID:  bytes.Clone(point.SnapshotCID),
+			PolicyDigest: point.PolicyDigest,
+			ControlCID:   bytes.Clone(point.ControlCID),
+		},
 		CreatedAt: 10,
 	}, []byte("before"))
 	require.NoError(t, err)
@@ -123,7 +158,11 @@ func TestReplaceRetentionDeclarationWithMaterialsFailurePreservesCompleteDeclara
 	firstPoint := testRetentionPoint(t, vaultID, 1, firstBody, [32]byte{11})
 	secondPoint := testRetentionPoint(t, vaultID, 2, secondBody, [32]byte{12})
 	firstDeclaration := testRetentionDeclaration(t, vaultID, firstPoint, 1, 10)
-	_, err := store.ReplaceRetentionDeclarationWithMaterials(ctx, firstDeclaration, []RetentionRecoveryPointMaterials{{Point: firstPoint, Payloads: [][]byte{firstBody}}})
+	_, err := store.ReplaceRetentionDeclarationWithMaterials(
+		ctx,
+		firstDeclaration,
+		[]RetentionRecoveryPointMaterials{{Point: firstPoint, Payloads: [][]byte{firstBody}}},
+	)
 	require.NoError(t, err)
 	before, err := store.RetentionDeclaration(ctx, vaultID, firstDeclaration.DeviceID)
 	require.NoError(t, err)

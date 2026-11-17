@@ -18,10 +18,20 @@ func TestCallbackAttemptsAreBounded(t *testing.T) {
 		require.NoError(t, err)
 	}
 	defer flow.Close()
-	for attempt := 0; attempt < 2; attempt++ {
-		callbackRequest(t, flow, "/callback", url.Values{"state": {"incorrect"}, "iss": {flow.identity.Issuer}, "code": {"code"}})
+	for range 2 {
+		callbackRequest(
+			t,
+			flow,
+			"/callback",
+			url.Values{"state": {"incorrect"}, "iss": {flow.identity.Issuer}, "code": {"code"}},
+		)
 	}
-	target := strings.TrimSuffix(flow.RedirectURI(), "/callback") + "/callback?state=incorrect&iss=" + url.QueryEscape(flow.identity.Issuer) + "&code=code"
+	target := strings.TrimSuffix(
+		flow.RedirectURI(),
+		"/callback",
+	) + "/callback?state=incorrect&iss=" + url.QueryEscape(
+		flow.identity.Issuer,
+	) + "&code=code"
 	if response, err := http.Get(target); err == nil {
 		_ = response.Body.Close()
 	}

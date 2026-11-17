@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
+
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
@@ -44,7 +45,10 @@ func validateBinding(binding Binding) error {
 			return errors.New("binding")
 		}
 		uri, parseErr := syntax.ParseATURI(binding.Repository)
-		if parseErr != nil || uri.String() != binding.Repository || string(uri.Authority()) != binding.AccountDID || uri.Collection() == "" || uri.RecordKey() == "" || uri.Normalize().String() != binding.Repository {
+		if parseErr != nil || uri.String() != binding.Repository || string(uri.Authority()) != binding.AccountDID ||
+			uri.Collection() == "" ||
+			uri.RecordKey() == "" ||
+			uri.Normalize().String() != binding.Repository {
 			return errors.New("binding")
 		}
 	default:
@@ -55,8 +59,36 @@ func validateBinding(binding Binding) error {
 
 func validateAttemptLimits(limits AttemptLimits) error {
 	defaults := DefaultAttemptLimits()
-	values := []uint64{uint64(limits.ActiveAttempts), uint64(limits.HistoricalAttempts), uint64(limits.RetainedPublications), uint64(limits.ManagedObjects), limits.CustodyBytes, limits.MetadataBytes, limits.EvidenceBytes, limits.EvidenceSlotBytes, uint64(limits.LifecycleEvents), limits.EventBytes, limits.CoreBytes, uint64(limits.HistoryPageEntries), limits.HistoryPageBytes}
-	ceilings := []uint64{uint64(defaults.ActiveAttempts), uint64(defaults.HistoricalAttempts), uint64(defaults.RetainedPublications), uint64(defaults.ManagedObjects), defaults.CustodyBytes, defaults.MetadataBytes, defaults.EvidenceBytes, defaults.EvidenceSlotBytes, uint64(defaults.LifecycleEvents), defaults.EventBytes, defaults.CoreBytes, uint64(defaults.HistoryPageEntries), defaults.HistoryPageBytes}
+	values := []uint64{
+		uint64(limits.ActiveAttempts),
+		uint64(limits.HistoricalAttempts),
+		uint64(limits.RetainedPublications),
+		uint64(limits.ManagedObjects),
+		limits.CustodyBytes,
+		limits.MetadataBytes,
+		limits.EvidenceBytes,
+		limits.EvidenceSlotBytes,
+		uint64(limits.LifecycleEvents),
+		limits.EventBytes,
+		limits.CoreBytes,
+		uint64(limits.HistoryPageEntries),
+		limits.HistoryPageBytes,
+	}
+	ceilings := []uint64{
+		uint64(defaults.ActiveAttempts),
+		uint64(defaults.HistoricalAttempts),
+		uint64(defaults.RetainedPublications),
+		uint64(defaults.ManagedObjects),
+		defaults.CustodyBytes,
+		defaults.MetadataBytes,
+		defaults.EvidenceBytes,
+		defaults.EvidenceSlotBytes,
+		uint64(defaults.LifecycleEvents),
+		defaults.EventBytes,
+		defaults.CoreBytes,
+		uint64(defaults.HistoryPageEntries),
+		defaults.HistoryPageBytes,
+	}
 	for index, value := range values {
 		if value == 0 || value > ceilings[index] || value > math.MaxInt64 {
 			return errors.New("attempt limits")
@@ -67,8 +99,34 @@ func validateAttemptLimits(limits AttemptLimits) error {
 
 func validateLimits(limits Limits) error {
 	defaults := DefaultLimits()
-	values := []uint64{uint64(limits.SuppliedSnapshotCount), limits.SuppliedTotalBytes, uint64(limits.SuppliedContextBytes), uint64(limits.MaxLineageLinks), uint64(limits.CacheRecordCount), uint64(limits.CacheObservationCount), limits.CacheLogicalBytes, uint64(limits.AcceptedRecordCount), uint64(limits.AcceptedEventCount), limits.AcceptedLogicalBytes, uint64(limits.HistoryPageEvents), limits.HistoryEvidenceBytes}
-	ceilings := []uint64{uint64(defaults.SuppliedSnapshotCount), defaults.SuppliedTotalBytes, uint64(defaults.SuppliedContextBytes), uint64(defaults.MaxLineageLinks), uint64(defaults.CacheRecordCount), uint64(defaults.CacheObservationCount), defaults.CacheLogicalBytes, uint64(defaults.AcceptedRecordCount), uint64(defaults.AcceptedEventCount), defaults.AcceptedLogicalBytes, uint64(defaults.HistoryPageEvents), defaults.HistoryEvidenceBytes}
+	values := []uint64{
+		uint64(limits.SuppliedSnapshotCount),
+		limits.SuppliedTotalBytes,
+		uint64(limits.SuppliedContextBytes),
+		uint64(limits.MaxLineageLinks),
+		uint64(limits.CacheRecordCount),
+		uint64(limits.CacheObservationCount),
+		limits.CacheLogicalBytes,
+		uint64(limits.AcceptedRecordCount),
+		uint64(limits.AcceptedEventCount),
+		limits.AcceptedLogicalBytes,
+		uint64(limits.HistoryPageEvents),
+		limits.HistoryEvidenceBytes,
+	}
+	ceilings := []uint64{
+		uint64(defaults.SuppliedSnapshotCount),
+		defaults.SuppliedTotalBytes,
+		uint64(defaults.SuppliedContextBytes),
+		uint64(defaults.MaxLineageLinks),
+		uint64(defaults.CacheRecordCount),
+		uint64(defaults.CacheObservationCount),
+		defaults.CacheLogicalBytes,
+		uint64(defaults.AcceptedRecordCount),
+		uint64(defaults.AcceptedEventCount),
+		defaults.AcceptedLogicalBytes,
+		uint64(defaults.HistoryPageEvents),
+		defaults.HistoryEvidenceBytes,
+	}
 	for index, value := range values {
 		if value == 0 || value > ceilings[index] || value > math.MaxInt64 {
 			return errors.New("limits")
@@ -80,14 +138,17 @@ func validateLimits(limits Limits) error {
 var errContextLimit = errors.New("context limit")
 
 func validateContext(context SuppliedContext, binding Binding, limits Limits) error {
-	if !utf8.ValidString(context.RepositoryRevision) || len(context.RepositoryRevision) == 0 || len(context.RepositoryDigest) == 0 {
+	if !utf8.ValidString(context.RepositoryRevision) || len(context.RepositoryRevision) == 0 ||
+		len(context.RepositoryDigest) == 0 {
 		return errors.New("context")
 	}
 	if len(context.RepositoryRevision) > 1024 || len(context.RepositoryDigest) > 128 {
 		return errContextLimit
 	}
 	if binding.Backend == BackendSpaces {
-		if context.Policy == nil || !context.Policy.OwnerOnly || !utf8.ValidString(context.Policy.Revision) || len(context.Policy.Revision) == 0 || len(context.Policy.Identity) == 0 {
+		if context.Policy == nil || !context.Policy.OwnerOnly || !utf8.ValidString(context.Policy.Revision) ||
+			len(context.Policy.Revision) == 0 ||
+			len(context.Policy.Identity) == 0 {
 			return errors.New("context")
 		}
 		if len(context.Policy.Revision) > 1024 || len(context.Policy.Identity) > 128 {
@@ -203,7 +264,16 @@ func validateObservation(input Observation, binding Binding, limits Limits) (val
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	id := domainHash("systems.lamb.dottie.local-observation-id.v1", observationDigest[:])
-	return validatedObservation{blocks: blocks, byCID: byCID, candidate: candidate, context: cloneContext(input.SuppliedContext), setDigest: setDigest, observationDigest: observationDigest, observationID: id, head: bytes.Clone(input.Head)}, nil
+	return validatedObservation{
+		blocks:            blocks,
+		byCID:             byCID,
+		candidate:         candidate,
+		context:           cloneContext(input.SuppliedContext),
+		setDigest:         setDigest,
+		observationDigest: observationDigest,
+		observationID:     id,
+		head:              bytes.Clone(input.Head),
+	}, nil
 }
 
 func sameBinding(a, b Binding) bool {
@@ -211,9 +281,16 @@ func sameBinding(a, b Binding) bool {
 }
 
 func cloneContext(context SuppliedContext) SuppliedContext {
-	out := SuppliedContext{RepositoryRevision: context.RepositoryRevision, RepositoryDigest: bytes.Clone(context.RepositoryDigest)}
+	out := SuppliedContext{
+		RepositoryRevision: context.RepositoryRevision,
+		RepositoryDigest:   bytes.Clone(context.RepositoryDigest),
+	}
 	if context.Policy != nil {
-		out.Policy = &Policy{Revision: context.Policy.Revision, Identity: bytes.Clone(context.Policy.Identity), OwnerOnly: context.Policy.OwnerOnly}
+		out.Policy = &Policy{
+			Revision:  context.Policy.Revision,
+			Identity:  bytes.Clone(context.Policy.Identity),
+			OwnerOnly: context.Policy.OwnerOnly,
+		}
 	}
 	return out
 }

@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestNeverSubmittedAttemptCanBeAbandonedWithoutRepositoryView(t *testing.T) {
@@ -72,7 +73,14 @@ func TestSubmittedAbsenceViewCannotAuthorizeAbandonment(t *testing.T) {
 				floorObservation := f.observation(1)
 				first, err := store.Prepare(ctx, ModeFirstUse, floorObservation, f.payload)
 				require.NoError(t, err)
-				_, err = store.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation)
+				_, err = store.Accept(
+					ctx,
+					ModeFirstUse,
+					first.StateToken,
+					floorObservation,
+					f.payload,
+					first.Confirmation,
+				)
 				require.NoError(t, err)
 				candidate = attemptCandidate(f, 1)
 				absenceView = attemptView(f, floorObservation, false)
@@ -86,7 +94,6 @@ func TestSubmittedAbsenceViewCannotAuthorizeAbandonment(t *testing.T) {
 				resolution, err := store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, absenceView)
 				require.NoError(t, err)
 				assert.Equal(t, OutcomeAbsentUnresolved, resolution.Outcome)
-				loaded = resolution.Attempt
 			}
 			before := readAttemptLogicalRows(t, store)
 			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
@@ -99,7 +106,13 @@ func TestSubmittedAbsenceViewCannotAuthorizeAbandonment(t *testing.T) {
 			assert.Equal(t, before, readAttemptLogicalRows(t, store))
 			currentProposal, err := store.PrepareAbandon(ctx, attempt.ID, &currentView)
 			require.NoError(t, err)
-			retired, err := store.AbandonAttempt(ctx, attempt.ID, currentProposal.StateToken, &absenceView, currentProposal.Confirmation)
+			retired, err := store.AbandonAttempt(
+				ctx,
+				attempt.ID,
+				currentProposal.StateToken,
+				&absenceView,
+				currentProposal.Confirmation,
+			)
 			requireErrorMetadata(t, err, ErrContinuity, StageAbandon, ReasonSubmittedUnknown)
 			assert.Equal(t, Attempt{}, retired)
 			assert.Equal(t, before, readAttemptLogicalRows(t, store))
@@ -107,7 +120,13 @@ func TestSubmittedAbsenceViewCannotAuthorizeAbandonment(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, beforePayload, afterPayload)
 
-			retired, err = store.AbandonAttempt(ctx, attempt.ID, currentProposal.StateToken, &currentView, currentProposal.Confirmation)
+			retired, err = store.AbandonAttempt(
+				ctx,
+				attempt.ID,
+				currentProposal.StateToken,
+				&currentView,
+				currentProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, AttemptRetiredAbandoned, retired.Lifecycle)
 			assert.Equal(t, OutcomeCurrent, retired.Outcome)
@@ -276,12 +295,42 @@ func TestDirectTerminalAbandonmentPersistsOutcomeAndRetirementAcrossReopen(t *te
 		view        func(*testing.T, fixture) SuppliedRepositoryView
 		resolveView func(*testing.T, fixture) SuppliedRepositoryView
 	}{
-		{"unresolved-to-current", "", OutcomeCurrent, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) }, nil},
+		{
+			"unresolved-to-current",
+			"",
+			OutcomeCurrent,
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) },
+			nil,
+		},
 		{"unresolved-to-lost-fence", "", OutcomeLostFence, competingGenesisView, nil},
-		{"unresolved-to-superseded", "", OutcomeSuperseded, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(2), false) }, nil},
-		{"absent-to-current", OutcomeAbsentUnresolved, OutcomeCurrent, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) }, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), true) }},
-		{"absent-to-lost-fence", OutcomeAbsentUnresolved, OutcomeLostFence, competingGenesisView, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), true) }},
-		{"current-to-superseded", OutcomeCurrent, OutcomeSuperseded, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(2), false) }, func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) }},
+		{
+			"unresolved-to-superseded",
+			"",
+			OutcomeSuperseded,
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(2), false) },
+			nil,
+		},
+		{
+			"absent-to-current",
+			OutcomeAbsentUnresolved,
+			OutcomeCurrent,
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) },
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), true) },
+		},
+		{
+			"absent-to-lost-fence",
+			OutcomeAbsentUnresolved,
+			OutcomeLostFence,
+			competingGenesisView,
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), true) },
+		},
+		{
+			"current-to-superseded",
+			OutcomeCurrent,
+			OutcomeSuperseded,
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(2), false) },
+			func(_ *testing.T, f fixture) SuppliedRepositoryView { return attemptView(f, f.observation(1), false) },
+		},
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -326,8 +375,16 @@ func TestDirectTerminalAbandonmentPersistsOutcomeAndRetirementAcrossReopen(t *te
 			assert.False(t, present)
 			assert.Equal(t, Attempt{}, active)
 			var attemptRefs, reservations int
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).Scan(&attemptRefs))
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).Scan(&reservations))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).
+					Scan(&attemptRefs),
+			)
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).
+					Scan(&reservations),
+			)
 			assert.Equal(t, 0, attemptRefs)
 			assert.Equal(t, 0, reservations)
 			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
@@ -375,15 +432,33 @@ func competingGenesisView(t *testing.T, f fixture) SuppliedRepositoryView {
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(raw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: record.Vault, PublicationSeq: 0, SnapshotCID: cid, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          record.Vault,
+			PublicationSeq: 0,
+			SnapshotCID:    cid,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
 	context := f.observation(1).SuppliedContext
-	return SuppliedRepositoryView{Origin: f.binding, Scope: ViewScopeWholeRepository, SuppliedContext: context, Head: head, Snapshots: []SnapshotBlock{{Key: f.blocks[0].Key, Raw: raw}}}
+	return SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           ViewScopeWholeRepository,
+		SuppliedContext: context,
+		Head:            head,
+		Snapshots:       []SnapshotBlock{{Key: f.blocks[0].Key, Raw: raw}},
+	}
 }
 
 func assertOutcomeRetirementProofs(t *testing.T, store *Store, id [16]byte, outcome AttemptOutcome) {
 	t.Helper()
-	rows, err := store.conn.QueryContext(context.Background(), "SELECT role,body FROM attempt_evidence WHERE attempt_id=? ORDER BY role", id[:])
+	rows, err := store.conn.QueryContext(
+		context.Background(),
+		"SELECT role,body FROM attempt_evidence WHERE attempt_id=? ORDER BY role",
+		id[:],
+	)
 	require.NoError(t, err)
 	defer rows.Close()
 	proofs := make(map[string]attemptEvidenceWire)
@@ -405,7 +480,14 @@ func assertOutcomeRetirementProofs(t *testing.T, store *Store, id [16]byte, outc
 	assert.Equal(t, string(outcome), proofs["retirement"].Outcome)
 }
 
-func createAndSubmitGenesis(t *testing.T, store *Store, f fixture, empty SuppliedRepositoryView, candidate CandidateInput, review LocalReviewContext) Attempt {
+func createAndSubmitGenesis(
+	t *testing.T,
+	store *Store,
+	_ fixture,
+	empty SuppliedRepositoryView,
+	candidate CandidateInput,
+	review LocalReviewContext,
+) Attempt {
 	t.Helper()
 	ctx := context.Background()
 	proposal, err := store.PrepareAttempt(ctx, candidate, empty, review)
@@ -418,7 +500,14 @@ func createAndSubmitGenesis(t *testing.T, store *Store, f fixture, empty Supplie
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return attempt
 }

@@ -9,12 +9,13 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCatalogCompilesSortsAndDeepCopies(t *testing.T) {
@@ -56,14 +57,23 @@ func TestNeovimIsExactlyOneDirectoryRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.SourceFiles, preset.Source)
 	require.Len(t, preset.Roots, 1)
-	assert.Equal(t, Root{Base: model.RootXDGConfig, Path: "nvim", Kind: model.SelectionDirectory, Exclude: []string{".git", ".git/**"}}, preset.Roots[0])
+	assert.Equal(
+		t,
+		Root{
+			Base:    model.RootXDGConfig,
+			Path:    "nvim",
+			Kind:    model.SelectionDirectory,
+			Exclude: []string{".git", ".git/**"},
+		},
+		preset.Roots[0],
+	)
 	assert.Empty(t, preset.Categories)
 }
 
 func TestLookupUnknownListsKnownIDsSorted(t *testing.T) {
 	_, err := Lookup("missing")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnknownPreset)
+	require.ErrorIs(t, err, ErrUnknownPreset)
 	assert.Contains(t, err.Error(), "gnome, kitty, neovim, sway")
 }
 
@@ -85,18 +95,58 @@ func TestClosedSchemaAndPresetValidation(t *testing.T) {
 		text string
 		key  string
 	}{
-		{name: "top level unknown key", text: strings.Replace(base, "[[roots]]", "command = \"run\"\n[[roots]]", 1), key: "command"},
-		{name: "nested reload", text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nreload = true", 1), key: "roots.reload"},
-		{name: "nested command", text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\ncommand = \"run\"", 1), key: "roots.command"},
-		{name: "nested follow", text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nfollow = true", 1), key: "roots.follow"},
-		{name: "unsupported schema", text: strings.Replace(base, "schema_version=1", "schema_version=2", 1), key: "schema_version"},
+		{
+			name: "top level unknown key",
+			text: strings.Replace(base, "[[roots]]", "command = \"run\"\n[[roots]]", 1),
+			key:  "command",
+		},
+		{
+			name: "nested reload",
+			text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nreload = true", 1),
+			key:  "roots.reload",
+		},
+		{
+			name: "nested command",
+			text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\ncommand = \"run\"", 1),
+			key:  "roots.command",
+		},
+		{
+			name: "nested follow",
+			text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nfollow = true", 1),
+			key:  "roots.follow",
+		},
+		{
+			name: "unsupported schema",
+			text: strings.Replace(base, "schema_version=1", "schema_version=2", 1),
+			key:  "schema_version",
+		},
 		{name: "unknown source", text: strings.Replace(base, "source=\"files\"", "source=\"other\"", 1), key: "source"},
-		{name: "unknown risk", text: strings.Replace(base, "risk=\"executable-config\"", "risk=\"unknown\"", 1), key: "risk"},
+		{
+			name: "unknown risk",
+			text: strings.Replace(base, "risk=\"executable-config\"", "risk=\"unknown\"", 1),
+			key:  "risk",
+		},
 		{name: "files without roots", text: strings.Split(base, "[[roots]]")[0], key: "roots"},
-		{name: "GNOME with roots", text: strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), key: "roots"},
-		{name: "GNOME without categories", text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0], key: "categories"},
-		{name: "GNOME with unknown category", text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0] + "categories = [\"wallpaper\"]\n", key: "categories"},
-		{name: "invalid exclude", text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nexclude = [\"{a,b}\"]", 1), key: "exclude"},
+		{
+			name: "GNOME with roots",
+			text: strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1),
+			key:  "roots",
+		},
+		{
+			name: "GNOME without categories",
+			text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0],
+			key:  "categories",
+		},
+		{
+			name: "GNOME with unknown category",
+			text: strings.Split(strings.Replace(base, "source=\"files\"", "source=\"gnome\"", 1), "[[roots]]")[0] + "categories = [\"wallpaper\"]\n",
+			key:  "categories",
+		},
+		{
+			name: "invalid exclude",
+			text: strings.Replace(base, "kind=\"directory\"", "kind=\"directory\"\nexclude = [\"{a,b}\"]", 1),
+			key:  "exclude",
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -173,7 +223,19 @@ func TestMaterializeAddsNeovimWithoutMutatingInput(t *testing.T) {
 	preset, err := Lookup("neovim")
 	require.NoError(t, err)
 	input := config.Default()
-	input.Targets = []config.Target{{ID: "existing", Source: model.SourceFiles, Mode: config.AutoApply, Root: &config.Root{Base: model.RootHome, Path: "Documents", Kind: model.SelectionDirectory, Exclude: []string{"local"}}}}
+	input.Targets = []config.Target{
+		{
+			ID:     "existing",
+			Source: model.SourceFiles,
+			Mode:   config.AutoApply,
+			Root: &config.Root{
+				Base:    model.RootHome,
+				Path:    "Documents",
+				Kind:    model.SelectionDirectory,
+				Exclude: []string{"local"},
+			},
+		},
+	}
 	before := cloneConfig(input)
 
 	result, err := Materialize(preset, input, paths)
@@ -196,7 +258,19 @@ func TestMaterializeIdenticalRootIsNoOpAndPreservesSelection(t *testing.T) {
 	preset, err := Lookup("neovim")
 	require.NoError(t, err)
 	input := config.Default()
-	input.Targets = []config.Target{{ID: "user-nvim", Source: model.SourceFiles, Mode: config.AutoApply, Root: &config.Root{Base: model.RootXDGConfig, Path: "nvim", Kind: model.SelectionDirectory, Exclude: []string{".git/**", ".git"}}}}
+	input.Targets = []config.Target{
+		{
+			ID:     "user-nvim",
+			Source: model.SourceFiles,
+			Mode:   config.AutoApply,
+			Root: &config.Root{
+				Base:    model.RootXDGConfig,
+				Path:    "nvim",
+				Kind:    model.SelectionDirectory,
+				Exclude: []string{".git/**", ".git"},
+			},
+		},
+	}
 	before := cloneConfig(input)
 	result, err := Materialize(preset, input, paths)
 	require.NoError(t, err)
@@ -211,14 +285,31 @@ func TestMaterializeRejectsConflictingExcludesAndIDCollision(t *testing.T) {
 	preset, err := Lookup("neovim")
 	require.NoError(t, err)
 	conflict := config.Default()
-	conflict.Targets = []config.Target{{ID: "nvim", Source: model.SourceFiles, Root: &config.Root{Base: model.RootXDGConfig, Path: "nvim", Kind: model.SelectionDirectory, Exclude: []string{".git"}}}}
+	conflict.Targets = []config.Target{
+		{
+			ID:     "nvim",
+			Source: model.SourceFiles,
+			Root: &config.Root{
+				Base:    model.RootXDGConfig,
+				Path:    "nvim",
+				Kind:    model.SelectionDirectory,
+				Exclude: []string{".git"},
+			},
+		},
+	}
 	_, err = Materialize(preset, conflict, paths)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConsentConflict)
+	require.ErrorIs(t, err, ErrConsentConflict)
 	assert.Contains(t, err.Error(), "exclude")
 
 	collision := config.Default()
-	collision.Targets = []config.Target{{ID: config.DeriveID(model.RootXDGConfig, "nvim"), Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory}}}
+	collision.Targets = []config.Target{
+		{
+			ID:     config.DeriveID(model.RootXDGConfig, "nvim"),
+			Source: model.SourceFiles,
+			Root:   &config.Root{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+		},
+	}
 	_, err = Materialize(preset, collision, paths)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id")
@@ -232,14 +323,27 @@ func TestMaterializeRejectsConfigAuthorityViolations(t *testing.T) {
 		setup func(*testing.T, platform.Paths)
 	}{
 		{name: "whole base", roots: []Root{{Base: model.RootHome, Path: ".", Kind: model.SelectionDirectory}}},
-		{name: "overlap", roots: []Root{{Base: model.RootHome, Path: "parent", Kind: model.SelectionDirectory}, {Base: model.RootHome, Path: "parent/child", Kind: model.SelectionDirectory}}},
-		{name: "self capture", roots: []Root{{Base: model.RootXDGConfig, Path: "dottie", Kind: model.SelectionDirectory}}},
-		{name: "unsafe symlink root", roots: []Root{{Base: model.RootXDGConfig, Path: "linked", Kind: model.SelectionDirectory}}, setup: func(t *testing.T, paths platform.Paths) {
-			t.Helper()
-			state := paths.AppStateDir()
-			require.NoError(t, os.MkdirAll(state, 0o700))
-			require.NoError(t, os.Symlink(state, filepath.Join(paths.ConfigHome, "linked")))
-		}},
+		{
+			name: "overlap",
+			roots: []Root{
+				{Base: model.RootHome, Path: "parent", Kind: model.SelectionDirectory},
+				{Base: model.RootHome, Path: "parent/child", Kind: model.SelectionDirectory},
+			},
+		},
+		{
+			name:  "self capture",
+			roots: []Root{{Base: model.RootXDGConfig, Path: "dottie", Kind: model.SelectionDirectory}},
+		},
+		{
+			name:  "unsafe symlink root",
+			roots: []Root{{Base: model.RootXDGConfig, Path: "linked", Kind: model.SelectionDirectory}},
+			setup: func(t *testing.T, paths platform.Paths) {
+				t.Helper()
+				state := paths.AppStateDir()
+				require.NoError(t, os.MkdirAll(state, 0o700))
+				require.NoError(t, os.Symlink(state, filepath.Join(paths.ConfigHome, "linked")))
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -247,7 +351,13 @@ func TestMaterializeRejectsConfigAuthorityViolations(t *testing.T) {
 			if test.setup != nil {
 				test.setup(t, paths)
 			}
-			preset := Preset{ID: "proposal", Name: "Proposal", Source: model.SourceFiles, Risk: "executable-config", Roots: test.roots}
+			preset := Preset{
+				ID:     "proposal",
+				Name:   "Proposal",
+				Source: model.SourceFiles,
+				Risk:   "executable-config",
+				Roots:  test.roots,
+			}
 			_, err := Materialize(preset, config.Default(), paths)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), `preset "proposal"`)
@@ -286,7 +396,11 @@ func TestGNOMEPresetResolvesPublishedCategoryKeys(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(keyDigest[:]), preview.KeyDigest)
 	for index := 1; index < len(preview.Settings); index++ {
 		previous, current := preview.Settings[index-1], preview.Settings[index]
-		assert.LessOrEqual(t, previous.SchemaID+"\x00"+previous.Path+"\x00"+previous.Key, current.SchemaID+"\x00"+current.Path+"\x00"+current.Key)
+		assert.LessOrEqual(
+			t,
+			previous.SchemaID+"\x00"+previous.Path+"\x00"+previous.Key,
+			current.SchemaID+"\x00"+current.Path+"\x00"+current.Key,
+		)
 	}
 	assert.Contains(t, preview.Settings, matrix.KeyRef{SchemaID: "org.gnome.desktop.interface", Key: "color-scheme"})
 	assert.Contains(t, preview.Settings, matrix.KeyRef{SchemaID: "org.gnome.desktop.calendar", Key: "show-weekdate"})
@@ -303,7 +417,13 @@ func TestGNOMEPresetRejectsInvalidCategorySelection(t *testing.T) {
 		{name: "duplicate", categories: []string{"appearance", "appearance"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			preset := Preset{ID: "gnome-custom", Name: "Custom GNOME", Source: model.SourceGNOME, Risk: "desktop-preferences", Categories: test.categories}
+			preset := Preset{
+				ID:         "gnome-custom",
+				Name:       "Custom GNOME",
+				Source:     model.SourceGNOME,
+				Risk:       "desktop-preferences",
+				Categories: test.categories,
+			}
 			_, err := BuildPreview(preset, paths)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), `preset "gnome-custom" key "categories"`)
@@ -369,7 +489,13 @@ func TestGNOMEPresetPolicyMismatchRequiresReapprovalWithoutWidening(t *testing.T
 
 func TestHandBuiltPresetIsRevalidatedAtBothBoundaries(t *testing.T) {
 	paths := testPaths(t)
-	invalid := Preset{ID: "hand-built", Name: "Hand built", Source: model.SourceFiles, Risk: "executable-config", Roots: []Root{{Base: model.RootHome, Path: "../escape", Kind: model.SelectionDirectory}}}
+	invalid := Preset{
+		ID:     "hand-built",
+		Name:   "Hand built",
+		Source: model.SourceFiles,
+		Risk:   "executable-config",
+		Roots:  []Root{{Base: model.RootHome, Path: "../escape", Kind: model.SelectionDirectory}},
+	}
 	_, err := BuildPreview(invalid, paths)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `preset "hand-built"`)
@@ -382,7 +508,11 @@ func TestHandBuiltPresetIsRevalidatedAtBothBoundaries(t *testing.T) {
 
 func TestCustomRootDoesNotRequirePreset(t *testing.T) {
 	paths := testPaths(t)
-	custom := config.Target{ID: "my-custom-root", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "custom/preferences", Kind: model.SelectionDirectory}}
+	custom := config.Target{
+		ID:     "my-custom-root",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "custom/preferences", Kind: model.SelectionDirectory},
+	}
 	c := config.Default()
 	require.NoError(t, config.CheckAddition(c, paths, custom))
 	c.Targets = append(c.Targets, custom)
@@ -407,7 +537,13 @@ func testPaths(t *testing.T) platform.Paths {
 	for _, path := range []string{home, configHome, stateHome, cacheHome, dataHome} {
 		require.NoError(t, os.MkdirAll(path, 0o700))
 	}
-	return platform.Paths{Home: home, ConfigHome: configHome, StateHome: stateHome, CacheHome: cacheHome, DataHome: dataHome}
+	return platform.Paths{
+		Home:       home,
+		ConfigHome: configHome,
+		StateHome:  stateHome,
+		CacheHome:  cacheHome,
+		DataHome:   dataHome,
+	}
 }
 
 func assertMissing(t *testing.T, path string) {

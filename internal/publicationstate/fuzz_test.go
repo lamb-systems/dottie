@@ -9,7 +9,21 @@ import (
 )
 
 func FuzzStrictPrivateWireJSON(f *testing.F) {
-	wire := stateTokenWire{Version: 1, DatabaseID: bytes.Repeat([]byte{0x5a}, 32), Revision: 1, Generation: 1, Binding: bindingWire{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: string(BackendPublicRepo), Repository: "at://did:plc:abcdefghijklmnopqrstuvwx", Vault: bytes.Repeat([]byte{0x31}, 32), Profile: storageProfile}, Limits: limitsToWire(DefaultLimits()), Floor: nil}
+	wire := stateTokenWire{
+		Version:    1,
+		DatabaseID: bytes.Repeat([]byte{0x5a}, 32),
+		Revision:   1,
+		Generation: 1,
+		Binding: bindingWire{
+			AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+			Backend:    string(BackendPublicRepo),
+			Repository: "at://did:plc:abcdefghijklmnopqrstuvwx",
+			Vault:      bytes.Repeat([]byte{0x31}, 32),
+			Profile:    storageProfile,
+		},
+		Limits: limitsToWire(DefaultLimits()),
+		Floor:  nil,
+	}
 	valid, err := canonicalJSON(wire)
 	require.NoError(f, err)
 	f.Add(valid)

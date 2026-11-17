@@ -39,8 +39,7 @@ func (e *AuthStatusError) Unwrap() error {
 }
 
 func authStatusFromError(err error) int {
-	var status *AuthStatusError
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[*AuthStatusError](err); ok {
 		return status.StatusCode
 	}
 	return 0
@@ -96,20 +95,38 @@ func NewAuthMethod(client *Client, identity Identity, handle string, session *Se
 	if err := session.Validate(); err != nil {
 		return nil, authMethodError(ErrAuthMethodSession, err)
 	}
-	if session.DID != identity.DID || session.Issuer != identity.Issuer || session.TokenEndpoint != identity.TokenEndpoint {
-		return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("session DID, issuer or token endpoint does not match discovery"))
+	if session.DID != identity.DID || session.Issuer != identity.Issuer ||
+		session.TokenEndpoint != identity.TokenEndpoint {
+		return nil, authMethodError(
+			ErrAuthMethodConfiguration,
+			errors.New("session DID, issuer or token endpoint does not match discovery"),
+		)
 	}
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
-	return &resourceAuthMethod{client: client, handle: normalizedHandle, identity: identity, origin: origin, session: session, mu: lock}, nil
+	return &resourceAuthMethod{
+		client:   client,
+		handle:   normalizedHandle,
+		identity: identity,
+		origin:   origin,
+		session:  session,
+		mu:       lock,
+	}, nil
 }
 
-func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.Request, _ syntax.NSID) (*http.Response, error) {
+func (a *resourceAuthMethod) DoWithAuth(
+	httpClient *http.Client,
+	request *http.Request,
+	_ syntax.NSID,
+) (*http.Response, error) {
 	if a == nil || a.client == nil || request == nil || request.URL == nil {
 		return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("auth method and request URL are required"))
 	}
 	if !requestMatchesOrigin(request, a.origin) {
-		return nil, authMethodError(ErrAuthMethodHost, errors.New("only HTTPS requests to the discovered PDS origin are allowed"))
+		return nil, authMethodError(
+			ErrAuthMethodHost,
+			errors.New("only HTTPS requests to the discovered PDS origin are allowed"),
+		)
 	}
 	if httpClient == nil {
 		return nil, authMethodError(ErrAuthMethodConfiguration, errors.New("HTTP client is required"))
@@ -134,7 +151,7 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		}
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		attemptRequest, err := authRequestForAttempt(request, attempt)
 		if err != nil {
 			return nil, authMethodError(ErrAuthMethodNonReplayable, err)
@@ -147,7 +164,15 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 			return nil, authMethodError(ErrAuthMethodSession, err)
 		}
 		token := a.session.AccessToken
-		proof, err := makeDPoPProof(key, attemptRequest.Method, attemptRequest.URL.String(), a.client.Clock(), a.client.Random, token, a.client.getNonce(a.origin))
+		proof, err := makeDPoPProof(
+			key,
+			attemptRequest.Method,
+			attemptRequest.URL.String(),
+			a.client.Clock(),
+			a.client.Random,
+			token,
+			a.client.getNonce(a.origin),
+		)
 		if err != nil {
 			return nil, authMethodError(ErrAuthMethodSession, err)
 		}
@@ -166,18 +191,27 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		body, readErr := readAndRestoreAuthBody(response)
 		if readErr != nil {
 			_ = response.Body.Close()
-			return nil, authMethodError(ErrAuthMethodTransport, &AuthStatusError{StatusCode: response.StatusCode, Err: safeTransportCause(readErr)})
+			return nil, authMethodError(
+				ErrAuthMethodTransport,
+				&AuthStatusError{StatusCode: response.StatusCode, Err: safeTransportCause(readErr)},
+			)
 		}
 		authSignal := strings.ToLower(response.Header.Get("WWW-Authenticate") + " " + string(body))
 		if strings.Contains(authSignal, "use_dpop_nonce") && response.Header.Get("DPoP-Nonce") != "" {
 			a.client.setNonce(a.origin, response.Header.Get("DPoP-Nonce"))
 			if attempt != 0 {
 				_ = response.Body.Close()
-				return nil, authMethodError(ErrAuthMethodNonce, errors.New("nonce challenge persisted after the single retry"))
+				return nil, authMethodError(
+					ErrAuthMethodNonce,
+					errors.New("nonce challenge persisted after the single retry"),
+				)
 			}
 			if !authRequestReplayable(request) {
 				_ = response.Body.Close()
-				return nil, authMethodError(ErrAuthMethodNonReplayable, errors.New("nonce challenge requires a retry but request body has no GetBody"))
+				return nil, authMethodError(
+					ErrAuthMethodNonReplayable,
+					errors.New("nonce challenge requires a retry but request body has no GetBody"),
+				)
 			}
 			_ = response.Body.Close()
 			continue
@@ -185,11 +219,17 @@ func (a *resourceAuthMethod) DoWithAuth(httpClient *http.Client, request *http.R
 		if response.StatusCode == http.StatusUnauthorized && strings.Contains(authSignal, "invalid_token") {
 			if attempt != 0 {
 				_ = response.Body.Close()
-				return nil, authMethodError(ErrAuthMethodToken, errors.New("invalid-token challenge persisted after the single retry"))
+				return nil, authMethodError(
+					ErrAuthMethodToken,
+					errors.New("invalid-token challenge persisted after the single retry"),
+				)
 			}
 			if !authRequestReplayable(request) {
 				_ = response.Body.Close()
-				return nil, authMethodError(ErrAuthMethodNonReplayable, errors.New("invalid-token challenge requires a retry but request body has no GetBody"))
+				return nil, authMethodError(
+					ErrAuthMethodNonReplayable,
+					errors.New("invalid-token challenge requires a retry but request body has no GetBody"),
+				)
 			}
 			_ = response.Body.Close()
 			if err := a.refresh(request.Context()); err != nil {
@@ -228,7 +268,8 @@ func (a *resourceAuthMethod) validateSession() error {
 	if err := a.session.Validate(); err != nil {
 		return err
 	}
-	if a.session.DID != a.identity.DID || a.session.Issuer != a.identity.Issuer || a.session.TokenEndpoint != a.identity.TokenEndpoint {
+	if a.session.DID != a.identity.DID || a.session.Issuer != a.identity.Issuer ||
+		a.session.TokenEndpoint != a.identity.TokenEndpoint {
 		return errors.New("session DID, issuer or token endpoint changed after auth method construction")
 	}
 	return nil
@@ -265,15 +306,15 @@ func authRequestReplayable(request *http.Request) bool {
 }
 
 func authRequestForAttempt(request *http.Request, attempt int) (*http.Request, error) {
-	copy := request.Clone(request.Context())
-	copy.Header = request.Header.Clone()
+	cloned := request.Clone(request.Context())
+	cloned.Header = request.Header.Clone()
 	if request.Body == nil || request.Body == http.NoBody {
-		copy.Body = request.Body
-		return copy, nil
+		cloned.Body = request.Body
+		return cloned, nil
 	}
 	if attempt == 0 {
-		copy.Body = request.Body
-		return copy, nil
+		cloned.Body = request.Body
+		return cloned, nil
 	}
 	if request.GetBody == nil {
 		return nil, errors.New("request body cannot be replayed")
@@ -282,8 +323,8 @@ func authRequestForAttempt(request *http.Request, attempt int) (*http.Request, e
 	if err != nil {
 		return nil, fmt.Errorf("reopen request body: %w", err)
 	}
-	copy.Body = body
-	return copy, nil
+	cloned.Body = body
+	return cloned, nil
 }
 
 type restoredAuthBody struct {

@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
@@ -18,8 +20,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const publicationIncomingPayloadDirectory = "payloads"
@@ -47,7 +47,10 @@ func newPublicationIncomingFixture(t *testing.T) *publicationIncomingFixture {
 	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: captured}
 	require.NoError(t, snapshot.Validate())
 	setup := encodePublicationReconcileMaterial(t, binding, snapshot, 0, nil, [16]byte{0x62, 0x34, 0x63})
-	supplied := publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}}
+	supplied := publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-revision",
+		RepositoryDigest:   []byte{1, 2, 3},
+	}
 	return &publicationIncomingFixture{
 		home: home, storeDirectory: storeDirectory, binding: binding,
 		configuration: configuration, portable: portable,
@@ -98,7 +101,14 @@ func (f *publicationIncomingFixture) acceptFirstUse(t *testing.T) (publicationst
 	require.Equal(t, "first_use", proposal.Stop)
 	require.NotEqual(t, [32]byte{}, proposal.StateToken)
 	require.NotEqual(t, [32]byte{}, proposal.Confirmation)
-	accepted, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.ModeFirstUse, proposal.StateToken, f.observation, f.setup.payload, proposal.Confirmation)
+	accepted, err := f.home.pubStore.AcceptMaterial(
+		ctx,
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		f.observation,
+		f.setup.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return accepted, proposal
 }
@@ -127,9 +137,21 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 
 	material, err := reopened.ReadAcceptedMaterial(ctx, f.binding, beforeRead.floor)
 	require.NoError(t, err)
-	require.True(t, reflect.DeepEqual(beforeRead.floor, material.Floor), "reader floor must match the independently loaded current floor")
-	require.True(t, bytes.Equal(f.expectedRecord, material.SnapshotRecord), "reader record must match the assertions-only setup oracle")
-	require.True(t, bytes.Equal(f.expectedPayload, material.Payload), "reader payload must match the assertions-only setup oracle")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead.floor, material.Floor),
+		"reader floor must match the independently loaded current floor",
+	)
+	require.True(
+		t,
+		bytes.Equal(f.expectedRecord, material.SnapshotRecord),
+		"reader record must match the assertions-only setup oracle",
+	)
+	require.True(
+		t,
+		bytes.Equal(f.expectedPayload, material.Payload),
+		"reader payload must match the assertions-only setup oracle",
+	)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	require.NoError(t, err)
@@ -137,12 +159,24 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, model.SnapshotVersion, snapshot.Version)
 	require.Len(t, snapshot.Targets, 1)
-	require.True(t, reflect.DeepEqual(f.portable, snapshot.Targets[0]), "reader snapshot must contain the independently selected target")
+	require.True(
+		t,
+		reflect.DeepEqual(f.portable, snapshot.Targets[0]),
+		"reader snapshot must contain the independently selected target",
+	)
 	require.Len(t, snapshot.Entries, 1)
 	require.NotNil(t, snapshot.Entries[0].File)
-	require.Equal(t, model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}, snapshot.Entries[0].Identity())
+	require.Equal(
+		t,
+		model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"},
+		snapshot.Entries[0].Identity(),
+	)
 	require.Equal(t, model.FileRegular, snapshot.Entries[0].File.Kind)
-	require.True(t, bytes.Equal(publicationReconcileInitial, snapshot.Entries[0].File.Content), "reader snapshot must contain the accepted synthetic file bytes")
+	require.True(
+		t,
+		bytes.Equal(publicationReconcileInitial, snapshot.Entries[0].File.Content),
+		"reader snapshot must contain the accepted synthetic file bytes",
+	)
 	require.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
 
 	f.requireSetupBuffersCleared(t, "no setup buffer may remain to supply the service call")
@@ -157,11 +191,19 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, base)
 	afterEstablish := readPublicationMaterialPositionOnlyState(t, reopened)
-	require.True(t, reflect.DeepEqual(beforeRead, afterEstablish), "base establishment must preserve fresh public publication state")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead, afterEstablish),
+		"base establishment must preserve fresh public publication state",
+	)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 
 	localEdit := []byte("distinct synthetic local edit\n")
-	require.False(t, bytes.Equal(publicationReconcileInitial, localEdit), "the local edit must differ from the accepted base bytes")
+	require.False(
+		t,
+		bytes.Equal(publicationReconcileInitial, localEdit),
+		"the local edit must differ from the accepted base bytes",
+	)
 	writePublicationReconcileFile(t, filepath.Join(f.home.selected, "settings.ini"), localEdit, 0o600)
 	preview, disposition, err := service.PreviewPublicationTarget(ctx, request, base)
 	require.NoError(t, err)
@@ -172,7 +214,12 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	require.Equal(t, publicationReconcileTargetID, preview.Targets[0].ID)
 	require.Len(t, preview.Targets[0].Entries, 1)
 	entry := preview.Targets[0].Entries[0]
-	require.True(t, entry.Key == (model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}), "preview must identify the selected synthetic file")
+	require.Equal(
+		t,
+		entry.Key,
+		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		"preview must identify the selected synthetic file",
+	)
 	require.Equal(t, syncengine.ActionUpload, entry.DecisionAction)
 	require.Equal(t, syncengine.PreviewChange, entry.Action)
 	require.Equal(t, syncengine.PreviewReasonLocalChanged, entry.Reason)
@@ -180,7 +227,11 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	require.Empty(t, entry.Detail)
 	require.NotNil(t, entry.Preimage)
 	localDigest := sha256.Sum256(localEdit)
-	require.True(t, hex.EncodeToString(localDigest[:]) == entry.Preimage.Digest, "preview preimage must match the independent synthetic edit SHA256")
+	require.Equal(
+		t,
+		hex.EncodeToString(localDigest[:]), entry.Preimage.Digest,
+		"preview preimage must match the independent synthetic edit SHA256",
+	)
 	require.Equal(t, uint32(0o600), entry.Preimage.Mode)
 	afterPreview := readPublicationMaterialPositionOnlyState(t, reopened)
 	require.True(t, reflect.DeepEqual(beforeRead, afterPreview), "preview must preserve fresh public publication state")
@@ -192,9 +243,22 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 
 	t.Run("unsupported mode", func(t *testing.T) {
 		f := newPublicationIncomingFixture(t)
-		floor, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.Mode("bogus"), [32]byte{}, f.observation, f.setup.payload, [32]byte{})
+		floor, err := f.home.pubStore.AcceptMaterial(
+			ctx,
+			publicationstate.Mode("bogus"),
+			[32]byte{},
+			f.observation,
+			f.setup.payload,
+			[32]byte{},
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
-		requirePublicationIncomingError(t, err, publicationstate.ErrInvalid, publicationstate.StageInput, publicationstate.ReasonMode)
+		requirePublicationIncomingError(
+			t,
+			err,
+			publicationstate.ErrInvalid,
+			publicationstate.StageInput,
+			publicationstate.ReasonMode,
+		)
 		requirePublicationIncomingNoAcceptedState(t, f.home.pubStore)
 		f.requireLocalFiles(t, publicationReconcileInitial)
 	})
@@ -202,9 +266,22 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 	t.Run("consumed state token", func(t *testing.T) {
 		f := newPublicationIncomingFixture(t)
 		accepted, consumed := f.acceptFirstUse(t)
-		floor, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.ModeAdvance, consumed.StateToken, f.observation, f.setup.payload, [32]byte{})
+		floor, err := f.home.pubStore.AcceptMaterial(
+			ctx,
+			publicationstate.ModeAdvance,
+			consumed.StateToken,
+			f.observation,
+			f.setup.payload,
+			[32]byte{},
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
-		requirePublicationIncomingError(t, err, publicationstate.ErrConsent, publicationstate.StageAcceptMaterial, publicationstate.ReasonStale)
+		requirePublicationIncomingError(
+			t,
+			err,
+			publicationstate.ErrConsent,
+			publicationstate.StageAcceptMaterial,
+			publicationstate.ReasonStale,
+		)
 		requirePublicationIncomingAcceptedState(t, f.home.pubStore, accepted)
 		f.requireLocalFiles(t, publicationReconcileInitial)
 	})
@@ -223,9 +300,22 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		proposal, err := store.Prepare(ctx, publicationstate.ModeFirstUse, f.observation, f.setup.payload)
 		require.NoError(t, err)
-		floor, err := store.AcceptMaterial(ctx, publicationstate.ModeFirstUse, proposal.StateToken, f.observation, f.setup.payload, proposal.Confirmation)
+		floor, err := store.AcceptMaterial(
+			ctx,
+			publicationstate.ModeFirstUse,
+			proposal.StateToken,
+			f.observation,
+			f.setup.payload,
+			proposal.Confirmation,
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
-		requirePublicationIncomingError(t, err, publicationstate.ErrLimit, publicationstate.StageAcceptMaterial, publicationstate.ReasonCapacity)
+		requirePublicationIncomingError(
+			t,
+			err,
+			publicationstate.ErrLimit,
+			publicationstate.StageAcceptMaterial,
+			publicationstate.ReasonCapacity,
+		)
 		requirePublicationIncomingNoAcceptedState(t, store)
 		f.requireLocalFiles(t, publicationReconcileInitial)
 	})
@@ -240,9 +330,22 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		name := publicationIncomingPayloadBasename(t, f.setup.payload)
 		require.Equal(t, []string{name}, publicationIncomingDirectoryNames(t, payloadDirectory))
 		require.NoError(t, os.Remove(filepath.Join(payloadDirectory, name)))
-		floor, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.ModeAdvance, noOp.StateToken, f.observation, f.setup.payload, [32]byte{})
+		floor, err := f.home.pubStore.AcceptMaterial(
+			ctx,
+			publicationstate.ModeAdvance,
+			noOp.StateToken,
+			f.observation,
+			f.setup.payload,
+			[32]byte{},
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
-		requirePublicationIncomingError(t, err, publicationstate.ErrStorage, publicationstate.StageAcceptMaterial, publicationstate.ReasonMaterialMissing)
+		requirePublicationIncomingError(
+			t,
+			err,
+			publicationstate.ErrStorage,
+			publicationstate.StageAcceptMaterial,
+			publicationstate.ReasonMaterialMissing,
+		)
 		requirePublicationIncomingAcceptedState(t, f.home.pubStore, accepted)
 		require.Empty(t, publicationIncomingDirectoryNames(t, payloadDirectory))
 		f.requireLocalFiles(t, publicationReconcileInitial)
@@ -253,13 +356,24 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		mismatched := bytes.Clone(f.setup.payload)
 		mismatched[0] ^= 0xff
 		require.Len(t, mismatched, len(f.setup.payload))
-		floor, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.ModeFirstUse, [32]byte{0x63}, f.observation, mismatched, [32]byte{})
+		floor, err := f.home.pubStore.AcceptMaterial(
+			ctx,
+			publicationstate.ModeFirstUse,
+			[32]byte{0x63},
+			f.observation,
+			mismatched,
+			[32]byte{},
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
 		require.ErrorIs(t, err, publication.ErrPayload)
 		var violation *publication.Violation
 		require.ErrorAs(t, err, &violation)
 		var stateError *publicationstate.Error
-		require.False(t, errors.As(err, &stateError), "forwarded payload errors must stay in the inherited publication family")
+		require.NotErrorAs(
+			t,
+			err, &stateError,
+			"forwarded payload errors must stay in the inherited publication family",
+		)
 		requirePublicationIncomingNoAcceptedState(t, f.home.pubStore)
 		f.requireLocalFiles(t, publicationReconcileInitial)
 	})
@@ -269,8 +383,16 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		malformed := []byte("synthetic malformed packed payload bytes\n")
 		blobCID, err := publication.RawPayloadCID(malformed)
 		require.NoError(t, err)
-		blob := publication.BlobReference{CID: blobCID, Size: uint64(len(malformed)), MIMEType: publication.SnapshotBlobMIMEType}
-		require.NoError(t, publication.VerifyPayload(malformed, blob), "the malformed bytes must be referenced exactly by the record")
+		blob := publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(malformed)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		}
+		require.NoError(
+			t,
+			publication.VerifyPayload(malformed, blob),
+			"the malformed bytes must be referenced exactly by the record",
+		)
 		record, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 			SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault,
 			PublicationID: [16]byte{0x62, 0x34, 0x63}, PublicationSeq: 0, Blob: blob,
@@ -289,14 +411,25 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 			Origin: f.binding, SuppliedContext: f.observation.SuppliedContext, Head: head,
 			Snapshots: []publicationstate.SnapshotBlock{{Key: key, Raw: record}},
 		}
-		floor, err := f.home.pubStore.AcceptMaterial(ctx, publicationstate.ModeFirstUse, [32]byte{0x63}, observation, malformed, [32]byte{})
+		floor, err := f.home.pubStore.AcceptMaterial(
+			ctx,
+			publicationstate.ModeFirstUse,
+			[32]byte{0x63},
+			observation,
+			malformed,
+			[32]byte{},
+		)
 		require.Equal(t, publicationstate.Floor{}, floor)
 		require.ErrorIs(t, err, vault.ErrInvalidPayload)
 		var payloadError *vault.PayloadError
 		require.ErrorAs(t, err, &payloadError)
 		require.NotEmpty(t, payloadError.Reason)
 		var stateError *publicationstate.Error
-		require.False(t, errors.As(err, &stateError), "forwarded vault payload errors must stay in the inherited vault family")
+		require.NotErrorAs(
+			t,
+			err, &stateError,
+			"forwarded vault payload errors must stay in the inherited vault family",
+		)
 		requirePublicationIncomingNoAcceptedState(t, f.home.pubStore)
 		f.requireLocalFiles(t, publicationReconcileInitial)
 	})
@@ -316,23 +449,43 @@ func TestPublicationIncomingMaterialReopenPreservesExactFloor(t *testing.T) {
 	floor, present, err := reopened.Load(ctx)
 	require.NoError(t, err)
 	require.True(t, present)
-	require.True(t, reflect.DeepEqual(accepted, floor), "graceful close and reopen must persist the exact accepted floor")
+	require.True(
+		t,
+		reflect.DeepEqual(accepted, floor),
+		"graceful close and reopen must persist the exact accepted floor",
+	)
 	history, err := reopened.History(ctx, 0, 10)
 	require.NoError(t, err)
 	require.False(t, history.HasMore)
 	require.Len(t, history.Events, 1)
-	require.True(t, reflect.DeepEqual(floor, history.Events[0].NewFloor), "the single history event must carry the exact reopened floor")
+	require.True(
+		t,
+		reflect.DeepEqual(floor, history.Events[0].NewFloor),
+		"the single history event must carry the exact reopened floor",
+	)
 	require.Equal(t, floor.Revision, history.NextRevision)
 	afterReopen := readPublicationMaterialPositionOnlyState(t, reopened)
-	require.True(t, reflect.DeepEqual(accepted, afterReopen.floor), "public history readback must preserve the exact reopened floor")
+	require.True(
+		t,
+		reflect.DeepEqual(accepted, afterReopen.floor),
+		"public history readback must preserve the exact reopened floor",
+	)
 	requirePublicationMaterialPositionOnlyLink(t, afterReopen, f.expectedRecord)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 
 	material, err := reopened.ReadAcceptedMaterial(ctx, f.binding, floor)
 	require.NoError(t, err)
 	require.True(t, reflect.DeepEqual(floor, material.Floor), "reader floor must match the exact reopened floor")
-	require.True(t, bytes.Equal(f.expectedRecord, material.SnapshotRecord), "reader record must match the assertions-only setup oracle")
-	require.True(t, bytes.Equal(f.expectedPayload, material.Payload), "reader payload must match the assertions-only setup oracle")
+	require.True(
+		t,
+		bytes.Equal(f.expectedRecord, material.SnapshotRecord),
+		"reader record must match the assertions-only setup oracle",
+	)
+	require.True(
+		t,
+		bytes.Equal(f.expectedPayload, material.Payload),
+		"reader payload must match the assertions-only setup oracle",
+	)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 
 	payloadDirectory := filepath.Join(f.storeDirectory, publicationIncomingPayloadDirectory)
@@ -342,13 +495,29 @@ func TestPublicationIncomingMaterialReopenPreservesExactFloor(t *testing.T) {
 	requirePublicationMaterialFile(t, payloadPath, f.expectedPayload, 0o600)
 	require.NoError(t, os.Remove(payloadPath))
 	damaged, readErr := reopened.ReadAcceptedMaterial(ctx, f.binding, floor)
-	require.True(t, reflect.DeepEqual(publicationstate.AcceptedMaterial{}, damaged), "damaged custody must not yield material for composition")
-	requirePublicationIncomingError(t, readErr, publicationstate.ErrStorage, publicationstate.StageReadAcceptedMaterial, publicationstate.ReasonMaterialMissing)
+	require.True(
+		t,
+		reflect.DeepEqual(publicationstate.AcceptedMaterial{}, damaged),
+		"damaged custody must not yield material for composition",
+	)
+	requirePublicationIncomingError(
+		t,
+		readErr,
+		publicationstate.ErrStorage,
+		publicationstate.StageReadAcceptedMaterial,
+		publicationstate.ReasonMaterialMissing,
+	)
 	requirePublicationIncomingAcceptedState(t, reopened, accepted)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 }
 
-func requirePublicationIncomingError(t *testing.T, err error, class error, stage publicationstate.Stage, reason publicationstate.Reason) {
+func requirePublicationIncomingError(
+	t *testing.T,
+	err error,
+	class error,
+	stage publicationstate.Stage,
+	reason publicationstate.Reason,
+) {
 	t.Helper()
 	require.Error(t, err)
 	require.ErrorIs(t, err, class)
@@ -372,7 +541,11 @@ func requirePublicationIncomingNoAcceptedState(t *testing.T, store *publications
 	require.False(t, history.HasMore)
 }
 
-func requirePublicationIncomingAcceptedState(t *testing.T, store *publicationstate.Store, expected publicationstate.Floor) {
+func requirePublicationIncomingAcceptedState(
+	t *testing.T,
+	store *publicationstate.Store,
+	expected publicationstate.Floor,
+) {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -383,7 +556,11 @@ func requirePublicationIncomingAcceptedState(t *testing.T, store *publicationsta
 	require.NoError(t, err)
 	require.False(t, history.HasMore)
 	require.Len(t, history.Events, 1)
-	require.True(t, reflect.DeepEqual(expected, history.Events[0].NewFloor), "a refusal must preserve the exact accepted history")
+	require.True(
+		t,
+		reflect.DeepEqual(expected, history.Events[0].NewFloor),
+		"a refusal must preserve the exact accepted history",
+	)
 }
 
 func publicationIncomingPayloadBasename(t *testing.T, payload []byte) string {

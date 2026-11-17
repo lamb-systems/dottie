@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwner(t *testing.T) {
@@ -33,7 +34,14 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	advanceObservation := f.observation(2)
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, f.payload)
 	require.NoError(t, err)
-	advanceFloor, err := store.Accept(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, f.payload, [32]byte{})
+	advanceFloor, err := store.Accept(
+		ctx,
+		ModeAdvance,
+		advanceProposal.StateToken,
+		advanceObservation,
+		f.payload,
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), advanceFloor.Sequence)
 	assert.Equal(t, initialFloor.Revision+1, advanceFloor.Revision)
@@ -45,7 +53,14 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	replacementProposal, err := store.Prepare(ctx, ModeReplaceFloor, replacementObservation, f.payload)
 	require.NoError(t, err)
 	require.Equal(t, ReasonRollback, replacementProposal.Reason)
-	replacementFloor, err := store.Accept(ctx, ModeReplaceFloor, replacementProposal.StateToken, replacementObservation, f.payload, replacementProposal.Confirmation)
+	replacementFloor, err := store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacementProposal.StateToken,
+		replacementObservation,
+		f.payload,
+		replacementProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), replacementFloor.Sequence)
 	assert.Equal(t, initialFloor.Revision+2, replacementFloor.Revision)
@@ -74,17 +89,27 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	assert.Equal(t, replacementFloor, latest.NewFloor)
 	var currentRecord []byte
 	for _, evidence := range history.Records {
-		if evidence.Reference.Key == replacementFloor.SnapshotKey && bytes.Equal(evidence.Reference.CID, replacementFloor.RecordCID) && evidence.Reference.Sequence == replacementFloor.Sequence {
+		if evidence.Reference.Key == replacementFloor.SnapshotKey &&
+			bytes.Equal(evidence.Reference.CID, replacementFloor.RecordCID) &&
+			evidence.Reference.Sequence == replacementFloor.Sequence {
 			currentRecord = bytes.Clone(evidence.Raw)
 		}
 	}
 	require.NotEmpty(t, currentRecord)
 	assert.Equal(t, candidate.SnapshotRecord, currentRecord)
 	var retainedRevision int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.ID[:]).Scan(&retainedRevision))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&retainedRevision),
+	)
 	assert.Equal(t, int64(initialFloor.Revision), retainedRevision)
 	var currentOwnerCount int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(loadedFloor.Revision)).Scan(&currentOwnerCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(loadedFloor.Revision)).
+			Scan(&currentOwnerCount),
+	)
 	assert.Zero(t, currentOwnerCount)
 
 	before := readAcceptedMaterialRevisionOwnedState(t, store, attempt.ID)
@@ -183,7 +208,13 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 
 	abandonProposal, err := store.PrepareAbandon(ctx, attempt.ID, nil)
 	require.NoError(t, err)
-	abandoned, err := store.AbandonAttempt(ctx, attempt.ID, abandonProposal.StateToken, nil, abandonProposal.Confirmation)
+	abandoned, err := store.AbandonAttempt(
+		ctx,
+		attempt.ID,
+		abandonProposal.StateToken,
+		nil,
+		abandonProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredAbandoned, abandoned.Lifecycle)
 	assert.Equal(t, OutcomeNotSubmitted, abandoned.Outcome)
@@ -192,7 +223,11 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.False(t, activePresent)
 	assert.Equal(t, Attempt{}, active)
 	var attemptReferences int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).Scan(&attemptReferences))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&attemptReferences),
+	)
 	assert.Zero(t, attemptReferences)
 
 	catalogBeforeAccept := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
@@ -213,7 +248,14 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Equal(t, candidate.HeadRecord, observation.Head)
 	positionProposal, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
 	require.NoError(t, err)
-	acceptedFloor, err := store.Accept(ctx, ModeFirstUse, positionProposal.StateToken, observation, f.payload, positionProposal.Confirmation)
+	acceptedFloor, err := store.Accept(
+		ctx,
+		ModeFirstUse,
+		positionProposal.StateToken,
+		observation,
+		f.payload,
+		positionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), acceptedFloor.Sequence)
 	assert.Equal(t, candidateSnapshot.PublicationID, acceptedFloor.PublicationID)
@@ -237,7 +279,9 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Equal(t, loadedFloor, history.Events[0].NewFloor)
 	var acceptedRecord []byte
 	for _, evidence := range history.Records {
-		if evidence.Reference.Key == loadedFloor.SnapshotKey && bytes.Equal(evidence.Reference.CID, loadedFloor.RecordCID) && evidence.Reference.Sequence == loadedFloor.Sequence {
+		if evidence.Reference.Key == loadedFloor.SnapshotKey &&
+			bytes.Equal(evidence.Reference.CID, loadedFloor.RecordCID) &&
+			evidence.Reference.Sequence == loadedFloor.Sequence {
 			acceptedRecord = bytes.Clone(evidence.Raw)
 		}
 	}
@@ -247,7 +291,11 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	catalogBeforeRead := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
 	assert.Equal(t, catalogBeforeAccept, catalogBeforeRead)
 	var currentOwners int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(loadedFloor.Revision)).Scan(&currentOwners))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(loadedFloor.Revision)).
+			Scan(&currentOwners),
+	)
 	assert.Zero(t, currentOwners)
 	before := readAcceptedMaterialRevisionAbandonedState(t, store, attempt.ID)
 	beforeRows := readAttemptLogicalRows(t, store)
@@ -271,7 +319,11 @@ type acceptedMaterialRevisionOwnedState struct {
 	Candidate      CandidateMaterial
 }
 
-func readAcceptedMaterialRevisionOwnedState(t *testing.T, store *Store, attemptID [16]byte) acceptedMaterialRevisionOwnedState {
+func readAcceptedMaterialRevisionOwnedState(
+	t *testing.T,
+	store *Store,
+	attemptID [16]byte,
+) acceptedMaterialRevisionOwnedState {
 	t.Helper()
 	ctx := context.Background()
 	floor, hasFloor, err := store.Load(ctx)
@@ -289,7 +341,14 @@ func readAcceptedMaterialRevisionOwnedState(t *testing.T, store *Store, attemptI
 	require.Equal(t, attemptID, attemptHistory.Attempts[0].ID)
 	candidate, err := store.ReadCandidate(ctx, attemptID)
 	require.NoError(t, err)
-	return acceptedMaterialRevisionOwnedState{Floor: floor, HasFloor: hasFloor, History: history, Attempt: attempt, AttemptHistory: attemptHistory, Candidate: candidate}
+	return acceptedMaterialRevisionOwnedState{
+		Floor:          floor,
+		HasFloor:       hasFloor,
+		History:        history,
+		Attempt:        attempt,
+		AttemptHistory: attemptHistory,
+		Candidate:      candidate,
+	}
 }
 
 type acceptedMaterialRevisionAbandonedState struct {
@@ -301,7 +360,11 @@ type acceptedMaterialRevisionAbandonedState struct {
 	Candidate      CandidateMaterial
 }
 
-func readAcceptedMaterialRevisionAbandonedState(t *testing.T, store *Store, attemptID [16]byte) acceptedMaterialRevisionAbandonedState {
+func readAcceptedMaterialRevisionAbandonedState(
+	t *testing.T,
+	store *Store,
+	attemptID [16]byte,
+) acceptedMaterialRevisionAbandonedState {
 	t.Helper()
 	ctx := context.Background()
 	floor, hasFloor, err := store.Load(ctx)
@@ -320,10 +383,22 @@ func readAcceptedMaterialRevisionAbandonedState(t *testing.T, store *Store, atte
 	candidate, err := store.ReadCandidate(ctx, attemptID)
 	assert.Equal(t, CandidateMaterial{}, candidate)
 	requireErrorMetadata(t, err, ErrStorage, StageCustody, ReasonCandidateMissing)
-	return acceptedMaterialRevisionAbandonedState{Floor: floor, HasFloor: hasFloor, History: history, Attempt: attempt, AttemptHistory: attemptHistory, Candidate: candidate}
+	return acceptedMaterialRevisionAbandonedState{
+		Floor:          floor,
+		HasFloor:       hasFloor,
+		History:        history,
+		Attempt:        attempt,
+		AttemptHistory: attemptHistory,
+		Candidate:      candidate,
+	}
 }
 
-func acceptedMaterialRevisionFinalizeGenesis(t *testing.T, store *Store, f fixture, candidate CandidateInput) (Attempt, Finalization) {
+func acceptedMaterialRevisionFinalizeGenesis(
+	t *testing.T,
+	store *Store,
+	f fixture,
+	candidate CandidateInput,
+) (Attempt, Finalization) {
 	t.Helper()
 	ctx := context.Background()
 	empty := attemptView(f, f.observation(1), true)
@@ -351,7 +426,13 @@ type acceptedMaterialAbandonedObject struct {
 	RetainedByBlob int64
 }
 
-func readAcceptedMaterialAbandonedObject(t *testing.T, store *Store, directory string, candidate CandidateInput, attemptID [16]byte) acceptedMaterialAbandonedObject {
+func readAcceptedMaterialAbandonedObject(
+	t *testing.T,
+	store *Store,
+	directory string,
+	candidate CandidateInput,
+	attemptID [16]byte,
+) acceptedMaterialAbandonedObject {
 	t.Helper()
 	ctx := context.Background()
 	snapshot, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -359,7 +440,11 @@ func readAcceptedMaterialAbandonedObject(t *testing.T, store *Store, directory s
 	var catalogCID []byte
 	var catalogSize int64
 	var basename string
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", snapshot.Blob.CID).Scan(&catalogCID, &catalogSize, &basename))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", snapshot.Blob.CID).
+			Scan(&catalogCID, &catalogSize, &basename),
+	)
 	assert.Equal(t, snapshot.Blob.CID, catalogCID)
 	assert.Equal(t, int64(snapshot.Blob.Size), catalogSize)
 	wantedBasename, err := payloadBasenameFromCID(catalogCID)
@@ -375,8 +460,23 @@ func readAcceptedMaterialAbandonedObject(t *testing.T, store *Store, directory s
 	require.NoError(t, err)
 	assert.Equal(t, candidate.Payload, payload)
 	var attemptRefs int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attemptID[:]).Scan(&attemptRefs))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attemptID[:]).
+			Scan(&attemptRefs),
+	)
 	var retainedByBlob int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE blob_cid=?", catalogCID).Scan(&retainedByBlob))
-	return acceptedMaterialAbandonedObject{CID: bytes.Clone(catalogCID), Size: catalogSize, Basename: basename, Payload: bytes.Clone(payload), AttemptRefs: attemptRefs, RetainedByBlob: retainedByBlob}
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE blob_cid=?", catalogCID).
+			Scan(&retainedByBlob),
+	)
+	return acceptedMaterialAbandonedObject{
+		CID:            bytes.Clone(catalogCID),
+		Size:           catalogSize,
+		Basename:       basename,
+		Payload:        bytes.Clone(payload),
+		AttemptRefs:    attemptRefs,
+		RetainedByBlob: retainedByBlob,
+	}
 }

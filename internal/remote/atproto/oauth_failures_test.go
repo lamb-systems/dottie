@@ -69,7 +69,11 @@ func TestCallbackAttemptLimitStoresNothing(t *testing.T) {
 	require.NoError(t, err)
 	defer flow.Close()
 	for range 2 {
-		request := httptest.NewRequest(http.MethodGet, "/callback?state=wrong&iss=https%3A%2F%2Fbsky.social&code=code", nil)
+		request := httptest.NewRequest(
+			http.MethodGet,
+			"/callback?state=wrong&iss=https%3A%2F%2Fbsky.social&code=code",
+			nil,
+		)
 		flow.serveCallback(httptest.NewRecorder(), request)
 	}
 	_, err = flow.Wait(context.Background())
@@ -112,9 +116,14 @@ func (s appliedThenFailStore) Save(ctx context.Context, name string, payload []b
 
 func TestLoginPersistenceErrorIsUncertainAndLeavesItem(t *testing.T) {
 	fake, baseClient, store := newFakeOAuth(t)
-	client, err := NewClient(baseClient.ClientID, appliedThenFailStore{memoryStore: store, err: errors.New("synthetic lost reply")},
-		WithHTTPClient(baseClient.HTTPClient), WithClock(baseClient.Clock), WithRandom(&counterReader{}),
-		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errors.New("unused") }))
+	client, err := NewClient(
+		baseClient.ClientID,
+		appliedThenFailStore{memoryStore: store, err: errors.New("synthetic lost reply")},
+		WithHTTPClient(baseClient.HTTPClient),
+		WithClock(baseClient.Clock),
+		WithRandom(&counterReader{}),
+		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errors.New("unused") }),
+	)
 	require.NoError(t, err)
 	flow, err := client.Begin(context.Background(), testHandle, VaultScopes(), VaultScopes())
 	require.NoError(t, err)

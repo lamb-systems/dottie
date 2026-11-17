@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +58,12 @@ func (coordinator *Coordinator) Status(ctx context.Context) (Status, error) {
 	}
 	latest := make(map[string]TargetStatus, len(configuration.Targets))
 	for _, target := range configuration.Targets {
-		latest[target.ID] = TargetStatus{ID: target.ID, Source: string(target.Source), Mode: target.ModeOrDefault(configuration.Defaults), State: StatusUnknown}
+		latest[target.ID] = TargetStatus{
+			ID:     target.ID,
+			Source: string(target.Source),
+			Mode:   target.ModeOrDefault(configuration.Defaults),
+			State:  StatusUnknown,
+		}
 	}
 	for _, entry := range journals {
 		status, ok := latest[entry.Identity.TargetID]
@@ -85,7 +91,10 @@ func (coordinator *Coordinator) Status(ctx context.Context) (Status, error) {
 		}
 		latest[entry.Identity.TargetID] = status
 	}
-	result := Status{Vaults: make([]VaultSelection, 0, len(selections)), Targets: make([]TargetStatus, 0, len(configuration.Targets))}
+	result := Status{
+		Vaults:  make([]VaultSelection, 0, len(selections)),
+		Targets: make([]TargetStatus, 0, len(configuration.Targets)),
+	}
 	for _, selection := range selections {
 		result.Vaults = append(result.Vaults, VaultSelection{Vault: selection.Vault, DeviceID: selection.DeviceID})
 	}
@@ -104,7 +113,8 @@ func (coordinator *Coordinator) selectVault(ctx context.Context, requested Vault
 	if requested.Vault != ([32]byte{}) {
 		matches := make([]state.VaultSelection, 0, 1)
 		for _, selection := range selections {
-			if selection.Vault == requested.Vault && (requested.DeviceID == "" || requested.DeviceID == selection.DeviceID) {
+			if selection.Vault == requested.Vault &&
+				(requested.DeviceID == "" || requested.DeviceID == selection.DeviceID) {
 				matches = append(matches, selection)
 			}
 		}
@@ -125,7 +135,10 @@ func (coordinator *Coordinator) selectVault(ctx context.Context, requested Vault
 	return VaultSelection{Vault: selections[0].Vault, DeviceID: selections[0].DeviceID}, nil
 }
 
-func (coordinator *Coordinator) ResolveSelection(ctx context.Context, requested VaultSelection) (VaultSelection, error) {
+func (coordinator *Coordinator) ResolveSelection(
+	ctx context.Context,
+	requested VaultSelection,
+) (VaultSelection, error) {
 	if err := coordinator.lock(ctx); err != nil {
 		return VaultSelection{}, err
 	}
@@ -169,17 +182,30 @@ func snapshotBlob(plaintext []byte) (vault.Blob, error) {
 	}
 	var plaintextBytes int64
 	for _, entry := range manifest.Entries {
-		if entry.Source == string(model.SourceFiles) && entry.State == string(model.FilePresent) && entry.Kind == string(model.FileRegular) {
+		if entry.Source == string(model.SourceFiles) && entry.State == string(model.FilePresent) &&
+			entry.Kind == string(model.FileRegular) {
 			if entry.Size < 0 || plaintextBytes > vault.DefaultLimits().MaxTotalBytes-entry.Size {
 				return vault.Blob{}, errors.New("authenticated snapshot exceeds its plaintext limit")
 			}
 			plaintextBytes += entry.Size
 		}
 	}
-	return vault.Blob{Version: vault.Version, Codec: vault.CodecNone, Payload: bytes.Clone(plaintext), Digest: sha256.Sum256(plaintext), EntryCount: len(manifest.Entries), PlaintextBytes: plaintextBytes}, nil
+	return vault.Blob{
+		Version:        vault.Version,
+		Codec:          vault.CodecNone,
+		Payload:        bytes.Clone(plaintext),
+		Digest:         sha256.Sum256(plaintext),
+		EntryCount:     len(manifest.Entries),
+		PlaintextBytes: plaintextBytes,
+	}, nil
 }
 
-func filterSnapshot(ctx context.Context, configuration config.Config, settings SettingsPort, snapshot model.Snapshot) (model.Snapshot, []model.EntryKey, error) {
+func filterSnapshot(
+	ctx context.Context,
+	configuration config.Config,
+	settings SettingsPort,
+	snapshot model.Snapshot,
+) (model.Snapshot, []model.EntryKey, error) {
 	configured := make(map[string]config.Target, len(configuration.Targets))
 	approved := make(map[string]map[model.EntryKey]struct{})
 	for _, target := range configuration.Targets {
@@ -232,8 +258,12 @@ func approvedSettings(ctx context.Context, settings SettingsPort, target config.
 		return nil, fmt.Errorf("%w: target %q categories are invalid", ErrGNOMEReapproval, target.ID)
 	}
 	digest, err := matrix.KeySetDigest(keys)
-	if err != nil || fmt.Sprintf("%x", digest) != policy.KeyDigest {
-		return nil, fmt.Errorf("%w: target %q key digest does not match stored categories", ErrGNOMEReapproval, target.ID)
+	if err != nil || hex.EncodeToString(digest[:]) != policy.KeyDigest {
+		return nil, fmt.Errorf(
+			"%w: target %q key digest does not match stored categories",
+			ErrGNOMEReapproval,
+			target.ID,
+		)
 	}
 	refs := make([]SettingRef, 0, len(keys))
 	for _, key := range keys {

@@ -73,13 +73,21 @@ func TestIndependentAtdataMapsMatchFixedCanonicalGoldens(t *testing.T) {
 	encodedSnapshot, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
 	assert.Equal(t, independentSnapshot, encodedSnapshot)
-	assert.Equal(t, "a764626c6f62a463726566d82a5825000155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6473697a65181a65247479706564626c6f62686d696d6554797065716170706c69636174696f6e2f782d746172652474797065782373797374656d732e6c616d622e646f747469652e7661756c74536e617073686f745632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2066706172656e74582401711220f8f289c4277230fcf5fd392e9d286653d691cfff61136b0fd9aa550802e3fe386d7075626c69636174696f6e496450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedSnapshot))
+	assert.Equal(
+		t,
+		"a764626c6f62a463726566d82a5825000155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6473697a65181a65247479706564626c6f62686d696d6554797065716170706c69636174696f6e2f782d746172652474797065782373797374656d732e6c616d622e646f747469652e7661756c74536e617073686f745632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2066706172656e74582401711220f8f289c4277230fcf5fd392e9d286653d691cfff61136b0fd9aa550802e3fe386d7075626c69636174696f6e496450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6d736368656d6156657273696f6e026e7075626c69636174696f6e53657107",
+		hex.EncodeToString(encodedSnapshot),
+	)
 	decodedSnapshot, err := DecodeSnapshot(independentSnapshot)
 	require.NoError(t, err)
 	assert.Equal(t, snapshot, decodedSnapshot)
 	recordCID, err := RecordCID(independentSnapshot)
 	require.NoError(t, err)
-	assert.Equal(t, "bafyreibd57swutju74skdhzkzwstffd4jgdd5emdj3hmacqijvgka4c2ui", cid.NewCidV1(cid.DagCBOR, mustHash(t, independentSnapshot)).String())
+	assert.Equal(
+		t,
+		"bafyreibd57swutju74skdhzkzwstffd4jgdd5emdj3hmacqijvgka4c2ui",
+		cid.NewCidV1(cid.DagCBOR, mustHash(t, independentSnapshot)).String(),
+	)
 	blobIdentifier, err := cid.Cast(blobCID)
 	require.NoError(t, err)
 	assert.Equal(t, "bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm", blobIdentifier.String())
@@ -95,7 +103,11 @@ func TestIndependentAtdataMapsMatchFixedCanonicalGoldens(t *testing.T) {
 	encodedHead, err := EncodeHead(head)
 	require.NoError(t, err)
 	assert.Equal(t, independentHead, encodedHead)
-	assert.Equal(t, "a6652474797065781f73797374656d732e6c616d622e646f747469652e7661756c74486561645632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2067626c6f6243696458240155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6b736e617073686f7443696458240171122023efe56a4d34ff24a19f2acda532947c49863e91834ecec00a084d4ca0705aa26d736368656d6156657273696f6e026e7075626c69636174696f6e53657107", hex.EncodeToString(encodedHead))
+	assert.Equal(
+		t,
+		"a6652474797065781f73797374656d732e6c616d622e646f747469652e7661756c74486561645632657661756c7458200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2067626c6f6243696458240155122090175ffb2a4721b775d19f76b3776ed695237a0ffcfa80b7d1ca300842ae98ab6b736e617073686f7443696458240171122023efe56a4d34ff24a19f2acda532947c49863e91834ecec00a084d4ca0705aa26d736368656d6156657273696f6e026e7075626c69636174696f6e53657107",
+		hex.EncodeToString(encodedHead),
+	)
 	decodedHead, err := DecodeHead(independentHead)
 	require.NoError(t, err)
 	assert.Equal(t, head, decodedHead)
@@ -134,22 +146,46 @@ func TestHeadBindingChecksEveryRecordAndPayloadJoin(t *testing.T) {
 	wrongSequence.PublicationSeq++
 	wrongSequenceBytes, err := EncodeHead(wrongSequence)
 	require.NoError(t, err)
-	requireViolation(t, VerifyHeadBinding(wrongSequenceBytes, snapshotBytes, sequenceKey), ErrBinding, "publicationSeq", "mismatch")
+	requireViolation(
+		t,
+		VerifyHeadBinding(wrongSequenceBytes, snapshotBytes, sequenceKey),
+		ErrBinding,
+		"publicationSeq",
+		"mismatch",
+	)
 	wrongKey, err := SequenceKey(snapshot.PublicationSeq + 1)
 	require.NoError(t, err)
-	requireViolation(t, VerifyHeadBinding(headBytes, snapshotBytes, wrongKey), ErrBinding, "snapshotKey", "sequence_mismatch")
+	requireViolation(
+		t,
+		VerifyHeadBinding(headBytes, snapshotBytes, wrongKey),
+		ErrBinding,
+		"snapshotKey",
+		"sequence_mismatch",
+	)
 
 	otherSnapshot := snapshot
 	otherSnapshot.PublicationID[0]++
 	otherSnapshotBytes, err := EncodeSnapshot(otherSnapshot)
 	require.NoError(t, err)
-	requireViolation(t, VerifyHeadBinding(headBytes, otherSnapshotBytes, sequenceKey), ErrBinding, "snapshotCid", "mismatch")
+	requireViolation(
+		t,
+		VerifyHeadBinding(headBytes, otherSnapshotBytes, sequenceKey),
+		ErrBinding,
+		"snapshotCid",
+		"mismatch",
+	)
 
 	wrongBlob := head
 	wrongBlob.BlobCID = independentCID(t, []byte("different payload"), cid.Raw)
 	wrongBlobBytes, err := EncodeHead(wrongBlob)
 	require.NoError(t, err)
-	requireViolation(t, VerifyHeadBinding(wrongBlobBytes, snapshotBytes, sequenceKey), ErrBinding, "blobCid", "mismatch")
+	requireViolation(
+		t,
+		VerifyHeadBinding(wrongBlobBytes, snapshotBytes, sequenceKey),
+		ErrBinding,
+		"blobCid",
+		"mismatch",
+	)
 
 	short := bytes.Clone(payload[:len(payload)-1])
 	requireViolation(t, VerifyPayload(short, snapshot.Blob), ErrPayload, "blob.size", "mismatch")
@@ -188,7 +224,13 @@ func TestIdenticalPayloadHasDistinctChainedPublicationRecords(t *testing.T) {
 	skipped, skippedBytes := fixtureSnapshot(t, payload, 2, firstCID, 5)
 	skippedKey, err := SequenceKey(skipped.PublicationSeq)
 	require.NoError(t, err)
-	requireViolation(t, VerifySuccessor(firstBytes, skippedBytes, skippedKey), ErrBinding, "publicationSeq", "not_successor")
+	requireViolation(
+		t,
+		VerifySuccessor(firstBytes, skippedBytes, skippedKey),
+		ErrBinding,
+		"publicationSeq",
+		"not_successor",
+	)
 
 	substitutedParent := second
 	substitutedParent.Parent = independentCID(t, []byte("another record"), cid.DagCBOR)
@@ -197,12 +239,30 @@ func TestIdenticalPayloadHasDistinctChainedPublicationRecords(t *testing.T) {
 	requireViolation(t, VerifySuccessor(firstBytes, substitutedParentBytes, key), ErrBinding, "parent", "mismatch")
 	wrongKey, err := SequenceKey(9)
 	require.NoError(t, err)
-	requireViolation(t, VerifySuccessor(firstBytes, secondBytes, wrongKey), ErrBinding, "snapshotKey", "sequence_mismatch")
+	requireViolation(
+		t,
+		VerifySuccessor(firstBytes, secondBytes, wrongKey),
+		ErrBinding,
+		"snapshotKey",
+		"sequence_mismatch",
+	)
 
-	maximum, maximumBytes := fixtureSnapshot(t, payload, MaxSequence, independentCID(t, []byte("valid predecessor link"), cid.DagCBOR), 6)
+	maximum, maximumBytes := fixtureSnapshot(
+		t,
+		payload,
+		MaxSequence,
+		independentCID(t, []byte("valid predecessor link"), cid.DagCBOR),
+		6,
+	)
 	_, zeroBytes := fixtureSnapshot(t, payload, 0, nil, 7)
 	assert.Equal(t, MaxSequence, maximum.PublicationSeq)
-	requireViolation(t, VerifySuccessor(maximumBytes, zeroBytes, "0000000000000000"), ErrBinding, "publicationSeq", "not_successor")
+	requireViolation(
+		t,
+		VerifySuccessor(maximumBytes, zeroBytes, "0000000000000000"),
+		ErrBinding,
+		"publicationSeq",
+		"not_successor",
+	)
 }
 
 func TestEncodeRejectsInvalidIdentifiersSequencesAndCIDRoles(t *testing.T) {
@@ -249,7 +309,12 @@ func TestEncodeRejectsInvalidIdentifiersSequencesAndCIDRoles(t *testing.T) {
 	require.Nil(t, encoded)
 	requireViolation(t, err, ErrCID, "blob.ref", "role")
 
-	head := HeadRecord{SchemaVersion: 1, Vault: snapshot.Vault, SnapshotCID: independentCID(t, []byte("record"), cid.DagCBOR), BlobCID: snapshot.Blob.CID}
+	head := HeadRecord{
+		SchemaVersion: 1,
+		Vault:         snapshot.Vault,
+		SnapshotCID:   independentCID(t, []byte("record"), cid.DagCBOR),
+		BlobCID:       snapshot.Blob.CID,
+	}
 	headBytes, err := EncodeHead(head)
 	require.Nil(t, headBytes)
 	requireViolation(t, err, ErrInvalidRecord, "schemaVersion", "unsupported")
@@ -274,26 +339,166 @@ func TestIndependentMalformedCBORIsRejectedWithoutPartialRecords(t *testing.T) {
 		field   string
 		reason  string
 	}{
-		{name: "v1 type", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultSnapshot" }), want: ErrInvalidRecord, field: "$type", reason: "unsupported"},
-		{name: "unknown type", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultSnapshotUnknown" }), want: ErrInvalidRecord, field: "$type", reason: "unsupported"},
-		{name: "unknown version", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["schemaVersion"] = int64(3) }), want: ErrInvalidRecord, field: "schemaVersion", reason: "unsupported"},
-		{name: "legacy fields", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["epochSeq"] = int64(0) }), want: ErrInvalidRecord, field: "record", reason: "fields"},
-		{name: "unknown field", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["extra"] = "unrecognized" }), want: ErrInvalidRecord, field: "record", reason: "fields"},
-		{name: "missing field", encoded: independentRecordMutation(t, base, func(value map[string]any) { delete(value, "publicationId") }), want: ErrInvalidRecord, field: "record", reason: "fields"},
+		{
+			name: "v1 type",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultSnapshot" },
+			),
+			want:   ErrInvalidRecord,
+			field:  "$type",
+			reason: "unsupported",
+		},
+		{
+			name: "unknown type",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultSnapshotUnknown" },
+			),
+			want:   ErrInvalidRecord,
+			field:  "$type",
+			reason: "unsupported",
+		},
+		{
+			name: "unknown version",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["schemaVersion"] = int64(3) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "schemaVersion",
+			reason: "unsupported",
+		},
+		{
+			name:    "legacy fields",
+			encoded: independentRecordMutation(t, base, func(value map[string]any) { value["epochSeq"] = int64(0) }),
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "fields",
+		},
+		{
+			name:    "unknown field",
+			encoded: independentRecordMutation(t, base, func(value map[string]any) { value["extra"] = "unrecognized" }),
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "fields",
+		},
+		{
+			name:    "missing field",
+			encoded: independentRecordMutation(t, base, func(value map[string]any) { delete(value, "publicationId") }),
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "fields",
+		},
 		{name: "renamed field", encoded: independentRecordMutation(t, base, func(value map[string]any) {
 			value["publicationID"] = value["publicationId"]
 			delete(value, "publicationId")
 		}), want: ErrInvalidRecord, field: "publicationId", reason: "missing"},
-		{name: "null sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = nil }), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "integral float sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = float64(0) }), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
-		{name: "boolean sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = true }), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "negative sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = int64(-1) }), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "overflow sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = int64(MaxSequence + 1) }), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "uint64 overflow sequence", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = ^uint64(0) }), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "integral float blob size", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["blob"].(map[string]any)["size"] = float64(len("fixture payload")) }), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
-		{name: "unknown nested blob field", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["blob"].(map[string]any)["extra"] = true }), want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "missing nested blob size", encoded: independentRecordMutation(t, base, func(value map[string]any) { delete(value["blob"].(map[string]any), "size") }), want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "null nested blob field", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["blob"].(map[string]any)["size"] = nil }), want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
+		{
+			name:    "null sequence",
+			encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = nil }),
+			want:    ErrInvalidRecord,
+			field:   "publicationSeq",
+			reason:  "integer",
+		},
+		{
+			name: "integral float sequence",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["publicationSeq"] = float64(0) },
+			),
+			want:   ErrNonCanonical,
+			field:  "record",
+			reason: "byte_mismatch",
+		},
+		{
+			name:    "boolean sequence",
+			encoded: independentRecordMutation(t, base, func(value map[string]any) { value["publicationSeq"] = true }),
+			want:    ErrInvalidRecord,
+			field:   "publicationSeq",
+			reason:  "integer",
+		},
+		{
+			name: "negative sequence",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["publicationSeq"] = int64(-1) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "publicationSeq",
+			reason: "integer",
+		},
+		{
+			name: "overflow sequence",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["publicationSeq"] = int64(MaxSequence + 1) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "publicationSeq",
+			reason: "integer",
+		},
+		{
+			name: "uint64 overflow sequence",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["publicationSeq"] = ^uint64(0) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "publicationSeq",
+			reason: "integer",
+		},
+		{
+			name: "integral float blob size",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["blob"].(map[string]any)["size"] = float64(len("fixture payload")) },
+			),
+			want:   ErrNonCanonical,
+			field:  "record",
+			reason: "byte_mismatch",
+		},
+		{
+			name: "unknown nested blob field",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["blob"].(map[string]any)["extra"] = true },
+			),
+			want:   ErrInvalidRecord,
+			field:  "record",
+			reason: "invalid_cbor",
+		},
+		{
+			name: "missing nested blob size",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { delete(value["blob"].(map[string]any), "size") },
+			),
+			want:   ErrInvalidRecord,
+			field:  "record",
+			reason: "invalid_cbor",
+		},
+		{
+			name: "null nested blob field",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["blob"].(map[string]any)["size"] = nil },
+			),
+			want:   ErrInvalidRecord,
+			field:  "record",
+			reason: "invalid_cbor",
+		},
 		{name: "bytes map in vault", encoded: independentRecordMutation(t, base, func(value map[string]any) {
 			value["vault"] = map[string]any{"$bytes": base64.RawStdEncoding.EncodeToString(value["vault"].([]byte))}
 		}), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
@@ -307,21 +512,91 @@ func TestIndependentMalformedCBORIsRejectedWithoutPartialRecords(t *testing.T) {
 		{name: "legacy blob map", encoded: independentRecordMutation(t, base, func(value map[string]any) {
 			value["blob"] = map[string]any{"mimeType": SnapshotBlobMIMEType, "cid": blobCIDText.String()}
 		}), want: ErrInvalidRecord, field: "blob.size", reason: "range"},
-		{name: "trailing item", encoded: append(independentSnapshotBytes(t, fixtureSnapshotValue(t)), 0x00), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
-		{name: "indefinite map", encoded: independentIndefiniteSnapshot(t, base), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
-		{name: "nonminimal map header", encoded: independentNonminimalSnapshot(t, base), want: ErrNonCanonical, field: "record", reason: "byte_mismatch"},
-		{name: "invalid utf8", encoded: independentRecordMutation(t, base, func(value map[string]any) { value["blob"].(map[string]any)["mimeType"] = string([]byte{0xff}) }), want: ErrNonCanonical, field: "record", reason: "invalid_utf8"},
-		{name: "undefined sequence", encoded: independentUndefinedSequence(t, base), want: ErrInvalidRecord, field: "publicationSeq", reason: "integer"},
-		{name: "huge map declaration", encoded: []byte{0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "huge byte string declaration", encoded: []byte{0xa1, 0x65, 'v', 'a', 'u', 'l', 't', 0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "large representable byte string declaration", encoded: []byte{0xa1, 0x65, 'v', 'a', 'u', 'l', 't', 0x5a, 0x01, 0xff, 0xff, 0xff}, want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "large representable map declaration", encoded: []byte{0xa1, 0x65, 'e', 'x', 't', 'r', 'a', 0xba, 0x7f, 0xff, 0xff, 0xff}, want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
-		{name: "large representable array declaration under map", encoded: []byte{0xa1, 0x65, 'e', 'x', 't', 'r', 'a', 0x9a, 0x7f, 0xff, 0xff, 0xff}, want: ErrInvalidRecord, field: "record", reason: "invalid_cbor"},
+		{
+			name:    "trailing item",
+			encoded: append(independentSnapshotBytes(t, fixtureSnapshotValue(t)), 0x00),
+			want:    ErrNonCanonical,
+			field:   "record",
+			reason:  "byte_mismatch",
+		},
+		{
+			name:    "indefinite map",
+			encoded: independentIndefiniteSnapshot(t, base),
+			want:    ErrNonCanonical,
+			field:   "record",
+			reason:  "byte_mismatch",
+		},
+		{
+			name:    "nonminimal map header",
+			encoded: independentNonminimalSnapshot(t, base),
+			want:    ErrNonCanonical,
+			field:   "record",
+			reason:  "byte_mismatch",
+		},
+		{
+			name: "invalid utf8",
+			encoded: independentRecordMutation(
+				t,
+				base,
+				func(value map[string]any) { value["blob"].(map[string]any)["mimeType"] = string([]byte{0xff}) },
+			),
+			want:   ErrNonCanonical,
+			field:  "record",
+			reason: "invalid_utf8",
+		},
+		{
+			name:    "undefined sequence",
+			encoded: independentUndefinedSequence(t, base),
+			want:    ErrInvalidRecord,
+			field:   "publicationSeq",
+			reason:  "integer",
+		},
+		{
+			name:    "huge map declaration",
+			encoded: []byte{0xbb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "invalid_cbor",
+		},
+		{
+			name:    "huge byte string declaration",
+			encoded: []byte{0xa1, 0x65, 'v', 'a', 'u', 'l', 't', 0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "invalid_cbor",
+		},
+		{
+			name:    "large representable byte string declaration",
+			encoded: []byte{0xa1, 0x65, 'v', 'a', 'u', 'l', 't', 0x5a, 0x01, 0xff, 0xff, 0xff},
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "invalid_cbor",
+		},
+		{
+			name:    "large representable map declaration",
+			encoded: []byte{0xa1, 0x65, 'e', 'x', 't', 'r', 'a', 0xba, 0x7f, 0xff, 0xff, 0xff},
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "invalid_cbor",
+		},
+		{
+			name:    "large representable array declaration under map",
+			encoded: []byte{0xa1, 0x65, 'e', 'x', 't', 'r', 'a', 0x9a, 0x7f, 0xff, 0xff, 0xff},
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "invalid_cbor",
+		},
 		{name: "oversized parent bytes", encoded: independentRecordMutation(t, base, func(value map[string]any) {
 			value["publicationSeq"] = int64(1)
 			value["parent"] = bytes.Repeat([]byte{1}, MaxCIDBytes+1)
 		}), want: ErrInvalidRecord, field: "parent", reason: "length"},
-		{name: "oversized record", encoded: bytes.Repeat([]byte{0}, MaxRecordBytes+1), want: ErrInvalidRecord, field: "record", reason: "size_limit"},
+		{
+			name:    "oversized record",
+			encoded: bytes.Repeat([]byte{0}, MaxRecordBytes+1),
+			want:    ErrInvalidRecord,
+			field:   "record",
+			reason:  "size_limit",
+		},
 	}
 
 	duplicateTop := independentDuplicateSnapshotField(t, base, "$type", SnapshotNSID)
@@ -360,8 +635,16 @@ func TestIndependentCIDRoleAndHashVariantsAreRejected(t *testing.T) {
 	}{
 		{name: "wrong codec", cid: independentCID(t, payload, cid.DagCBOR), field: "blob.ref"},
 		{name: "cid v0", cid: independentCIDV0(t, payload), field: "blob.ref"},
-		{name: "wrong hash", cid: independentCIDWithPrefix(t, payload, cid.Raw, multihash.SHA3_256, 32), field: "blob.ref"},
-		{name: "wrong hash length", cid: independentCIDWithPrefix(t, payload, cid.Raw, multihash.SHA2_256, 16), field: "blob.ref"},
+		{
+			name:  "wrong hash",
+			cid:   independentCIDWithPrefix(t, payload, cid.Raw, multihash.SHA3_256, 32),
+			field: "blob.ref",
+		},
+		{
+			name:  "wrong hash length",
+			cid:   independentCIDWithPrefix(t, payload, cid.Raw, multihash.SHA2_256, 16),
+			field: "blob.ref",
+		},
 	}
 	for _, variant := range variants {
 		t.Run(variant.name, func(t *testing.T) {
@@ -404,11 +687,53 @@ func TestRecordCIDDispatchReturnsStrictDecoderErrors(t *testing.T) {
 		{name: "head wrong codec", encoded: independentRecordMutation(t, head, func(value map[string]any) {
 			value["snapshotCid"] = independentCID(t, []byte("raw record cid"), cid.Raw)
 		}), want: ErrCID, field: "snapshotCid", reason: "role"},
-		{name: "head wrong length", encoded: independentRecordMutation(t, head, func(value map[string]any) { value["blobCid"] = []byte{} }), want: ErrCID, field: "blobCid", reason: "length"},
-		{name: "head unsupported version", encoded: independentRecordMutation(t, head, func(value map[string]any) { value["schemaVersion"] = int64(1) }), want: ErrInvalidRecord, field: "schemaVersion", reason: "unsupported"},
-		{name: "invalid snapshot", encoded: independentRecordMutation(t, snapshot, func(value map[string]any) { value["schemaVersion"] = int64(1) }), want: ErrInvalidRecord, field: "schemaVersion", reason: "unsupported"},
-		{name: "unknown type", encoded: independentRecordMutation(t, snapshot, func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultPolicy" }), want: ErrInvalidRecord, field: "$type", reason: "unsupported"},
-		{name: "missing type", encoded: independentRecordMutation(t, snapshot, func(value map[string]any) { delete(value, "$type") }), want: ErrInvalidRecord, field: "$type", reason: "invalid"},
+		{
+			name:    "head wrong length",
+			encoded: independentRecordMutation(t, head, func(value map[string]any) { value["blobCid"] = []byte{} }),
+			want:    ErrCID,
+			field:   "blobCid",
+			reason:  "length",
+		},
+		{
+			name: "head unsupported version",
+			encoded: independentRecordMutation(
+				t,
+				head,
+				func(value map[string]any) { value["schemaVersion"] = int64(1) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "schemaVersion",
+			reason: "unsupported",
+		},
+		{
+			name: "invalid snapshot",
+			encoded: independentRecordMutation(
+				t,
+				snapshot,
+				func(value map[string]any) { value["schemaVersion"] = int64(1) },
+			),
+			want:   ErrInvalidRecord,
+			field:  "schemaVersion",
+			reason: "unsupported",
+		},
+		{
+			name: "unknown type",
+			encoded: independentRecordMutation(
+				t,
+				snapshot,
+				func(value map[string]any) { value["$type"] = "systems.lamb.dottie.vaultPolicy" },
+			),
+			want:   ErrInvalidRecord,
+			field:  "$type",
+			reason: "unsupported",
+		},
+		{
+			name:    "missing type",
+			encoded: independentRecordMutation(t, snapshot, func(value map[string]any) { delete(value, "$type") }),
+			want:    ErrInvalidRecord,
+			field:   "$type",
+			reason:  "invalid",
+		},
 		{name: "empty input", encoded: nil, want: ErrInvalidRecord, field: "record", reason: "size_limit"},
 	}
 	for _, test := range cases {
@@ -468,21 +793,65 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	assert.Equal(t, "any", snapshot.Defs["main"].Key)
 	assert.Equal(t, "record", head.Defs["main"].Type)
 	assert.Equal(t, "literal:self", head.Defs["main"].Key)
-	assert.Equal(t, []string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"}, sortedStrings(snapshot.Defs["main"].Record.Required))
-	assert.Equal(t, []string{"blobCid", "publicationSeq", "schemaVersion", "snapshotCid", "vault"}, sortedStrings(head.Defs["main"].Record.Required))
-	assert.Equal(t, []string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"}, sortedPropertyKeys(snapshot.Defs["main"].Record.Properties))
-	assert.Equal(t, []string{"blobCid", "publicationSeq", "schemaVersion", "snapshotCid", "vault"}, sortedPropertyKeys(head.Defs["main"].Record.Properties))
+	assert.Equal(
+		t,
+		[]string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
+		sortedStrings(snapshot.Defs["main"].Record.Required),
+	)
+	assert.Equal(
+		t,
+		[]string{"blobCid", "publicationSeq", "schemaVersion", "snapshotCid", "vault"},
+		sortedStrings(head.Defs["main"].Record.Required),
+	)
+	assert.Equal(
+		t,
+		[]string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
+		sortedPropertyKeys(snapshot.Defs["main"].Record.Properties),
+	)
+	assert.Equal(
+		t,
+		[]string{"blobCid", "publicationSeq", "schemaVersion", "snapshotCid", "vault"},
+		sortedPropertyKeys(head.Defs["main"].Record.Properties),
+	)
 	for _, document := range []lexiconFile{snapshot, head} {
 		props := document.Defs["main"].Record.Properties
 		assert.Equal(t, map[string]any{"type": "integer", "const": float64(2)}, props["schemaVersion"])
-		assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(32), "maxLength": float64(32)}, props["vault"])
-		assert.Equal(t, map[string]any{"type": "integer", "minimum": float64(0), "maximum": float64(MaxSequence)}, props["publicationSeq"])
+		assert.Equal(
+			t,
+			map[string]any{"type": "bytes", "minLength": float64(32), "maxLength": float64(32)},
+			props["vault"],
+		)
+		assert.Equal(
+			t,
+			map[string]any{"type": "integer", "minimum": float64(0), "maximum": float64(MaxSequence)},
+			props["publicationSeq"],
+		)
 	}
-	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(16), "maxLength": float64(16)}, snapshot.Defs["main"].Record.Properties["publicationId"])
-	assert.Equal(t, map[string]any{"type": "bytes", "maxLength": float64(MaxCIDBytes)}, snapshot.Defs["main"].Record.Properties["parent"])
-	assert.Equal(t, map[string]any{"type": "blob", "accept": []any{SnapshotBlobMIMEType}, "maxSize": float64(MaxBlobBytes)}, snapshot.Defs["main"].Record.Properties["blob"])
-	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)}, head.Defs["main"].Record.Properties["snapshotCid"])
-	assert.Equal(t, map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)}, head.Defs["main"].Record.Properties["blobCid"])
+	assert.Equal(
+		t,
+		map[string]any{"type": "bytes", "minLength": float64(16), "maxLength": float64(16)},
+		snapshot.Defs["main"].Record.Properties["publicationId"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "bytes", "maxLength": float64(MaxCIDBytes)},
+		snapshot.Defs["main"].Record.Properties["parent"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "blob", "accept": []any{SnapshotBlobMIMEType}, "maxSize": float64(MaxBlobBytes)},
+		snapshot.Defs["main"].Record.Properties["blob"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)},
+		head.Defs["main"].Record.Properties["snapshotCid"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)},
+		head.Defs["main"].Record.Properties["blobCid"],
+	)
 	assert.NotContains(t, strings.ToLower(string(mustReadFile(t, paths))), "example.")
 }
 
@@ -532,13 +901,31 @@ func fixtureSnapshotValue(t testing.TB) SnapshotRecord {
 	t.Helper()
 	payload := []byte("fixture payload")
 	blobCID := independentCID(t, payload, cid.Raw)
-	return SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType}}
+	return SnapshotRecord{
+		SchemaVersion: SchemaVersion,
+		Vault:         fixtureVault(),
+		PublicationID: fixturePublicationID(),
+		Blob:          BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType},
+	}
 }
 
-func fixtureSnapshot(t testing.TB, payload []byte, sequence uint64, parent []byte, publicationByte byte) (SnapshotRecord, []byte) {
+func fixtureSnapshot(
+	t testing.TB,
+	payload []byte,
+	sequence uint64,
+	parent []byte,
+	publicationByte byte,
+) (SnapshotRecord, []byte) {
 	t.Helper()
 	blobCID := independentCID(t, payload, cid.Raw)
-	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(), PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType}}
+	record := SnapshotRecord{
+		SchemaVersion:  SchemaVersion,
+		Vault:          fixtureVault(),
+		PublicationID:  fixturePublicationID(),
+		PublicationSeq: sequence,
+		Parent:         bytes.Clone(parent),
+		Blob:           BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: SnapshotBlobMIMEType},
+	}
 	record.PublicationID[15] = publicationByte
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -800,7 +1187,17 @@ func testCBOR(value any) []byte {
 		return testCBORHead(0, item)
 	case float64:
 		encoded := []byte{0xfb}
-		return append(encoded, byte(math.Float64bits(item)>>56), byte(math.Float64bits(item)>>48), byte(math.Float64bits(item)>>40), byte(math.Float64bits(item)>>32), byte(math.Float64bits(item)>>24), byte(math.Float64bits(item)>>16), byte(math.Float64bits(item)>>8), byte(math.Float64bits(item)))
+		return append(
+			encoded,
+			byte(math.Float64bits(item)>>56),
+			byte(math.Float64bits(item)>>48),
+			byte(math.Float64bits(item)>>40),
+			byte(math.Float64bits(item)>>32),
+			byte(math.Float64bits(item)>>24),
+			byte(math.Float64bits(item)>>16),
+			byte(math.Float64bits(item)>>8),
+			byte(math.Float64bits(item)),
+		)
 	case bool:
 		if item {
 			return []byte{0xf5}
@@ -869,7 +1266,17 @@ func testCBORHead(major uint8, value uint64) []byte {
 	case value <= math.MaxUint32:
 		return []byte{prefix | 26, byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
 	default:
-		return []byte{prefix | 27, byte(value >> 56), byte(value >> 48), byte(value >> 40), byte(value >> 32), byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
+		return []byte{
+			prefix | 27,
+			byte(value >> 56),
+			byte(value >> 48),
+			byte(value >> 40),
+			byte(value >> 32),
+			byte(value >> 24),
+			byte(value >> 16),
+			byte(value >> 8),
+			byte(value),
+		}
 	}
 }
 

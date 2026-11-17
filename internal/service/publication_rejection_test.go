@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publicationstate"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
 )
 
 func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.T) {
@@ -31,7 +32,7 @@ func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.
 	for name, value := range ambiguous {
 		t.Run(name, func(t *testing.T) {
 			failure := atprotoMaterialApplyStatus(value.status, value.response)
-			assert.NotErrorIs(t, failure, ErrMaterialSubmissionRejected)
+			require.NotErrorIs(t, failure, ErrMaterialSubmissionRejected)
 			assert.ErrorIs(t, failure, atproto.ErrCandidateMayBeDisclosed)
 		})
 	}
@@ -41,28 +42,72 @@ func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.
 		response []byte
 		class    error
 	}{
-		"quota":              {status: 400, response: []byte(`{"error":"QuotaExceeded"}`), class: atproto.ErrPublicationQuota},
-		"storage quota":      {status: 400, response: []byte(`{"error":"StorageQuotaExceeded"}`), class: atproto.ErrPublicationQuota},
-		"rate limited":       {status: 429, response: []byte(`{"error":"RateLimitExceeded"}`), class: atproto.ErrPublicationRateLimited},
-		"payload too large":  {status: 400, response: []byte(`{"error":"PayloadTooLarge"}`), class: atproto.ErrPublicationBatchTooLarge},
-		"request too large":  {status: 413, response: []byte(`{"error":"RequestTooLarge"}`), class: atproto.ErrPublicationBatchTooLarge},
-		"fence lost":         {status: 409, response: []byte(`{"error":"InvalidSwap"}`), class: atproto.ErrFenceLost},
-		"auth required":      {status: 400, response: []byte(`{"error":"AuthRequired"}`), class: atproto.ErrBatchRejected},
-		"unrecognised code":  {status: 400, response: []byte(`{"error":"InvalidRecord"}`), class: atproto.ErrBatchRejected},
-		"provider rejection": {status: 400, response: []byte(`{"error":"ApplyWritesRejected"}`), class: atproto.ErrBatchRejected},
-		"untyped list":       {status: 422, response: []byte(`{"error":"SomethingElse"}`), class: atproto.ErrBatchRejected},
+		"quota": {
+			status:   400,
+			response: []byte(`{"error":"QuotaExceeded"}`),
+			class:    atproto.ErrPublicationQuota,
+		},
+		"storage quota": {
+			status:   400,
+			response: []byte(`{"error":"StorageQuotaExceeded"}`),
+			class:    atproto.ErrPublicationQuota,
+		},
+		"rate limited": {
+			status:   429,
+			response: []byte(`{"error":"RateLimitExceeded"}`),
+			class:    atproto.ErrPublicationRateLimited,
+		},
+		"payload too large": {
+			status:   400,
+			response: []byte(`{"error":"PayloadTooLarge"}`),
+			class:    atproto.ErrPublicationBatchTooLarge,
+		},
+		"request too large": {
+			status:   413,
+			response: []byte(`{"error":"RequestTooLarge"}`),
+			class:    atproto.ErrPublicationBatchTooLarge,
+		},
+		"fence lost": {status: 409, response: []byte(`{"error":"InvalidSwap"}`), class: atproto.ErrFenceLost},
+		"auth required": {
+			status:   400,
+			response: []byte(`{"error":"AuthRequired"}`),
+			class:    atproto.ErrBatchRejected,
+		},
+		"unrecognised code": {
+			status:   400,
+			response: []byte(`{"error":"InvalidRecord"}`),
+			class:    atproto.ErrBatchRejected,
+		},
+		"provider rejection": {
+			status:   400,
+			response: []byte(`{"error":"ApplyWritesRejected"}`),
+			class:    atproto.ErrBatchRejected,
+		},
+		"untyped list": {
+			status:   422,
+			response: []byte(`{"error":"SomethingElse"}`),
+			class:    atproto.ErrBatchRejected,
+		},
 	}
 	for name, value := range definite {
 		t.Run(name, func(t *testing.T) {
 			failure := atprotoMaterialApplyStatus(value.status, value.response)
-			assert.ErrorIs(t, failure, ErrMaterialSubmissionRejected)
-			assert.ErrorIs(t, failure, value.class)
-			assert.ErrorIs(t, failure, atproto.ErrCandidateMayBeDisclosed)
+			require.ErrorIs(t, failure, ErrMaterialSubmissionRejected)
+			require.ErrorIs(t, failure, value.class)
+			require.ErrorIs(t, failure, atproto.ErrCandidateMayBeDisclosed)
 			assert.NotErrorIs(t, failure, atproto.ErrAmbiguousTransport)
 		})
 	}
-	assert.Equal(t, "dispatch_rejected:400:QuotaExceeded", atprotoMaterialDispatchReason(400, []byte(`{"error":"QuotaExceeded"}`)))
-	assert.Equal(t, "dispatch_rejected:400:InvalidRecord", atprotoMaterialDispatchReason(400, []byte(`{"error":"InvalidRecord"}`)))
+	assert.Equal(
+		t,
+		"dispatch_rejected:400:QuotaExceeded",
+		atprotoMaterialDispatchReason(400, []byte(`{"error":"QuotaExceeded"}`)),
+	)
+	assert.Equal(
+		t,
+		"dispatch_rejected:400:InvalidRecord",
+		atprotoMaterialDispatchReason(400, []byte(`{"error":"InvalidRecord"}`)),
+	)
 }
 
 func TestDefiniteSubmissionRejectionRetiresTheAttemptAndAmbiguityDoesNot(t *testing.T) {
@@ -73,27 +118,39 @@ func TestDefiniteSubmissionRejectionRetiresTheAttemptAndAmbiguityDoesNot(t *test
 		blocking  bool
 	}{
 		"definite refusal": {
-			failure: atprotoMaterialApplyStatus(400, []byte(`{"error":"QuotaExceeded"}`)),
-			outcome: publicationstate.OutcomeRejected, lifecycle: publicationstate.AttemptRetiredAbandoned, blocking: false,
+			failure:   atprotoMaterialApplyStatus(400, []byte(`{"error":"QuotaExceeded"}`)),
+			outcome:   publicationstate.OutcomeRejected,
+			lifecycle: publicationstate.AttemptRetiredAbandoned,
+			blocking:  false,
 		},
 		"ambiguous outcome": {
-			failure: errors.Join(atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed),
-			outcome: publicationstate.OutcomeUnresolved, lifecycle: publicationstate.AttemptMayHaveSubmitted, blocking: true,
+			failure:   errors.Join(atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed),
+			outcome:   publicationstate.OutcomeUnresolved,
+			lifecycle: publicationstate.AttemptMayHaveSubmitted,
+			blocking:  true,
 		},
 	}
 	for name, value := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			fixture := newPublicationPushFixture(t)
-			preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+			preparation, err := fixture.coordinator.PreparePublicationPush(
+				ctx,
+				fixture.request(fixture.publicationID, nil),
+			)
 			require.NoError(t, err)
 			fixture.transport.setSendError(value.failure)
-			_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+			_, err = fixture.coordinator.ConfirmPublicationPush(
+				ctx,
+				fixture.request(fixture.publicationID, nil),
+				preparation,
+				preparation.Proposal.Confirmation,
+			)
 			require.Error(t, err)
 			if value.blocking {
-				assert.NotErrorIs(t, err, ErrMaterialSubmissionRejected)
+				require.NotErrorIs(t, err, ErrMaterialSubmissionRejected)
 			} else {
-				assert.ErrorIs(t, err, ErrMaterialSubmissionRejected)
+				require.ErrorIs(t, err, ErrMaterialSubmissionRejected)
 			}
 
 			failed, err := fixture.store.LoadAttempt(ctx, preparation.Proposal.Proposal.AttemptID)
@@ -121,12 +178,17 @@ func TestDefiniteSubmissionRejectionKeepsTheDisclosureWarningAndReleasesCustody(
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	fixture.transport.setSendError(atprotoMaterialApplyStatus(400, []byte(`{"error":"QuotaExceeded"}`)))
-	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	result, err := fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrMaterialSubmissionRejected)
-	assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
-	assert.ErrorIs(t, err, atproto.ErrPublicationQuota)
-	assert.NotErrorIs(t, err, atproto.ErrAmbiguousTransport)
+	require.ErrorIs(t, err, ErrMaterialSubmissionRejected)
+	require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
+	require.ErrorIs(t, err, atproto.ErrPublicationQuota)
+	require.NotErrorIs(t, err, atproto.ErrAmbiguousTransport)
 	var staged interface {
 		Stage() string
 		Reason() string
@@ -152,7 +214,12 @@ func TestDefiniteSubmissionRejectionDoesNotPublishOrRetainAFloor(t *testing.T) {
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	fixture.transport.setSendError(ErrMaterialSubmissionRejected)
-	_, err = fixture.coordinator.ConfirmPublicationPush(ctx, fixture.request(fixture.publicationID, nil), preparation, preparation.Proposal.Confirmation)
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		fixture.request(fixture.publicationID, nil),
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	require.Error(t, err)
 
 	_, present, err := fixture.store.Load(ctx)

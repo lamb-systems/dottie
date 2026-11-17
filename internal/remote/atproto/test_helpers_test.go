@@ -96,14 +96,14 @@ type rewriteTransport struct {
 }
 
 func (r *rewriteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	copy := request.Clone(request.Context())
+	cloned := request.Clone(request.Context())
 	original := *request.URL
-	copy.Header = request.Header.Clone()
-	copy.Header.Set("X-Original-Host", original.Host)
-	copy.URL.Scheme = r.server.Scheme
-	copy.URL.Host = r.server.Host
-	copy.Host = original.Host
-	return r.transport.RoundTrip(copy)
+	cloned.Header = request.Header.Clone()
+	cloned.Header.Set("X-Original-Host", original.Host)
+	cloned.URL.Scheme = r.server.Scheme
+	cloned.URL.Host = r.server.Host
+	cloned.Host = original.Host
+	return r.transport.RoundTrip(cloned)
 }
 
 type counterReader struct {
@@ -209,8 +209,17 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *Client, *memoryStore) {
 		require.NoError(t, err)
 	}
 	store := newMemoryStore()
-	client, err := NewClient("https://dottie.example/client-metadata.json", store,
-		WithHTTPClient(&http.Client{Transport: &rewriteTransport{server: serverURL, transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}}),
+	client, err := NewClient(
+		"https://dottie.example/client-metadata.json",
+		store,
+		WithHTTPClient(
+			&http.Client{
+				Transport: &rewriteTransport{
+					server:    serverURL,
+					transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+				},
+			},
+		),
 		WithClock(func() time.Time { return time.Unix(1_700_000_123, 987654321) }),
 		WithRandom(&counterReader{}),
 		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errorsNewNotFound{} }),
@@ -227,7 +236,14 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 	defer f.mu.Unlock()
 	switch {
 	case host == handleHost && request.URL.Path == "/.well-known/did.json":
-		writeJSON(writer, didDocument{ID: f.documentID, AlsoKnownAs: f.alsoKnown, Service: []didService{{ID: f.serviceID, Type: "AtprotoPersonalDataServer", ServiceEndpoint: f.pds}}})
+		writeJSON(
+			writer,
+			didDocument{
+				ID:          f.documentID,
+				AlsoKnownAs: f.alsoKnown,
+				Service:     []didService{{ID: f.serviceID, Type: "AtprotoPersonalDataServer", ServiceEndpoint: f.pds}},
+			},
+		)
 	case host == handleHost && request.URL.Path == "/.well-known/atproto-did":
 		if f.handleStatus != 0 {
 			http.Error(writer, "not found", f.handleStatus)
@@ -236,16 +252,36 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 		writer.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(writer, f.did)
 	case host == didHost && strings.HasPrefix(request.URL.Path, "/did:"):
-		writeJSON(writer, didDocument{ID: f.documentID, AlsoKnownAs: f.alsoKnown, Service: []didService{{ID: f.serviceID, Type: "AtprotoPersonalDataServer", ServiceEndpoint: f.pds}}})
+		writeJSON(
+			writer,
+			didDocument{
+				ID:          f.documentID,
+				AlsoKnownAs: f.alsoKnown,
+				Service:     []didService{{ID: f.serviceID, Type: "AtprotoPersonalDataServer", ServiceEndpoint: f.pds}},
+			},
+		)
 	case hostMatchesURL(host, f.pds) && request.URL.Path == "/.well-known/oauth-protected-resource":
 		status := f.resourceStatus
 		if status != 0 {
 			http.Error(writer, "missing", status)
 			return
 		}
-		writeJSON(writer, protectedResource{Resource: f.resource, AuthorizationServers: []string{f.authorizationServer}})
+		writeJSON(
+			writer,
+			protectedResource{Resource: f.resource, AuthorizationServers: []string{f.authorizationServer}},
+		)
 	case host == issuerHost && request.URL.Path == "/.well-known/oauth-authorization-server":
-		writeJSON(writer, authorizationMetadata{Issuer: f.metadataIssuer, AuthorizationEndpoint: f.authorizationEndpoint, TokenEndpoint: f.tokenEndpoint, PARSEndpoint: f.parEndpoint, RevocationEndpoint: f.revocationEndpoint, ScopesSupported: VaultScopes()})
+		writeJSON(
+			writer,
+			authorizationMetadata{
+				Issuer:                f.metadataIssuer,
+				AuthorizationEndpoint: f.authorizationEndpoint,
+				TokenEndpoint:         f.tokenEndpoint,
+				PARSEndpoint:          f.parEndpoint,
+				RevocationEndpoint:    f.revocationEndpoint,
+				ScopesSupported:       VaultScopes(),
+			},
+		)
 	case host == issuerHost && request.URL.Path == "/par":
 		_ = request.ParseForm()
 		f.parValues = request.Form
@@ -300,7 +336,16 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 			writer.WriteHeader(status)
 			return
 		}
-		writeJSON(writer, tokenResponse{AccessToken: f.tokenAccess, RefreshToken: f.tokenRefresh, TokenType: "DPoP", Scope: f.tokenScope, Sub: f.tokenSub})
+		writeJSON(
+			writer,
+			tokenResponse{
+				AccessToken:  f.tokenAccess,
+				RefreshToken: f.tokenRefresh,
+				TokenType:    "DPoP",
+				Scope:        f.tokenScope,
+				Sub:          f.tokenSub,
+			},
+		)
 	case host == issuerHost && request.URL.Path == "/resource":
 		f.resourceProof = request.Header.Get("DPoP")
 		f.resourceAuth = request.Header.Get("Authorization")
@@ -308,7 +353,10 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 	case hostMatchesURL(host, f.pds) && request.URL.Path == "/resource":
 		f.resourceProof = request.Header.Get("DPoP")
 		f.resourceAuth = request.Header.Get("Authorization")
-		f.resourceRequests = append(f.resourceRequests, fakeResourceRequest{host: host, authorization: f.resourceAuth, proof: f.resourceProof})
+		f.resourceRequests = append(
+			f.resourceRequests,
+			fakeResourceRequest{host: host, authorization: f.resourceAuth, proof: f.resourceProof},
+		)
 		index := len(f.resourceRequests) - 1
 		var configured fakeResourceResponse
 		if index < len(f.resourceResponses) {
@@ -330,7 +378,14 @@ func (f *fakeOAuth) serveHTTP(writer http.ResponseWriter, request *http.Request)
 		_, _ = io.WriteString(writer, configured.body)
 	case host == issuerHost && request.URL.Path == "/revoke":
 		_ = request.ParseForm()
-		f.revocationRequests = append(f.revocationRequests, fakeRevocationRequest{form: request.Form, authorization: request.Header.Get("Authorization"), proof: request.Header.Get("DPoP")})
+		f.revocationRequests = append(
+			f.revocationRequests,
+			fakeRevocationRequest{
+				form:          request.Form,
+				authorization: request.Header.Get("Authorization"),
+				proof:         request.Header.Get("DPoP"),
+			},
+		)
 		index := len(f.revocationRequests) - 1
 		var configured fakeResourceResponse
 		if index < len(f.revocationResponses) {

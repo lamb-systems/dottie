@@ -60,10 +60,17 @@ const (
 	publicationSelectionReasonCanceled = publicationSelectionReasonCode("canceled")
 )
 
-func NewPublicationLocalContext(paths platform.Paths, capture CapturePort, settings SettingsPort) (*PublicationLocalContext, error) {
+func NewPublicationLocalContext(
+	paths platform.Paths,
+	capture CapturePort,
+	settings SettingsPort,
+) (*PublicationLocalContext, error) {
 	budget := publicationStringBudget{}
 	for _, value := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
-		if value == "" || len(value) > model.MaxRelativePathBytes || !filepath.IsAbs(value) || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 || !budget.add(value) {
+		if value == "" || len(value) > model.MaxRelativePathBytes || !filepath.IsAbs(value) ||
+			!utf8.ValidString(value) ||
+			strings.IndexByte(value, 0) >= 0 ||
+			!budget.add(value) {
 			return nil, publicationSelectionFailure(context.Background(), publicationSelectionReasonInput)
 		}
 	}
@@ -79,8 +86,15 @@ func NewPublicationLocalContext(paths platform.Paths, capture CapturePort, setti
 	}, nil
 }
 
-func selectPublicationTarget(ctx context.Context, local *PublicationLocalContext, configuration config.Config, selectedID string, expected model.Target) (publicationSelection, error) {
-	if ctx == nil || local == nil || local.affinity == nil || local.files == nil || !validPublicationContextPaths(local.paths) {
+func selectPublicationTarget(
+	ctx context.Context,
+	local *PublicationLocalContext,
+	configuration config.Config,
+	selectedID string,
+	expected model.Target,
+) (publicationSelection, error) {
+	if ctx == nil || local == nil || local.affinity == nil || local.files == nil ||
+		!validPublicationContextPaths(local.paths) {
 		return publicationSelection{}, publicationSelectionFailure(ctx, publicationSelectionReasonInput)
 	}
 	if err := ctx.Err(); err != nil {
@@ -105,7 +119,8 @@ func selectPublicationTarget(ctx context.Context, local *PublicationLocalContext
 		}
 	}
 	budget := publicationStringBudget{used: local.pathBytes}
-	if !addPublicationConfigStrings(&budget, configuration) || !budget.add(selectedID) || !addPortableTargetStrings(&budget, expected) {
+	if !addPublicationConfigStrings(&budget, configuration) || !budget.add(selectedID) ||
+		!addPortableTargetStrings(&budget, expected) {
 		return publicationSelection{}, publicationSelectionFailure(ctx, publicationSelectionReasonBounds)
 	}
 	if configuration.Version != config.Version || configuration.Validate() != nil {
@@ -148,7 +163,10 @@ func selectPublicationTarget(ctx context.Context, local *PublicationLocalContext
 	selection := publicationSelection{context: local}
 	if selected.Source == model.SourceFiles {
 		var derivedPaths []string
-		selection.resolvedPath, selection.anchorPath, selection.anchorName, selection.anchorInfo, derivedPaths, err = resolvePublicationFileAnchor(selected, local.paths)
+		selection.resolvedPath, selection.anchorPath, selection.anchorName, selection.anchorInfo, derivedPaths, err = resolvePublicationFileAnchor(
+			selected,
+			local.paths,
+		)
 		if err != nil {
 			return publicationSelection{}, publicationSelectionFailure(ctx, publicationSelectionReasonRoot)
 		}
@@ -158,7 +176,8 @@ func selectPublicationTarget(ctx context.Context, local *PublicationLocalContext
 			}
 		}
 	} else {
-		if local.settings == nil || selected.GNOMEPolicy == nil || len(selected.GNOMEPolicy.Categories) > matrix.MaxKeys {
+		if local.settings == nil || selected.GNOMEPolicy == nil ||
+			len(selected.GNOMEPolicy.Categories) > matrix.MaxKeys {
 			return publicationSelection{}, publicationSelectionFailure(ctx, publicationSelectionReasonSettings)
 		}
 		refs, resolveErr := approvedSettings(ctx, local.settings, selected)
@@ -216,7 +235,8 @@ func addPublicationConfigStrings(budget *publicationStringBudget, configuration 
 			return false
 		}
 		if target.Root != nil {
-			if !budget.add(string(target.Root.Base)) || !budget.add(target.Root.Path) || !budget.add(string(target.Root.Kind)) {
+			if !budget.add(string(target.Root.Base)) || !budget.add(target.Root.Path) ||
+				!budget.add(string(target.Root.Kind)) {
 				return false
 			}
 			for _, pattern := range target.Root.Exclude {
@@ -244,7 +264,8 @@ func addPortableTargetStrings(budget *publicationStringBudget, target model.Targ
 		return false
 	}
 	if target.Root != nil {
-		return budget.add(string(target.Root.Base)) && budget.add(target.Root.Path) && budget.add(string(target.Root.Kind))
+		return budget.add(string(target.Root.Base)) && budget.add(target.Root.Path) &&
+			budget.add(string(target.Root.Kind))
 	}
 	return true
 }
@@ -264,14 +285,19 @@ func nilPublicationDependency(dependency any) bool {
 
 func validPublicationContextPaths(paths platform.Paths) bool {
 	for _, value := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
-		if value == "" || len(value) > model.MaxRelativePathBytes || !filepath.IsAbs(value) || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+		if value == "" || len(value) > model.MaxRelativePathBytes || !filepath.IsAbs(value) ||
+			!utf8.ValidString(value) ||
+			strings.IndexByte(value, 0) >= 0 {
 			return false
 		}
 	}
 	return true
 }
 
-func resolvePublicationFileAnchor(target config.Target, paths platform.Paths) (string, string, string, os.FileInfo, []string, error) {
+func resolvePublicationFileAnchor(
+	target config.Target,
+	paths platform.Paths,
+) (string, string, string, os.FileInfo, []string, error) {
 	if target.Source != model.SourceFiles || target.Root == nil {
 		return "", "", "", nil, nil, os.ErrInvalid
 	}
@@ -324,7 +350,8 @@ func resolvePublicationFileAnchor(target config.Target, paths platform.Paths) (s
 		}
 		anchorName = filepath.Base(logicalPath)
 		logicalParent, parentErr := platform.RealPath(filepath.Dir(logicalPath))
-		if parentErr != nil || anchorName != filepath.Base(resolvedPath) || logicalParent != filepath.Dir(resolvedPath) {
+		if parentErr != nil || anchorName != filepath.Base(resolvedPath) ||
+			logicalParent != filepath.Dir(resolvedPath) {
 			return "", "", "", nil, nil, os.ErrInvalid
 		}
 		anchorPath = logicalParent
@@ -386,7 +413,13 @@ func validatePublicationSettingRefs(targetID string, refs []SettingRef) ([]Setti
 	seen := make(map[model.EntryKey]struct{}, len(refs))
 	validated := make([]SettingRef, 0, len(refs))
 	for _, ref := range refs {
-		key := model.EntryKey{TargetID: targetID, Source: model.SourceGNOME, SchemaID: ref.SchemaID, SettingsPath: ref.Path, SettingKey: ref.Key}
+		key := model.EntryKey{
+			TargetID:     targetID,
+			Source:       model.SourceGNOME,
+			SchemaID:     ref.SchemaID,
+			SettingsPath: ref.Path,
+			SettingKey:   ref.Key,
+		}
 		locator := matrix.KeyRef{SchemaID: ref.SchemaID, Path: ref.Path, Key: ref.Key}
 		if key.Validate() != nil || locator.Validate() != nil {
 			return nil, errors.New("invalid selected settings")
@@ -423,5 +456,10 @@ func publicationSelectionFailure(ctx context.Context, reason publicationSelectio
 	if ctx != nil && ctx.Err() != nil {
 		reason = publicationSelectionReasonCanceled
 	}
-	return publicationReconciliationFailure(ctx, publicationReconciliationStage(publicationSelectionStage), publicationReconciliationReason(reason), nil)
+	return publicationReconciliationFailure(
+		ctx,
+		publicationReconciliationStage(publicationSelectionStage),
+		publicationReconciliationReason(reason),
+		nil,
+	)
 }

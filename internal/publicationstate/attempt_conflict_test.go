@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestFirstConflictResolveRefreshReopenRepinRetireAndPayloadLoss(t *testing.T) {
@@ -78,7 +79,11 @@ func TestFirstConflictResolveRefreshReopenRepinRetireAndPayloadLoss(t *testing.T
 	assert.Equal(t, h1Conflict.ID, latest.ID)
 	assert.Equal(t, h1Conflict.Evidence, latest.Evidence)
 	var latestOutcome []byte
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attempt.ID[:]).Scan(&latestOutcome))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attempt.ID[:]).
+			Scan(&latestOutcome),
+	)
 	var latestWire attemptEvidenceWire
 	require.NoError(t, strictJSON(latestOutcome, &latestWire))
 	assert.Len(t, latestWire.Suffix, 5)
@@ -98,8 +103,16 @@ func TestFirstConflictResolveRefreshReopenRepinRetireAndPayloadLoss(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredAbandoned, retired.Lifecycle)
 	var refs, reservations int
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).Scan(&refs))
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).Scan(&reservations))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&refs),
+	)
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&reservations),
+	)
 	assert.Zero(t, refs)
 	assert.Zero(t, reservations)
 	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
@@ -161,7 +174,11 @@ func TestFirstConflictDirectAbandonAndThreeRoleAdmission(t *testing.T) {
 	assert.Equal(t, OutcomeLostFence, retired.Outcome)
 	assert.Equal(t, AttemptRetiredAbandoned, retired.Lifecycle)
 	var roles int
-	require.NoError(t, exact.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).Scan(&roles))
+	require.NoError(
+		t,
+		exact.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&roles),
+	)
 	assert.Equal(t, 3, roles)
 	first, present, err := exact.ReadFirstConflict(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -219,7 +236,10 @@ func TestFirstConflictInsertionAndEventFailuresRollbackTogether(t *testing.T) {
 			loaded, err := store.LoadAttempt(ctx, attempt.ID)
 			require.NoError(t, err)
 			assert.Equal(t, OutcomeUnresolved, loaded.Outcome)
-			_, err = store.conn.ExecContext(ctx, "DROP TRIGGER "+map[string]string{"first-conflict-insert": "fail_first_conflict", "lost-event-insert": "fail_lost_event"}[fault.name])
+			_, err = store.conn.ExecContext(
+				ctx,
+				"DROP TRIGGER "+map[string]string{"first-conflict-insert": "fail_first_conflict", "lost-event-insert": "fail_lost_event"}[fault.name],
+			)
 			require.NoError(t, err)
 			require.NoError(t, store.Close())
 			reopened, err := Open(directory, f.binding)
@@ -255,7 +275,10 @@ func TestFirstConflictDirectAbandonRetirementFailureRollsBackAllRecords(t *testi
 	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
 	beforePayload, err := os.ReadFile(payloadPath)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "CREATE TEMP TRIGGER fail_first_conflict_retirement BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='retirement' BEGIN SELECT RAISE(ABORT,'first-conflict-retirement-canary'); END")
+	_, err = store.conn.ExecContext(
+		ctx,
+		"CREATE TEMP TRIGGER fail_first_conflict_retirement BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='retirement' BEGIN SELECT RAISE(ABORT,'first-conflict-retirement-canary'); END",
+	)
 	require.NoError(t, err)
 	retired, err := store.AbandonAttempt(ctx, attempt.ID, proposal.StateToken, &conflict, proposal.Confirmation)
 	requireErrorMetadata(t, err, ErrStorage, StageAbandon, ReasonIO)
@@ -304,11 +327,23 @@ func TestFirstConflictReadbackRejectsMissingAndMisjoinedRows(t *testing.T) {
 			_, err = store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, conflict)
 			require.NoError(t, err)
 			var report, event []byte
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", attempt.ID[:]).Scan(&report))
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='outcome-lost-fence'", attempt.ID[:]).Scan(&event))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", attempt.ID[:]).
+					Scan(&report),
+			)
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='outcome-lost-fence'", attempt.ID[:]).
+					Scan(&event),
+			)
 			switch damage {
 			case "missing-role":
-				_, err = store.conn.ExecContext(ctx, "DELETE FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", attempt.ID[:])
+				_, err = store.conn.ExecContext(
+					ctx,
+					"DELETE FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'",
+					attempt.ID[:],
+				)
 				require.NoError(t, err)
 			case "wrong-core":
 				var wire firstConflictWire
@@ -317,7 +352,13 @@ func TestFirstConflictReadbackRejectsMissingAndMisjoinedRows(t *testing.T) {
 				report, err = canonicalJSON(wire)
 				require.NoError(t, err)
 				digest := domainHash("systems.lamb.dottie.publication-attempt-evidence.v1", report)
-				_, err = store.conn.ExecContext(ctx, "UPDATE attempt_evidence SET body=?,digest=? WHERE attempt_id=? AND role='first-conflict'", report, digest[:], attempt.ID[:])
+				_, err = store.conn.ExecContext(
+					ctx,
+					"UPDATE attempt_evidence SET body=?,digest=? WHERE attempt_id=? AND role='first-conflict'",
+					report,
+					digest[:],
+					attempt.ID[:],
+				)
 				require.NoError(t, err)
 			case "wrong-event-id":
 				var wire attemptEventWire
@@ -326,7 +367,13 @@ func TestFirstConflictReadbackRejectsMissingAndMisjoinedRows(t *testing.T) {
 				event, err = encodeAttemptEvent(wire)
 				require.NoError(t, err)
 				digest := domainHash("systems.lamb.dottie.publication-attempt-event.v1", event)
-				_, err = store.conn.ExecContext(ctx, "UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND kind='outcome-lost-fence'", event, digest[:], attempt.ID[:])
+				_, err = store.conn.ExecContext(
+					ctx,
+					"UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND kind='outcome-lost-fence'",
+					event,
+					digest[:],
+					attempt.ID[:],
+				)
 				require.NoError(t, err)
 			case "wrong-proof":
 				var envelope firstConflictWire
@@ -336,7 +383,13 @@ func TestFirstConflictReadbackRejectsMissingAndMisjoinedRows(t *testing.T) {
 				require.NoError(t, err)
 				reportDigest := domainHash("systems.lamb.dottie.publication-attempt-evidence.v1", report)
 				reportID := domainHash("systems.lamb.dottie.publication-attempt-first-conflict.v1", report)
-				_, err = store.conn.ExecContext(ctx, "UPDATE attempt_evidence SET body=?,digest=? WHERE attempt_id=? AND role='first-conflict'", report, reportDigest[:], attempt.ID[:])
+				_, err = store.conn.ExecContext(
+					ctx,
+					"UPDATE attempt_evidence SET body=?,digest=? WHERE attempt_id=? AND role='first-conflict'",
+					report,
+					reportDigest[:],
+					attempt.ID[:],
+				)
 				require.NoError(t, err)
 				var eventWire attemptEventWire
 				require.NoError(t, strictJSON(event, &eventWire))
@@ -344,7 +397,13 @@ func TestFirstConflictReadbackRejectsMissingAndMisjoinedRows(t *testing.T) {
 				event, err = encodeAttemptEvent(eventWire)
 				require.NoError(t, err)
 				eventDigest := domainHash("systems.lamb.dottie.publication-attempt-event.v1", event)
-				_, err = store.conn.ExecContext(ctx, "UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND kind='outcome-lost-fence'", event, eventDigest[:], attempt.ID[:])
+				_, err = store.conn.ExecContext(
+					ctx,
+					"UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND kind='outcome-lost-fence'",
+					event,
+					eventDigest[:],
+					attempt.ID[:],
+				)
 				require.NoError(t, err)
 			}
 			_, _, err = store.ReadFirstConflict(ctx, attempt.ID)
@@ -370,14 +429,31 @@ func TestFirstConflictCannotBeCopiedToAnotherAttempt(t *testing.T) {
 	_, err = store.AbandonAttempt(ctx, first.ID, proposal.StateToken, &conflict, proposal.Confirmation)
 	require.NoError(t, err)
 	var body, digest []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", first.ID[:]).Scan(&body, &digest))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", first.ID[:]).
+			Scan(&body, &digest),
+	)
 
 	secondCandidate := candidateWithPublicationID(t, candidate, [16]byte{0x73})
 	secondProposal, err := store.PrepareAttempt(ctx, secondCandidate, empty, review)
 	require.NoError(t, err)
-	second, err := store.CreateAttempt(ctx, secondProposal.StateToken, secondCandidate, empty, review, secondProposal.Confirmation)
+	second, err := store.CreateAttempt(
+		ctx,
+		secondProposal.StateToken,
+		secondCandidate,
+		empty,
+		review,
+		secondProposal.Confirmation,
+	)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "INSERT INTO attempt_evidence(attempt_id,role,body,digest) VALUES(?,'first-conflict',?,?)", second.ID[:], body, digest)
+	_, err = store.conn.ExecContext(
+		ctx,
+		"INSERT INTO attempt_evidence(attempt_id,role,body,digest) VALUES(?,'first-conflict',?,?)",
+		second.ID[:],
+		body,
+		digest,
+	)
 	require.NoError(t, err)
 	_, _, err = store.ReadFirstConflict(ctx, second.ID)
 	requireErrorMetadata(t, err, ErrSchema, StageHistory, ReasonCorrupt)
@@ -394,14 +470,28 @@ func TestTerminalEvidenceRefreshRequiresExactSuffixPrefix(t *testing.T) {
 		{"lost-fence-extension", OutcomeLostFence, OutcomeLostFence},
 	} {
 		t.Run(transition.name, func(t *testing.T) {
-			old := attemptEvidenceWire{Version: 1, Role: "outcome", AttemptedKey: "0000000000000001", AttemptedRecord: []byte("candidate"), PredecessorRecord: []byte("predecessor"), Suffix: []SnapshotBlock{{Key: "0000000000000001", Raw: []byte("first")}, {Key: "0000000000000002", Raw: []byte("second")}}, Outcome: string(transition.from)}
+			old := attemptEvidenceWire{
+				Version:           1,
+				Role:              "outcome",
+				AttemptedKey:      "0000000000000001",
+				AttemptedRecord:   []byte("candidate"),
+				PredecessorRecord: []byte("predecessor"),
+				Suffix: []SnapshotBlock{
+					{Key: "0000000000000001", Raw: []byte("first")},
+					{Key: "0000000000000002", Raw: []byte("second")},
+				},
+				Outcome: string(transition.from),
+			}
 			if transition.from == OutcomeLostFence {
 				old.AttemptedRecord = []byte("occupant")
 				old.Suffix[0].Raw = []byte("occupant")
 			}
 			newer := old
 			newer.Outcome = string(transition.to)
-			newer.Suffix = append(cloneSnapshotBlocks(old.Suffix), SnapshotBlock{Key: "0000000000000003", Raw: []byte("third")})
+			newer.Suffix = append(
+				cloneSnapshotBlocks(old.Suffix),
+				SnapshotBlock{Key: "0000000000000003", Raw: []byte("third")},
+			)
 			oldBytes, err := encodeAttemptEvidence(old)
 			require.NoError(t, err)
 			newBytes, err := encodeAttemptEvidence(newer)
@@ -421,7 +511,14 @@ func TestTerminalEvidenceRefreshRequiresExactSuffixPrefix(t *testing.T) {
 	}
 }
 
-func createAndSubmitSuccessor(t *testing.T, store *Store, f fixture, candidate CandidateInput, preflight SuppliedRepositoryView, review LocalReviewContext) Attempt {
+func createAndSubmitSuccessor(
+	t *testing.T,
+	store *Store,
+	_ fixture,
+	candidate CandidateInput,
+	preflight SuppliedRepositoryView,
+	review LocalReviewContext,
+) Attempt {
 	t.Helper()
 	ctx := context.Background()
 	proposal, err := store.PrepareAttempt(ctx, candidate, preflight, review)
@@ -439,7 +536,14 @@ func createAndSubmitSuccessor(t *testing.T, store *Store, f fixture, candidate C
 	return attempt
 }
 
-func competingSuccessorView(t *testing.T, f fixture, preflight SuppliedRepositoryView, candidate CandidateInput, occupantID byte, descendantIDs []byte) SuppliedRepositoryView {
+func competingSuccessorView(
+	t *testing.T,
+	f fixture,
+	preflight SuppliedRepositoryView,
+	candidate CandidateInput,
+	occupantID byte,
+	descendantIDs []byte,
+) SuppliedRepositoryView {
 	t.Helper()
 	occupant, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	require.NoError(t, err)
@@ -469,7 +573,21 @@ func competingSuccessorView(t *testing.T, f fixture, preflight SuppliedRepositor
 	require.NoError(t, err)
 	lastCID, err := publication.RecordCID(last.Raw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: lastRecord.Vault, PublicationSeq: lastRecord.PublicationSeq, SnapshotCID: lastCID, BlobCID: lastRecord.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          lastRecord.Vault,
+			PublicationSeq: lastRecord.PublicationSeq,
+			SnapshotCID:    lastCID,
+			BlobCID:        lastRecord.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	return SuppliedRepositoryView{Origin: f.binding, Scope: preflight.Scope, SuppliedContext: cloneContext(preflight.SuppliedContext), Head: head, Snapshots: blocks}
+	return SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           preflight.Scope,
+		SuppliedContext: cloneContext(preflight.SuppliedContext),
+		Head:            head,
+		Snapshots:       blocks,
+	}
 }

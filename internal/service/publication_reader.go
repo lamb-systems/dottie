@@ -86,7 +86,8 @@ func (reader *PublicationReader) authorize() error {
 	if err := reader.adapter.join(); err != nil {
 		return err
 	}
-	if reader.did != reader.adapter.did || reader.binding != reader.adapter.binding || reader.session.DID != reader.did {
+	if reader.did != reader.adapter.did || reader.binding != reader.adapter.binding ||
+		reader.session.DID != reader.did {
 		return ErrPublicationReaderIdentity
 	}
 	return reader.session.RequirePublicationScopes()

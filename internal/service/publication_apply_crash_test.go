@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -55,8 +56,12 @@ var publicationApplyCrashCases = []publicationApplyCrashCase{
 		stage: publicationstate.JournalStageApplyPending, destination: publicationApplyCrashPreimage, rewrite: true,
 	},
 	{
-		name: publicationApplyCrashWrittenStage, state: publicationstate.JournalStatePending,
-		stage: publicationstate.JournalStageApplyPending, destination: publicationApplyCrashPreimage, scratch: true, rewrite: true,
+		name:        publicationApplyCrashWrittenStage,
+		state:       publicationstate.JournalStatePending,
+		stage:       publicationstate.JournalStageApplyPending,
+		destination: publicationApplyCrashPreimage,
+		scratch:     true,
+		rewrite:     true,
 	},
 	{
 		name: publicationApplyCrashRenamedStage, state: publicationstate.JournalStatePending,
@@ -138,7 +143,11 @@ func publicationApplyCrashFixtureAt(home, journalDirectory string) (publicationA
 		CacheHome:  filepath.Join(home, ".cache"),
 		DataHome:   filepath.Join(home, ".data"),
 	}
-	target := config.Target{ID: "crash-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "applied/tree", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "crash-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "applied/tree", Kind: model.SelectionDirectory},
+	}
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
 	portable, err := target.Model()
@@ -160,13 +169,19 @@ func newPublicationApplyCrashFixture(t *testing.T) publicationApplyCrashFixture 
 	t.Helper()
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	fixture, err := publicationApplyCrashFixtureAt(home, filepath.Join(home, ".state", publicationApplyCrashJournalName))
+	fixture, err := publicationApplyCrashFixtureAt(
+		home,
+		filepath.Join(home, ".state", publicationApplyCrashJournalName),
+	)
 	require.NoError(t, err)
 	for _, path := range []string{fixture.paths.ConfigHome, fixture.paths.StateHome, fixture.paths.CacheHome, fixture.paths.DataHome} {
 		require.NoError(t, os.MkdirAll(path, 0o700))
 	}
 	require.NoError(t, os.MkdirAll(fixture.root, 0o700))
-	require.NoError(t, os.WriteFile(fixture.path(publicationApplyCrashTarget), []byte(publicationApplyCrashPreimage), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(fixture.path(publicationApplyCrashTarget), []byte(publicationApplyCrashPreimage), 0o600),
+	)
 	require.NoError(t, os.Mkdir(fixture.journalDirectory, 0o700))
 	journal, err := publicationstate.OpenJournal(fixture.journalDirectory)
 	require.NoError(t, err)
@@ -194,17 +209,25 @@ func (fixture publicationApplyCrashFixture) read(t *testing.T, path string) stri
 }
 
 func (fixture publicationApplyCrashFixture) snapshot(entries map[string]string) model.Snapshot {
-	return model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fixture.portable}, Entries: publicationPreviewFileEntries(fixture.target.ID, entries)}
+	return model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fixture.portable},
+		Entries: publicationPreviewFileEntries(fixture.target.ID, entries),
+	}
 }
 
 func (fixture publicationApplyCrashFixture) request(journal *publicationstate.Journal) PublicationApplyRequest {
 	return PublicationApplyRequest{
-		Journal: journal, Vault: fixture.vault, FloorRevision: fixture.floor,
-		Configuration:  fixture.configuration,
-		BaseSnapshot:   fixture.snapshot(map[string]string{publicationApplyCrashTarget: publicationApplyCrashPreimage}),
-		RemoteSnapshot: fixture.snapshot(map[string]string{publicationApplyCrashTarget: publicationApplyCrashPostimage}),
-		Roots:          map[string]string{fixture.target.ID: fixture.root},
-		Local:          fixture.local,
+		Journal:       journal,
+		Vault:         fixture.vault,
+		FloorRevision: fixture.floor,
+		Configuration: fixture.configuration,
+		BaseSnapshot:  fixture.snapshot(map[string]string{publicationApplyCrashTarget: publicationApplyCrashPreimage}),
+		RemoteSnapshot: fixture.snapshot(
+			map[string]string{publicationApplyCrashTarget: publicationApplyCrashPostimage},
+		),
+		Roots: map[string]string{fixture.target.ID: fixture.root},
+		Local: fixture.local,
 	}
 }
 
@@ -256,7 +279,11 @@ func (fixture publicationApplyCrashFixture) rows(t *testing.T) []publicationAppl
 		var state, stage string
 		var backup any
 		require.NoError(t, result.Scan(&entry, &state, &stage, &backup))
-		row := publicationApplyCrashRow{entry: entry, state: publicationstate.JournalState(state), stage: publicationstate.JournalStage(stage)}
+		row := publicationApplyCrashRow{
+			entry: entry,
+			state: publicationstate.JournalState(state),
+			stage: publicationstate.JournalStage(stage),
+		}
 		if backup != nil {
 			digest, ok := backup.([]byte)
 			require.True(t, ok, "journal entry %d holds a non-blob backup digest", entry)
@@ -288,7 +315,10 @@ func TestApplyCrashHelper(t *testing.T) {
 	if stage == "" {
 		t.Skip("the crash helper runs only as the re-executed child of the crash harness")
 	}
-	fixture, err := publicationApplyCrashFixtureAt(os.Getenv(publicationApplyCrashHomeEnv), os.Getenv(publicationApplyCrashJournalEnv))
+	fixture, err := publicationApplyCrashFixtureAt(
+		os.Getenv(publicationApplyCrashHomeEnv),
+		os.Getenv(publicationApplyCrashJournalEnv),
+	)
 	require.NoError(t, err)
 	journal, err := publicationstate.OpenJournal(fixture.journalDirectory)
 	require.NoError(t, err)
@@ -301,9 +331,15 @@ func TestApplyCrashHelper(t *testing.T) {
 	request := fixture.request(journal)
 	switch stage {
 	case publicationApplyCrashWrittenStage:
-		request.FileSystem = publicationApplyCrashFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), killBeforeRename: true}
+		request.FileSystem = publicationApplyCrashFileSystem{
+			ApplyFileSystem:  files.DefaultApplyFileSystem(),
+			killBeforeRename: true,
+		}
 	case publicationApplyCrashRenamedStage:
-		request.FileSystem = publicationApplyCrashFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), killAfterRename: true}
+		request.FileSystem = publicationApplyCrashFileSystem{
+			ApplyFileSystem: files.DefaultApplyFileSystem(),
+			killAfterRename: true,
+		}
 	}
 	_, err = ApplyPublication(context.Background(), request)
 	require.NoError(t, err)
@@ -403,7 +439,7 @@ func TestApplyCrashStagesLeaveARecoverableJournal(t *testing.T) {
 				assert.Equal(t, publicationstate.JournalStateApplied, settled[0].state)
 				assert.Equal(t, publicationstate.JournalStageApplyComplete, settled[0].stage)
 			}
-			assert.NoError(t, journal.CheckAdmission(context.Background(), fixture.floor))
+			require.NoError(t, journal.CheckAdmission(context.Background(), fixture.floor))
 			fixture.assertFloorUnchanged(t)
 		})
 	}

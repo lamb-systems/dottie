@@ -29,14 +29,19 @@ func TestValidateTransitionEnrollmentCertificateEpochMatchesPolicy(t *testing.T)
 
 func TestValidateTransitionEnrollmentCertificateRoleIsRestricted(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	transition := remakeTransition(t, fixture, fixture.transition, func(policy *Policy, certificate *Certificate, _ *Envelope) {
-		certificate.Role = RoleRoot
-		for index := range policy.Roles {
-			if policy.Roles[index].DeviceID == certificate.DeviceID {
-				policy.Roles[index].Role = RoleRoot
+	transition := remakeTransition(
+		t,
+		fixture,
+		fixture.transition,
+		func(policy *Policy, certificate *Certificate, _ *Envelope) {
+			certificate.Role = RoleRoot
+			for index := range policy.Roles {
+				if policy.Roles[index].DeviceID == certificate.DeviceID {
+					policy.Roles[index].Role = RoleRoot
+				}
 			}
-		}
-	})
+		},
+	)
 
 	err := ValidateTransition(transition, fixture.predecessor)
 	require.ErrorIs(t, err, ErrCertificateAuthority)
@@ -44,9 +49,14 @@ func TestValidateTransitionEnrollmentCertificateRoleIsRestricted(t *testing.T) {
 
 func TestValidateTransitionEnrollmentCertificateRoleMatchesPolicy(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	transition := remakeTransition(t, fixture, fixture.transition, func(_ *Policy, certificate *Certificate, _ *Envelope) {
-		certificate.Role = RoleRestoreOnly
-	})
+	transition := remakeTransition(
+		t,
+		fixture,
+		fixture.transition,
+		func(_ *Policy, certificate *Certificate, _ *Envelope) {
+			certificate.Role = RoleRestoreOnly
+		},
+	)
 
 	err := ValidateTransition(transition, fixture.predecessor)
 	require.ErrorIs(t, err, ErrCertificateAuthority)

@@ -8,10 +8,11 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	v1state "github.com/lamb-systems/dottie/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	v1state "github.com/lamb-systems/dottie/internal/state"
 )
 
 func TestOpenRejectsSQLitePrefixLookalikeAsForeignSchema(t *testing.T) {
@@ -53,7 +54,13 @@ func TestOpenRejectsLookalikeObjectInRecognizedSchema(t *testing.T) {
 
 func TestOpenRefusesSyntheticV1SchemaWithoutAdoption(t *testing.T) {
 	base := t.TempDir()
-	paths := platform.Paths{Home: filepath.Join(base, "home"), ConfigHome: filepath.Join(base, "config"), StateHome: filepath.Join(base, "state"), CacheHome: filepath.Join(base, "cache"), DataHome: filepath.Join(base, "data")}
+	paths := platform.Paths{
+		Home:       filepath.Join(base, "home"),
+		ConfigHome: filepath.Join(base, "config"),
+		StateHome:  filepath.Join(base, "state"),
+		CacheHome:  filepath.Join(base, "cache"),
+		DataHome:   filepath.Join(base, "data"),
+	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
 	}

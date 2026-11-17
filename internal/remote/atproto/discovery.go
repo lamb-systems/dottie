@@ -102,7 +102,10 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 		return Identity{}, &DiscoveryError{Stage: ErrDID, Err: err}
 	}
 	if document.ID != did {
-		return Identity{}, &DiscoveryError{Stage: ErrDID, Err: errors.New("DID document id does not match the resolved DID")}
+		return Identity{}, &DiscoveryError{
+			Stage: ErrDID,
+			Err:   errors.New("DID document id does not match the resolved DID"),
+		}
 	}
 	if !claimsHandle(document.AlsoKnownAs, handle) {
 		return Identity{}, &DiscoveryError{Stage: ErrDID, Err: errors.New("DID document does not claim the handle")}
@@ -117,7 +120,10 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 		return Identity{}, &DiscoveryError{Stage: ErrResource, Err: err}
 	}
 	if !sameResource(resource.Resource, pds) || len(resource.AuthorizationServers) == 0 {
-		return Identity{}, &DiscoveryError{Stage: ErrResource, Err: errors.New("protected-resource document does not bind the PDS or advertise an authorization server")}
+		return Identity{}, &DiscoveryError{
+			Stage: ErrResource,
+			Err:   errors.New("protected-resource document does not bind the PDS or advertise an authorization server"),
+		}
 	}
 	server, err := validateHTTPSURL(resource.AuthorizationServers[0])
 	if err != nil {
@@ -132,7 +138,10 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 		return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: err}
 	}
 	if metadata.Issuer != server {
-		return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server issuer does not match the advertised identifier")}
+		return Identity{}, &DiscoveryError{
+			Stage: ErrIssuer,
+			Err:   errors.New("authorization-server issuer does not match the advertised identifier"),
+		}
 	}
 	for _, endpoint := range []string{metadata.AuthorizationEndpoint, metadata.TokenEndpoint, metadata.PARSEndpoint} {
 		if _, err := validateHTTPSURL(endpoint); err != nil {
@@ -141,15 +150,24 @@ func (c *Client) Discover(ctx context.Context, handle string) (Identity, error) 
 	}
 	if metadata.RevocationEndpoint != "" {
 		if _, err := validateHTTPSURL(metadata.RevocationEndpoint); err != nil {
-			return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server revocation endpoint is invalid")}
+			return Identity{}, &DiscoveryError{
+				Stage: ErrIssuer,
+				Err:   errors.New("authorization-server revocation endpoint is invalid"),
+			}
 		}
 	}
 	if metadata.AuthorizationEndpoint == "" || metadata.TokenEndpoint == "" || metadata.PARSEndpoint == "" {
-		return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server metadata is missing a required endpoint")}
+		return Identity{}, &DiscoveryError{
+			Stage: ErrIssuer,
+			Err:   errors.New("authorization-server metadata is missing a required endpoint"),
+		}
 	}
 	for _, scope := range metadata.ScopesSupported {
 		if strings.ContainsAny(scope, " \t\r\n") || scope == "" {
-			return Identity{}, &DiscoveryError{Stage: ErrIssuer, Err: errors.New("authorization-server metadata contains a malformed scope entry")}
+			return Identity{}, &DiscoveryError{
+				Stage: ErrIssuer,
+				Err:   errors.New("authorization-server metadata contains a malformed scope entry"),
+			}
 		}
 	}
 	return Identity{
@@ -178,7 +196,7 @@ func (c *Client) resolveDID(ctx context.Context, handle string) (string, error) 
 	}
 	records, err := lookup(ctx, "_atproto."+handle)
 	if err != nil {
-		return "", fmt.Errorf("handle DID and _atproto TXT lookup failed")
+		return "", errors.New("handle DID and _atproto TXT lookup failed")
 	}
 	for _, record := range records {
 		record = strings.TrimSpace(record)
@@ -238,12 +256,12 @@ func normalizeHandle(handle string) (string, error) {
 	if handle == "" || strings.ContainsAny(handle, "/:@?#[] \\") || !strings.Contains(handle, ".") {
 		return "", errors.New("invalid handle")
 	}
-	for _, label := range strings.Split(handle, ".") {
+	for label := range strings.SplitSeq(handle, ".") {
 		if label == "" || len(label) > 63 {
 			return "", errors.New("invalid handle")
 		}
 		for _, ch := range label {
-			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-') {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '-' {
 				return "", errors.New("invalid handle")
 			}
 		}
@@ -252,8 +270,8 @@ func normalizeHandle(handle string) (string, error) {
 }
 
 func validDID(did string) bool {
-	if strings.HasPrefix(did, "did:plc:") {
-		suffix := strings.TrimPrefix(did, "did:plc:")
+	if after, ok := strings.CutPrefix(did, "did:plc:"); ok {
+		suffix := after
 		return len(suffix) == 24 && isLowerAlphaNum(suffix)
 	}
 	if strings.HasPrefix(did, "did:web:") {
@@ -265,7 +283,7 @@ func validDID(did string) bool {
 
 func isLowerAlphaNum(value string) bool {
 	for _, ch := range value {
-		if !(ch >= 'a' && ch <= 'z' || ch >= '2' && ch <= '7') {
+		if (ch < 'a' || ch > 'z') && (ch < '2' || ch > '7') {
 			return false
 		}
 	}
@@ -296,7 +314,8 @@ func didWebURL(did string) (string, error) {
 		segments := make([]string, len(parts)-1)
 		for index, part := range parts[1:] {
 			decoded, decodeErr := url.PathUnescape(part)
-			if decodeErr != nil || decoded == "" || decoded == "." || decoded == ".." || strings.Contains(decoded, "/") {
+			if decodeErr != nil || decoded == "" || decoded == "." || decoded == ".." ||
+				strings.Contains(decoded, "/") {
 				return "", errors.New("invalid did:web path")
 			}
 			segments[index] = url.PathEscape(decoded)
@@ -368,7 +387,8 @@ func cleanURLPath(path string) string {
 
 func authorizationMetadataURL(issuer string) (string, error) {
 	parsed, err := url.Parse(issuer)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return "", errors.New("invalid authorization-server identifier")
 	}
 	path := strings.TrimRight(parsed.Path, "/")

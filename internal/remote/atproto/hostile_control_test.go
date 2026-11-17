@@ -5,8 +5,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestReaderRejectsInvalidPreviousControlRecordType(t *testing.T) {
@@ -53,10 +54,24 @@ func TestReaderRejectsPreviousControlSignerMismatch(t *testing.T) {
 		t, fixture.request.Vault, "alternate-root", []byte("alternate-root-sign"), alternateRootSigning,
 		alternateRootRecipient, 0, "root", []byte("root-sign"), fixtureSigningKey(11),
 	)
-	putReadRecord(t, fixture.records, RecordKey{Collection: VaultCertificateNSID, RKey: "alternate-root"}, certificateRecordFromObject(mustReadCertificate(t, alternateRootCert)))
+	putReadRecord(
+		t,
+		fixture.records,
+		RecordKey{Collection: VaultCertificateNSID, RKey: "alternate-root"},
+		certificateRecordFromObject(mustReadCertificate(t, alternateRootCert)),
+	)
 
 	successorPolicyRecord, successorPolicy, successorDigest := craftSuccessorPolicy(t, fixture, 1, genesisDigest)
-	snapshotBytes, snapshot := sealSnapshotAtEpoch(t, fixture, successorPolicy, successorDigest, 1, nil, 0xD1, []byte("synthetic snapshot payload"))
+	snapshotBytes, snapshot := sealSnapshotAtEpoch(
+		t,
+		fixture,
+		successorPolicy,
+		successorDigest,
+		1,
+		nil,
+		0xD1,
+		[]byte("synthetic snapshot payload"),
+	)
 	snapshotCID := readRawCID(t, snapshotBytes)
 	genesisControl := vault.Control{
 		Vault: fixture.request.Vault, EpochSeq: 0, PolicyDigest: genesisDigest,
@@ -68,14 +83,28 @@ func TestReaderRejectsPreviousControlSignerMismatch(t *testing.T) {
 
 	previousControlCID := readRawCID(t, genesisControlBytes)
 	currentControl := craftControl(t, fixture, 1, successorDigest, snapshotCID, previousControlCID)
-	currentHead := craftHead(t, fixture, 1, successorDigest, snapshotCID, nil, 1, publisherSigner(), fixtureSigningKey(12))
+	currentHead := craftHead(
+		t,
+		fixture,
+		1,
+		successorDigest,
+		snapshotCID,
+		nil,
+		1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}] = successorPolicyRecord
 	installSnapshot(t, &fixture, snapshotBytes, snapshot, currentHead)
 	installControl(t, &fixture, currentControl)
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.ErrorIs(t, err, ErrReadControlSigner,
-		"the valid predecessor control is signed by a root authorized in the predecessor policy but differs from that policy's signer")
+	require.ErrorIs(
+		t,
+		err,
+		ErrReadControlSigner,
+		"the valid predecessor control is signed by a root authorized in the predecessor policy but differs from that policy's signer",
+	)
 }
 
 func TestReaderRejectsPreviousControlEpochMismatch(t *testing.T) {
@@ -101,7 +130,16 @@ func TestReaderRejectsPreviousControlPolicyDigestMismatch(t *testing.T) {
 func TestReaderRejectsNonGenesisPolicyWithoutAncestry(t *testing.T) {
 	fixture := newReadFixture(t)
 	policyRecordBytes, policyObject, digest := craftSuccessorPolicy(t, fixture, 2, [32]byte{})
-	snapshotBytes, snapshot := sealSnapshotAtEpoch(t, fixture, policyObject, digest, 2, nil, 0xD2, []byte("synthetic snapshot payload"))
+	snapshotBytes, snapshot := sealSnapshotAtEpoch(
+		t,
+		fixture,
+		policyObject,
+		digest,
+		2,
+		nil,
+		0xD2,
+		[]byte("synthetic snapshot payload"),
+	)
 	snapshotCID := readRawCID(t, snapshotBytes)
 	currentControlObject := readControlObject(t, fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}])
 	currentControlCID := readRawCID(t, mustEncodeControl(t, currentControlObject))
@@ -169,11 +207,19 @@ func installGenesisReadState(t *testing.T, fixture *readFixture, previousControl
 	require.NoError(t, err)
 	policyDigest := readPolicyDigest(t, policyBytes)
 	envelope, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0xD3}, 16)),
-		EpochSeq: 0, PolicyDigest: policyDigest, DeviceID: "root", KeyID: []byte("root-sign"),
-		Plaintext: []byte("synthetic genesis payload"), SigningKey: fixtureSigningKey(11),
-		ContentKey: bytes.Repeat([]byte{0x5a}, 32), Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: preparedRecipientsForPolicy(t, policy, 81), Policy: policy,
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         fixture.request.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{0xD3}, 16)),
+		EpochSeq:      0,
+		PolicyDigest:  policyDigest,
+		DeviceID:      "root",
+		KeyID:         []byte("root-sign"),
+		Plaintext:     []byte("synthetic genesis payload"),
+		SigningKey:    fixtureSigningKey(11),
+		ContentKey:    bytes.Repeat([]byte{0x5a}, 32),
+		Nonce:         [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
+		Recipients:    preparedRecipientsForPolicy(t, policy, 81),
+		Policy:        policy,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -181,8 +227,14 @@ func installGenesisReadState(t *testing.T, fixture *readFixture, previousControl
 	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(11))
 	snapshotCID := readRawCID(t, envelopeBytes)
 	control := vault.Control{
-		Vault: policy.Vault, EpochSeq: 0, PolicyDigest: policyDigest,
-		HeadSnapshotCID: bytes.Clone(snapshotCID), PrevControlCID: bytes.Clone(previousControlCID), Signer: policy.Signer,
+		Vault:        policy.Vault,
+		EpochSeq:     0,
+		PolicyDigest: policyDigest,
+		HeadSnapshotCID: bytes.Clone(
+			snapshotCID,
+		),
+		PrevControlCID: bytes.Clone(previousControlCID),
+		Signer:         policy.Signer,
 	}
 	controlBytes := signReadControl(t, control, fixtureSigningKey(11))
 	controlRecord := encodeReadControlRecord(t, controlBytes)

@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
+	"maps"
+	"math"
 	"strings"
 )
 
@@ -56,16 +58,20 @@ func schemaInventoryForVersion(version int) (schemaInventory, error) {
 		statements = append(statements, schemaV1Statements...)
 		statements = append(statements, attemptSchemaStatements...)
 		objects := make(map[string]string, len(schemaV1Objects)+len(attemptSchemaObjects))
-		for name, kind := range schemaV1Objects {
-			objects[name] = kind
-		}
-		for name, kind := range attemptSchemaObjects {
-			objects[name] = kind
-		}
+		maps.Copy(objects, schemaV1Objects)
+		maps.Copy(objects, attemptSchemaObjects)
 		return schemaInventory{
-			statements:   statements,
-			objects:      objects,
-			metadataKeys: []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"},
+			statements: statements,
+			objects:    objects,
+			metadataKeys: []string{
+				"attempt_limits",
+				"attempt_mutation_revision",
+				"binding",
+				"database_id",
+				"generation",
+				"limits",
+				"revision",
+			},
 		}, nil
 	case 3:
 		base, err := schemaInventoryForVersion(2)
@@ -87,9 +93,7 @@ func schemaInventoryForVersion(version int) (schemaInventory, error) {
 
 func cloneSchemaObjects(objects map[string]string) map[string]string {
 	cloned := make(map[string]string, len(objects))
-	for name, kind := range objects {
-		cloned[name] = kind
-	}
+	maps.Copy(cloned, objects)
 	return cloned
 }
 
@@ -136,7 +140,10 @@ func checkSchemaVersion(ctx context.Context, conn schemaReader, version int) err
 }
 
 func readSchemaObjects(ctx context.Context, conn schemaReader) (map[string]string, map[string]string, error) {
-	rows, err := conn.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name")
+	rows, err := conn.QueryContext(
+		ctx,
+		"SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,7 +236,7 @@ func checkAttemptMetadata(ctx context.Context, conn interface {
 	if err != nil || len(revision) != 8 {
 		return classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
-	if binary.BigEndian.Uint64(revision) > uint64(^uint64(0)>>1) {
+	if binary.BigEndian.Uint64(revision) > math.MaxInt64 {
 		return classified(ErrSchema, StageOpen, ReasonCorrupt)
 	}
 	return nil

@@ -49,7 +49,12 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 		require.NoError(t, err)
 	}
 	if loaded.AccessToken.Reveal() != "" || loaded.RefreshToken.Reveal() != "old-refresh-token-shape" {
-		require.False(t, loaded.AccessToken.Reveal() != "" || loaded.RefreshToken.Reveal() != "old-refresh-token-shape", "restart did not load the one-item refresh session: %#v", loaded)
+		require.False(
+			t,
+			loaded.AccessToken.Reveal() != "" || loaded.RefreshToken.Reveal() != "old-refresh-token-shape",
+			"restart did not load the one-item refresh session: %#v",
+			loaded,
+		)
 	}
 	fake.tokenRefresh = "rotated-refresh-token-shape"
 	fake.tokenAccess = "rotated-access-token-shape"
@@ -57,23 +62,49 @@ func TestSessionEnvelopeReloadAndRefreshPersistsRotatedRefreshToken(t *testing.T
 	if err != nil {
 		require.NoError(t, err)
 	}
-	if refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" || refreshed.AccessToken.Reveal() != "rotated-access-token-shape" {
-		require.False(t, refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" || refreshed.AccessToken.Reveal() != "rotated-access-token-shape", "refresh response did not replace the rotated tokens")
+	if refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" ||
+		refreshed.AccessToken.Reveal() != "rotated-access-token-shape" {
+		require.False(
+			t,
+			refreshed.RefreshToken.Reveal() != "rotated-refresh-token-shape" ||
+				refreshed.AccessToken.Reveal() != "rotated-access-token-shape",
+			"refresh response did not replace the rotated tokens",
+		)
 	}
 	reloaded, err := restarted.LoadSession(context.Background(), testDID)
 	if err != nil {
 		require.NoError(t, err)
 	}
 	if reloaded.RefreshToken.Reveal() != "rotated-refresh-token-shape" {
-		require.Equal(t, "rotated-refresh-token-shape", reloaded.RefreshToken.Reveal(), "rotated refresh token did not survive the restart boundary")
+		require.Equal(
+			t,
+			"rotated-refresh-token-shape",
+			reloaded.RefreshToken.Reveal(),
+			"rotated refresh token did not survive the restart boundary",
+		)
 	}
 	envelope := store.raw(sessionItemName(clientID, testDID))
 	if strings.Contains(string(envelope), "rotated-access-token-shape") {
-		require.NotContains(t, string(envelope), "rotated-access-token-shape", "access token was persisted in the session envelope")
+		require.NotContains(
+			t,
+			string(envelope),
+			"rotated-access-token-shape",
+			"access token was persisted in the session envelope",
+		)
 	}
 	var persisted sessionEnvelope
-	if err := json.Unmarshal(envelope, &persisted); err != nil || persisted.RefreshToken != "rotated-refresh-token-shape" {
-		require.False(t, err != nil || persisted.RefreshToken != "rotated-refresh-token-shape", "invalid atomic session envelope: %+v, %v", persisted, err)
+	if err := json.Unmarshal(
+		envelope,
+		&persisted,
+	); err != nil ||
+		persisted.RefreshToken != "rotated-refresh-token-shape" {
+		require.False(
+			t,
+			err != nil || persisted.RefreshToken != "rotated-refresh-token-shape",
+			"invalid atomic session envelope: %+v, %v",
+			persisted,
+			err,
+		)
 	}
 }
 
@@ -88,9 +119,8 @@ func TestLoadSessionRejectsPartialAndWrongVersionEnvelopes(t *testing.T) {
 		if err := store.Save(context.Background(), name, []byte(encoded)); err != nil {
 			require.NoError(t, err)
 		}
-		if _, err := client.LoadSession(context.Background(), testDID); err != ErrSessionUnavailable {
-			require.ErrorIs(t, err, ErrSessionUnavailable, "LoadSession error = %v, want forced re-login", err)
-		}
+		_, err := client.LoadSession(context.Background(), testDID)
+		require.ErrorIs(t, err, ErrSessionUnavailable, "LoadSession error = %v, want forced re-login", err)
 	}
 }
 
@@ -98,7 +128,15 @@ func TestRefreshRejectsChangedIssuerTokenEndpointAndDIDBeforeCredentials(t *test
 	fake, client, _ := newFakeOAuth(t)
 	key, err := marshalPrivateKey(generateTestKey(t))
 	require.NoError(t, err)
-	session := &Session{DID: testDID, Handle: testHandle, Issuer: "https://other.example", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, RefreshToken: NewSecret("refresh"), DPoPPrivateKey: key}
+	session := &Session{
+		DID:            testDID,
+		Handle:         testHandle,
+		Issuer:         "https://other.example",
+		TokenEndpoint:  "https://bsky.social/token",
+		Scopes:         []string{"atproto"},
+		RefreshToken:   NewSecret("refresh"),
+		DPoPPrivateKey: key,
+	}
 	_, _, err = client.Refresh(context.Background(), testHandle, session)
 	require.ErrorIs(t, err, ErrSessionRelocated)
 
@@ -128,7 +166,15 @@ func TestNoTokenMaterialIsWrittenUnderStateCacheOrConfig(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err)
 	}
-	session := &Session{DID: testDID, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token", Scopes: []string{"atproto"}, AccessToken: NewSecret("access-token-shaped-value"), RefreshToken: NewSecret("refresh-token-shaped-value"), DPoPPrivateKey: key}
+	session := &Session{
+		DID:            testDID,
+		Issuer:         "https://bsky.social",
+		TokenEndpoint:  "https://bsky.social/token",
+		Scopes:         []string{"atproto"},
+		AccessToken:    NewSecret("access-token-shaped-value"),
+		RefreshToken:   NewSecret("refresh-token-shaped-value"),
+		DPoPPrivateKey: key,
+	}
 	if err := client.saveSession(context.Background(), session); err != nil {
 		require.NoError(t, err)
 	}
@@ -184,7 +230,13 @@ func TestSecretRedactionFormattingAndJSONMatrix(t *testing.T) {
 		require.NoError(t, err)
 	}
 	if strings.Count(string(encoded), redactionMarker) != 4 || strings.Contains(string(encoded), "private-key-secret") {
-		require.False(t, strings.Count(string(encoded), redactionMarker) != 4 || strings.Contains(string(encoded), "private-key-secret"), "JSON did not structurally redact secrets: %s", encoded)
+		require.False(
+			t,
+			strings.Count(string(encoded), redactionMarker) != 4 ||
+				strings.Contains(string(encoded), "private-key-secret"),
+			"JSON did not structurally redact secrets: %s",
+			encoded,
+		)
 	}
 	text, err := record.Code.MarshalText()
 	if err != nil || string(text) != redactionMarker {
@@ -197,10 +249,20 @@ func TestSessionKeyNameBindsClientAndDID(t *testing.T) {
 	rightClient := sessionItemName("https://other.example/client", testDID)
 	rightDID := sessionItemName("https://dottie.example/client", "did:plc:zyxwvutsrqponmlkjihgfe00")
 	if left == rightClient || left == rightDID {
-		require.False(t, left == rightClient || left == rightDID, "keyring item name does not bind both client id and DID")
+		require.False(
+			t,
+			left == rightClient || left == rightDID,
+			"keyring item name does not bind both client id and DID",
+		)
 	}
 	digest := sha256.Sum256([]byte("https://dottie.example/client\x00" + testDID))
 	if left != "session:"+base64.RawURLEncoding.EncodeToString(digest[:]) {
-		require.Equal(t, "session:"+base64.RawURLEncoding.EncodeToString(digest[:]), left, "unexpected item name derivation: %q", left)
+		require.Equal(
+			t,
+			"session:"+base64.RawURLEncoding.EncodeToString(digest[:]),
+			left,
+			"unexpected item name derivation: %q",
+			left,
+		)
 	}
 }

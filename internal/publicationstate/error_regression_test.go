@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestFilesystemCanaryIsRedactedOnUnsafeSymlinkRefusal(t *testing.T) {
@@ -27,12 +27,18 @@ func TestFilesystemCanaryIsRedactedOnUnsafeSymlinkRefusal(t *testing.T) {
 	publicationPath := filepath.Join(root, "publication.db")
 	require.NoError(t, os.Symlink(target, publicationPath))
 	f := newFixture(t, BackendPublicRepo)
-	require.True(t, strings.Contains(root, "filesystem-path-canary-7f3a"))
-	require.True(t, strings.Contains(target, "target-name-canary-9a21"))
+	require.Contains(t, root, "filesystem-path-canary-7f3a")
+	require.Contains(t, target, "target-name-canary-9a21")
 	store, err := Open(root, f.binding)
 	require.Nil(t, store)
 	requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonBinding)
-	assertErrorRedacted(t, err, "filesystem-path-canary-7f3a", "target-name-canary-9a21", "filesystem-target-content-canary")
+	assertErrorRedacted(
+		t,
+		err,
+		"filesystem-path-canary-7f3a",
+		"target-name-canary-9a21",
+		"filesystem-target-content-canary",
+	)
 	after, err := os.ReadFile(target)
 	require.NoError(t, err)
 	assert.Equal(t, targetBytes, after)
@@ -110,10 +116,10 @@ func TestMalformedCachedRecordReturnsClosedCorruptError(t *testing.T) {
 	requireErrorMetadata(t, err, ErrSchema, StagePrepare, ReasonCorrupt)
 	assert.NotContains(t, err.Error(), canary)
 	assert.NotContains(t, fmt.Sprintf("%+v", err), canary)
-	for current := error(err); current != nil; current = errors.Unwrap(current) {
+	for current := err; current != nil; current = errors.Unwrap(current) {
 		assert.NotContains(t, current.Error(), canary)
 	}
-	assert.Nil(t, errors.Unwrap(errors.Unwrap(err)))
+	assert.NoError(t, errors.Unwrap(errors.Unwrap(err)))
 }
 
 func TestCanceledPublicCallsExposeClosedStageAndSafeIdentity(t *testing.T) {
@@ -143,7 +149,7 @@ func TestCanceledPublicCallsExposeClosedStageAndSafeIdentity(t *testing.T) {
 	err = store.withTx(commitCtx, StageAccept, func(*sql.Tx) error { commitCancel(); return nil })
 	requireErrorMetadata(t, err, ErrStorage, StageAccept, ReasonCanceled)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, errors.Unwrap(errors.Unwrap(err)))
+	assert.NoError(t, errors.Unwrap(errors.Unwrap(err)))
 }
 
 func TestDeferredCommitFailureRequiresReadbackAndKeepsCommittedFloor(t *testing.T) {

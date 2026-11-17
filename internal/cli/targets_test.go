@@ -68,9 +68,27 @@ func TestTargetsListEmptyAndPopulatedWithoutRootProbes(t *testing.T) {
 
 	current := config.Default()
 	current.Targets = []config.Target{
-		{ID: "offline", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "does-not-exist", Kind: model.SelectionDirectory, Exclude: []string{".git", ".git/**"}}},
-		{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
-		{ID: "line\nbreak", Source: model.SourceGNOME, Mode: config.BackupOnly, GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}},
+		{
+			ID:     "offline",
+			Source: model.SourceFiles,
+			Root: &config.Root{
+				Base:    model.RootHome,
+				Path:    "does-not-exist",
+				Kind:    model.SelectionDirectory,
+				Exclude: []string{".git", ".git/**"},
+			},
+		},
+		{
+			ID:          "desktop",
+			Source:      model.SourceGNOME,
+			GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending},
+		},
+		{
+			ID:          "line\nbreak",
+			Source:      model.SourceGNOME,
+			Mode:        config.BackupOnly,
+			GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending},
+		},
 	}
 	require.NoError(t, writeCLIConfig(paths, current))
 
@@ -91,7 +109,12 @@ func TestTargetsAddNoOverrideAndIdenticalNoOp(t *testing.T) {
 	code, out, stderr := invokeTargets(env, "add", "--exclude", ".git", "--exclude=.git/**", selected)
 	require.Equal(t, 0, code, "add exit code")
 	assert.Empty(t, stderr, "add error")
-	assert.True(t, strings.HasPrefix(out, "added home-dotfiles (files:home/dotfiles, mode review)\n"), "add output = %q", out)
+	assert.True(
+		t,
+		strings.HasPrefix(out, "added home-dotfiles (files:home/dotfiles, mode review)\n"),
+		"add output = %q",
+		out,
+	)
 
 	stored, err := config.Load(paths)
 	require.NoError(t, err)
@@ -119,7 +142,17 @@ func TestTargetsAddConsentDivergenceRejected(t *testing.T) {
 	selected := filepath.Join(paths.Home, "config-dir")
 	require.NoError(t, os.Mkdir(selected, 0o700))
 
-	code, _, stderr := invokeTargets(env, "add", "--id", "chosen", "--mode", "auto-apply", "--exclude", "private", selected)
+	code, _, stderr := invokeTargets(
+		env,
+		"add",
+		"--id",
+		"chosen",
+		"--mode",
+		"auto-apply",
+		"--exclude",
+		"private",
+		selected,
+	)
 	require.Equal(t, 0, code, "initial add exit code")
 	assert.Empty(t, stderr, "initial add error")
 
@@ -178,7 +211,12 @@ func TestTargetsModeInheritanceAndRemoveDoesNotDeleteFiles(t *testing.T) {
 
 	current, err = config.Load(paths)
 	require.NoError(t, err)
-	assert.Equal(t, config.BackupOnly, current.Targets[0].ModeOrDefault(current.Defaults), "mode override inherited defaults")
+	assert.Equal(
+		t,
+		config.BackupOnly,
+		current.Targets[0].ModeOrDefault(current.Defaults),
+		"mode override inherited defaults",
+	)
 
 	code, out, stderr = invokeTargets(env, "remove", "custom")
 	require.Equal(t, 0, code, "remove exit code")
@@ -224,7 +262,12 @@ func TestTargetsAddFlagsMayFollowSelectionPath(t *testing.T) {
 
 	code, out, stderr := invokeTargets(env, "add", selected, "--mode", "backup-only")
 	require.Equal(t, 0, code, "add with flags after path exit code: %s", stderr)
-	assert.Equal(t, "added home-after-flags (files:home/after-flags, mode backup-only)\n", out, "add with flags after path output")
+	assert.Equal(
+		t,
+		"added home-after-flags (files:home/after-flags, mode backup-only)\n",
+		out,
+		"add with flags after path output",
+	)
 	assert.Empty(t, stderr, "add with flags after path error")
 
 	stored, err := config.Load(paths)
@@ -300,7 +343,12 @@ func TestTargetsRejectShellCompletionFlag(t *testing.T) {
 	code := Run([]string{"targets", "--generate-shell-completion"}, &stdout, &stderr)
 	assert.Equal(t, 2, code, "shell completion exit code")
 	assert.Empty(t, stdout.String(), "shell completion output")
-	assert.True(t, strings.HasPrefix(stderr.String(), "dottie: usage: "), "shell completion error = %q", stderr.String())
+	assert.True(
+		t,
+		strings.HasPrefix(stderr.String(), "dottie: usage: "),
+		"shell completion error = %q",
+		stderr.String(),
+	)
 	assert.Equal(t, 1, strings.Count(stderr.String(), "\n"), "shell completion error line count")
 }
 
@@ -442,7 +490,13 @@ func TestTargetsNoPathLeakAndControlEscaping(t *testing.T) {
 	assert.Contains(t, out, "id\\x0Aline", "escaped add output")
 	assert.True(t, strings.HasSuffix(out, "\n"), "escaped add output missing trailing newline: %q", out)
 	for index, r := range out {
-		assert.False(t, unicode.IsControl(r) && !(r == '\n' && index == len(out)-1), "escaped add output contains raw control character %U: %q", r, out)
+		assert.False(
+			t,
+			unicode.IsControl(r) && (r != '\n' || index != len(out)-1),
+			"escaped add output contains raw control character %U: %q",
+			r,
+			out,
+		)
 	}
 
 	code, out, stderr = invokeTargets(env, "list")

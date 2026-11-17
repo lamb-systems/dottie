@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationAttemptAdmissionRejectsMalformedJoinsWithoutCustodyMutation(t *testing.T) {
@@ -25,7 +26,11 @@ func TestPublicationAttemptAdmissionRejectsMalformedJoinsWithoutCustodyMutation(
 		candidate CandidateInput
 		view      SuppliedRepositoryView
 	}{
-		{"wrong-key", func() CandidateInput { value := candidate; value.SnapshotKey = "0000000000000001"; return value }(), view},
+		{
+			"wrong-key",
+			func() CandidateInput { value := candidate; value.SnapshotKey = "0000000000000001"; return value }(),
+			view,
+		},
 		{"wrong-head-binding", func() CandidateInput {
 			value := candidate
 			record, err := publication.DecodeSnapshot(value.SnapshotRecord)
@@ -35,7 +40,15 @@ func TestPublicationAttemptAdmissionRejectsMalformedJoinsWithoutCustodyMutation(
 			require.NoError(t, err)
 			otherCID, err := publication.RecordCID(otherRecord)
 			require.NoError(t, err)
-			value.HeadRecord, err = publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 0, SnapshotCID: otherCID, BlobCID: record.Blob.CID})
+			value.HeadRecord, err = publication.EncodeHead(
+				publication.HeadRecord{
+					SchemaVersion:  publication.SchemaVersion,
+					Vault:          f.binding.Vault,
+					PublicationSeq: 0,
+					SnapshotCID:    otherCID,
+					BlobCID:        record.Blob.CID,
+				},
+			)
 			require.NoError(t, err)
 			return value
 		}(), view},
@@ -59,7 +72,10 @@ func TestPublicationAttemptAdmissionRejectsMalformedJoinsWithoutCustodyMutation(
 			_, err := store.PrepareAttempt(ctx, test.candidate, test.view, review)
 			require.Error(t, err)
 			var attempts int
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+			)
 			assert.Equal(t, 0, attempts)
 			_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName))
 			assert.ErrorIs(t, statErr, os.ErrNotExist)

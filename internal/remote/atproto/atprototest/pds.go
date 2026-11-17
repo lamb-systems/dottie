@@ -95,8 +95,15 @@ func NewMemoryPDS(did string, signingKey *atcrypto.PrivateKeyP256) (*MemoryPDS, 
 		return nil, err
 	}
 	return &MemoryPDS{
-		did: did, key: signingKey, current: initial,
-		records: make(map[string]Record), blobs: make(map[string][]byte), blobMIMETypes: make(map[string]string), exposed: make(map[string]bool),
+		did:     did,
+		key:     signingKey,
+		current: initial,
+		records: make(
+			map[string]Record,
+		),
+		blobs:         make(map[string][]byte),
+		blobMIMETypes: make(map[string]string),
+		exposed:       make(map[string]bool),
 	}, nil
 }
 
@@ -194,7 +201,13 @@ func (p *MemoryPDS) Calls() []string {
 	return append([]string(nil), p.calls...)
 }
 
-func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (p *MemoryPDS) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
@@ -220,7 +233,8 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		}
 		return jsonResponse(200, map[string]string{"cid": p.current.CommitCID.String(), "rev": RepositoryRevision})
 	case "com.atproto.repo.listRecords":
-		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), "self") || !validListLimit(query.Get("limit")) {
+		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), "self") ||
+			!validListLimit(query.Get("limit")) {
 			return errorResponse(400, "InvalidRequest")
 		}
 		collection := query.Get("collection")
@@ -238,7 +252,10 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 				return errorResponse(500, "InternalServerError")
 			}
 			uri := "at://" + p.did + "/" + record.Collection + "/" + record.RKey
-			records = append(records, map[string]any{"uri": uri, "cid": recordCID.String(), "value": jsonAPIValue(value)})
+			records = append(
+				records,
+				map[string]any{"uri": uri, "cid": recordCID.String(), "value": jsonAPIValue(value)},
+			)
 		}
 		if len(records) > 4096 {
 			return errorResponse(413, "TooManyRecords")
@@ -258,7 +275,8 @@ func (p *MemoryPDS) Do(ctx context.Context, method, endpoint string, query url.V
 		sort.Strings(cids)
 		return jsonResponse(200, map[string]any{"cids": cids})
 	case "com.atproto.sync.getRecord", "com.atproto.repo.getRecord":
-		if method != "GET" || query.Get("repo") != p.did || !validRecordKey(query.Get("collection"), query.Get("rkey")) {
+		if method != "GET" || query.Get("repo") != p.did ||
+			!validRecordKey(query.Get("collection"), query.Get("rkey")) {
 			return errorResponse(400, "InvalidRequest")
 		}
 		record, exists := p.records[recordKey(query.Get("collection"), query.Get("rkey"))]
@@ -372,7 +390,10 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 	var input applyWritesRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || input.Repo != p.did || len(input.Writes) == 0 || len(input.Writes) > maxWriteCount {
+	if err := decoder.Decode(
+		&input,
+	); err != nil || input.Repo != p.did || len(input.Writes) == 0 ||
+		len(input.Writes) > maxWriteCount {
 		return errorResponse(400, "InvalidRequest")
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
@@ -392,8 +413,7 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 			return errorResponse(400, "InvalidRecord")
 		}
 		seen[key] = struct{}{}
-		exists := false
-		if _, exists = nextRecords[key]; exists {
+		if _, exists := nextRecords[key]; exists {
 			if write.Type == "com.atproto.repo.applyWrites#create" {
 				return errorResponse(400, "RecordAlreadyExists")
 			}
@@ -440,7 +460,8 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 	if p.hooks.RejectNextApplyWritesAfterBlobProcessing {
 		p.hooks.RejectNextApplyWritesAfterBlobProcessing = false
 		for _, write := range input.Writes {
-			if write.Type != "com.atproto.repo.applyWrites#create" && write.Type != "com.atproto.repo.applyWrites#update" {
+			if write.Type != "com.atproto.repo.applyWrites#create" &&
+				write.Type != "com.atproto.repo.applyWrites#update" {
 				continue
 			}
 			value, err := atdata.UnmarshalJSON(write.Value)
@@ -481,7 +502,11 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 
 func (p *MemoryPDS) deleteRecord(body []byte) (int, []byte, error) {
 	var request deleteRecordRequest
-	if err := json.Unmarshal(body, &request); err != nil || request.Repo != p.did || !validRecordKey(request.Collection, request.RKey) {
+	if err := json.Unmarshal(
+		body,
+		&request,
+	); err != nil || request.Repo != p.did ||
+		!validRecordKey(request.Collection, request.RKey) {
 		return errorResponse(400, "InvalidRequest")
 	}
 	key := recordKey(request.Collection, request.RKey)

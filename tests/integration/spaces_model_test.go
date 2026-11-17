@@ -22,13 +22,34 @@ type spacesModelAssumption struct {
 }
 
 var spacesModelAssumptions = []spacesModelAssumption{
-	{name: "occupied-sequence-create-rejects-whole-batch", description: "an occupied immutable sequence key rejects the snapshot-and-head batch, including identical replays"},
-	{name: "rejected-batch-is-atomic", description: "a rejected batch cannot leave a newly-created snapshot or advance the head"},
-	{name: "head-binds-record-and-blob", description: "head snapshot record CID, record blob CID, and payload bytes identify one exact candidate"},
-	{name: "mutable-policy-revision-is-checked-at-commit", description: "a mutable owner-only policy revision must still match at commit"},
-	{name: "immutable-owner-policy-refuses-broadening", description: "an immutable owner-only policy refuses a broadening transition"},
-	{name: "conflict-is-reported-and-candidate-retained", description: "a losing local candidate remains recoverable and its conflict is reportable"},
-	{name: "resolution-is-one-of-three-recorded-outcomes", description: "conflicts are recorded as keep-local-overwrite, take-remote, or unresolved"},
+	{
+		name:        "occupied-sequence-create-rejects-whole-batch",
+		description: "an occupied immutable sequence key rejects the snapshot-and-head batch, including identical replays",
+	},
+	{
+		name:        "rejected-batch-is-atomic",
+		description: "a rejected batch cannot leave a newly-created snapshot or advance the head",
+	},
+	{
+		name:        "head-binds-record-and-blob",
+		description: "head snapshot record CID, record blob CID, and payload bytes identify one exact candidate",
+	},
+	{
+		name:        "mutable-policy-revision-is-checked-at-commit",
+		description: "a mutable owner-only policy revision must still match at commit",
+	},
+	{
+		name:        "immutable-owner-policy-refuses-broadening",
+		description: "an immutable owner-only policy refuses a broadening transition",
+	},
+	{
+		name:        "conflict-is-reported-and-candidate-retained",
+		description: "a losing local candidate remains recoverable and its conflict is reportable",
+	},
+	{
+		name:        "resolution-is-one-of-three-recorded-outcomes",
+		description: "conflicts are recorded as keep-local-overwrite, take-remote, or unresolved",
+	},
 }
 
 type spacesCandidate struct {
@@ -136,7 +157,14 @@ func spacesBlobCID(payload []byte) string {
 }
 
 func spacesSnapshotRecordCID(vault string, sequence uint64, parentCID, blobCID string, publicationID string) string {
-	encoded := fmt.Sprintf("snapshot-v2\x00%s\x00%d\x00%s\x00%s\x00%s", vault, sequence, parentCID, blobCID, publicationID)
+	encoded := fmt.Sprintf(
+		"snapshot-v2\x00%s\x00%d\x00%s\x00%s\x00%s",
+		vault,
+		sequence,
+		parentCID,
+		blobCID,
+		publicationID,
+	)
 	digest := sha256.Sum256([]byte(encoded))
 	return fmt.Sprintf("record-sha256:%x", digest[:])
 }
@@ -153,7 +181,13 @@ func spacesPrepareCandidate(model *spacesModel, id, vault string, payload []byte
 		candidate.sequence = model.head.sequence + 1
 		candidate.parentCID = model.head.snapshot
 	}
-	candidate.recordCID = spacesSnapshotRecordCID(candidate.vault, candidate.sequence, candidate.parentCID, candidate.blobCID, candidate.id)
+	candidate.recordCID = spacesSnapshotRecordCID(
+		candidate.vault,
+		candidate.sequence,
+		candidate.parentCID,
+		candidate.blobCID,
+		candidate.id,
+	)
 	model.pending[candidate.id] = candidate
 	return candidate
 }
@@ -167,11 +201,19 @@ func (model *spacesModel) recordFailure(candidate spacesCandidate, conflict bool
 	if model.reportConflict {
 		remote := spacesConflictPosition{vault: "none", sequence: -1, record: "no-head"}
 		if model.head != nil {
-			remote = spacesConflictPosition{vault: model.head.vault, sequence: int64(model.head.sequence), record: model.head.snapshot}
+			remote = spacesConflictPosition{
+				vault:    model.head.vault,
+				sequence: int64(model.head.sequence),
+				record:   model.head.snapshot,
+			}
 		}
 		model.reported[candidate.id] = true
 		model.reports[candidate.id] = spacesConflictReport{
-			local:  spacesConflictPosition{vault: candidate.vault, sequence: int64(candidate.sequence), record: candidate.recordCID},
+			local: spacesConflictPosition{
+				vault:    candidate.vault,
+				sequence: int64(candidate.sequence),
+				record:   candidate.recordCID,
+			},
 			remote: remote,
 		}
 	}
@@ -238,8 +280,6 @@ func (model *spacesModel) broadenPolicy() bool {
 	if model.policyMode == spacesImmutablePolicy && model.forbidPolicyBroadening {
 		return false
 	}
-	if model.policyMode == spacesImmutablePolicy {
-	}
 	model.policyRevision++
 	model.policyOwnerOnly = false
 	return true
@@ -249,7 +289,11 @@ func (model *spacesModel) currentConflictPosition() spacesConflictPosition {
 	if model.head == nil {
 		return spacesConflictPosition{vault: "none", sequence: -1, record: "no-head"}
 	}
-	return spacesConflictPosition{vault: model.head.vault, sequence: int64(model.head.sequence), record: model.head.snapshot}
+	return spacesConflictPosition{
+		vault:    model.head.vault,
+		sequence: int64(model.head.sequence),
+		record:   model.head.snapshot,
+	}
 }
 
 func (model *spacesModel) refreshConflictIfHeadMoved(candidateID string) bool {
@@ -276,7 +320,8 @@ func (model *spacesModel) resolve(candidateID, outcome string) bool {
 	if !ok || !model.conflicts[candidateID] || model.policyBlocked[candidateID] {
 		return false
 	}
-	if outcome != spacesResolutionKeepLocal && outcome != spacesResolutionTakeRemote && outcome != spacesResolutionUnresolved {
+	if outcome != spacesResolutionKeepLocal && outcome != spacesResolutionTakeRemote &&
+		outcome != spacesResolutionUnresolved {
 		return false
 	}
 	if outcome == spacesResolutionUnresolved {
@@ -309,7 +354,13 @@ func (model *spacesModel) resolve(candidateID, outcome string) bool {
 		payload:        append([]byte(nil), candidate.payload...),
 		policyRevision: model.policyRevision,
 	}
-	overwrite.recordCID = spacesSnapshotRecordCID(overwrite.vault, overwrite.sequence, overwrite.parentCID, overwrite.blobCID, overwrite.id)
+	overwrite.recordCID = spacesSnapshotRecordCID(
+		overwrite.vault,
+		overwrite.sequence,
+		overwrite.parentCID,
+		overwrite.blobCID,
+		overwrite.id,
+	)
 	model.pending[overwrite.id] = overwrite
 	if model.refreshConflictIfHeadMoved(candidateID) || model.commit(overwrite, false) != "committed" {
 		delete(model.pending, overwrite.id)
@@ -329,9 +380,11 @@ func spacesInvariantViolations(model *spacesModel) []string {
 	for _, candidate := range model.committed {
 		committed = append(committed, candidate)
 	}
-	for left := 0; left < len(committed); left++ {
+	for left := range len(committed) {
 		for right := left + 1; right < len(committed); right++ {
-			if committed[left].sequence == committed[right].sequence && committed[left].parentCID == committed[right].parentCID && committed[left].id != committed[right].id {
+			if committed[left].sequence == committed[right].sequence &&
+				committed[left].parentCID == committed[right].parentCID &&
+				committed[left].id != committed[right].id {
 				violations["I1 distinct-candidate exclusion"] = true
 			}
 		}
@@ -343,7 +396,11 @@ func spacesInvariantViolations(model *spacesModel) []string {
 			violations["I4 no partial publication"] = true
 		} else {
 			payload, blobExists := model.blobs[record.blobCID]
-			if model.head.snapshot != record.recordCID || model.head.blob != record.blobCID || model.head.vault != record.vault || model.head.sequence != record.sequence || !blobExists || spacesBlobCID(payload) != record.blobCID {
+			if model.head.snapshot != record.recordCID || model.head.blob != record.blobCID ||
+				model.head.vault != record.vault ||
+				model.head.sequence != record.sequence ||
+				!blobExists ||
+				spacesBlobCID(payload) != record.blobCID {
 				violations["I2 exact binding"] = true
 			}
 			if model.head.candidate != record.id {
@@ -370,7 +427,8 @@ func spacesInvariantViolations(model *spacesModel) []string {
 			violations["I5 no silent loss"] = true
 		}
 		if _, retained := model.pending[candidateID]; !retained {
-			if model.resolutions[candidateID] != spacesResolutionTakeRemote && model.resolutions[candidateID] != spacesResolutionKeepLocal {
+			if model.resolutions[candidateID] != spacesResolutionTakeRemote &&
+				model.resolutions[candidateID] != spacesResolutionKeepLocal {
 				violations["I5 no silent loss"] = true
 			}
 		}
@@ -382,14 +440,18 @@ func spacesInvariantViolations(model *spacesModel) []string {
 			}
 		case spacesResolutionTakeRemote:
 			report, hasReport := model.reports[candidateID]
-			if !hasReport || model.resolutionRemoteHead[candidateID] == "" || model.resolutionRemoteHead[candidateID] != report.remote.record {
+			if !hasReport || model.resolutionRemoteHead[candidateID] == "" ||
+				model.resolutionRemoteHead[candidateID] != report.remote.record {
 				violations["I6 explicit resolution"] = true
 			}
 		case spacesResolutionKeepLocal:
 			report, hasReport := model.reports[candidateID]
 			overwriteID := model.resolutionOverwrite[candidateID]
 			overwrite, committed := model.committed[overwriteID]
-			if !hasReport || !committed || model.resolutionRemoteHead[candidateID] != report.remote.record || overwrite.parentCID != report.remote.record || overwrite.sequence != uint64(report.remote.sequence+1) || overwrite.payload == nil {
+			if !hasReport || !committed || model.resolutionRemoteHead[candidateID] != report.remote.record ||
+				overwrite.parentCID != report.remote.record ||
+				overwrite.sequence != uint64(report.remote.sequence+1) ||
+				overwrite.payload == nil {
 				violations["I6 explicit resolution"] = true
 			}
 		default:
@@ -502,13 +564,13 @@ func TestSpacesModelHeadAndBlobBinding(t *testing.T) {
 	}{
 		{
 			name: "head-does-not-name-record-cid",
-			mutate: func(model *spacesModel, candidate spacesCandidate) {
+			mutate: func(model *spacesModel, _ spacesCandidate) {
 				model.head.snapshot = model.head.blob
 			},
 		},
 		{
 			name: "head-does-not-name-record-blob-cid",
-			mutate: func(model *spacesModel, candidate spacesCandidate) {
+			mutate: func(model *spacesModel, _ spacesCandidate) {
 				model.head.blob = "blob-sha256:wrong"
 			},
 		},

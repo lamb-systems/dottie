@@ -253,18 +253,29 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 	}
 	defer func() { _ = lease.Close() }()
 
-	resolutions, err := request.Journal.ResolveInterrupted(ctx, func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
-		return observePublicationApplyEntry(fileSystem, entry)
-	})
+	resolutions, err := request.Journal.ResolveInterrupted(
+		ctx,
+		func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
+			return observePublicationApplyEntry(fileSystem, entry)
+		},
+	)
 	if err != nil {
 		return report, publicationApplyFailure(ctx, publicationApplyStageResolve, publicationApplyReasonJournal, err)
 	}
 	for _, resolution := range resolutions {
 		switch resolution.Outcome {
 		case publicationstate.JournalOutcomeUnobserved:
-			return report, &publicationApplyError{stage: publicationApplyStageResolve, reason: publicationApplyReasonUnobserved, entry: resolution.Entry}
+			return report, &publicationApplyError{
+				stage:  publicationApplyStageResolve,
+				reason: publicationApplyReasonUnobserved,
+				entry:  resolution.Entry,
+			}
 		case publicationstate.JournalOutcomeIndeterminate:
-			return report, &publicationApplyError{stage: publicationApplyStageResolve, reason: publicationApplyReasonIndeterminate, entry: resolution.Entry}
+			return report, &publicationApplyError{
+				stage:  publicationApplyStageResolve,
+				reason: publicationApplyReasonIndeterminate,
+				entry:  resolution.Entry,
+			}
 		}
 	}
 	if err := request.Journal.CheckAdmission(ctx, request.FloorRevision); err != nil {
@@ -383,7 +394,11 @@ func validatePublicationApplyPlanRequest(ctx context.Context, request Publicatio
 	return nil
 }
 
-func planPublicationApply(ctx context.Context, request PublicationApplyRequest, fileSystem files.ApplyFileSystem) ([]publicationApplyOperation, error) {
+func planPublicationApply(
+	ctx context.Context,
+	request PublicationApplyRequest,
+	fileSystem files.ApplyFileSystem,
+) ([]publicationApplyOperation, error) {
 	targets := append([]config.Target(nil), request.Configuration.Targets...)
 	sort.Slice(targets, func(left, right int) bool { return targets[left].ID < targets[right].ID })
 	operations := make([]publicationApplyOperation, 0)
@@ -392,11 +407,21 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonCanceled, err)
 		}
 		if target.Source != model.SourceFiles || target.Root == nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonTargetUnsupported, nil)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonTargetUnsupported,
+				nil,
+			)
 		}
 		portable, err := target.Model()
 		if err != nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonTargetUnsupported, nil)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonTargetUnsupported,
+				nil,
+			)
 		}
 		selection, err := selectPublicationTarget(ctx, request.Local, request.Configuration, target.ID, portable)
 		if err != nil {
@@ -427,11 +452,21 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 			return nil, err
 		}
 		if !captured.complete {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonCaptureIncomplete, nil)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonCaptureIncomplete,
+				nil,
+			)
 		}
 		localEntries, unknown := publicationBaseLocalEntries(captured)
 		if len(unknown) != 0 {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonCaptureIncomplete, nil)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonCaptureIncomplete,
+				nil,
+			)
 		}
 		localView := syncengine.LocalView{Entries: localEntries, Coverage: []string{target.ID}}
 		if !publicationBaseWithinBounds(baseEntries, localView, remote.entries, nil) {
@@ -441,13 +476,28 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 		if err != nil {
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanBinding, err)
 		}
-		plan, err := syncengine.Reconcile(baseView, localView, remote.entries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
+		plan, err := syncengine.Reconcile(
+			baseView,
+			localView,
+			remote.entries,
+			syncengine.Options{Bindings: []syncengine.TargetBinding{binding}},
+		)
 		if err != nil {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanReconcile, err)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonPlanReconcile,
+				err,
+			)
 		}
 		for _, decision := range plan.Decisions {
 			if decision.Action == syncengine.ActionConflict {
-				return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanConflict, nil)
+				return nil, publicationApplyFailure(
+					ctx,
+					publicationApplyStagePlan,
+					publicationApplyReasonPlanConflict,
+					nil,
+				)
 			}
 		}
 		preview, err := syncengine.BuildPreview(plan, []model.Target{selection.portable}, captured.observations)
@@ -455,14 +505,28 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanPreview, err)
 		}
 		if !preview.Complete || len(preview.Targets) != 1 {
-			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanIncomplete, nil)
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonPlanIncomplete,
+				nil,
+			)
 		}
 		content := make(map[model.EntryKey]model.Entry, len(remote.entries))
 		for _, entry := range remote.entries {
 			content[entry.Identity()] = entry
 		}
 		for _, previewEntry := range preview.Targets[0].Entries {
-			operation, err := publicationApplyOperationFor(ctx, request, fileSystem, selection, root, anchor, previewEntry, content)
+			operation, err := publicationApplyOperationFor(
+				ctx,
+				request,
+				fileSystem,
+				selection,
+				root,
+				anchor,
+				previewEntry,
+				content,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -478,7 +542,16 @@ func planPublicationApply(ctx context.Context, request PublicationApplyRequest, 
 	return operations, nil
 }
 
-func publicationApplyOperationFor(ctx context.Context, request PublicationApplyRequest, fileSystem files.ApplyFileSystem, selection publicationSelection, root string, anchor publicationstate.JournalAnchor, previewEntry syncengine.PreviewEntry, content map[model.EntryKey]model.Entry) (publicationApplyOperation, error) {
+func publicationApplyOperationFor(
+	ctx context.Context,
+	request PublicationApplyRequest,
+	fileSystem files.ApplyFileSystem,
+	selection publicationSelection,
+	root string,
+	anchor publicationstate.JournalAnchor,
+	previewEntry syncengine.PreviewEntry,
+	content map[model.EntryKey]model.Entry,
+) (publicationApplyOperation, error) {
 	path := previewEntry.Key.FilePath
 	operation := publicationApplyOperation{targetID: previewEntry.Key.TargetID, root: root, path: path, anchor: anchor}
 	switch previewEntry.DecisionAction {
@@ -488,11 +561,21 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		return operation, nil
 	case syncengine.ActionDownload:
 		if selection.mode == config.BackupOnly {
-			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonBackupOnly, nil)
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonBackupOnly,
+				nil,
+			)
 		}
 		entry, ok := content[previewEntry.Key]
 		if !ok || entry.File == nil || entry.File.State != model.FilePresent || entry.File.Kind != model.FileRegular {
-			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonTargetUnsupported, nil)
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonTargetUnsupported,
+				nil,
+			)
 		}
 		declared, supported := publicationApplySupportedMode(entry.File.Mode)
 		if !supported {
@@ -505,28 +588,53 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		operation.post = publicationstate.ObservedJournalFile(operation.content)
 	case syncengine.ActionDeleteLocal:
 		if selection.mode == config.BackupOnly {
-			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonBackupOnly, nil)
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonBackupOnly,
+				nil,
+			)
 		}
 		operation.kind = PublicationApplyDelete
 		operation.journalOperation = publicationApplyDeleteOperation
 		operation.post = publicationstate.ObservedFile{}
 	case syncengine.ActionUpload, syncengine.ActionDeleteRemote:
 		if !request.ApplyRemoteOnly {
-			return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, nil)
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonPlanUnresolved,
+				nil,
+			)
 		}
 		operation.kind = PublicationApplyUnchanged
 		operation.key = path
 		return operation, nil
 	default:
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, nil)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonPlanUnresolved,
+			nil,
+		)
 	}
 	captured, err := publicationApplyCaptured(previewEntry)
 	if err != nil {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanUnresolved, err)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonPlanUnresolved,
+			err,
+		)
 	}
 	operation.captured = captured
 	if operation.kind == PublicationApplyDelete && !captured.present {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPreimage, nil)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonPreimage,
+			nil,
+		)
 	}
 	if operation.kind == PublicationApplyWrite && captured.present && captured.digest == operation.post.Digest {
 		if _, supported := publicationApplySupportedMode(captured.mode); !supported {
@@ -535,13 +643,28 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 	}
 	destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
 	if err != nil {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonContainment, err)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonContainment,
+			err,
+		)
 	}
 	if destinationDir != anchor.Path {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonContainment, nil)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonContainment,
+			nil,
+		)
 	}
 	if err := validatePublicationApplyDestination(destinationDir, destinationPath); err != nil {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonContainment, err)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonContainment,
+			err,
+		)
 	}
 	operation.destinationDir = destinationDir
 	operation.destinationPath = destinationPath
@@ -550,7 +673,12 @@ func publicationApplyOperationFor(ctx context.Context, request PublicationApplyR
 		operation.key = "."
 	}
 	if err := publicationApplyParents(fileSystem, root, operation.key); err != nil {
-		return publicationApplyOperation{}, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonParent, err)
+		return publicationApplyOperation{}, publicationApplyFailure(
+			ctx,
+			publicationApplyStagePlan,
+			publicationApplyReasonParent,
+			err,
+		)
 	}
 	return operation, nil
 }
@@ -590,7 +718,8 @@ func validatePublicationApplyDestination(directory, path string) error {
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
 		return errors.New("apply destination directory is not absolute and clean")
 	}
-	if path == "" || path == "." || path == ".." || filepath.IsAbs(path) || filepath.Clean(path) != path || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+	if path == "" || path == "." || path == ".." || filepath.IsAbs(path) || filepath.Clean(path) != path ||
+		strings.HasPrefix(path, ".."+string(filepath.Separator)) {
 		return errors.New("apply destination path is not a relative file name")
 	}
 	return nil
@@ -614,15 +743,32 @@ func publicationApplyParents(fileSystem files.ApplyFileSystem, root, key string)
 	return nil
 }
 
-func applyPublicationOperation(ctx context.Context, request PublicationApplyRequest, fileSystem files.ApplyFileSystem, operation publicationApplyOperation) (PublicationApplyEntry, error) {
-	entry := PublicationApplyEntry{TargetID: operation.targetID, Path: operation.path, Operation: operation.kind, Digest: operation.post.Digest, Size: operation.post.Size, Mode: uint32(operation.mode.Perm())}
+func applyPublicationOperation(
+	ctx context.Context,
+	request PublicationApplyRequest,
+	fileSystem files.ApplyFileSystem,
+	operation publicationApplyOperation,
+) (PublicationApplyEntry, error) {
+	entry := PublicationApplyEntry{
+		TargetID:  operation.targetID,
+		Path:      operation.path,
+		Operation: operation.kind,
+		Digest:    operation.post.Digest,
+		Size:      operation.post.Size,
+		Mode:      uint32(operation.mode.Perm()),
+	}
 	if operation.kind == PublicationApplyUnchanged {
 		return entry, nil
 	}
 	bound := publicationApplyBoundFileSystem{ApplyFileSystem: fileSystem, anchor: operation.anchor}
 	observed, err := files.ObserveFileBounded(bound, operation.root, operation.key, publicationApplyMaxObservedBytes)
 	if err != nil {
-		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyObservationReason(err), err)
+		return entry, publicationApplyFailure(
+			ctx,
+			publicationApplyStageObserve,
+			publicationApplyObservationReason(err),
+			err,
+		)
 	}
 	if publicationApplySettled(operation, observed) {
 		entry.Operation = PublicationApplyUnchanged
@@ -631,7 +777,11 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	if !publicationApplyCapturedMatches(operation.captured, observed) {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyReasonPreimage, nil)
 	}
-	preimage := publicationstate.ObservedFile{Present: true, Digest: operation.captured.digest, Size: uint64(len(observed.Data))}
+	preimage := publicationstate.ObservedFile{
+		Present: true,
+		Digest:  operation.captured.digest,
+		Size:    uint64(len(observed.Data)),
+	}
 	intent := publicationstate.JournalIntent{
 		Vault:             request.Vault,
 		Operation:         operation.journalOperation,
@@ -658,17 +808,38 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 			return entry, err
 		}
 	}
-	if err := publicationApplyContainment(operation.anchor, written.DestinationDir, written.DestinationPath); err != nil {
-		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonContainment, err))
+	if err := publicationApplyContainment(
+		operation.anchor,
+		written.DestinationDir,
+		written.DestinationPath,
+	); err != nil {
+		return publicationApplyIndeterminate(
+			ctx,
+			request.Journal,
+			written,
+			entry,
+			publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonContainment, err),
+		)
 	}
-	expected := files.ExpectedPreimage{Exists: operation.captured.present, Digest: hex.EncodeToString(operation.captured.digest[:]), Mode: operation.captured.mode, Size: preimage.Size}
+	expected := files.ExpectedPreimage{
+		Exists: operation.captured.present,
+		Digest: hex.EncodeToString(operation.captured.digest[:]),
+		Mode:   operation.captured.mode,
+		Size:   preimage.Size,
+	}
 	if operation.kind == PublicationApplyDelete {
 		err = files.DeleteFile(bound, operation.root, operation.key, expected)
 	} else {
 		err = files.ReplaceFile(bound, operation.root, operation.key, operation.content, operation.mode, expected)
 	}
 	if err != nil {
-		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyMutationReason(err), err))
+		return publicationApplyIndeterminate(
+			ctx,
+			request.Journal,
+			written,
+			entry,
+			publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyMutationReason(err), err),
+		)
 	}
 	publicationApplyStageReached(publicationApplyHookMutated)
 	if request.Barrier != nil {
@@ -678,7 +849,13 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	}
 	completed, err := files.ObserveFileBounded(bound, operation.root, operation.key, publicationApplyMaxObservedBytes)
 	if err != nil {
-		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, publicationApplyFailure(ctx, publicationApplyStageObservation, publicationApplyObservationReason(err), err))
+		return publicationApplyIndeterminate(
+			ctx,
+			request.Journal,
+			written,
+			entry,
+			publicationApplyFailure(ctx, publicationApplyStageObservation, publicationApplyObservationReason(err), err),
+		)
 	}
 	if err := request.Journal.CompleteJournal(ctx, written, publicationApplyObserved(completed)); err != nil {
 		return publicationApplyIndeterminate(ctx, request.Journal, written, entry, err)
@@ -688,7 +865,13 @@ func applyPublicationOperation(ctx context.Context, request PublicationApplyRequ
 	return entry, nil
 }
 
-func publicationApplyIndeterminate(ctx context.Context, journal *publicationstate.Journal, written publicationstate.JournalEntry, entry PublicationApplyEntry, cause error) (PublicationApplyEntry, error) {
+func publicationApplyIndeterminate(
+	ctx context.Context,
+	journal *publicationstate.Journal,
+	written publicationstate.JournalEntry,
+	entry PublicationApplyEntry,
+	cause error,
+) (PublicationApplyEntry, error) {
 	if err := journal.MarkIndeterminate(ctx, written); err != nil {
 		return entry, errors.Join(cause, err)
 	}
@@ -717,7 +900,9 @@ func publicationApplySettled(operation publicationApplyOperation, observed files
 		if !observed.Exists {
 			return false
 		}
-		return sha256.Sum256(observed.Data) == operation.post.Digest && uint64(len(observed.Data)) == operation.post.Size && observed.Mode == uint32(operation.mode.Perm())
+		return sha256.Sum256(observed.Data) == operation.post.Digest &&
+			uint64(len(observed.Data)) == operation.post.Size &&
+			observed.Mode == uint32(operation.mode.Perm())
 	default:
 		return true
 	}
@@ -734,8 +919,7 @@ func publicationApplyCapturedMatches(captured publicationApplyCapturedPreimage, 
 }
 
 func publicationApplyObservationReason(err error) publicationReconciliationReason {
-	var oversized *files.ObservationLimitError
-	if errors.As(err, &oversized) {
+	if _, ok := errors.AsType[*files.ObservationLimitError](err); ok {
 		return publicationApplyReasonOversized
 	}
 	if errors.Is(err, errPublicationApplyAnchor) {
@@ -755,15 +939,27 @@ func publicationApplyObserved(observation files.ApplyObservation) publicationsta
 	if !observation.Exists {
 		return publicationstate.ObservedFile{}
 	}
-	return publicationstate.ObservedFile{Present: true, Digest: sha256.Sum256(observation.Data), Size: uint64(len(observation.Data))}
+	return publicationstate.ObservedFile{
+		Present: true,
+		Digest:  sha256.Sum256(observation.Data),
+		Size:    uint64(len(observation.Data)),
+	}
 }
 
-func observePublicationApplyEntry(fileSystem files.ApplyFileSystem, entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
+func observePublicationApplyEntry(
+	fileSystem files.ApplyFileSystem,
+	entry publicationstate.JournalEntry,
+) (publicationstate.ObservedFile, error) {
 	if entry.DestinationDir != entry.Anchor.Path {
 		return publicationstate.ObservedFile{}, errors.New("journal destination is not the recorded anchor")
 	}
 	bound := publicationApplyBoundFileSystem{ApplyFileSystem: fileSystem, anchor: entry.Anchor}
-	observed, err := files.ObserveFileBounded(bound, entry.Anchor.Path, entry.DestinationPath, publicationApplyMaxObservedBytes)
+	observed, err := files.ObserveFileBounded(
+		bound,
+		entry.Anchor.Path,
+		entry.DestinationPath,
+		publicationApplyMaxObservedBytes,
+	)
 	if err != nil {
 		return publicationstate.ObservedFile{}, err
 	}
@@ -778,7 +974,12 @@ func publicationApplyUnsupportedMode(ctx context.Context, mode uint32) error {
 	return failure
 }
 
-func publicationApplyFailure(ctx context.Context, stage publicationReconciliationStage, reason publicationReconciliationReason, cause error) error {
+func publicationApplyFailure(
+	ctx context.Context,
+	stage publicationReconciliationStage,
+	reason publicationReconciliationReason,
+	cause error,
+) error {
 	cancellation := error(nil)
 	if ctx != nil {
 		if err := ctx.Err(); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

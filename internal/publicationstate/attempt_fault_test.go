@@ -94,7 +94,14 @@ func TestPublicationAttemptDeferredCommitErrorRollsBackAndAllowsSubsequentWrite(
 	}
 	freshDispatch, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
 	require.NoError(t, err)
-	material, err = store.BeginUpload(ctx, attempt.ID, freshDispatch.StateToken, view, review, freshDispatch.Confirmation)
+	material, err = store.BeginUpload(
+		ctx,
+		attempt.ID,
+		freshDispatch.StateToken,
+		view,
+		review,
+		freshDispatch.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate.Payload, material.Payload)
 	require.NoError(t, store.Close())
@@ -126,7 +133,14 @@ func TestPublicationAttemptSubmissionCommitUnknownNeverReturnsBatchOrRetry(t *te
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
 	store.commitTransaction = commitThenReturnError
-	material, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	material, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	requireErrorMetadata(t, err, ErrStorage, StageDispatch, ReasonCommitUnknown)
 	assert.Equal(t, SubmissionMaterial{}, material)
 	loadedFloor, present, err := store.Load(ctx)
@@ -223,7 +237,11 @@ func TestPublicationAttemptAdmissionCommitRollbackAllowsRealRetryAfterReadback(t
 	sentinel := filepath.Join(directory, "commit-sentinel")
 	sentinelBytes := []byte("unchanged admission commit sentinel")
 	require.NoError(t, os.WriteFile(sentinel, sentinelBytes, 0o600))
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_admission_commit AFTER INSERT ON main.publication_attempts BEGIN INSERT INTO attempt_commit_child(id) VALUES(101); END")
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER fail_admission_commit AFTER INSERT ON main.publication_attempts BEGIN INSERT INTO attempt_commit_child(id) VALUES(101); END",
+	)
 	result, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
 	requireErrorMetadata(t, err, ErrStorage, StageAttempt, ReasonCommitUnknown)
 	assert.Equal(t, Attempt{}, result)
@@ -277,7 +295,11 @@ func TestPublicationAttemptSubmissionCommitRollbackAllowsFreshBoundaryAfterReadb
 	require.NoError(t, err)
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_submission_commit AFTER INSERT ON main.attempt_events WHEN NEW.kind='may-have-submitted' BEGIN INSERT INTO attempt_commit_child(id) VALUES(102); END")
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER fail_submission_commit AFTER INSERT ON main.attempt_events WHEN NEW.kind='may-have-submitted' BEGIN INSERT INTO attempt_commit_child(id) VALUES(102); END",
+	)
 	material, err := store.BeginSubmission(ctx, attempt.ID, proposal.StateToken, empty, review, proposal.Confirmation)
 	requireErrorMetadata(t, err, ErrStorage, StageDispatch, ReasonCommitUnknown)
 	assert.Equal(t, SubmissionMaterial{}, material)
@@ -330,7 +352,11 @@ func TestPublicationAttemptFinalizeCommitRollbackAllowsRealRetryAfterReadback(t 
 	before := readAttemptLogicalRows(t, store)
 	candidateBefore, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_finalize_commit AFTER INSERT ON main.attempt_events WHEN NEW.kind='retired-success' BEGIN INSERT INTO attempt_commit_child(id) VALUES(103); END")
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER fail_finalize_commit AFTER INSERT ON main.attempt_events WHEN NEW.kind='retired-success' BEGIN INSERT INTO attempt_commit_child(id) VALUES(103); END",
+	)
 	result, err := store.FinalizeAttempt(ctx, attempt.ID, resolution.Attempt.StateDigest, current)
 	requireErrorMetadata(t, err, ErrStorage, StageFinalize, ReasonCommitUnknown)
 	assert.Equal(t, Finalization{}, result)
@@ -382,7 +408,11 @@ func TestPublicationAttemptAbandonCommitRollbackAllowsRealRetryAfterReadback(t *
 	require.NoError(t, err)
 	proposal, err := store.PrepareAbandon(ctx, attempt.ID, &current)
 	require.NoError(t, err)
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_abandon_commit AFTER INSERT ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN INSERT INTO attempt_commit_child(id) VALUES(104); END")
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER fail_abandon_commit AFTER INSERT ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN INSERT INTO attempt_commit_child(id) VALUES(104); END",
+	)
 	result, err := store.AbandonAttempt(ctx, attempt.ID, proposal.StateToken, &current, proposal.Confirmation)
 	requireErrorMetadata(t, err, ErrStorage, StageAbandon, ReasonCommitUnknown)
 	assert.Equal(t, Attempt{}, result)
@@ -435,7 +465,13 @@ func removeDeferredAttemptCommitFailure(t *testing.T, store *Store, triggerName 
 	}
 }
 
-func createAndSubmitPreparationForFaultTest(t *testing.T, store *Store, candidate CandidateInput, view SuppliedRepositoryView, review LocalReviewContext) Attempt {
+func createAndSubmitPreparationForFaultTest(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+) Attempt {
 	t.Helper()
 	ctx := context.Background()
 	proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
@@ -461,8 +497,14 @@ func TestSubmittedTerminalAbandonEvidenceWritesRollbackTogether(t *testing.T) {
 		role string
 		ddl  string
 	}{
-		{"outcome", "CREATE TEMP TRIGGER fail_abandon_outcome BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN SELECT RAISE(ABORT,'abandon-outcome-canary'); END"},
-		{"retirement", "CREATE TEMP TRIGGER fail_abandon_retirement BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='retirement' BEGIN SELECT RAISE(ABORT,'abandon-retirement-canary'); END"},
+		{
+			"outcome",
+			"CREATE TEMP TRIGGER fail_abandon_outcome BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN SELECT RAISE(ABORT,'abandon-outcome-canary'); END",
+		},
+		{
+			"retirement",
+			"CREATE TEMP TRIGGER fail_abandon_retirement BEFORE INSERT ON main.attempt_evidence WHEN NEW.role='retirement' BEGIN SELECT RAISE(ABORT,'abandon-retirement-canary'); END",
+		},
 	}
 	for _, fault := range triggers {
 		t.Run(fault.role, func(t *testing.T) {
@@ -496,7 +538,7 @@ func TestSubmittedTerminalAbandonEvidenceWritesRollbackTogether(t *testing.T) {
 			reopened, err := Open(directory, f.binding)
 			require.NoError(t, err)
 			defer reopened.Close()
-			loaded, err = reopened.LoadAttempt(ctx, attempt.ID)
+			_, err = reopened.LoadAttempt(ctx, attempt.ID)
 			require.NoError(t, err)
 			fresh, err := reopened.PrepareAbandon(ctx, attempt.ID, &current)
 			require.NoError(t, err)
@@ -514,20 +556,62 @@ func TestPublicationAttemptFinalizeStatementFailuresRollbackAllRows(t *testing.T
 		name string
 		ddl  string
 	}{
-		{"accepted-record", "CREATE TEMP TRIGGER abort_final_record BEFORE INSERT ON main.accepted_records BEGIN SELECT RAISE(ABORT,'final-record-canary'); END"},
-		{"accepted-event", "CREATE TEMP TRIGGER abort_final_event BEFORE INSERT ON main.accepted_events BEGIN SELECT RAISE(ABORT,'final-event-canary'); END"},
-		{"floor", "CREATE TEMP TRIGGER abort_final_floor BEFORE INSERT ON main.active_floor BEGIN SELECT RAISE(ABORT,'final-floor-canary'); END"},
-		{"retained-point", "CREATE TEMP TRIGGER abort_final_retained BEFORE INSERT ON main.retained_publications BEGIN SELECT RAISE(ABORT,'final-retained-canary'); END"},
-		{"attempt-state", "CREATE TEMP TRIGGER abort_final_attempt BEFORE UPDATE ON main.publication_attempts BEGIN SELECT RAISE(ABORT,'final-attempt-canary'); END"},
-		{"attempt-reference", "CREATE TEMP TRIGGER abort_final_ref BEFORE DELETE ON main.attempt_payload_refs BEGIN SELECT RAISE(ABORT,'final-ref-canary'); END"},
-		{"active-slot", "CREATE TEMP TRIGGER abort_final_active BEFORE DELETE ON main.active_publication_attempt BEGIN SELECT RAISE(ABORT,'final-active-canary'); END"},
-		{"reservation", "CREATE TEMP TRIGGER abort_final_reservation BEFORE DELETE ON main.attempt_reservations BEGIN SELECT RAISE(ABORT,'final-reservation-canary'); END"},
-		{"pending-genesis-delete", "CREATE TEMP TRIGGER abort_final_pending_genesis BEFORE DELETE ON main.pending_genesis BEGIN SELECT RAISE(ABORT,'final-pending-genesis-canary'); END"},
-		{"store-meta-revision", "CREATE TEMP TRIGGER abort_final_meta_revision BEFORE UPDATE ON main.store_meta WHEN OLD.key='revision' BEGIN SELECT RAISE(ABORT,'final-meta-revision-canary'); END"},
-		{"store-meta-generation", "CREATE TEMP TRIGGER abort_final_meta_generation BEFORE UPDATE ON main.store_meta WHEN OLD.key='generation' BEGIN SELECT RAISE(ABORT,'final-meta-generation-canary'); END"},
-		{"store-meta-attempt-mutation", "CREATE TEMP TRIGGER abort_final_meta_attempt_mutation BEFORE UPDATE ON main.store_meta WHEN OLD.key='attempt_mutation_revision' BEGIN SELECT RAISE(ABORT,'final-meta-attempt-mutation-canary'); END"},
-		{"attempt-event", "CREATE TEMP TRIGGER abort_final_retired_event BEFORE INSERT ON main.attempt_events WHEN NEW.kind='retired-success' BEGIN SELECT RAISE(ABORT,'final-retired-event-canary'); END"},
-		{"outcome-evidence-upsert", "CREATE TEMP TRIGGER abort_final_outcome_evidence BEFORE UPDATE ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN SELECT RAISE(ABORT,'final-outcome-evidence-canary'); END"},
+		{
+			"accepted-record",
+			"CREATE TEMP TRIGGER abort_final_record BEFORE INSERT ON main.accepted_records BEGIN SELECT RAISE(ABORT,'final-record-canary'); END",
+		},
+		{
+			"accepted-event",
+			"CREATE TEMP TRIGGER abort_final_event BEFORE INSERT ON main.accepted_events BEGIN SELECT RAISE(ABORT,'final-event-canary'); END",
+		},
+		{
+			"floor",
+			"CREATE TEMP TRIGGER abort_final_floor BEFORE INSERT ON main.active_floor BEGIN SELECT RAISE(ABORT,'final-floor-canary'); END",
+		},
+		{
+			"retained-point",
+			"CREATE TEMP TRIGGER abort_final_retained BEFORE INSERT ON main.retained_publications BEGIN SELECT RAISE(ABORT,'final-retained-canary'); END",
+		},
+		{
+			"attempt-state",
+			"CREATE TEMP TRIGGER abort_final_attempt BEFORE UPDATE ON main.publication_attempts BEGIN SELECT RAISE(ABORT,'final-attempt-canary'); END",
+		},
+		{
+			"attempt-reference",
+			"CREATE TEMP TRIGGER abort_final_ref BEFORE DELETE ON main.attempt_payload_refs BEGIN SELECT RAISE(ABORT,'final-ref-canary'); END",
+		},
+		{
+			"active-slot",
+			"CREATE TEMP TRIGGER abort_final_active BEFORE DELETE ON main.active_publication_attempt BEGIN SELECT RAISE(ABORT,'final-active-canary'); END",
+		},
+		{
+			"reservation",
+			"CREATE TEMP TRIGGER abort_final_reservation BEFORE DELETE ON main.attempt_reservations BEGIN SELECT RAISE(ABORT,'final-reservation-canary'); END",
+		},
+		{
+			"pending-genesis-delete",
+			"CREATE TEMP TRIGGER abort_final_pending_genesis BEFORE DELETE ON main.pending_genesis BEGIN SELECT RAISE(ABORT,'final-pending-genesis-canary'); END",
+		},
+		{
+			"store-meta-revision",
+			"CREATE TEMP TRIGGER abort_final_meta_revision BEFORE UPDATE ON main.store_meta WHEN OLD.key='revision' BEGIN SELECT RAISE(ABORT,'final-meta-revision-canary'); END",
+		},
+		{
+			"store-meta-generation",
+			"CREATE TEMP TRIGGER abort_final_meta_generation BEFORE UPDATE ON main.store_meta WHEN OLD.key='generation' BEGIN SELECT RAISE(ABORT,'final-meta-generation-canary'); END",
+		},
+		{
+			"store-meta-attempt-mutation",
+			"CREATE TEMP TRIGGER abort_final_meta_attempt_mutation BEFORE UPDATE ON main.store_meta WHEN OLD.key='attempt_mutation_revision' BEGIN SELECT RAISE(ABORT,'final-meta-attempt-mutation-canary'); END",
+		},
+		{
+			"attempt-event",
+			"CREATE TEMP TRIGGER abort_final_retired_event BEFORE INSERT ON main.attempt_events WHEN NEW.kind='retired-success' BEGIN SELECT RAISE(ABORT,'final-retired-event-canary'); END",
+		},
+		{
+			"outcome-evidence-upsert",
+			"CREATE TEMP TRIGGER abort_final_outcome_evidence BEFORE UPDATE ON main.attempt_evidence WHEN NEW.role='outcome' BEGIN SELECT RAISE(ABORT,'final-outcome-evidence-canary'); END",
+		},
 	}
 	for _, test := range triggers {
 		t.Run(test.name, func(t *testing.T) {

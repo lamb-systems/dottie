@@ -52,17 +52,17 @@ func validScope(scope string) bool {
 	if scope == "atproto" {
 		return true
 	}
-	if strings.HasPrefix(scope, "repo:") {
-		return scopeNSID.MatchString(strings.TrimPrefix(scope, "repo:"))
+	if after, ok := strings.CutPrefix(scope, "repo:"); ok {
+		return scopeNSID.MatchString(after)
 	}
 	for _, family := range []string{"transition:", "rpc:", "account:", "identity:", "include:"} {
-		if strings.HasPrefix(scope, family) {
-			value := strings.TrimPrefix(scope, family)
+		if after, ok := strings.CutPrefix(scope, family); ok {
+			value := after
 			return value != "" && !strings.ContainsAny(value, " \t\r\n")
 		}
 	}
-	if strings.HasPrefix(scope, "blob:") {
-		mediaType := strings.TrimPrefix(scope, "blob:")
+	if after, ok := strings.CutPrefix(scope, "blob:"); ok {
+		mediaType := after
 		if strings.ContainsAny(mediaType, " \t\r\n") {
 			return false
 		}
@@ -87,12 +87,22 @@ func ValidateScopes(requested, required, granted []string) error {
 	}
 	for scope := range grantedSet {
 		if _, ok := requestedSet[scope]; !ok {
-			return &ScopeError{Granted: sortedKeys(grantedSet), Requested: sortedKeys(requestedSet), Required: sortedKeys(requiredSet), Reason: "grant contains an unrequested scope"}
+			return &ScopeError{
+				Granted:   sortedKeys(grantedSet),
+				Requested: sortedKeys(requestedSet),
+				Required:  sortedKeys(requiredSet),
+				Reason:    "grant contains an unrequested scope",
+			}
 		}
 	}
 	for scope := range requiredSet {
 		if _, ok := grantedSet[scope]; !ok {
-			return &ScopeError{Granted: sortedKeys(grantedSet), Requested: sortedKeys(requestedSet), Required: sortedKeys(requiredSet), Reason: "grant omits a required scope"}
+			return &ScopeError{
+				Granted:   sortedKeys(grantedSet),
+				Requested: sortedKeys(requestedSet),
+				Required:  sortedKeys(requiredSet),
+				Reason:    "grant omits a required scope",
+			}
 		}
 	}
 	return nil
@@ -149,7 +159,10 @@ func (e *PublicationScopeError) Error() string {
 	if e == nil || len(e.Missing) == 0 {
 		return reason
 	}
-	return reason + ": missing " + strings.Join(e.Missing, " ") + "; sign in again to grant the v2 publication collections"
+	return reason + ": missing " + strings.Join(
+		e.Missing,
+		" ",
+	) + "; sign in again to grant the v2 publication collections"
 }
 
 func (e *PublicationScopeError) Unwrap() error { return ErrInsufficientPublicationScope }

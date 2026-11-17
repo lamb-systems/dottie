@@ -43,23 +43,26 @@ func newManualCommand(stdout, stderr io.Writer, exitCode *int, factory statusCoo
 		}
 		return command
 	}
-	status := configure(&urfave.Command{Name: "status", Action: func(ctx context.Context, command *urfave.Command) error {
-		coordinator, closeResources, err := factory()
-		if err != nil {
-			return refused(err)
-		}
-		defer closeResources()
-		result, err := coordinator.Status(ctx)
-		if err != nil {
-			return refused(err)
-		}
-		return writeCommandOutput(command, renderManualStatus(result))
-	}})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{status}, Writer: stdout, ErrWriter: stderr})
+	status := configure(
+		&urfave.Command{Name: "status", Action: func(ctx context.Context, command *urfave.Command) error {
+			coordinator, closeResources, err := factory()
+			if err != nil {
+				return refused(err)
+			}
+			defer closeResources()
+			result, err := coordinator.Status(ctx)
+			if err != nil {
+				return refused(err)
+			}
+			return writeCommandOutput(command, renderManualStatus(result))
+		}},
+	)
+	root := configure(
+		&urfave.Command{Name: "dottie", Commands: []*urfave.Command{status}, Writer: stdout, ErrWriter: stderr},
+	)
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code >= 3 && code <= 4 {
@@ -91,7 +94,13 @@ func productionStatusCoordinator(env func(string) string) (*service.Coordinator,
 	}
 	closeStore := func() { _ = store.Close() }
 	coordinator, err := service.NewCoordinator(service.Dependencies{
-		Config: service.FileConfigPort{Paths: paths}, State: store, Settings: manualGNOMESettings(), Paths: paths, Clock: time.Now,
+		Config: service.FileConfigPort{
+			Paths: paths,
+		},
+		State:    store,
+		Settings: manualGNOMESettings(),
+		Paths:    paths,
+		Clock:    time.Now,
 	})
 	if err != nil {
 		closeStore()
@@ -103,13 +112,26 @@ func productionStatusCoordinator(env func(string) string) (*service.Coordinator,
 func renderManualStatus(status service.Status) string {
 	var output strings.Builder
 	for _, selection := range status.Vaults {
-		fmt.Fprintf(&output, "vault\t%s\tdevice=%s\n", escapeField(hex.EncodeToString(selection.Vault[:])), escapeField(selection.DeviceID))
+		fmt.Fprintf(
+			&output,
+			"vault\t%s\tdevice=%s\n",
+			escapeField(hex.EncodeToString(selection.Vault[:])),
+			escapeField(selection.DeviceID),
+		)
 	}
 	if len(status.Vaults) == 0 {
 		output.WriteString("no vault selection recorded\n")
 	}
 	for _, target := range status.Targets {
-		fmt.Fprintf(&output, "%s\t%s\t%s\t%s\titems=%d", escapeField(target.ID), escapeField(target.Source), escapeField(string(target.Mode)), escapeField(string(target.State)), target.Items)
+		fmt.Fprintf(
+			&output,
+			"%s\t%s\t%s\t%s\titems=%d",
+			escapeField(target.ID),
+			escapeField(target.Source),
+			escapeField(string(target.Mode)),
+			escapeField(string(target.State)),
+			target.Items,
+		)
 		if target.Reason != "" {
 			fmt.Fprintf(&output, "\treason=%s", escapeField(target.Reason))
 		}

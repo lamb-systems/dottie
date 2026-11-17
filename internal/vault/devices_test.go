@@ -26,7 +26,12 @@ type devicesFixture struct {
 
 func newDevicesFixture(t *testing.T) devicesFixture {
 	t.Helper()
-	root := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
+	root := DeviceMaterial{
+		DeviceID:  "device-root",
+		KeyID:     []byte("root-key"),
+		Signing:   fixedSigningKey(11),
+		Recipient: fixedX25519Key(21),
+	}
 	boot, err := Bootstrap("synthetic vault", root)
 	require.NoError(t, err)
 	policy, err := DecodePolicy(boot.Policy)
@@ -40,13 +45,29 @@ func newDevicesFixture(t *testing.T) devicesFixture {
 		Control: boot.Control, Policy: boot.Policy, Certificates: [][]byte{boot.Certificate}, TrustAnchor: boot.Anchor,
 	}
 	_ = policy
-	newDevice := DeviceMaterial{DeviceID: "device-new", KeyID: []byte("new-key"), Signing: fixedSigningKey(12), Recipient: fixedX25519Key(22)}
-	modelSnapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}}
+	newDevice := DeviceMaterial{
+		DeviceID:  "device-new",
+		KeyID:     []byte("new-key"),
+		Signing:   fixedSigningKey(12),
+		Recipient: fixedX25519Key(22),
+	}
+	modelSnapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+	}
 	packed, err := Pack(modelSnapshot)
 	require.NoError(t, err)
 	wraps := []RecipientWrapInput{
-		{KeyID: []byte("new-key"), EphemeralPrivate: [32]byte(fixtureBytes(31, 32)), WrapNonce: [24]byte(fixtureBytes(63, 24))},
-		{KeyID: []byte("root-key"), EphemeralPrivate: [32]byte(fixtureBytes(87, 32)), WrapNonce: [24]byte(fixtureBytes(111, 24))},
+		{
+			KeyID:            []byte("new-key"),
+			EphemeralPrivate: [32]byte(fixtureBytes(31, 32)),
+			WrapNonce:        [24]byte(fixtureBytes(63, 24)),
+		},
+		{
+			KeyID:            []byte("root-key"),
+			EphemeralPrivate: [32]byte(fixtureBytes(87, 32)),
+			WrapNonce:        [24]byte(fixtureBytes(111, 24)),
+		},
 	}
 	newRecipientPrivate, err := ecdhPrivateForFixture(33)
 	require.NoError(t, err)
@@ -55,13 +76,28 @@ func newDevicesFixture(t *testing.T) devicesFixture {
 	require.NoError(t, err)
 	wraps[1].EphemeralPrivate = [32]byte(rootRecipientPrivate.Bytes())
 	intent := TransitionIntent{
-		Kind: TransitionEnroll, Vault: boot.Vault, Signer: root, NewDevice: &newDevice, RequestedRole: RolePublisher,
-		ContentKey: fixtureBytes(121, 32), Recipients: [][]byte{boot.Certificate}, Wraps: wraps,
-		Plaintext: packed.Payload, PublicationID: [16]byte(fixtureBytes(153, 16)), Nonce: [24]byte(fixtureBytes(169, 24)),
+		Kind:          TransitionEnroll,
+		Vault:         boot.Vault,
+		Signer:        root,
+		NewDevice:     &newDevice,
+		RequestedRole: RolePublisher,
+		ContentKey:    fixtureBytes(121, 32),
+		Recipients:    [][]byte{boot.Certificate},
+		Wraps:         wraps,
+		Plaintext:     packed.Payload,
+		PublicationID: [16]byte(fixtureBytes(153, 16)),
+		Nonce:         [24]byte(fixtureBytes(169, 24)),
 	}
 	transition, err := PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
-	return devicesFixture{root: root, newDevice: newDevice, bootstrap: boot, predecessor: predecessor, intent: intent, transition: transition}
+	return devicesFixture{
+		root:        root,
+		newDevice:   newDevice,
+		bootstrap:   boot,
+		predecessor: predecessor,
+		intent:      intent,
+		transition:  transition,
+	}
 }
 
 func ecdhPrivateForFixture(seed byte) (*ecdh.PrivateKey, error) {
@@ -77,9 +113,19 @@ func predecessorAfterTransition(t *testing.T, predecessor Predecessor, transitio
 	head, err := DecodeHead(transition.Head)
 	require.NoError(t, err)
 	return Predecessor{
-		ControlCID: controlCID, PolicyDigest: policyDigest, EpochSeq: head.EpochSeq,
-		HeadCID: bytes.Clone(head.SnapshotCID), Head: bytes.Clone(transition.Head), Control: bytes.Clone(transition.Control),
-		Policy: bytes.Clone(transition.Policy), Certificates: cloneByteSlices(transition.Recipients), TrustAnchor: predecessor.TrustAnchor,
+		ControlCID:   controlCID,
+		PolicyDigest: policyDigest,
+		EpochSeq:     head.EpochSeq,
+		HeadCID: bytes.Clone(
+			head.SnapshotCID,
+		),
+		Head:    bytes.Clone(transition.Head),
+		Control: bytes.Clone(transition.Control),
+		Policy: bytes.Clone(
+			transition.Policy,
+		),
+		Certificates: cloneByteSlices(transition.Recipients),
+		TrustAnchor:  predecessor.TrustAnchor,
 	}
 }
 
@@ -90,7 +136,11 @@ type epochFirstSeenKey struct {
 
 type epochFirstSeenFixture map[epochFirstSeenKey]int64
 
-func (store epochFirstSeenFixture) VaultEpochFirstSeen(_ context.Context, vaultID [32]byte, epoch uint64) (int64, bool, error) {
+func (store epochFirstSeenFixture) VaultEpochFirstSeen(
+	_ context.Context,
+	vaultID [32]byte,
+	epoch uint64,
+) (int64, bool, error) {
 	firstSeenAt, found := store[epochFirstSeenKey{vault: vaultID, epoch: epoch}]
 	return firstSeenAt, found, nil
 }
@@ -100,13 +150,28 @@ func publicationTestIntent(fixture devicesFixture, predecessor Predecessor) Publ
 		epochFirstSeenKey{vault: fixture.bootstrap.Vault, epoch: predecessor.EpochSeq}: 1_700_000_000,
 	}
 	return PublicationIntent{
-		Vault: fixture.bootstrap.Vault, Signer: fixture.newDevice, ContentKey: fixtureBytes(191, 32),
+		Vault:      fixture.bootstrap.Vault,
+		Signer:     fixture.newDevice,
+		ContentKey: fixtureBytes(191, 32),
 		Wraps: []RecipientWrapInput{
-			{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(31, 32)), WrapNonce: [24]byte(fixtureBytes(63, 24))},
-			{KeyID: bytes.Clone(fixture.newDevice.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(87, 32)), WrapNonce: [24]byte(fixtureBytes(111, 24))},
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(31, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(63, 24)),
+			},
+			{
+				KeyID:            bytes.Clone(fixture.newDevice.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(87, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(111, 24)),
+			},
 		},
-		Plaintext: []byte("synthetic publication payload"), PublicationID: [16]byte(fixtureBytes(223, 16)), Nonce: [24]byte(fixtureBytes(239, 24)),
-		EpochFirstSeen: firstSeen, Clock: func() time.Time { return time.Unix(1_700_000_001, 0) },
+		Plaintext: []byte(
+			"synthetic publication payload",
+		),
+		PublicationID:  [16]byte(fixtureBytes(223, 16)),
+		Nonce:          [24]byte(fixtureBytes(239, 24)),
+		EpochFirstSeen: firstSeen,
+		Clock:          func() time.Time { return time.Unix(1_700_000_001, 0) },
 	}
 }
 
@@ -188,8 +253,20 @@ func TestPreparePublicationUsesPublisherWithoutRootPrivateKey(t *testing.T) {
 func TestPreparePublicationRejectsCertificateNotNamedByPolicy(t *testing.T) {
 	fixture := newDevicesFixture(t)
 	predecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
-	rogue := DeviceMaterial{DeviceID: "unlisted-publisher", KeyID: []byte("unlisted-key"), Signing: fixedSigningKey(77), Recipient: fixedX25519Key(78)}
-	certificate, err := certificateForEnrollment(fixture.bootstrap.Vault, rogue, RolePublisher, predecessor.EpochSeq, fixture.root, predecessor.ControlCID)
+	rogue := DeviceMaterial{
+		DeviceID:  "unlisted-publisher",
+		KeyID:     []byte("unlisted-key"),
+		Signing:   fixedSigningKey(77),
+		Recipient: fixedX25519Key(78),
+	}
+	certificate, err := certificateForEnrollment(
+		fixture.bootstrap.Vault,
+		rogue,
+		RolePublisher,
+		predecessor.EpochSeq,
+		fixture.root,
+		predecessor.ControlCID,
+	)
 	require.NoError(t, err)
 	predecessor.Certificates = append(predecessor.Certificates, certificate)
 	intent := publicationTestIntent(fixture, predecessor)
@@ -217,10 +294,24 @@ func TestValidatePublicationRejectsCountSkipAndRepeat(t *testing.T) {
 func TestPrepareRevocationAdvancesEpochAndWithdrawsDevice(t *testing.T) {
 	fixture, predecessor, _, _ := newPublicationTestFixture(t)
 	intent := TransitionIntent{
-		Kind: TransitionRevoke, Vault: fixture.bootstrap.Vault, Signer: fixture.root, RevokeDeviceID: fixture.newDevice.DeviceID,
-		ContentKey: fixtureBytes(31, 32), Recipients: [][]byte{predecessor.Certificates[0]},
-		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(91, 32)), WrapNonce: [24]byte(fixtureBytes(123, 24))}},
-		Plaintext: []byte("complete current snapshot"), PublicationID: [16]byte(fixtureBytes(157, 16)), Nonce: [24]byte(fixtureBytes(173, 24)),
+		Kind:           TransitionRevoke,
+		Vault:          fixture.bootstrap.Vault,
+		Signer:         fixture.root,
+		RevokeDeviceID: fixture.newDevice.DeviceID,
+		ContentKey:     fixtureBytes(31, 32),
+		Recipients:     [][]byte{predecessor.Certificates[0]},
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(91, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(123, 24)),
+			},
+		},
+		Plaintext: []byte(
+			"complete current snapshot",
+		),
+		PublicationID: [16]byte(fixtureBytes(157, 16)),
+		Nonce:         [24]byte(fixtureBytes(173, 24)),
 	}
 	transition, err := PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
@@ -244,10 +335,24 @@ func TestEnrollmentPreservesPredecessorRevocations(t *testing.T) {
 	fixture := newDevicesFixture(t)
 	firstPredecessor := predecessorAfterTransition(t, fixture.predecessor, fixture.transition)
 	revocation, err := PrepareTransition(firstPredecessor, TransitionIntent{
-		Kind: TransitionRevoke, Vault: fixture.bootstrap.Vault, Signer: fixture.root, RevokeDeviceID: fixture.newDevice.DeviceID,
-		ContentKey: fixtureBytes(31, 32), Recipients: [][]byte{firstPredecessor.Certificates[0]},
-		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(91, 32)), WrapNonce: [24]byte(fixtureBytes(123, 24))}},
-		Plaintext: []byte("state after revocation"), PublicationID: [16]byte(fixtureBytes(157, 16)), Nonce: [24]byte(fixtureBytes(169, 24)),
+		Kind:           TransitionRevoke,
+		Vault:          fixture.bootstrap.Vault,
+		Signer:         fixture.root,
+		RevokeDeviceID: fixture.newDevice.DeviceID,
+		ContentKey:     fixtureBytes(31, 32),
+		Recipients:     [][]byte{firstPredecessor.Certificates[0]},
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(91, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(123, 24)),
+			},
+		},
+		Plaintext: []byte(
+			"state after revocation",
+		),
+		PublicationID: [16]byte(fixtureBytes(157, 16)),
+		Nonce:         [24]byte(fixtureBytes(169, 24)),
 	})
 	require.NoError(t, err)
 	revokedPredecessor := predecessorAfterTransition(t, firstPredecessor, revocation)
@@ -255,15 +360,37 @@ func TestEnrollmentPreservesPredecessorRevocations(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, revokedControl.Revoked, 1)
 
-	next := DeviceMaterial{DeviceID: "device-next", KeyID: []byte("next-key"), Signing: fixedSigningKey(13), Recipient: fixedX25519Key(23)}
+	next := DeviceMaterial{
+		DeviceID:  "device-next",
+		KeyID:     []byte("next-key"),
+		Signing:   fixedSigningKey(13),
+		Recipient: fixedX25519Key(23),
+	}
 	enrollment, err := PrepareTransition(revokedPredecessor, TransitionIntent{
-		Kind: TransitionEnroll, Vault: fixture.bootstrap.Vault, Signer: fixture.root, NewDevice: &next, RequestedRole: RolePublisher,
-		ContentKey: fixtureBytes(41, 32), Recipients: cloneByteSlices(revokedPredecessor.Certificates),
+		Kind:          TransitionEnroll,
+		Vault:         fixture.bootstrap.Vault,
+		Signer:        fixture.root,
+		NewDevice:     &next,
+		RequestedRole: RolePublisher,
+		ContentKey:    fixtureBytes(41, 32),
+		Recipients:    cloneByteSlices(revokedPredecessor.Certificates),
 		Wraps: []RecipientWrapInput{
-			{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(51, 32)), WrapNonce: [24]byte(fixtureBytes(83, 24))},
-			{KeyID: bytes.Clone(next.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(115, 32)), WrapNonce: [24]byte(fixtureBytes(147, 24))},
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(51, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(83, 24)),
+			},
+			{
+				KeyID:            bytes.Clone(next.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(115, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(147, 24)),
+			},
 		},
-		Plaintext: []byte("state after the next enrollment"), PublicationID: [16]byte(fixtureBytes(179, 16)), Nonce: [24]byte(fixtureBytes(195, 24)),
+		Plaintext: []byte(
+			"state after the next enrollment",
+		),
+		PublicationID: [16]byte(fixtureBytes(179, 16)),
+		Nonce:         [24]byte(fixtureBytes(195, 24)),
 	})
 	require.NoError(t, err)
 	control, err := DecodeControl(enrollment.Control)
@@ -281,18 +408,44 @@ func TestEnrollmentPreservesPredecessorRevocations(t *testing.T) {
 func TestRevokedCertificateCannotPrepareLaterPublication(t *testing.T) {
 	fixture, predecessor, _, _ := newPublicationTestFixture(t)
 	intent := TransitionIntent{
-		Kind: TransitionRevoke, Vault: fixture.bootstrap.Vault, Signer: fixture.root, RevokeDeviceID: fixture.newDevice.DeviceID,
-		ContentKey: fixtureBytes(31, 32), Recipients: [][]byte{predecessor.Certificates[0]},
-		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(91, 32)), WrapNonce: [24]byte(fixtureBytes(123, 24))}},
-		Plaintext: []byte("complete current snapshot"), PublicationID: [16]byte(fixtureBytes(157, 16)), Nonce: [24]byte(fixtureBytes(173, 24)),
+		Kind:           TransitionRevoke,
+		Vault:          fixture.bootstrap.Vault,
+		Signer:         fixture.root,
+		RevokeDeviceID: fixture.newDevice.DeviceID,
+		ContentKey:     fixtureBytes(31, 32),
+		Recipients:     [][]byte{predecessor.Certificates[0]},
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(91, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(123, 24)),
+			},
+		},
+		Plaintext: []byte(
+			"complete current snapshot",
+		),
+		PublicationID: [16]byte(fixtureBytes(157, 16)),
+		Nonce:         [24]byte(fixtureBytes(173, 24)),
 	}
 	revocation, err := PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
 	after := predecessorAfterTransition(t, predecessor, revocation)
 	publicationIntent := PublicationIntent{
-		Vault: fixture.bootstrap.Vault, Signer: fixture.newDevice, ContentKey: fixtureBytes(121, 32),
-		Wraps:     []RecipientWrapInput{{KeyID: bytes.Clone(fixture.root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(201, 32)), WrapNonce: [24]byte(fixtureBytes(17, 24))}},
-		Plaintext: []byte("must not publish"), PublicationID: [16]byte(fixtureBytes(41, 16)), Nonce: [24]byte(fixtureBytes(57, 24)),
+		Vault:      fixture.bootstrap.Vault,
+		Signer:     fixture.newDevice,
+		ContentKey: fixtureBytes(121, 32),
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(fixture.root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(201, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(17, 24)),
+			},
+		},
+		Plaintext: []byte(
+			"must not publish",
+		),
+		PublicationID: [16]byte(fixtureBytes(41, 16)),
+		Nonce:         [24]byte(fixtureBytes(57, 24)),
 	}
 	_, err = PreparePublication(after, publicationIntent)
 	assert.ErrorIs(t, err, ErrPublicationAuthority)
@@ -315,7 +468,12 @@ func recipientDeviceIDs(recipients []PolicyRecipient) []string {
 }
 
 func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
-	root := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
+	root := DeviceMaterial{
+		DeviceID:  "device-root",
+		KeyID:     []byte("root-key"),
+		Signing:   fixedSigningKey(11),
+		Recipient: fixedX25519Key(21),
+	}
 	first, err := Bootstrap("vault-a", root)
 	require.NoError(t, err)
 	second, err := Bootstrap("vault-a", root)
@@ -324,7 +482,12 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	other, err := Bootstrap("vault-b", root)
 	require.NoError(t, err)
 	assert.NotEqual(t, first.Vault, other.Vault, "vault names must derive distinct identities")
-	anotherRoot := DeviceMaterial{DeviceID: "device-root", KeyID: []byte("root-key"), Signing: fixedSigningKey(12), Recipient: fixedX25519Key(21)}
+	anotherRoot := DeviceMaterial{
+		DeviceID:  "device-root",
+		KeyID:     []byte("root-key"),
+		Signing:   fixedSigningKey(12),
+		Recipient: fixedX25519Key(21),
+	}
 	otherRoot, err := Bootstrap("vault-a", anotherRoot)
 	require.NoError(t, err)
 	assert.NotEqual(t, first.Vault, otherRoot.Vault, "root device keys must derive distinct vault identities")
@@ -332,19 +495,40 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	certificate, err := DecodeCertificate(first.Certificate)
 	require.NoError(t, err)
 	assert.Equal(t, certificate.DeviceID, certificate.Issuer, "genesis root must be self-issued")
-	request := OpenRequest{Vault: first.Vault, EpochSeq: 0, TrustAnchor: first.Anchor, Certificates: [][]byte{first.Certificate}}
+	request := OpenRequest{
+		Vault:        first.Vault,
+		EpochSeq:     0,
+		TrustAnchor:  first.Anchor,
+		Certificates: [][]byte{first.Certificate},
+	}
 	require.NoError(t, verifyCertificateChain(certificate, request, 1, make(map[string]bool)))
 	policy, err := DecodePolicy(first.Policy)
 	require.NoError(t, err)
 	assert.Equal(t, [32]byte{}, policy.RecoveryAnchor, "bootstrap must not claim an offline recovery anchor")
 	policyPrefix, err := encodePolicyPrefix(policy)
 	require.NoError(t, err)
-	require.NoError(t, Verify("dottie/v1/sig-policy", objectSignaturePreimage(policyPrefix), policy.Signature[:], certificate.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		Verify(
+			"dottie/v1/sig-policy",
+			objectSignaturePreimage(policyPrefix),
+			policy.Signature[:],
+			certificate.SigningPublicKey[:],
+		),
+	)
 	control, err := DecodeControl(first.Control)
 	require.NoError(t, err)
 	controlPrefix, err := encodeControlPrefix(control)
 	require.NoError(t, err)
-	require.NoError(t, Verify("dottie/v1/sig-control", objectSignaturePreimage(controlPrefix), control.Signature[:], certificate.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		Verify(
+			"dottie/v1/sig-control",
+			objectSignaturePreimage(controlPrefix),
+			control.Signature[:],
+			certificate.SigningPublicKey[:],
+		),
+	)
 	checkpoint, err := DecodeCheckpoint(first.Checkpoint)
 	require.NoError(t, err)
 	assert.Equal(t, first.Anchor, checkpoint.Anchor, "checkpoint anchor")
@@ -352,7 +536,15 @@ func TestBootstrapIsDeterministicAndPinsSelfSignedRoot(t *testing.T) {
 	assert.Equal(t, root.KeyID, checkpoint.Signer.KeyID, "genesis checkpoint carries the root device key id")
 	checkpointPrefix, err := encodeCheckpointPrefix(checkpoint)
 	require.NoError(t, err)
-	require.NoError(t, Verify("dottie/v1/sig-checkpoint", objectSignaturePreimage(checkpointPrefix), checkpoint.Signature[:], certificate.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		Verify(
+			"dottie/v1/sig-checkpoint",
+			objectSignaturePreimage(checkpointPrefix),
+			checkpoint.Signature[:],
+			certificate.SigningPublicKey[:],
+		),
+	)
 }
 
 func TestPrepareTransitionFirstEnrollmentCreatesFirstSnapshot(t *testing.T) {
@@ -371,8 +563,18 @@ func TestPrepareTransitionFirstEnrollmentCreatesFirstSnapshot(t *testing.T) {
 	envelope, err := DecodeEnvelope(transition.Snapshot)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), envelope.EpochSeq, "first snapshot uses the successor epoch")
-	assert.Equal(t, fixture.intent.Plaintext, openTransitionSnapshot(t, fixture, transition, fixture.root), "root recipient opens the packed first snapshot")
-	assert.Equal(t, fixture.intent.Plaintext, openTransitionSnapshot(t, fixture, transition, fixture.newDevice), "enrolled recipient opens the packed first snapshot")
+	assert.Equal(
+		t,
+		fixture.intent.Plaintext,
+		openTransitionSnapshot(t, fixture, transition, fixture.root),
+		"root recipient opens the packed first snapshot",
+	)
+	assert.Equal(
+		t,
+		fixture.intent.Plaintext,
+		openTransitionSnapshot(t, fixture, transition, fixture.newDevice),
+		"enrolled recipient opens the packed first snapshot",
+	)
 	require.NoError(t, ValidateTransition(transition, fixture.predecessor))
 }
 
@@ -394,7 +596,12 @@ func TestPrepareTransitionReencryptsCallerStateForExistingHead(t *testing.T) {
 	head, err := DecodeHead(transition.Head)
 	require.NoError(t, err)
 	assert.Equal(t, predecessor.HeadCID, head.PrevHeadCID, "successor head links to the observed predecessor head")
-	assert.Equal(t, fixture.intent.Plaintext, openTransitionSnapshot(t, fixture, transition, fixture.root), "existing current state was re-encrypted")
+	assert.Equal(
+		t,
+		fixture.intent.Plaintext,
+		openTransitionSnapshot(t, fixture, transition, fixture.root),
+		"existing current state was re-encrypted",
+	)
 }
 
 func TestPrepareTransitionRejectsEscalationNonRootAndDuplicateDevice(t *testing.T) {
@@ -402,12 +609,12 @@ func TestPrepareTransitionRejectsEscalationNonRootAndDuplicateDevice(t *testing.
 	escalation := fixture.intent
 	escalation.RequestedRole = RoleRoot
 	_, err := PrepareTransition(fixture.predecessor, escalation)
-	assert.ErrorIs(t, err, ErrAuthorization, "enrollment cannot issue a root certificate")
+	require.ErrorIs(t, err, ErrAuthorization, "enrollment cannot issue a root certificate")
 
 	nonRoot := fixture.intent
 	nonRoot.Signer = fixture.newDevice
 	_, err = PrepareTransition(fixture.predecessor, nonRoot)
-	assert.ErrorIs(t, err, ErrAuthorization, "a non-root device cannot authorize enrollment")
+	require.ErrorIs(t, err, ErrAuthorization, "a non-root device cannot authorize enrollment")
 
 	duplicate := fixture.intent
 	duplicateDevice := fixture.newDevice
@@ -422,9 +629,30 @@ func TestEnrollmentTranscriptFingerprintBindsEveryRequestedField(t *testing.T) {
 	device := fixture.newDevice
 	signingPublic := device.Signing.Public().(ed25519.PublicKey)
 	recipientPublic := device.Recipient.PublicKey().Bytes()
-	base := EnrollmentTranscriptFingerprint(fixture.bootstrap.Vault, device.DeviceID, device.KeyID, RolePublisher, signingPublic, recipientPublic)
-	roleChange := EnrollmentTranscriptFingerprint(fixture.bootstrap.Vault, device.DeviceID, device.KeyID, RoleRestoreOnly, signingPublic, recipientPublic)
-	deviceChange := EnrollmentTranscriptFingerprint(fixture.bootstrap.Vault, "other-device", device.KeyID, RolePublisher, signingPublic, recipientPublic)
+	base := EnrollmentTranscriptFingerprint(
+		fixture.bootstrap.Vault,
+		device.DeviceID,
+		device.KeyID,
+		RolePublisher,
+		signingPublic,
+		recipientPublic,
+	)
+	roleChange := EnrollmentTranscriptFingerprint(
+		fixture.bootstrap.Vault,
+		device.DeviceID,
+		device.KeyID,
+		RoleRestoreOnly,
+		signingPublic,
+		recipientPublic,
+	)
+	deviceChange := EnrollmentTranscriptFingerprint(
+		fixture.bootstrap.Vault,
+		"other-device",
+		device.KeyID,
+		RolePublisher,
+		signingPublic,
+		recipientPublic,
+	)
 	assert.NotEqual(t, base, roleChange, "role substitution changes transcript fingerprint")
 	assert.NotEqual(t, base, deviceChange, "device substitution changes transcript fingerprint")
 }
@@ -467,17 +695,27 @@ func TestValidateTransitionRevalidationChecksReturnSpecificErrors(t *testing.T) 
 	})
 
 	t.Run("3 epoch increments exactly once", func(t *testing.T) {
-		transition := remakeTransition(t, fixture, fixture.transition, func(policy *Policy, _ *Certificate, _ *Envelope) {
-			policy.EpochSeq = 2
-		})
+		transition := remakeTransition(
+			t,
+			fixture,
+			fixture.transition,
+			func(policy *Policy, _ *Certificate, _ *Envelope) {
+				policy.EpochSeq = 2
+			},
+		)
 		err := ValidateTransition(transition, fixture.predecessor)
 		assert.ErrorIs(t, err, ErrTransitionEpoch, "check 3 error")
 	})
 
 	t.Run("4 policy ancestry", func(t *testing.T) {
-		transition := remakeTransition(t, fixture, fixture.transition, func(policy *Policy, _ *Certificate, _ *Envelope) {
-			policy.PrevPolicyDigest[0] ^= 1
-		})
+		transition := remakeTransition(
+			t,
+			fixture,
+			fixture.transition,
+			func(policy *Policy, _ *Certificate, _ *Envelope) {
+				policy.PrevPolicyDigest[0] ^= 1
+			},
+		)
 		err := ValidateTransition(transition, fixture.predecessor)
 		assert.ErrorIs(t, err, ErrPolicyAncestry, "check 4 error")
 	})
@@ -494,9 +732,14 @@ func TestValidateTransitionRevalidationChecksReturnSpecificErrors(t *testing.T) 
 	})
 
 	t.Run("6 certificate issuer and role", func(t *testing.T) {
-		transition := remakeTransition(t, fixture, fixture.transition, func(_ *Policy, certificate *Certificate, _ *Envelope) {
-			certificate.Issuer = "not-root"
-		})
+		transition := remakeTransition(
+			t,
+			fixture,
+			fixture.transition,
+			func(_ *Policy, certificate *Certificate, _ *Envelope) {
+				certificate.Issuer = "not-root"
+			},
+		)
 		err := ValidateTransition(transition, fixture.predecessor)
 		assert.ErrorIs(t, err, ErrCertificateAuthority, "check 6 error")
 	})
@@ -510,9 +753,14 @@ func TestValidateTransitionRevalidationChecksReturnSpecificErrors(t *testing.T) 
 	})
 
 	t.Run("8 snapshot old epoch", func(t *testing.T) {
-		transition := remakeTransition(t, fixture, fixture.transition, func(_ *Policy, _ *Certificate, envelope *Envelope) {
-			envelope.EpochSeq = 0
-		})
+		transition := remakeTransition(
+			t,
+			fixture,
+			fixture.transition,
+			func(_ *Policy, _ *Certificate, envelope *Envelope) {
+				envelope.EpochSeq = 0
+			},
+		)
 		err := ValidateTransition(transition, fixture.predecessor)
 		assert.ErrorIs(t, err, ErrSnapshotEpoch, "check 8 error")
 	})
@@ -552,7 +800,14 @@ func TestPrepareTransitionRejectsSnapshotUnderOldEpoch(t *testing.T) {
 
 func TestEnrollmentCertificateUsesRootSignerAndRequestedRole(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	encoded, err := certificateForEnrollment(fixture.bootstrap.Vault, fixture.newDevice, RolePublisher, 1, fixture.root, fixture.predecessor.ControlCID)
+	encoded, err := certificateForEnrollment(
+		fixture.bootstrap.Vault,
+		fixture.newDevice,
+		RolePublisher,
+		1,
+		fixture.root,
+		fixture.predecessor.ControlCID,
+	)
 	require.NoError(t, err)
 	certificate, err := DecodeCertificate(encoded)
 	require.NoError(t, err)
@@ -576,10 +831,20 @@ func openTransitionSnapshot(t *testing.T, fixture devicesFixture, transition Tra
 }
 
 func predecessorReference(predecessor Predecessor) PredecessorRef {
-	return PredecessorRef{ControlCID: bytes.Clone(predecessor.ControlCID), PolicyDigest: predecessor.PolicyDigest, EpochSeq: predecessor.EpochSeq, HeadCID: bytes.Clone(predecessor.HeadCID)}
+	return PredecessorRef{
+		ControlCID:   bytes.Clone(predecessor.ControlCID),
+		PolicyDigest: predecessor.PolicyDigest,
+		EpochSeq:     predecessor.EpochSeq,
+		HeadCID:      bytes.Clone(predecessor.HeadCID),
+	}
 }
 
-func remakeTransition(t *testing.T, fixture devicesFixture, transition Transition, mutate func(*Policy, *Certificate, *Envelope)) Transition {
+func remakeTransition(
+	t *testing.T,
+	fixture devicesFixture,
+	transition Transition,
+	mutate func(*Policy, *Certificate, *Envelope),
+) Transition {
 	t.Helper()
 	policy, err := DecodePolicy(transition.Policy)
 	require.NoError(t, err)
@@ -671,12 +936,14 @@ func TestValidateTransitionRejectsDeltaBeyondTheEnrollment(t *testing.T) {
 	addRoot := rebuildTransition(t, baseline, fixture.root.Signing, func(policy *Policy, control *Control) {
 		policy.Roles = append(policy.Roles, RoleBinding{DeviceID: "device-extra-root", Role: RoleRoot})
 		policy.Recipients = append(policy.Recipients, PolicyRecipient{
-			DeviceID: "device-extra-root", KeyID: extraRootDevice.KeyID, PublicKey: [32]byte(extraRootDevice.Recipient.PublicKey().Bytes()),
+			DeviceID:  "device-extra-root",
+			KeyID:     extraRootDevice.KeyID,
+			PublicKey: [32]byte(extraRootDevice.Recipient.PublicKey().Bytes()),
 		})
 		control.PolicyDigest = mustPolicyDigestForTest(t, *policy, fixture)
 	})
 	addRoot.Recipients = append(addRoot.Recipients, extraRootBytes)
-	assert.ErrorIs(t, ValidateTransition(addRoot, fixture.predecessor), ErrTransitionDelta,
+	require.ErrorIs(t, ValidateTransition(addRoot, fixture.predecessor), ErrTransitionDelta,
 		"an enrollment may not add a second root device")
 
 	roleSwap := rebuildTransition(t, baseline, fixture.root.Signing, func(policy *Policy, control *Control) {
@@ -687,7 +954,7 @@ func TestValidateTransitionRejectsDeltaBeyondTheEnrollment(t *testing.T) {
 		}
 		control.PolicyDigest = mustPolicyDigestForTest(t, *policy, fixture)
 	})
-	assert.ErrorIs(t, ValidateTransition(roleSwap, fixture.predecessor), ErrTransitionDelta,
+	require.ErrorIs(t, ValidateTransition(roleSwap, fixture.predecessor), ErrTransitionDelta,
 		"an enrollment may not change an existing role")
 
 	removal := rebuildTransition(t, baseline, fixture.root.Signing, func(policy *Policy, control *Control) {
@@ -741,7 +1008,7 @@ func TestValidateTransitionRejectsRevokedDeviceAndCheckpoint(t *testing.T) {
 	}
 	bundle.Recipients = replaced
 	bundle.Digest = ComputeTransitionDigest(bundle)
-	assert.ErrorIs(t, ValidateTransition(bundle, revokedPredecessor), ErrRevokedDevice,
+	require.ErrorIs(t, ValidateTransition(bundle, revokedPredecessor), ErrRevokedDevice,
 		"a device revoked at the successor epoch cannot be enrolled")
 
 	withCheckpoint := baseline
@@ -758,7 +1025,7 @@ func TestValidateTransitionRejectsUnauthenticatedPredecessorIdentifier(t *testin
 	claimed := baseline
 	claimed.Predecessor.ControlCID = fixtureCIDBytes(t)
 	claimed.Digest = ComputeTransitionDigest(claimed)
-	assert.ErrorIs(t, ValidateTransition(claimed, fixture.predecessor), ErrObservedRevision,
+	require.ErrorIs(t, ValidateTransition(claimed, fixture.predecessor), ErrObservedRevision,
 		"a bundle claiming a different predecessor is rejected at check 1")
 
 	unauthenticated := fixture.predecessor
@@ -775,7 +1042,12 @@ func mustPolicyDigestForTest(t *testing.T, policy Policy, fixture devicesFixture
 	return digest
 }
 
-func rebuildTransition(t *testing.T, baseline Transition, rootKey ed25519.PrivateKey, mutate func(*Policy, *Control)) Transition {
+func rebuildTransition(
+	t *testing.T,
+	baseline Transition,
+	rootKey ed25519.PrivateKey,
+	mutate func(*Policy, *Control),
+) Transition {
 	t.Helper()
 	policy, err := DecodePolicy(baseline.Policy)
 	require.NoError(t, err)

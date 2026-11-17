@@ -15,8 +15,18 @@ func TestScopeGrantFailuresPreventSessionStorage(t *testing.T) {
 		required  []string
 		granted   string
 	}{
-		{name: "missing required", requested: []string{"atproto", "repo:com.example.settings"}, required: []string{"atproto", "repo:com.example.settings"}, granted: "atproto"},
-		{name: "extra granted", requested: []string{"atproto"}, required: []string{"atproto"}, granted: "atproto repo:com.example.unrequested"},
+		{
+			name:      "missing required",
+			requested: []string{"atproto", "repo:com.example.settings"},
+			required:  []string{"atproto", "repo:com.example.settings"},
+			granted:   "atproto",
+		},
+		{
+			name:      "extra granted",
+			requested: []string{"atproto"},
+			required:  []string{"atproto"},
+			granted:   "atproto repo:com.example.unrequested",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -27,12 +37,16 @@ func TestScopeGrantFailuresPreventSessionStorage(t *testing.T) {
 				require.NoError(t, err)
 			}
 			defer flow.Close()
-			callbackFlow(t, flow, url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"scope-test-code"}})
+			callbackFlow(
+				t,
+				flow,
+				url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"scope-test-code"}},
+			)
 			if _, err := flow.Wait(context.Background()); err == nil {
 				require.Error(t, err, "invalid scope grant was accepted")
 			}
 			if len(store.items) != 0 {
-				require.Len(t, store.items, 0, "invalid scope grant was stored")
+				require.Empty(t, store.items, "invalid scope grant was stored")
 			}
 		})
 	}

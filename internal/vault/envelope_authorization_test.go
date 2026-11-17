@@ -20,12 +20,21 @@ func signTestEnvelope(t *testing.T, envelope Envelope, key ed25519.PrivateKey) E
 	return envelope
 }
 
-func signedControlForOpenTest(t *testing.T, fixture envelopeFixture, mutate func(*Control), key ed25519.PrivateKey) []byte {
+func signedControlForOpenTest(
+	t *testing.T,
+	fixture envelopeFixture,
+	mutate func(*Control),
+	key ed25519.PrivateKey,
+) []byte {
 	t.Helper()
 	control := Control{
-		Vault: fixture.policy.Vault, EpochSeq: fixture.policy.EpochSeq,
+		Vault:        fixture.policy.Vault,
+		EpochSeq:     fixture.policy.EpochSeq,
 		PolicyDigest: fixture.prepared.PolicyDigest,
-		Signer:       Signer{DeviceID: fixture.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.rootCertificate.KeyID)},
+		Signer: Signer{
+			DeviceID: fixture.rootCertificate.DeviceID,
+			KeyID:    bytes.Clone(fixture.rootCertificate.KeyID),
+		},
 	}
 	if mutate != nil {
 		mutate(&control)
@@ -43,8 +52,8 @@ func TestOpenRejectsEnvelopeVaultRequestMismatch(t *testing.T) {
 	hostile.Vault[0] ^= 1
 	hostile = signTestEnvelope(t, hostile, fixture.publisherKey)
 	plaintext, err = Open(hostile, fixture.openRequest)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "vault, epoch_seq, or policy_digest")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "vault, epoch_seq, or policy_digest")
 	assert.Nil(t, plaintext)
 }
 
@@ -59,8 +68,8 @@ func TestOpenRejectsPolicyBytesDigestMismatch(t *testing.T) {
 	hostile := fixture.openRequest
 	hostile.Policy = signPolicyValue(t, policy, fixture.signingKey)
 	plaintext, err = Open(fixture.envelope, hostile)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "policy_digest")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "policy_digest")
 	assert.Nil(t, plaintext)
 }
 
@@ -73,8 +82,8 @@ func TestOpenRejectsPolicyVaultRequestMismatch(t *testing.T) {
 	hostile := fixture.openRequest
 	hostile.Vault[0] ^= 1
 	plaintext, err = Open(fixture.envelope, hostile)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "policy vault")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "policy vault")
 	assert.Nil(t, plaintext)
 }
 
@@ -99,8 +108,8 @@ func TestOpenRequiresRootPolicySigner(t *testing.T) {
 	request.Policy = policyBytes
 	request.PolicyDigest = policyDigest
 	plaintext, err = Open(envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "policy signer")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "policy signer")
 	assert.Nil(t, plaintext)
 }
 
@@ -118,8 +127,8 @@ func TestOpenRequiresRootControlSigner(t *testing.T) {
 	control.Signer = Signer{DeviceID: fixture.certificate.DeviceID, KeyID: bytes.Clone(fixture.certificate.KeyID)}
 	request.Control = signControlValue(t, control, fixture.publisherKey)
 	plaintext, err = Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "control signer")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "control signer")
 	assert.Nil(t, plaintext)
 }
 
@@ -131,10 +140,15 @@ func TestOpenRejectsControlVaultRequestMismatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fixture.prepared.Plaintext, plaintext)
 
-	request.Control = signedControlForOpenTest(t, fixture, func(control *Control) { control.Vault[0] ^= 1 }, fixture.signingKey)
+	request.Control = signedControlForOpenTest(
+		t,
+		fixture,
+		func(control *Control) { control.Vault[0] ^= 1 },
+		fixture.signingKey,
+	)
 	plaintext, err = Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "control vault or epoch_seq")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "control vault or epoch_seq")
 	assert.Nil(t, plaintext)
 }
 
@@ -146,10 +160,15 @@ func TestOpenRejectsControlEpochRequestMismatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fixture.prepared.Plaintext, plaintext)
 
-	request.Control = signedControlForOpenTest(t, fixture, func(control *Control) { control.EpochSeq++ }, fixture.signingKey)
+	request.Control = signedControlForOpenTest(
+		t,
+		fixture,
+		func(control *Control) { control.EpochSeq++ },
+		fixture.signingKey,
+	)
 	plaintext, err = Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "control vault or epoch_seq")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "control vault or epoch_seq")
 	assert.Nil(t, plaintext)
 }
 
@@ -161,10 +180,15 @@ func TestOpenRejectsControlPolicyDigestRequestMismatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fixture.prepared.Plaintext, plaintext)
 
-	request.Control = signedControlForOpenTest(t, fixture, func(control *Control) { control.PolicyDigest[0] ^= 1 }, fixture.signingKey)
+	request.Control = signedControlForOpenTest(
+		t,
+		fixture,
+		func(control *Control) { control.PolicyDigest[0] ^= 1 },
+		fixture.signingKey,
+	)
 	plaintext, err = Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "control policy_digest")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "control policy_digest")
 	assert.Nil(t, plaintext)
 }
 
@@ -177,11 +201,13 @@ func TestOpenRevocationMatchesCertificateDevice(t *testing.T) {
 	assert.Equal(t, fixture.prepared.Plaintext, plaintext)
 
 	request.Control = signedControlForOpenTest(t, fixture, func(control *Control) {
-		control.Revoked = []RevokedDevice{{DeviceID: fixture.certificate.DeviceID, CertEpoch: fixture.certificate.CertEpoch}}
+		control.Revoked = []RevokedDevice{
+			{DeviceID: fixture.certificate.DeviceID, CertEpoch: fixture.certificate.CertEpoch},
+		}
 	}, fixture.signingKey)
 	plaintext, err = Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "signer revocation")
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "signer revocation")
 	assert.Nil(t, plaintext)
 
 	request.Control = signedControlForOpenTest(t, fixture, func(control *Control) {
@@ -205,7 +231,7 @@ func TestCertificateChainRequiresRequestedVault(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{fixture.rootCertificateBytes, encoded}
 	err = verifyCertificateChain(leaf, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "certificate chain")
 }
 
@@ -222,7 +248,7 @@ func TestCertificateChainRequiresRootRole(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{encoded}
 	err = verifyCertificateChain(root, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "root certificate")
 }
 
@@ -239,7 +265,7 @@ func TestCertificateChainRequiresRootSignerDeviceIdentity(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{encoded}
 	err = verifyCertificateChain(root, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "root certificate")
 }
 
@@ -256,7 +282,7 @@ func TestCertificateChainRequiresRootSignerKeyIdentity(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{encoded}
 	err = verifyCertificateChain(root, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "root certificate")
 }
 
@@ -273,7 +299,7 @@ func TestCertificateChainRequiresLeafSignerDeviceToMatchIssuer(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{fixture.rootCertificateBytes, encoded}
 	err = verifyCertificateChain(leaf, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "certificate issuer")
 }
 
@@ -290,7 +316,7 @@ func TestCertificateChainRequiresLeafSignerKeyToMatchIssuer(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{fixture.rootCertificateBytes, encoded}
 	err = verifyCertificateChain(leaf, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "certificate issuer")
 }
 
@@ -307,7 +333,7 @@ func TestAuthorizedSignerRequiresPolicyRoleToMatchCertificate(t *testing.T) {
 		}
 	}
 	_, err = authorizedSigner(fixture.envelope, fixture.openRequest, policy)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "signer role")
 }
 
@@ -322,19 +348,26 @@ func TestAuthorizedSignerRequiresPurposeAllowedForRole(t *testing.T) {
 	hostile, err := SealPrepared(prepared)
 	require.NoError(t, err)
 	_, err = authorizedSigner(hostile, fixture.openRequest, fixture.policy)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "signer role")
 }
 
 func TestSealAuthorizedRequiresCertificateVaultToMatchPolicy(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	request := SealRequest{
-		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault, PublicationID: fixture.prepared.PublicationID,
-		EpochSeq: fixture.policy.EpochSeq, PolicyDigest: fixture.prepared.PolicyDigest,
-		Parent: bytes.Clone(fixture.prepared.Parent), DeviceID: fixture.certificate.DeviceID,
-		KeyID: bytes.Clone(fixture.certificate.KeyID), Plaintext: bytes.Clone(fixture.prepared.Plaintext),
-		SigningKey: fixture.publisherKey,
-		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+		Purpose:       PurposeSnapshot,
+		Vault:         fixture.policy.Vault,
+		PublicationID: fixture.prepared.PublicationID,
+		EpochSeq:      fixture.policy.EpochSeq,
+		PolicyDigest:  fixture.prepared.PolicyDigest,
+		Parent:        bytes.Clone(fixture.prepared.Parent),
+		DeviceID:      fixture.certificate.DeviceID,
+		KeyID:         bytes.Clone(fixture.certificate.KeyID),
+		Plaintext:     bytes.Clone(fixture.prepared.Plaintext),
+		SigningKey:    fixture.publisherKey,
+		Recipients: []RecipientPublicKey{
+			{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()},
+		},
 	}
 	_, err := SealAuthorized(request, fixture.certificate, fixture.policy)
 	require.NoError(t, err)
@@ -342,19 +375,26 @@ func TestSealAuthorizedRequiresCertificateVaultToMatchPolicy(t *testing.T) {
 	certificate := fixture.certificate
 	certificate.Vault[0] ^= 1
 	_, err = SealAuthorized(request, certificate, fixture.policy)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "seal vault")
 }
 
 func TestSealAuthorizedRequiresPolicyRoleToMatchCertificateRole(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	request := SealRequest{
-		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault, PublicationID: fixture.prepared.PublicationID,
-		EpochSeq: fixture.policy.EpochSeq, PolicyDigest: fixture.prepared.PolicyDigest,
-		Parent: bytes.Clone(fixture.prepared.Parent), DeviceID: fixture.certificate.DeviceID,
-		KeyID: bytes.Clone(fixture.certificate.KeyID), Plaintext: bytes.Clone(fixture.prepared.Plaintext),
-		SigningKey: fixture.publisherKey,
-		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+		Purpose:       PurposeSnapshot,
+		Vault:         fixture.policy.Vault,
+		PublicationID: fixture.prepared.PublicationID,
+		EpochSeq:      fixture.policy.EpochSeq,
+		PolicyDigest:  fixture.prepared.PolicyDigest,
+		Parent:        bytes.Clone(fixture.prepared.Parent),
+		DeviceID:      fixture.certificate.DeviceID,
+		KeyID:         bytes.Clone(fixture.certificate.KeyID),
+		Plaintext:     bytes.Clone(fixture.prepared.Plaintext),
+		SigningKey:    fixture.publisherKey,
+		Recipients: []RecipientPublicKey{
+			{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()},
+		},
 	}
 	_, err := SealAuthorized(request, fixture.certificate, fixture.policy)
 	require.NoError(t, err)
@@ -366,19 +406,27 @@ func TestSealAuthorizedRequiresPolicyRoleToMatchCertificateRole(t *testing.T) {
 		}
 	}
 	_, err = SealAuthorized(request, fixture.certificate, policy)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.ErrorContains(t, err, "seal role")
 }
 
 func TestResolveTrustedCertificateRequiresRequestedKeyID(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
-	certificate, err := resolveTrustedCertificate(fixture.certificate.DeviceID, fixture.certificate.KeyID, fixture.openRequest)
+	certificate, err := resolveTrustedCertificate(
+		fixture.certificate.DeviceID,
+		fixture.certificate.KeyID,
+		fixture.openRequest,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, fixture.certificate.KeyID, certificate.KeyID)
 
-	certificate, err = resolveTrustedCertificate(fixture.certificate.DeviceID, []byte("different-key"), fixture.openRequest)
-	assert.ErrorIs(t, err, ErrAuthorization)
-	assert.ErrorContains(t, err, "signer certificate")
+	certificate, err = resolveTrustedCertificate(
+		fixture.certificate.DeviceID,
+		[]byte("different-key"),
+		fixture.openRequest,
+	)
+	require.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorContains(t, err, "signer certificate")
 	assert.Equal(t, Certificate{}, certificate)
 }
 
@@ -400,7 +448,7 @@ func TestOpenRejectsPolicySignerWithoutRoleBinding(t *testing.T) {
 	request.PolicyDigest = digest
 
 	plaintext, err := Open(envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.Nil(t, plaintext)
 }
 

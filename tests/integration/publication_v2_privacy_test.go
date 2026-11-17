@@ -18,6 +18,9 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -28,8 +31,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -85,7 +86,9 @@ func publicationPrivacyReviewAnchor(nonce string) []byte {
 }
 
 func publicationPrivacyFileContent(nonce string) []byte {
-	return []byte(string(publicationPrivacyPlaintext(nonce)) + "\n" + string(publicationPrivacyCredential(nonce)) + "\n")
+	return []byte(
+		string(publicationPrivacyPlaintext(nonce)) + "\n" + string(publicationPrivacyCredential(nonce)) + "\n",
+	)
 }
 
 func publicationPrivacyRevisionTwoContent(nonce string) []byte {
@@ -148,7 +151,11 @@ type publicationPrivacyFixture struct {
 	publicationN  uint64
 }
 
-func newPublicationPrivacyFixture(t *testing.T, reviewAnchor []byte, control *publicationPrivacyScanControl) *publicationPrivacyFixture {
+func newPublicationPrivacyFixture(
+	t *testing.T,
+	reviewAnchor []byte,
+	control *publicationPrivacyScanControl,
+) *publicationPrivacyFixture {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -164,16 +171,25 @@ func newPublicationPrivacyFixture(t *testing.T, reviewAnchor []byte, control *pu
 	method := pds.VerificationMethod()
 	revisionReader := atproto.RevisionReader{
 		Transport: pds, DIDDocumentID: publicationPrivacyDID,
-		VerificationMethods: []atproto.VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 	binding := publicationstate.Binding{
 		AccountDID: publicationPrivacyDID, Backend: publicationstate.BackendPublicRepo,
 		Repository: "at://" + publicationPrivacyDID, Vault: [32]byte{0x70, 0x72, 0x69},
 	}
 	adapter, err := service.NewATProtoMaterialTransport(service.ATProtoMaterialConfig{
-		Binding: binding, DID: publicationPrivacyDID, Reader: revisionReader, Transport: transport, BlobUploadLimit: publicationPrivacyBlobLimit,
+		Binding:         binding,
+		DID:             publicationPrivacyDID,
+		Reader:          revisionReader,
+		Transport:       transport,
+		BlobUploadLimit: publicationPrivacyBlobLimit,
 	})
 	require.NoError(t, err)
 	blobs := atproto.VaultReader{Transport: pds, Budgets: atproto.DefaultBudgets()}
@@ -247,14 +263,21 @@ func (fixture *publicationPrivacyFixture) request() service.PublicationPushReque
 	}
 }
 
-func (fixture *publicationPrivacyFixture) publish(t *testing.T) (service.MaterialPublishResult, service.PublicationPushPreparation, error) {
+func (fixture *publicationPrivacyFixture) publish(
+	t *testing.T,
+) (service.MaterialPublishResult, service.PublicationPushPreparation, error) {
 	t.Helper()
 	ctx := context.Background()
 	request := fixture.request()
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, request)
 	require.NoError(t, err)
 	require.False(t, preparation.NoOp)
-	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, request, preparation, preparation.Proposal.Confirmation)
+	result, err := fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		request,
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	return result, preparation, err
 }
 
@@ -265,7 +288,9 @@ func (fixture *publicationPrivacyFixture) publishCandidatePayload(t *testing.T) 
 	return bytes.Clone(preparation.Proposal.Candidate.Payload)
 }
 
-func (fixture *publicationPrivacyFixture) prepareOnly(t *testing.T) (service.PublicationPushRequest, service.PublicationPushPreparation, error) {
+func (fixture *publicationPrivacyFixture) prepareOnly(
+	t *testing.T,
+) (service.PublicationPushRequest, service.PublicationPushPreparation, error) {
 	t.Helper()
 	request := fixture.request()
 	preparation, err := fixture.coordinator.PreparePublicationPush(context.Background(), request)
@@ -282,7 +307,12 @@ func (fixture *publicationPrivacyFixture) publishRejected(t *testing.T) (service
 	request, preparation, err := fixture.prepareOnly(t)
 	require.NoError(t, err)
 	payload := bytes.Clone(preparation.Proposal.Candidate.Payload)
-	result, err := fixture.coordinator.ConfirmPublicationPush(ctx, request, preparation, preparation.Proposal.Confirmation)
+	result, err := fixture.coordinator.ConfirmPublicationPush(
+		ctx,
+		request,
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	return result, payload, err
 }
 
@@ -340,14 +370,22 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 			publication.HeadNSID + "/self",
 			publication.SnapshotNSID + "/0000000000000000",
 		}, publicationPrivacyRecordKeys(t, fixture.pds))
-		assert.Equal(t, []string{publication.HeadNSID, publication.SnapshotNSID}, publicationPrivacyCollections(t, fixture.pds))
+		assert.Equal(
+			t,
+			[]string{publication.HeadNSID, publication.SnapshotNSID},
+			publicationPrivacyCollections(t, fixture.pds),
+		)
 		for _, legacy := range publicationPrivacyLegacyCollections() {
 			assert.NotContains(t, publicationPrivacyCollections(t, fixture.pds), legacy)
 		}
-		require.Equal(t, 2, len(fixture.pds.CurrentRevision().Records))
+		require.Len(t, fixture.pds.CurrentRevision().Records, 2)
 		publicationPrivacyAssertRecordSchema(t, fixture)
 
-		require.Empty(t, publicationPrivacyScan(t, fixture, canaries.allCanaries), "candidate bytes surfaced in published repository records")
+		require.Empty(
+			t,
+			publicationPrivacyScan(t, fixture, canaries.allCanaries),
+			"candidate bytes surfaced in published repository records",
+		)
 
 		terminal := fixture.terminalSnapshot(t)
 		terminalKey, err := publication.SequenceKey(terminal.PublicationSeq)
@@ -355,7 +393,12 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		assert.Equal(t, "0000000000000000", terminalKey)
 		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, terminal.Blob.CID)}, fixture.pds.StoredBlobCIDs())
 		publicationPrivacyAssertBlobReferences(t, fixture)
-		publicationPrivacyAssertBlobPacking(t, fixture, terminal.Blob, [][]byte{canaries.plaintext, canaries.credential})
+		publicationPrivacyAssertBlobPacking(
+			t,
+			fixture,
+			terminal.Blob,
+			[][]byte{canaries.plaintext, canaries.credential},
+		)
 		publicationPrivacyAssertRetainedReviewHasNoCandidateBytes(t, preparation, canaries)
 
 		fixture.writeTrackedFile(t, publicationPrivacyRevisionTwoContent(nonce))
@@ -367,12 +410,20 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 			publication.SnapshotNSID + "/0000000000000000",
 			publication.SnapshotNSID + "/0000000000000001",
 		}, publicationPrivacyRecordKeys(t, fixture.pds))
-		assert.Equal(t, []string{publication.HeadNSID, publication.SnapshotNSID}, publicationPrivacyCollections(t, fixture.pds))
+		assert.Equal(
+			t,
+			[]string{publication.HeadNSID, publication.SnapshotNSID},
+			publicationPrivacyCollections(t, fixture.pds),
+		)
 		for _, legacy := range publicationPrivacyLegacyCollections() {
 			assert.NotContains(t, publicationPrivacyCollections(t, fixture.pds), legacy)
 		}
 		publicationPrivacyAssertRecordSchema(t, fixture)
-		require.Empty(t, publicationPrivacyScan(t, fixture, canaries.allCanaries), "candidate bytes surfaced in published repository records")
+		require.Empty(
+			t,
+			publicationPrivacyScan(t, fixture, canaries.allCanaries),
+			"candidate bytes surfaced in published repository records",
+		)
 		require.Len(t, fixture.pds.StoredBlobCIDs(), 2)
 		publicationPrivacyAssertBlobReferences(t, fixture)
 		terminal = fixture.terminalSnapshot(t)
@@ -391,19 +442,36 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
 
 		_, _, err := fixture.publish(t)
-		assert.Error(t, err, "a head record carrying an unrecognized field must not resolve as a verified repository view")
+		require.Error(
+			t,
+			err,
+			"a head record carrying an unrecognized field must not resolve as a verified repository view",
+		)
 		require.Equal(t, []string{
 			publication.HeadNSID + "/self",
 			publication.SnapshotNSID + "/0000000000000000",
 		}, publicationPrivacyRecordKeys(t, fixture.pds))
 
-		scanned := append(append([]publicationPrivacyCanary{}, canaries.allCanaries...), publicationPrivacyCanary{name: "injected-record-canary", value: []byte(control.value)})
+		scanned := append(
+			append([]publicationPrivacyCanary{}, canaries.allCanaries...),
+			publicationPrivacyCanary{name: "injected-record-canary", value: []byte(control.value)},
+		)
 		findings := publicationPrivacyScan(t, fixture, scanned)
 		require.NotEmpty(t, findings, "the canary scan reported nothing for a record that carries an injected canary")
 		for _, finding := range findings {
-			assert.Equal(t, "injected-record-canary", finding.canary, "unexpected canary reported in records: %s", finding)
+			assert.Equal(
+				t,
+				"injected-record-canary",
+				finding.canary,
+				"unexpected canary reported in records: %s",
+				finding,
+			)
 		}
-		assert.Contains(t, publicationPrivacyFindingNames(findings), "injected-record-canary@"+publication.HeadNSID+"/self")
+		assert.Contains(
+			t,
+			publicationPrivacyFindingNames(findings),
+			"injected-record-canary@"+publication.HeadNSID+"/self",
+		)
 	})
 
 	t.Run("blob upload rejected", func(t *testing.T) {
@@ -411,12 +479,18 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextUploadBlobStatus: 413, RejectNextUploadBlobCode: "BlobTooLarge"})
+		fixture.pds.SetHooks(
+			atprototest.MemoryPDSHooks{
+				CanonicalizeBlobMIMEType:   true,
+				RejectNextUploadBlobStatus: 413,
+				RejectNextUploadBlobCode:   "BlobTooLarge",
+			},
+		)
 
 		result, _, err := fixture.publish(t)
 		require.Error(t, err, "a rejected blob upload must refuse the publication")
 		publicationPrivacyAssertTypedFailure(t, err, "upload", "upload_failed")
-		assert.ErrorIs(t, err, atproto.ErrCandidateExceedsBlobUploadLimit)
+		require.ErrorIs(t, err, atproto.ErrCandidateExceedsBlobUploadLimit)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 		assert.Empty(t, fixture.pds.StoredBlobCIDs())
 		assert.Empty(t, fixture.pds.CurrentRevision().Records)
@@ -433,14 +507,20 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesStatus: 400, RejectNextApplyWritesCode: "InvalidRecord"})
+		fixture.pds.SetHooks(
+			atprototest.MemoryPDSHooks{
+				CanonicalizeBlobMIMEType:    true,
+				RejectNextApplyWritesStatus: 400,
+				RejectNextApplyWritesCode:   "InvalidRecord",
+			},
+		)
 
 		result, candidatePayload, err := fixture.publishRejected(t)
 		require.Error(t, err, "a rejected record batch must refuse the publication")
 		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_rejected")
-		assert.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
-		assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
-		assert.NotErrorIs(t, err, atproto.ErrAmbiguousTransport)
+		require.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
+		require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
+		require.NotErrorIs(t, err, atproto.ErrAmbiguousTransport)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 
 		candidateBlobCID, err := publication.RawPayloadCID(candidatePayload)
@@ -448,11 +528,24 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		stored := fixture.pds.StoredBlobCIDs()
 		require.Len(t, stored, 1)
 		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidateBlobCID)}, stored)
-		assert.True(t, bytes.Contains(candidatePayload, canaries.plaintext), "the retained provider blob is not the candidate payload")
+		assert.True(
+			t,
+			bytes.Contains(candidatePayload, canaries.plaintext),
+			"the retained provider blob is not the candidate payload",
+		)
 		assert.False(t, fixture.pds.BlobIsLive(stored[0]), "the retained plaintext blob must be unattached")
-		assert.False(t, fixture.pds.PubliclyRetrievable(stored[0]), "the synthetic provider serves only referenced blobs")
-		_, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidateBlobCID, int64(len(candidatePayload)))
-		assert.ErrorIs(t, fetchErr, atproto.ErrReadBlobMissing)
+		assert.False(
+			t,
+			fixture.pds.PubliclyRetrievable(stored[0]),
+			"the synthetic provider serves only referenced blobs",
+		)
+		_, fetchErr := fixture.blobs.FetchBlob(
+			context.Background(),
+			publicationPrivacyDID,
+			candidateBlobCID,
+			int64(len(candidatePayload)),
+		)
+		require.ErrorIs(t, fetchErr, atproto.ErrReadBlobMissing)
 
 		assert.Empty(t, fixture.pds.CurrentRevision().Records, "a rejected batch must leave no record behind")
 		require.Empty(t, publicationPrivacyScan(t, fixture, canaries.allCanaries))
@@ -474,14 +567,16 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesAfterBlobProcessing: true})
+		fixture.pds.SetHooks(
+			atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesAfterBlobProcessing: true},
+		)
 
 		result, candidatePayload, err := fixture.publishRejected(t)
 		require.Error(t, err, "a rejected record batch must refuse the publication")
 		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_rejected")
-		assert.ErrorIs(t, err, atproto.ErrPublicationQuota)
-		assert.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
-		assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
+		require.ErrorIs(t, err, atproto.ErrPublicationQuota)
+		require.ErrorIs(t, err, service.ErrMaterialSubmissionRejected)
+		require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 
 		candidateBlobCID, err := publication.RawPayloadCID(candidatePayload)
@@ -490,8 +585,17 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		require.Len(t, stored, 1)
 		assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, candidateBlobCID)}, stored)
 		assert.False(t, fixture.pds.BlobIsLive(stored[0]))
-		assert.True(t, fixture.pds.PubliclyRetrievable(stored[0]), "the modeled post-processing window must expose the unattached plaintext blob")
-		retrieved, fetchErr := fixture.blobs.FetchBlob(context.Background(), publicationPrivacyDID, candidateBlobCID, int64(len(candidatePayload)))
+		assert.True(
+			t,
+			fixture.pds.PubliclyRetrievable(stored[0]),
+			"the modeled post-processing window must expose the unattached plaintext blob",
+		)
+		retrieved, fetchErr := fixture.blobs.FetchBlob(
+			context.Background(),
+			publicationPrivacyDID,
+			candidateBlobCID,
+			int64(len(candidatePayload)),
+		)
 		require.NoError(t, fetchErr)
 		assert.True(t, bytes.Equal(candidatePayload, retrieved))
 		assert.Empty(t, fixture.pds.CurrentRevision().Records, "a rejected batch must leave no record behind")
@@ -506,24 +610,35 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
-		fixture.pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, LoseNextApplyWritesResponse: true})
+		fixture.pds.SetHooks(
+			atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, LoseNextApplyWritesResponse: true},
+		)
 
 		result, _, err := fixture.publish(t)
 		require.Error(t, err, "a lost commit response must not be reported as a success")
 		publicationPrivacyAssertTypedFailure(t, err, "submission", "submission_unresolved")
-		assert.ErrorIs(t, err, atproto.ErrAmbiguousTransport)
-		assert.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
+		require.ErrorIs(t, err, atproto.ErrAmbiguousTransport)
+		require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
 		publicationPrivacyAssertNoCanaryText(t, canaries, err.Error())
 
 		assert.Equal(t, []string{
 			publication.HeadNSID + "/self",
 			publication.SnapshotNSID + "/0000000000000000",
 		}, publicationPrivacyRecordKeys(t, fixture.pds))
-		require.Empty(t, publicationPrivacyScan(t, fixture, canaries.allCanaries), "candidate bytes surfaced in published repository records")
+		require.Empty(
+			t,
+			publicationPrivacyScan(t, fixture, canaries.allCanaries),
+			"candidate bytes surfaced in published repository records",
+		)
 		publicationPrivacyAssertRecordSchema(t, fixture)
 		publicationPrivacyAssertBlobReferences(t, fixture)
 		terminal := fixture.terminalSnapshot(t)
-		publicationPrivacyAssertBlobPacking(t, fixture, terminal.Blob, [][]byte{canaries.plaintext, canaries.credential})
+		publicationPrivacyAssertBlobPacking(
+			t,
+			fixture,
+			terminal.Blob,
+			[][]byte{canaries.plaintext, canaries.credential},
+		)
 		assert.False(t, fixture.floorPresent(t), "an ambiguous commit must not advance the accepted floor")
 		attempt := fixture.attempt(t, result.Attempt.ID)
 		assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, attempt.Lifecycle)
@@ -540,7 +655,18 @@ func publicationPrivacyLegacyCollections() []string {
 }
 
 func publicationPrivacySnapshotRecordKeys() []string {
-	return []string{"$type", "blob", "mimeType", "parent", "publicationId", "publicationSeq", "ref", "schemaVersion", "size", "vault"}
+	return []string{
+		"$type",
+		"blob",
+		"mimeType",
+		"parent",
+		"publicationId",
+		"publicationSeq",
+		"ref",
+		"schemaVersion",
+		"size",
+		"vault",
+	}
 }
 
 func publicationPrivacyHeadRecordKeys() []string {
@@ -610,14 +736,21 @@ func publicationPrivacyBlobIdentifier(t *testing.T, blobCID []byte) string {
 	return identifier.String()
 }
 
-func publicationPrivacyScan(t *testing.T, fixture *publicationPrivacyFixture, canaries []publicationPrivacyCanary) []publicationPrivacyFinding {
+func publicationPrivacyScan(
+	t *testing.T,
+	fixture *publicationPrivacyFixture,
+	canaries []publicationPrivacyCanary,
+) []publicationPrivacyFinding {
 	t.Helper()
 	findings := make([]publicationPrivacyFinding, 0)
 	for _, record := range fixture.pds.CurrentRevision().Records {
 		for _, canary := range canaries {
 			if bytes.Contains(record.Data, canary.value) {
 				findings = append(findings, publicationPrivacyFinding{
-					canary: canary.name, collection: record.Collection, rkey: record.RKey, surface: "stored-record-cbor",
+					canary:     canary.name,
+					collection: record.Collection,
+					rkey:       record.RKey,
+					surface:    "stored-record-cbor",
 				})
 			}
 		}
@@ -626,7 +759,10 @@ func publicationPrivacyScan(t *testing.T, fixture *publicationPrivacyFixture, ca
 		for _, canary := range canaries {
 			if bytes.Contains(served.value, canary.value) {
 				findings = append(findings, publicationPrivacyFinding{
-					canary: canary.name, collection: served.collection, rkey: served.rkey, surface: "served-record-json",
+					canary:     canary.name,
+					collection: served.collection,
+					rkey:       served.rkey,
+					surface:    "served-record-json",
 				})
 			}
 		}
@@ -677,9 +813,23 @@ func publicationPrivacyAssertRecordSchema(t *testing.T, fixture *publicationPriv
 	for _, record := range records {
 		switch record.Collection {
 		case publication.SnapshotNSID:
-			assert.Equal(t, publicationPrivacySnapshotRecordKeys(), publicationPrivacyRecursiveKeys(t, record.Data), "recursive key inventory of %s/%s", record.Collection, record.RKey)
+			assert.Equal(
+				t,
+				publicationPrivacySnapshotRecordKeys(),
+				publicationPrivacyRecursiveKeys(t, record.Data),
+				"recursive key inventory of %s/%s",
+				record.Collection,
+				record.RKey,
+			)
 		case publication.HeadNSID:
-			assert.Equal(t, publicationPrivacyHeadRecordKeys(), publicationPrivacyRecursiveKeys(t, record.Data), "recursive key inventory of %s/%s", record.Collection, record.RKey)
+			assert.Equal(
+				t,
+				publicationPrivacyHeadRecordKeys(),
+				publicationPrivacyRecursiveKeys(t, record.Data),
+				"recursive key inventory of %s/%s",
+				record.Collection,
+				record.RKey,
+			)
 		default:
 			assert.Fail(t, "unexpected publication collection", record.Collection)
 		}
@@ -700,13 +850,32 @@ func publicationPrivacyAssertBlobReferences(t *testing.T, fixture *publicationPr
 				seen[identifier] = struct{}{}
 				referenced = append(referenced, identifier)
 			}
-			assert.Contains(t, stored, identifier, "record %s/%s references a blob the publish never uploaded", record.Collection, record.RKey)
-			assert.True(t, fixture.pds.BlobIsLive(identifier), "record %s/%s references a blob the provider does not serve as live", record.Collection, record.RKey)
+			assert.Contains(
+				t,
+				stored,
+				identifier,
+				"record %s/%s references a blob the publish never uploaded",
+				record.Collection,
+				record.RKey,
+			)
+			assert.True(
+				t,
+				fixture.pds.BlobIsLive(identifier),
+				"record %s/%s references a blob the provider does not serve as live",
+				record.Collection,
+				record.RKey,
+			)
 			payload := fixture.fetchBlob(t, blob.Ref.CID().Bytes(), blob.Size)
-			assert.Equal(t, int(blob.Size), len(payload))
+			assert.Len(t, payload, int(blob.Size))
 			payloadIdentifier, err := publication.RawPayloadCID(payload)
 			require.NoError(t, err)
-			assert.True(t, bytes.Equal(blob.Ref.CID().Bytes(), payloadIdentifier), "record %s/%s references a blob whose bytes hash to a different CID", record.Collection, record.RKey)
+			assert.True(
+				t,
+				bytes.Equal(blob.Ref.CID().Bytes(), payloadIdentifier),
+				"record %s/%s references a blob whose bytes hash to a different CID",
+				record.Collection,
+				record.RKey,
+			)
 		}
 	}
 	require.NotEmpty(t, referenced)
@@ -729,23 +898,40 @@ func publicationPrivacyAssertBlobReferences(t *testing.T, fixture *publicationPr
 	require.NoError(t, publication.VerifyHeadBinding(headRaw, snapshotRaw, terminalKey))
 }
 
-func publicationPrivacyAssertBlobPacking(t *testing.T, fixture *publicationPrivacyFixture, reference publication.BlobReference, contained [][]byte) {
+func publicationPrivacyAssertBlobPacking(
+	t *testing.T,
+	fixture *publicationPrivacyFixture,
+	reference publication.BlobReference,
+	contained [][]byte,
+) {
 	t.Helper()
 	payload := fixture.fetchBlob(t, reference.CID, int64(reference.Size))
-	assert.Equal(t, int(reference.Size), len(payload), "the provider blob size disagrees with the published blob reference")
+	assert.Len(
+		t,
+		payload, int(reference.Size),
+		"the provider blob size disagrees with the published blob reference",
+	)
 	require.NoError(t, publication.VerifyPayload(payload, reference))
 	decoded, err := publication.DecodePayload(payload, reference)
 	require.NoError(t, err)
 	repacked, err := vault.Pack(decoded)
 	require.NoError(t, err)
-	assert.True(t, bytes.Equal(payload, repacked.Payload), "the provider blob is not the canonical packed payload for the published snapshot")
+	assert.True(
+		t,
+		bytes.Equal(payload, repacked.Payload),
+		"the provider blob is not the canonical packed payload for the published snapshot",
+	)
 	assert.Equal(t, len(decoded.Entries), repacked.EntryCount)
 	for _, canary := range contained {
 		assert.True(t, bytes.Contains(payload, canary), "the provider blob does not hold the packed payload plaintext")
 	}
 }
 
-func publicationPrivacyAssertRetainedReviewHasNoCandidateBytes(t *testing.T, preparation service.PublicationPushPreparation, canaries publicationPrivacyCanaries) {
+func publicationPrivacyAssertRetainedReviewHasNoCandidateBytes(
+	t *testing.T,
+	preparation service.PublicationPushPreparation,
+	canaries publicationPrivacyCanaries,
+) {
 	t.Helper()
 	encoded, err := json.Marshal(preparation.Record)
 	require.NoError(t, err)
@@ -754,7 +940,7 @@ func publicationPrivacyAssertRetainedReviewHasNoCandidateBytes(t *testing.T, pre
 
 func publicationPrivacyAssertTypedFailure(t *testing.T, err error, stage, reason string) {
 	t.Helper()
-	assert.ErrorIs(t, err, service.ErrPublishMaterial)
+	require.ErrorIs(t, err, service.ErrPublishMaterial)
 	var failure interface {
 		Stage() string
 		Reason() string
@@ -767,7 +953,12 @@ func publicationPrivacyAssertTypedFailure(t *testing.T, err error, stage, reason
 func publicationPrivacyAssertNoCanaryText(t *testing.T, canaries publicationPrivacyCanaries, text string) {
 	t.Helper()
 	for _, canary := range canaries.materialCanaries {
-		assert.False(t, strings.Contains(text, string(canary.value)), "the %s canary surfaced through a Dottie surface", canary.name)
+		assert.NotContains(
+			t,
+			text, string(canary.value),
+			"the %s canary surfaced through a Dottie surface",
+			canary.name,
+		)
 	}
 }
 
@@ -776,14 +967,24 @@ type publicationPrivacyLeakingTransport struct {
 	control publicationPrivacyScanControl
 }
 
-func (transport publicationPrivacyLeakingTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (transport publicationPrivacyLeakingTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if endpoint == publicationPrivacyApplyURL {
 		body = publicationPrivacyInjectCanary(body, transport.control)
 	}
 	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
 }
 
-func (transport publicationPrivacyLeakingTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (transport publicationPrivacyLeakingTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	return transport.base.OpenStream(ctx, endpoint, query)
 }
 
@@ -873,7 +1074,9 @@ func (store *publicationPrivacyProposalStore) Delete(_ context.Context, publicat
 	return nil
 }
 
-func (store *publicationPrivacyProposalStore) retained(publicationID [16]byte) (service.PublicationProposalRecord, bool) {
+func (store *publicationPrivacyProposalStore) retained(
+	publicationID [16]byte,
+) (service.PublicationProposalRecord, bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	record, found := store.entries[publicationID]
@@ -884,7 +1087,9 @@ type publicationPrivacyReviews struct {
 	review publicationstate.LocalReviewContext
 }
 
-func (reviews publicationPrivacyReviews) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
+func (reviews publicationPrivacyReviews) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
 	return reviews.review, config.Token{}, publicationPrivacyGuard{}, nil
 }
 

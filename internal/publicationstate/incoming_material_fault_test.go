@@ -101,14 +101,14 @@ func classifyCustodySyncTarget(store *Store, fd int) (string, uint64, error) {
 	}
 	switch stat.Mode & unix.S_IFMT {
 	case unix.S_IFREG:
-		return custodySyncFileKind, uint64(stat.Nlink), nil
+		return custodySyncFileKind, stat.Nlink, nil
 	case unix.S_IFDIR:
 		var root unix.Stat_t
 		if err := unix.Fstat(store.rootFD, &root); err != nil {
 			return "", 0, err
 		}
 		if stat.Dev == root.Dev && stat.Ino == root.Ino {
-			return custodySyncRootKind, uint64(stat.Nlink), nil
+			return custodySyncRootKind, stat.Nlink, nil
 		}
 		if store.payloadFD >= 0 {
 			var payload unix.Stat_t
@@ -116,7 +116,7 @@ func classifyCustodySyncTarget(store *Store, fd int) (string, uint64, error) {
 				return "", 0, err
 			}
 			if stat.Dev == payload.Dev && stat.Ino == payload.Ino {
-				return custodySyncPayloadDirectoryKind, uint64(stat.Nlink), nil
+				return custodySyncPayloadDirectoryKind, stat.Nlink, nil
 			}
 		}
 		return "", 0, errors.New("unexpected custody sync directory")
@@ -207,13 +207,20 @@ func TestAcceptMaterialPrelinkFaultsLeaveNoNamedPayload(t *testing.T) {
 				require.FailNow(t, "unexpected fault case")
 			}
 
-			floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.AcceptMaterial(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			assert.Equal(t, Floor{}, floor)
 			requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 			assert.Equal(t, 1, seam)
 			assert.False(t, store.needsReadback)
 			_, statErr := os.Lstat(filepath.Join(directory, payloadDirectoryName, payloadBasename(f.payload)))
-			assert.ErrorIs(t, statErr, os.ErrNotExist)
+			require.ErrorIs(t, statErr, os.ErrNotExist)
 			entries, readErr := os.ReadDir(filepath.Join(directory, payloadDirectoryName))
 			require.NoError(t, readErr)
 			assert.Empty(t, entries)
@@ -271,7 +278,14 @@ func TestAcceptMaterialPostlinkFaultsLeaveReusableOrphan(t *testing.T) {
 			proposal := prepareFirstUse(t, store, observation, f.payload)
 			observer := installCustodySyncObserver(t, store, test.fault)
 
-			floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.AcceptMaterial(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			assert.Equal(t, Floor{}, floor)
 			requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 			assert.Equal(t, 1, observer.fired)
@@ -287,7 +301,14 @@ func TestAcceptMaterialPostlinkFaultsLeaveReusableOrphan(t *testing.T) {
 			requireIncomingMaterialLoadAbsent(t, ctx, store)
 
 			observer.restore(store)
-			floor, err = store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err = store.AcceptMaterial(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, uint64(1), floor.Revision)
 			adopted, err := observeAcceptedMaterialPayloadFile(path, len(f.payload))
@@ -305,7 +326,11 @@ func TestAcceptMaterialPostlinkFaultsLeaveReusableOrphan(t *testing.T) {
 func requireIncomingMaterialTempTrigger(t *testing.T, ctx context.Context, store *Store, name string, want int64) {
 	t.Helper()
 	var count any
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_temp_master WHERE type='trigger' AND name=?", name).Scan(&count))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_temp_master WHERE type='trigger' AND name=?", name).
+			Scan(&count),
+	)
 	got, ok := rawInt64(count)
 	require.True(t, ok)
 	require.Equal(t, want, got)
@@ -342,7 +367,14 @@ func TestAcceptMaterialSQLPhaseFaultRollsBackAtomicPublication(t *testing.T) {
 			require.NoError(t, err)
 			requireIncomingMaterialTempTrigger(t, ctx, store, test.trigger, 1)
 
-			floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err := store.AcceptMaterial(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			assert.Equal(t, Floor{}, floor)
 			requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 			assert.NotContains(t, err.Error(), "-canary")
@@ -354,7 +386,14 @@ func TestAcceptMaterialSQLPhaseFaultRollsBackAtomicPublication(t *testing.T) {
 			_, err = store.conn.ExecContext(ctx, "DROP TRIGGER "+test.trigger)
 			require.NoError(t, err)
 			requireIncomingMaterialTempTrigger(t, ctx, store, test.trigger, 0)
-			floor, err = store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			floor, err = store.AcceptMaterial(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, uint64(1), floor.Revision)
 			requireIncomingMaterialPublication(t, ctx, store, f, floor)
@@ -377,9 +416,20 @@ func TestAcceptMaterialFinalRootSyncFailureIsDefiniteRollback(t *testing.T) {
 		return originalCommit(tx)
 	}
 	t.Cleanup(func() { store.commitTransaction = originalCommit })
-	observer := installCustodySyncObserver(t, store, custodySyncFault{kind: custodySyncRootKind, requireNamedFileSync: true, ordinal: 2})
+	observer := installCustodySyncObserver(
+		t,
+		store,
+		custodySyncFault{kind: custodySyncRootKind, requireNamedFileSync: true, ordinal: 2},
+	)
 
-	floor, err := store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	assert.Equal(t, Floor{}, floor)
 	requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonIO)
 	assert.Equal(t, 1, observer.fired)
@@ -401,7 +451,14 @@ func TestAcceptMaterialFinalRootSyncFailureIsDefiniteRollback(t *testing.T) {
 
 	observer.restore(store)
 	retry := installCustodySyncObserver(t, store, custodySyncFault{})
-	floor, err = store.AcceptMaterial(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err = store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), floor.Revision)
 	assert.Equal(t, 0, retry.fired)
@@ -412,7 +469,10 @@ func TestAcceptMaterialFinalRootSyncFailureIsDefiniteRollback(t *testing.T) {
 		custodySyncRootKind,
 	}, retry.trace)
 	assert.Equal(t, 1, commits)
-	adopted, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, payloadBasename(f.payload)), len(f.payload))
+	adopted, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(directory, payloadDirectoryName, payloadBasename(f.payload)),
+		len(f.payload),
+	)
 	require.NoError(t, err)
 	require.True(t, adopted.Exists)
 	assert.Equal(t, orphan.Device, adopted.Device)

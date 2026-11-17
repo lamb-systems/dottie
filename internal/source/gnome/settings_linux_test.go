@@ -13,9 +13,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 const isolatedTestMarker = "DOTTIE_GNOME_NATIVE_TEST_CHILD"
@@ -142,7 +143,10 @@ func TestOpenDefaultSubprocessHelper(t *testing.T) {
 		settings, err := OpenDefault("org.dottie.Test", "")
 		require.Nil(t, settings)
 		require.ErrorIs(t, err, ErrBackendUnavailable)
-		capture, err := Capture(context.Background(), CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}})
+		capture, err := Capture(
+			context.Background(),
+			CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}},
+		)
 		require.ErrorIs(t, err, ErrBackendUnavailable)
 		require.Empty(t, capture.Entries)
 		require.Empty(t, capture.Unknown)
@@ -158,7 +162,10 @@ func TestOpenDefaultSubprocessHelper(t *testing.T) {
 		user, err := settings.ReadUser("vendor-text")
 		require.NoError(t, err)
 		require.Equal(t, UserValue{Type: "s", Text: "'isolated-keyfile'", Present: true, Writable: true}, user)
-		captured, err := Capture(context.Background(), CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "vendor-text"}}})
+		captured, err := Capture(
+			context.Background(),
+			CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "vendor-text"}}},
+		)
 		require.NoError(t, err)
 		require.Empty(t, captured.Unknown)
 		require.Empty(t, captured.Errors)
@@ -234,18 +241,36 @@ func TestDefaultsAndOverrideFidelity(t *testing.T) {
 	require.NotNil(t, equalDefault.User)
 	require.True(t, equalDefault.User.Present)
 	require.Equal(t, equalDefault.Default.Text, equalDefault.User.Text)
-	require.Equal(t, equalDefault.Default.Text, equalDefault.Effective.Text, "equal-to-default user override was not distinguishable: %#v", equalDefault)
+	require.Equal(
+		t,
+		equalDefault.Default.Text,
+		equalDefault.Effective.Text,
+		"equal-to-default user override was not distinguishable: %#v",
+		equalDefault,
+	)
 	require.NoError(t, settings.Reset("enabled"))
 	value = requireNoUserValue(t, settings, "enabled")
 	require.Equal(t, value.Default.Text, value.Effective.Text, "reset retained equal-default override: %#v", value)
 
 	vendorDefault := requireNoUserValue(t, settings, "vendor-text")
-	require.Equal(t, "'vendor-default'", vendorDefault.Default.Text, "unexpected vendor default before equality test: %#v", vendorDefault)
+	require.Equal(
+		t,
+		"'vendor-default'",
+		vendorDefault.Default.Text,
+		"unexpected vendor default before equality test: %#v",
+		vendorDefault,
+	)
 	require.NoError(t, settings.Set("vendor-text", "s", "'vendor-default'"))
 	equalVendorDefault := readKey(t, settings, "vendor-text")
 	require.NotNil(t, equalVendorDefault.User)
 	require.Equal(t, equalVendorDefault.Default.Text, equalVendorDefault.User.Text)
-	require.Equal(t, equalVendorDefault.Default.Text, equalVendorDefault.Effective.Text, "equal-to-vendor-default user override was not preserved: %#v", equalVendorDefault)
+	require.Equal(
+		t,
+		equalVendorDefault.Default.Text,
+		equalVendorDefault.Effective.Text,
+		"equal-to-vendor-default user override was not preserved: %#v",
+		equalVendorDefault,
+	)
 	require.NoError(t, settings.Reset("vendor-text"))
 	value = requireNoUserValue(t, settings, "vendor-text")
 	require.Equal(t, value.Default.Text, value.Effective.Text, "reset retained vendor-default override: %#v", value)
@@ -254,14 +279,26 @@ func TestDefaultsAndOverrideFidelity(t *testing.T) {
 	emptyString := readKey(t, settings, "vendor-text")
 	require.NotNil(t, emptyString.User)
 	require.Equal(t, "''", emptyString.User.Text)
-	require.Equal(t, "''", emptyString.Effective.Text, "empty string override was not distinguished from absence: %#v", emptyString)
+	require.Equal(
+		t,
+		"''",
+		emptyString.Effective.Text,
+		"empty string override was not distinguished from absence: %#v",
+		emptyString,
+	)
 	require.NoError(t, settings.Reset("vendor-text"))
 	require.NoError(t, settings.Set("items", "as", "[]"))
 	emptyArray := readKey(t, settings, "items")
 	require.NotNil(t, emptyArray.User)
 	require.Equal(t, "as", emptyArray.User.Type)
 	require.Equal(t, emptyArray.Effective.Text, emptyArray.User.Text)
-	require.Contains(t, emptyArray.Effective.Text, "[]", "empty array override was not distinguished from absence: %#v", emptyArray)
+	require.Contains(
+		t,
+		emptyArray.Effective.Text,
+		"[]",
+		"empty array override was not distinguished from absence: %#v",
+		emptyArray,
+	)
 	equal, err := variantTextEqual("as", "[]", emptyArray.Effective.Text)
 	require.NoError(t, err)
 	require.True(t, equal, "empty array override changed semantic value")
@@ -285,7 +322,12 @@ func TestTypedVariantTextRoundTrips(t *testing.T) {
 		{name: "utf8-string", key: "vendor-text", typeName: "s", text: "'héllo'"},
 		{name: "string-array", key: "items", typeName: "as", text: "['one', 'two']"},
 		{name: "tuple", key: "pair", typeName: "(is)", text: "(7, 'seven')"},
-		{name: "variant-dictionary", key: "dictionary", typeName: "a{sv}", text: "{'answer': <uint64 42>, 'kind': <'fixture'>}"},
+		{
+			name:     "variant-dictionary",
+			key:      "dictionary",
+			typeName: "a{sv}",
+			text:     "{'answer': <uint64 42>, 'kind': <'fixture'>}",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -294,7 +336,13 @@ func TestTypedVariantTextRoundTrips(t *testing.T) {
 			require.Equal(t, testCase.typeName, value.Effective.Type)
 			require.NotNil(t, value.User)
 			require.Equal(t, testCase.typeName, value.User.Type)
-			require.Equal(t, value.Effective.Text, value.User.Text, "typed text round trip changed type or user/effective consistency: %#v", value)
+			require.Equal(
+				t,
+				value.Effective.Text,
+				value.User.Text,
+				"typed text round trip changed type or user/effective consistency: %#v",
+				value,
+			)
 			equal, err := variantTextEqual(testCase.typeName, testCase.text, value.Effective.Text)
 			require.NoError(t, err)
 			require.True(t, equal, "typed text round trip changed semantic value: value=%#v", value)
@@ -426,7 +474,14 @@ func TestValidationDoesNotMutateAndSchemaSourceDoesNotFallback(t *testing.T) {
 			defer validRelocatable.Close()
 			value, err := validRelocatable.Read("label")
 			require.NoError(t, err, "valid relocatable schema read failed at %q", path)
-			require.Equal(t, "'relocatable'", value.Effective.Text, "valid relocatable schema read failed at %q: %#v", path, value)
+			require.Equal(
+				t,
+				"'relocatable'",
+				value.Effective.Text,
+				"valid relocatable schema read failed at %q: %#v",
+				path,
+				value,
+			)
 		})
 	}
 }
@@ -467,9 +522,19 @@ func TestReadUserRejectsOversizedTypeAndRenderedText(t *testing.T) {
 	wideType := "(" + strings.Repeat("i", 260) + ")"
 	wideValue := "(" + strings.TrimSuffix(strings.Repeat("0,", 260), ",") + ")"
 	fixture := t.TempDir()
-	schema := fmt.Sprintf("<schemalist><schema id=\"org.dottie.WideType\" path=\"/org/dottie/wide/\"><key name=\"wide\" type=\"%s\"><default>%s</default></key></schema></schemalist>", wideType, wideValue)
+	schema := fmt.Sprintf(
+		"<schemalist><schema id=\"org.dottie.WideType\" path=\"/org/dottie/wide/\"><key name=\"wide\" type=\"%s\"><default>%s</default></key></schema></schemalist>",
+		wideType,
+		wideValue,
+	)
 	require.NoError(t, os.WriteFile(filepath.Join(fixture, "wide.gschema.xml"), []byte(schema), 0600))
-	wideSettings, err := Open(compileSchemas(t, fixture, filepath.Join(t.TempDir(), "schemas")), "org.dottie.WideType", "", MemoryBackend, nil)
+	wideSettings, err := Open(
+		compileSchemas(t, fixture, filepath.Join(t.TempDir(), "schemas")),
+		"org.dottie.WideType",
+		"",
+		MemoryBackend,
+		nil,
+	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = wideSettings.Close() })
 	require.NoError(t, setUserValueForTest(wideSettings, "wide", wideValue))
@@ -518,7 +583,13 @@ func TestCanonicalizeAndSync(t *testing.T) {
 		text     string
 		want     string
 	}{
-		{name: "trailing whitespace", key: "vendor-text", typeName: "s", text: "'canonical'  \t\n", want: "'canonical'"},
+		{
+			name:     "trailing whitespace",
+			key:      "vendor-text",
+			typeName: "s",
+			text:     "'canonical'  \t\n",
+			want:     "'canonical'",
+		},
 		{name: "annotated empty container", key: "items", typeName: "as", text: "@as []", want: "@as []"},
 		{name: "empty container", key: "items", typeName: "as", text: "[]", want: "@as []"},
 	}

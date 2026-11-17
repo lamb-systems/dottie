@@ -131,7 +131,12 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 		return model.Snapshot{}, errors.New("snapshot manifest has a negative tar size")
 	}
 	if header.Size > limits.MaxManifestBytes {
-		return model.Snapshot{}, &BoundError{Kind: "MaxManifestBytes", Path: "manifest", Limit: limits.MaxManifestBytes, Observed: header.Size}
+		return model.Snapshot{}, &BoundError{
+			Kind:     "MaxManifestBytes",
+			Path:     "manifest",
+			Limit:    limits.MaxManifestBytes,
+			Observed: header.Size,
+		}
 	}
 	if err := checkHeader(header, manifestMember, header.Size); err != nil {
 		return model.Snapshot{}, err
@@ -141,7 +146,12 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 		return model.Snapshot{}, fmt.Errorf("read snapshot manifest: %w", err)
 	}
 	if int64(len(manifestBytes)) > limits.MaxManifestBytes {
-		return model.Snapshot{}, &BoundError{Kind: "MaxManifestBytes", Path: "manifest", Limit: limits.MaxManifestBytes, Observed: int64(len(manifestBytes))}
+		return model.Snapshot{}, &BoundError{
+			Kind:     "MaxManifestBytes",
+			Path:     "manifest",
+			Limit:    limits.MaxManifestBytes,
+			Observed: int64(len(manifestBytes)),
+		}
 	}
 	if int64(len(manifestBytes)) != header.Size {
 		return model.Snapshot{}, errors.New("snapshot manifest size does not match its tar header")
@@ -154,15 +164,29 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 		return model.Snapshot{}, errors.New("unsupported snapshot manifest version or codec")
 	}
 	if len(manifest.Entries) > limits.MaxEntries {
-		return model.Snapshot{}, &BoundError{Kind: "MaxEntries", Path: "manifest", Limit: int64(limits.MaxEntries), Observed: int64(len(manifest.Entries))}
+		return model.Snapshot{}, &BoundError{
+			Kind:     "MaxEntries",
+			Path:     "manifest",
+			Limit:    int64(limits.MaxEntries),
+			Observed: int64(len(manifest.Entries)),
+		}
 	}
 	if len(manifest.Entries) > maxOrdinal {
-		return model.Snapshot{}, &BoundError{Kind: "MaxEntries", Path: "manifest", Limit: maxOrdinal, Observed: int64(len(manifest.Entries))}
+		return model.Snapshot{}, &BoundError{
+			Kind:     "MaxEntries",
+			Path:     "manifest",
+			Limit:    maxOrdinal,
+			Observed: int64(len(manifest.Entries)),
+		}
 	}
 	if err := checkManifestBounds(manifest, limits); err != nil {
 		return model.Snapshot{}, err
 	}
-	snapshot := model.Snapshot{Version: manifest.SnapshotVersion, Targets: append([]model.Target(nil), manifest.Targets...), Entries: make([]model.Entry, 0, len(manifest.Entries))}
+	snapshot := model.Snapshot{
+		Version: manifest.SnapshotVersion,
+		Targets: append([]model.Target(nil), manifest.Targets...),
+		Entries: make([]model.Entry, 0, len(manifest.Entries)),
+	}
 	previousSize := header.Size
 	var totalBytes int64
 	var plaintextBytes int64
@@ -170,7 +194,11 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 	for index, wire := range manifest.Entries {
 		name := ordinal(index + 1)
 		if wire.Member != name {
-			return model.Snapshot{}, fmt.Errorf("manifest entry %d has noncanonical member ordinal %q", index, wire.Member)
+			return model.Snapshot{}, fmt.Errorf(
+				"manifest entry %d has noncanonical member ordinal %q",
+				index,
+				wire.Member,
+			)
 		}
 		header, err = nextArchiveHeader(archive, reader, previousSize, false)
 		if err != nil {
@@ -178,20 +206,35 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 		}
 		logicalPath := wirePath(wire)
 		if header.Size > limits.MaxEntryBytes {
-			return model.Snapshot{}, &BoundError{Kind: "MaxEntryBytes", Path: logicalPath, Limit: limits.MaxEntryBytes, Observed: header.Size}
+			return model.Snapshot{}, &BoundError{
+				Kind:     "MaxEntryBytes",
+				Path:     logicalPath,
+				Limit:    limits.MaxEntryBytes,
+				Observed: header.Size,
+			}
 		}
 		if err := checkHeader(header, name, wire.Size); err != nil {
 			return model.Snapshot{}, fmt.Errorf("snapshot member %q: %w", name, err)
 		}
 		if wire.Size < 0 || wire.Size > limits.MaxEntryBytes {
-			return model.Snapshot{}, &BoundError{Kind: "MaxEntryBytes", Path: logicalPath, Limit: limits.MaxEntryBytes, Observed: wire.Size}
+			return model.Snapshot{}, &BoundError{
+				Kind:     "MaxEntryBytes",
+				Path:     logicalPath,
+				Limit:    limits.MaxEntryBytes,
+				Observed: wire.Size,
+			}
 		}
 		content, err := io.ReadAll(io.LimitReader(archive, limits.MaxEntryBytes+1))
 		if err != nil {
 			return model.Snapshot{}, fmt.Errorf("read snapshot member %q: %w", name, err)
 		}
 		if int64(len(content)) > limits.MaxEntryBytes {
-			return model.Snapshot{}, &BoundError{Kind: "MaxEntryBytes", Path: logicalPath, Limit: limits.MaxEntryBytes, Observed: int64(len(content))}
+			return model.Snapshot{}, &BoundError{
+				Kind:     "MaxEntryBytes",
+				Path:     logicalPath,
+				Limit:    limits.MaxEntryBytes,
+				Observed: int64(len(content)),
+			}
 		}
 		previousSize = header.Size
 		if int64(len(content)) != header.Size || int64(len(content)) != wire.Size {
@@ -199,13 +242,19 @@ func UnpackWithLimits(blob Blob, limits Limits) (model.Snapshot, error) {
 		}
 		observedTotal := totalBytes + int64(len(content))
 		if observedTotal > limits.MaxTotalBytes {
-			return model.Snapshot{}, &BoundError{Kind: "MaxTotalBytes", Path: logicalPath, Limit: limits.MaxTotalBytes, Observed: observedTotal}
+			return model.Snapshot{}, &BoundError{
+				Kind:     "MaxTotalBytes",
+				Path:     logicalPath,
+				Limit:    limits.MaxTotalBytes,
+				Observed: observedTotal,
+			}
 		}
 		totalBytes = observedTotal
 		if digestHex(content) != wire.SHA256 {
 			return model.Snapshot{}, fmt.Errorf("snapshot entry digest mismatch at %q", logicalPath)
 		}
-		if wire.Source == model.SourceFiles && wire.State == string(model.FilePresent) && wire.Kind == model.FileRegular {
+		if wire.Source == model.SourceFiles && wire.State == string(model.FilePresent) &&
+			wire.Kind == model.FileRegular {
 			plaintextBytes += int64(len(content))
 		}
 		entry, entryErr := entryFromWire(wire, content)
@@ -286,10 +335,20 @@ func prepare(snapshot model.Snapshot, limits Limits) (preparedSnapshot, error) {
 		return preparedSnapshot{}, fmt.Errorf("invalid snapshot: %w", err)
 	}
 	if len(snapshot.Entries) > limits.MaxEntries {
-		return preparedSnapshot{}, &BoundError{Kind: "MaxEntries", Path: "snapshot", Limit: int64(limits.MaxEntries), Observed: int64(len(snapshot.Entries))}
+		return preparedSnapshot{}, &BoundError{
+			Kind:     "MaxEntries",
+			Path:     "snapshot",
+			Limit:    int64(limits.MaxEntries),
+			Observed: int64(len(snapshot.Entries)),
+		}
 	}
 	if len(snapshot.Entries) > maxOrdinal {
-		return preparedSnapshot{}, &BoundError{Kind: "MaxEntries", Path: "snapshot", Limit: maxOrdinal, Observed: int64(len(snapshot.Entries))}
+		return preparedSnapshot{}, &BoundError{
+			Kind:     "MaxEntries",
+			Path:     "snapshot",
+			Limit:    maxOrdinal,
+			Observed: int64(len(snapshot.Entries)),
+		}
 	}
 	for _, target := range snapshot.Targets {
 		if target.Root != nil {
@@ -314,7 +373,12 @@ func prepare(snapshot model.Snapshot, limits Limits) (preparedSnapshot, error) {
 		}
 		if wire.Source == model.SourceFiles && wire.LinkTarget != "" {
 			if len(wire.LinkTarget) > limits.MaxPathBytes {
-				return preparedSnapshot{}, &BoundError{Kind: "MaxPathBytes", Path: path, Limit: int64(limits.MaxPathBytes), Observed: int64(len(wire.LinkTarget))}
+				return preparedSnapshot{}, &BoundError{
+					Kind:     "MaxPathBytes",
+					Path:     path,
+					Limit:    int64(limits.MaxPathBytes),
+					Observed: int64(len(wire.LinkTarget)),
+				}
 			}
 		}
 		depthPath := path
@@ -323,18 +387,34 @@ func prepare(snapshot model.Snapshot, limits Limits) (preparedSnapshot, error) {
 		}
 		depth := pathDepth(depthPath)
 		if depth > limits.MaxDepth {
-			return preparedSnapshot{}, &BoundError{Kind: "MaxDepth", Path: path, Limit: int64(limits.MaxDepth), Observed: int64(depth)}
+			return preparedSnapshot{}, &BoundError{
+				Kind:     "MaxDepth",
+				Path:     path,
+				Limit:    int64(limits.MaxDepth),
+				Observed: int64(depth),
+			}
 		}
 		if wire.Size > limits.MaxEntryBytes {
-			return preparedSnapshot{}, &BoundError{Kind: "MaxEntryBytes", Path: path, Limit: limits.MaxEntryBytes, Observed: wire.Size}
+			return preparedSnapshot{}, &BoundError{
+				Kind:     "MaxEntryBytes",
+				Path:     path,
+				Limit:    limits.MaxEntryBytes,
+				Observed: wire.Size,
+			}
 		}
 		observedTotal := prepared.plaintextBytes + wire.Size
 		if observedTotal > limits.MaxTotalBytes {
-			return preparedSnapshot{}, &BoundError{Kind: "MaxTotalBytes", Path: path, Limit: limits.MaxTotalBytes, Observed: observedTotal}
+			return preparedSnapshot{}, &BoundError{
+				Kind:     "MaxTotalBytes",
+				Path:     path,
+				Limit:    limits.MaxTotalBytes,
+				Observed: observedTotal,
+			}
 		}
 		prepared.plaintextBytes = observedTotal
 		targetBytes[entry.TargetID] += wire.Size
-		if wire.Source == model.SourceFiles && wire.Kind == model.FileSymlink && linkEscapes(wire.Path, wire.LinkTarget) {
+		if wire.Source == model.SourceFiles && wire.Kind == model.FileSymlink &&
+			linkEscapes(wire.Path, wire.LinkTarget) {
 			prepared.escapingLinks = append(prepared.escapingLinks, entry.Identity())
 		}
 		prepared.entries = append(prepared.entries, preparedEntry{entry: entry, wire: wire, payload: content})
@@ -344,7 +424,10 @@ func prepare(snapshot model.Snapshot, limits Limits) (preparedSnapshot, error) {
 	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
 	prepared.targetSizes = make([]TargetSize, 0, len(targets))
 	for _, target := range targets {
-		prepared.targetSizes = append(prepared.targetSizes, TargetSize{TargetID: target.ID, Bytes: targetBytes[target.ID]})
+		prepared.targetSizes = append(
+			prepared.targetSizes,
+			TargetSize{TargetID: target.ID, Bytes: targetBytes[target.ID]},
+		)
 	}
 	manifest, err := encodeManifest(wireManifest{
 		Version:         Version,
@@ -357,17 +440,25 @@ func prepare(snapshot model.Snapshot, limits Limits) (preparedSnapshot, error) {
 		return preparedSnapshot{}, fmt.Errorf("encode snapshot manifest: %w", err)
 	}
 	if int64(len(manifest)) > limits.MaxManifestBytes {
-		return preparedSnapshot{}, &BoundError{Kind: "MaxManifestBytes", Path: "manifest", Limit: limits.MaxManifestBytes, Observed: int64(len(manifest))}
+		return preparedSnapshot{}, &BoundError{
+			Kind:     "MaxManifestBytes",
+			Path:     "manifest",
+			Limit:    limits.MaxManifestBytes,
+			Observed: int64(len(manifest)),
+		}
 	}
 	prepared.manifest = manifest
 	return prepared, nil
 }
 
 func validateLimits(limits Limits) error {
-	if limits.MaxEntries <= 0 || limits.MaxDepth < 0 || limits.MaxEntryBytes <= 0 || limits.MaxTotalBytes <= 0 || limits.MaxManifestBytes <= 0 || limits.MaxPathBytes <= 0 {
+	if limits.MaxEntries <= 0 || limits.MaxDepth < 0 || limits.MaxEntryBytes <= 0 || limits.MaxTotalBytes <= 0 ||
+		limits.MaxManifestBytes <= 0 ||
+		limits.MaxPathBytes <= 0 {
 		return errors.New("snapshot limits must be positive, except MaxDepth may be zero")
 	}
-	if limits.MaxEntryBytes == int64(^uint64(0)>>1) || limits.MaxTotalBytes == int64(^uint64(0)>>1) || limits.MaxManifestBytes == int64(^uint64(0)>>1) {
+	if limits.MaxEntryBytes == int64(^uint64(0)>>1) || limits.MaxTotalBytes == int64(^uint64(0)>>1) ||
+		limits.MaxManifestBytes == int64(^uint64(0)>>1) {
 		return errors.New("snapshot byte limit is too large")
 	}
 	return nil
@@ -387,7 +478,12 @@ func checkManifestBounds(manifest wireManifest, limits Limits) error {
 			return err
 		}
 		if len(wire.LinkTarget) > limits.MaxPathBytes {
-			return &BoundError{Kind: "MaxPathBytes", Path: path, Limit: int64(limits.MaxPathBytes), Observed: int64(len(wire.LinkTarget))}
+			return &BoundError{
+				Kind:     "MaxPathBytes",
+				Path:     path,
+				Limit:    int64(limits.MaxPathBytes),
+				Observed: int64(len(wire.LinkTarget)),
+			}
 		}
 		depthPath := path
 		if wire.Source == model.SourceGNOME && path != "/" {
@@ -406,7 +502,12 @@ func checkManifestBounds(manifest wireManifest, limits Limits) error {
 
 func checkPathBound(path string, limits Limits) error {
 	if len(path) > limits.MaxPathBytes {
-		return &BoundError{Kind: "MaxPathBytes", Path: path, Limit: int64(limits.MaxPathBytes), Observed: int64(len(path))}
+		return &BoundError{
+			Kind:     "MaxPathBytes",
+			Path:     path,
+			Limit:    int64(limits.MaxPathBytes),
+			Observed: int64(len(path)),
+		}
 	}
 	return nil
 }
@@ -447,7 +548,11 @@ func nextArchiveHeader(archive *tar.Reader, input *bytes.Reader, previousSize in
 		expected = int(blockPadding(previousSize) + 1024)
 	}
 	if consumed != expected {
-		return nil, fmt.Errorf("noncanonical tar framing: consumed %d bytes between members, want %d", consumed, expected)
+		return nil, fmt.Errorf(
+			"noncanonical tar framing: consumed %d bytes between members, want %d",
+			consumed,
+			expected,
+		)
 	}
 	return header, err
 }
@@ -469,10 +574,16 @@ func checkHeader(header *tar.Header, name string, size int64) error {
 	if header.Size != size {
 		return fmt.Errorf("tar member %q size does not match its manifest", name)
 	}
-	if header.Mode != 0o600 || header.Uid != 0 || header.Gid != 0 || header.Uname != "" || header.Gname != "" || header.Linkname != "" || header.Devmajor != 0 || header.Devminor != 0 {
+	if header.Mode != 0o600 || header.Uid != 0 || header.Gid != 0 || header.Uname != "" || header.Gname != "" ||
+		header.Linkname != "" ||
+		header.Devmajor != 0 ||
+		header.Devminor != 0 {
 		return fmt.Errorf("tar member %q has noncanonical header fields", name)
 	}
-	if header.ModTime.Unix() != 0 || header.ModTime.Nanosecond() != 0 || !header.AccessTime.IsZero() || !header.ChangeTime.IsZero() || len(header.PAXRecords) != 0 || len(header.Xattrs) != 0 {
+	if header.ModTime.Unix() != 0 || header.ModTime.Nanosecond() != 0 || !header.AccessTime.IsZero() ||
+		!header.ChangeTime.IsZero() ||
+		len(header.PAXRecords) != 0 ||
+		len(header.Xattrs) != 0 {
 		return fmt.Errorf("tar member %q has noncanonical metadata", name)
 	}
 	return nil
@@ -563,7 +674,7 @@ func linkEscapes(path, target string) bool {
 		components = strings.Split(path, "/")
 		components = components[:len(components)-1]
 	}
-	for _, component := range strings.Split(target, "/") {
+	for component := range strings.SplitSeq(target, "/") {
 		switch component {
 		case "", ".":
 		case "..":

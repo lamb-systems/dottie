@@ -8,13 +8,14 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -161,7 +162,12 @@ type publicationProjectionFuzzSnapshotResult struct {
 	reason    publicationReconciliationReason
 }
 
-func publicationProjectionFuzzSnapshot(t *testing.T, input []byte, selection publicationSelection, refs []SettingRef) publicationProjectionFuzzSnapshotResult {
+func publicationProjectionFuzzSnapshot(
+	t *testing.T,
+	input []byte,
+	selection publicationSelection,
+	refs []SettingRef,
+) publicationProjectionFuzzSnapshotResult {
 	t.Helper()
 	result := publicationProjectionFuzzSnapshotResult{
 		entries: make([]model.Entry, 0), untracked: make([]model.EntryKey, 0),
@@ -177,11 +183,15 @@ func publicationProjectionFuzzSnapshot(t *testing.T, input []byte, selection pub
 	}
 	target := selection.portable
 	target.ID = targetID
-	result.snapshot = model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{target}, Entries: make([]model.Entry, 0, count)}
+	result.snapshot = model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{target},
+		Entries: make([]model.Entry, 0, count),
+	}
 	seen := make(map[model.EntryKey]struct{}, count)
 	malformed := false
 	cursor := 1
-	for index := 0; index < count; index++ {
+	for range count {
 		if len(input)-cursor < 4 {
 			break
 		}
@@ -189,10 +199,7 @@ func publicationProjectionFuzzSnapshot(t *testing.T, input []byte, selection pub
 		shape := input[cursor+1]
 		requested := int(binary.BigEndian.Uint16(input[cursor+2 : cursor+4]))
 		cursor += 4
-		valueBytes := requested
-		if valueBytes > publicationProjectionFuzzMaxTextBytes {
-			valueBytes = publicationProjectionFuzzMaxTextBytes
-		}
+		valueBytes := min(requested, publicationProjectionFuzzMaxTextBytes)
 		if valueBytes > len(input)-cursor {
 			valueBytes = len(input) - cursor
 		}
@@ -249,7 +256,10 @@ func publicationProjectionFuzzSnapshot(t *testing.T, input []byte, selection pub
 		return result
 	}
 	sort.Slice(result.entries, func(left, right int) bool {
-		return publicationProjectionFuzzKeyLess(publicationProjectionFuzzEntryKey(result.entries[left]), publicationProjectionFuzzEntryKey(result.entries[right]))
+		return publicationProjectionFuzzKeyLess(
+			publicationProjectionFuzzEntryKey(result.entries[left]),
+			publicationProjectionFuzzEntryKey(result.entries[right]),
+		)
 	})
 	sort.Slice(result.untracked, func(left, right int) bool {
 		return publicationProjectionFuzzKeyLess(result.untracked[left], result.untracked[right])
@@ -270,7 +280,11 @@ func publicationProjectionFuzzIdentity(selector byte, refs []SettingRef) (Settin
 		ref.Path = "/wrong-path/"
 		return ref, publicationProjectionFuzzUntracked
 	case 0x81:
-		return SettingRef{SchemaID: "org.example.Foreign", Path: "/synthetic/", Key: "foreign"}, publicationProjectionFuzzUntracked
+		return SettingRef{
+			SchemaID: "org.example.Foreign",
+			Path:     "/synthetic/",
+			Key:      "foreign",
+		}, publicationProjectionFuzzUntracked
 	case 0x82:
 		ref := refs[0]
 		ref.Path = "relative/"
@@ -369,5 +383,5 @@ func publicationProjectionFuzzAssertError(t *testing.T, err error, reason public
 	assert.Equal(t, string(publicationProjectionStage), classified.Stage())
 	assert.Equal(t, string(reason), classified.Reason())
 	assert.Equal(t, "publication reconciliation: "+string(publicationProjectionStage)+"/"+string(reason), err.Error())
-	assert.Nil(t, errors.Unwrap(err))
+	assert.NoError(t, errors.Unwrap(err))
 }

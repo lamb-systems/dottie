@@ -63,7 +63,14 @@ func decodePublicJWK(jwk publicJWK) (*ecdsa.PublicKey, error) {
 	return public, nil
 }
 
-func makeDPoPProof(key *ecdsa.PrivateKey, method, endpoint string, now time.Time, random io.Reader, accessToken Secret, nonce string) (string, error) {
+func makeDPoPProof(
+	key *ecdsa.PrivateKey,
+	method, endpoint string,
+	now time.Time,
+	random io.Reader,
+	accessToken Secret,
+	nonce string,
+) (string, error) {
 	if key == nil || key.Curve != elliptic.P256() {
 		return "", errors.New("DPoP requires a P-256 private key")
 	}
@@ -80,7 +87,13 @@ func makeDPoPProof(key *ecdsa.PrivateKey, method, endpoint string, now time.Time
 	if _, err := io.ReadFull(random, jtiBytes); err != nil {
 		return "", errors.New("cannot generate DPoP proof identifier")
 	}
-	claims := dpopClaims{JTI: base64.RawURLEncoding.EncodeToString(jtiBytes), HTM: strings.ToUpper(method), HTU: parsed.String(), IAT: now.Unix(), Nonce: nonce}
+	claims := dpopClaims{
+		JTI:   base64.RawURLEncoding.EncodeToString(jtiBytes),
+		HTM:   strings.ToUpper(method),
+		HTU:   parsed.String(),
+		IAT:   now.Unix(),
+		Nonce: nonce,
+	}
 	if len(accessToken.value) > 0 {
 		digest := sha256.Sum256(accessToken.value)
 		claims.ATH = base64.RawURLEncoding.EncodeToString(digest[:])

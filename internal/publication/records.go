@@ -86,7 +86,7 @@ func ParseSequenceKey(key string) (uint64, error) {
 	if len(key) != SequenceKeyLength {
 		return 0, violation(ErrSequenceKey, "snapshotKey", "format")
 	}
-	for index := 0; index < len(key); index++ {
+	for index := range len(key) {
 		if key[index] < '0' || key[index] > '9' {
 			return 0, violation(ErrSequenceKey, "snapshotKey", "format")
 		}
@@ -138,7 +138,16 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 	if err != nil {
 		return SnapshotRecord{}, err
 	}
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "publicationId", "publicationSeq", "parent", "blob"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"publicationId",
+		"publicationSeq",
+		"parent",
+		"blob",
+	); err != nil {
 		return SnapshotRecord{}, err
 	}
 	if object["$type"] != SnapshotNSID {
@@ -174,7 +183,7 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 	if blob.Size <= 0 || uint64(blob.Size) > MaxBlobBytes {
 		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob.size", "range")
 	}
-	blobCID, err := validateCID([]byte(blob.Ref.CID().Bytes()), cid.Raw, "blob.ref")
+	blobCID, err := validateCID(blob.Ref.CID().Bytes(), cid.Raw, "blob.ref")
 	if err != nil {
 		return SnapshotRecord{}, err
 	}
@@ -232,7 +241,15 @@ func DecodeHead(encoded []byte) (HeadRecord, error) {
 	if err != nil {
 		return HeadRecord{}, err
 	}
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "publicationSeq", "snapshotCid", "blobCid"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"publicationSeq",
+		"snapshotCid",
+		"blobCid",
+	); err != nil {
 		return HeadRecord{}, err
 	}
 	if object["$type"] != HeadNSID {

@@ -26,7 +26,14 @@ func TestPublicationAttemptDispatchResolveFinalizeAndRetain(t *testing.T) {
 
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, empty, review)
 	require.NoError(t, err)
-	upload, err := store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, empty, review, uploadProposal.Confirmation)
+	upload, err := store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		empty,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate.Payload, upload.Payload)
 	assert.Equal(t, attempt.ID, upload.AttemptID)
@@ -36,7 +43,14 @@ func TestPublicationAttemptDispatchResolveFinalizeAndRetain(t *testing.T) {
 
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	submission, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	submission, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.True(t, submission.SnapshotCreateOnly)
 	assert.True(t, submission.RequiresAtomicBatch)

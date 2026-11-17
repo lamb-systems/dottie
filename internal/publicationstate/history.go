@@ -44,12 +44,21 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 	if _, err := s.readState(ctx, s.conn, StageHistory); err != nil {
 		return HistoryPage{}, err
 	}
-	rows, err := s.conn.QueryContext(ctx, "SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest FROM accepted_events WHERE revision>? ORDER BY revision LIMIT ?", afterRevision, limit+1)
+	rows, err := s.conn.QueryContext(
+		ctx,
+		"SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest FROM accepted_events WHERE revision>? ORDER BY revision LIMIT ?",
+		afterRevision,
+		limit+1,
+	)
 	if err != nil {
 		return HistoryPage{}, storageFailure(ctx, StageHistory, err)
 	}
 	defer rows.Close()
-	page := HistoryPage{Events: make([]HistoryEvent, 0, limit), Records: make([]RecordEvidence, 0), NextRevision: afterRevision}
+	page := HistoryPage{
+		Events:       make([]HistoryEvent, 0, limit),
+		Records:      make([]RecordEvidence, 0),
+		NextRevision: afterRevision,
+	}
 	seenRecords := make(map[string]bool)
 	var evidenceBytes uint64
 	for rows.Next() {
@@ -65,7 +74,8 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 		newRaw, newOK := rawBytes(values[5])
 		body, bodyOK := rawBytes(values[6])
 		digest, digestOK := rawBytes(values[7])
-		if !revisionOK || revisionValue < 0 || !modeOK || !reasonOK || !stopOK || !oldOK || !newOK || !bodyOK || !digestOK {
+		if !revisionOK || revisionValue < 0 || !modeOK || !reasonOK || !stopOK || !oldOK || !newOK || !bodyOK ||
+			!digestOK {
 			return HistoryPage{}, classified(ErrSchema, StageHistory, ReasonCorrupt)
 		}
 		revision := uint64(revisionValue)
@@ -74,7 +84,9 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 			break
 		}
 		var wire eventBodyWire
-		if strictJSON(body, &wire) != nil || wire.Version != 1 || wire.Mode != mode || wire.Reason != reason || wire.Stop != stop || len(digest) != 32 {
+		if strictJSON(body, &wire) != nil || wire.Version != 1 || wire.Mode != mode || wire.Reason != reason ||
+			wire.Stop != stop ||
+			len(digest) != 32 {
 			return HistoryPage{}, classified(ErrSchema, StageHistory, ReasonCorrupt)
 		}
 		calculated := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
@@ -98,7 +110,8 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 		toAdd := make([]RecordEvidence, 0)
 		pendingRecords := make(map[string]bool)
 		for _, refWire := range wire.Trace {
-			if len(refWire.CID) == 0 || len(refWire.CID) > publication.MaxCIDBytes || len(refWire.Key) != publication.SequenceKeyLength {
+			if len(refWire.CID) == 0 || len(refWire.CID) > publication.MaxCIDBytes ||
+				len(refWire.Key) != publication.SequenceKeyLength {
 				return HistoryPage{}, classified(ErrSchema, StageHistory, ReasonCorrupt)
 			}
 			ref := RecordReference{Key: refWire.Key, CID: bytes.Clone(refWire.CID), Sequence: refWire.Sequence}
@@ -115,14 +128,28 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 			newEvidenceBytes += recordLogicalBytes(record)
 		}
 		if oldFloor != nil {
-			anchorRef := RecordReference{Key: oldFloor.SnapshotKey, CID: bytes.Clone(oldFloor.RecordCID), Sequence: oldFloor.Sequence}
+			anchorRef := RecordReference{
+				Key:      oldFloor.SnapshotKey,
+				CID:      bytes.Clone(oldFloor.RecordCID),
+				Sequence: oldFloor.Sequence,
+			}
 			if !seenRecords[string(anchorRef.CID)] && !pendingRecords[string(anchorRef.CID)] {
-				anchor, err := s.loadRecordByCID(ctx, s.conn, anchorRef.CID, anchorRef.Key, anchorRef.Sequence, StageHistory)
+				anchor, err := s.loadRecordByCID(
+					ctx,
+					s.conn,
+					anchorRef.CID,
+					anchorRef.Key,
+					anchorRef.Sequence,
+					StageHistory,
+				)
 				if err != nil {
 					return HistoryPage{}, err
 				}
 				pendingRecords[string(anchorRef.CID)] = true
-				toAdd = append(toAdd, RecordEvidence{Reference: cloneReference(anchorRef), Raw: bytes.Clone(anchor.raw)})
+				toAdd = append(
+					toAdd,
+					RecordEvidence{Reference: cloneReference(anchorRef), Raw: bytes.Clone(anchor.raw)},
+				)
 				newEvidenceBytes += recordLogicalBytes(anchor)
 			}
 		}
@@ -133,7 +160,18 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 			page.HasMore = true
 			break
 		}
-		event := HistoryEvent{Revision: revision, Mode: Mode(mode), Reason: Reason(reason), Stop: stop, OldFloor: cloneFloorPointer(oldFloor), NewFloor: cloneFloor(newFloor), Trace: cloneReferences(trace), ObservationDigest: copyHash(wire.ObservationDigest), SuppliedSetDigest: copyHash(wire.SuppliedSetDigest), EventDigest: calculated}
+		event := HistoryEvent{
+			Revision:          revision,
+			Mode:              Mode(mode),
+			Reason:            Reason(reason),
+			Stop:              stop,
+			OldFloor:          cloneFloorPointer(oldFloor),
+			NewFloor:          cloneFloor(newFloor),
+			Trace:             cloneReferences(trace),
+			ObservationDigest: copyHash(wire.ObservationDigest),
+			SuppliedSetDigest: copyHash(wire.SuppliedSetDigest),
+			EventDigest:       calculated,
+		}
 		page.Events = append(page.Events, event)
 		for _, record := range toAdd {
 			seenRecords[string(record.Reference.CID)] = true
@@ -151,7 +189,8 @@ func (s *Store) History(ctx context.Context, afterRevision uint64, limit uint32)
 	if len(page.Events) == int(limit) {
 		var more int
 		var moreValue any
-		if err := s.conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM accepted_events WHERE revision>?)", page.NextRevision).Scan(&moreValue); err != nil {
+		if err := s.conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM accepted_events WHERE revision>?)", page.NextRevision).
+			Scan(&moreValue); err != nil {
 			return HistoryPage{}, storageFailure(ctx, StageHistory, err)
 		}
 		moreInt, ok := rawInt64(moreValue)
@@ -168,7 +207,7 @@ func cloneFloorPointer(floor *Floor) *Floor {
 	if floor == nil {
 		return nil
 	}
-	copy := cloneFloor(*floor)
-	return &copy
+	cloned := cloneFloor(*floor)
+	return &cloned
 }
 func copyHash(data []byte) [32]byte { var out [32]byte; copy(out[:], data); return out }

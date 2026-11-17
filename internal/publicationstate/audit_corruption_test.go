@@ -39,13 +39,21 @@ func TestTamperedEventAndFloorRefuseWithoutPartialHistory(t *testing.T) {
 			store, dir := newStore(t, f)
 			observation := f.observation(1)
 			proposal := prepareFirstUse(t, store, observation, f.payload)
-			_, err := store.Accept(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+			_, err := store.Accept(
+				ctx,
+				ModeFirstUse,
+				proposal.StateToken,
+				observation,
+				f.payload,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
-			if name == "event" {
+			switch name {
+			case "event":
 				_, err = store.conn.ExecContext(ctx, "UPDATE accepted_events SET body=? WHERE revision=1", []byte(`{}`))
-			} else if name == "missing-event" {
+			case "missing-event":
 				_, err = store.conn.ExecContext(ctx, "DELETE FROM accepted_events WHERE revision=1")
-			} else {
+			default:
 				_, err = store.conn.ExecContext(ctx, "UPDATE active_floor SET floor=? WHERE singleton=1", []byte(`{}`))
 			}
 			require.NoError(t, err)

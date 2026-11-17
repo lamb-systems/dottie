@@ -9,12 +9,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func assertPublicationProjectionError(t *testing.T, err error, reason publicationReconciliationReason) {
@@ -102,13 +103,22 @@ func TestProjectPublicationSnapshotMatchesLocalFileExclusionPolicy(t *testing.T)
 				}
 			}
 			for directory := range directories {
-				entries = append(entries, publicationProjectionFile(selection.portable.ID, directory, model.FileDirectory, nil))
+				entries = append(
+					entries,
+					publicationProjectionFile(selection.portable.ID, directory, model.FileDirectory, nil),
+				)
 			}
 			for _, path := range test.files {
-				entries = append(entries, publicationProjectionFile(selection.portable.ID, path, model.FileRegular, []byte(path)))
+				entries = append(
+					entries,
+					publicationProjectionFile(selection.portable.ID, path, model.FileRegular, []byte(path)),
+				)
 			}
-			projected, projectErr := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, entries))
-			assert.NoError(t, projectErr)
+			projected, projectErr := projectPublicationSnapshot(
+				selection,
+				publicationProjectionSnapshot(selection, entries),
+			)
+			require.NoError(t, projectErr)
 			assert.Equal(t, test.want, publicationProjectionPaths(projected.entries))
 		})
 	}
@@ -162,8 +172,14 @@ func TestProjectPublicationSnapshotPrunesExcludedAncestorsAndPreservesIncludedFi
 	assert.Equal(t, []byte("kept"), projected.entries[2].File.Content)
 	assert.Empty(t, projected.untracked)
 
-	malformedExcluded := model.Entry{TargetID: selection.portable.ID, File: &model.FileEntry{Path: "excluded/malformed", State: model.FilePresent, Kind: model.FileRegular}}
-	refused, refusalErr := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, []model.Entry{malformedExcluded}))
+	malformedExcluded := model.Entry{
+		TargetID: selection.portable.ID,
+		File:     &model.FileEntry{Path: "excluded/malformed", State: model.FilePresent, Kind: model.FileRegular},
+	}
+	refused, refusalErr := projectPublicationSnapshot(
+		selection,
+		publicationProjectionSnapshot(selection, []model.Entry{malformedExcluded}),
+	)
 	assert.Equal(t, publicationProjection{}, refused)
 	assertPublicationProjectionError(t, refusalErr, publicationProjectionReasonSnapshot)
 }
@@ -183,7 +199,16 @@ func TestProjectPublicationSnapshotAppliesSingleFileDotExcludesLikeCapture(t *te
 		{name: "dot nonmatching", pattern: "*.ini", want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			target := config.Target{ID: "single-file", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "single-parent/selected.ini", Kind: model.SelectionFile, Exclude: []string{test.pattern}}}
+			target := config.Target{
+				ID:     "single-file",
+				Source: model.SourceFiles,
+				Root: &config.Root{
+					Base:    model.RootHome,
+					Path:    "single-parent/selected.ini",
+					Kind:    model.SelectionFile,
+					Exclude: []string{test.pattern},
+				},
+			}
 			selection := publicationCaptureSelectionFor(t, fixture, target, nil)
 			captured, captureErr := capturePublicationFiles(context.Background(), selection)
 			require.NoError(t, captureErr)
@@ -197,7 +222,10 @@ func TestProjectPublicationSnapshotAppliesSingleFileDotExcludesLikeCapture(t *te
 			}
 
 			entry := publicationProjectionFile(selection.portable.ID, ".", model.FileRegular, []byte("selected"))
-			projected, projectErr := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, []model.Entry{entry}))
+			projected, projectErr := projectPublicationSnapshot(
+				selection,
+				publicationProjectionSnapshot(selection, []model.Entry{entry}),
+			)
 			require.NoError(t, projectErr)
 			if test.want {
 				require.Len(t, projected.entries, 1)
@@ -222,7 +250,10 @@ func TestProjectPublicationSnapshotRejectsRootAndUnsafeLinkShapes(t *testing.T) 
 		{name: "included external link", entries: []model.Entry{{TargetID: selection.portable.ID, File: &model.FileEntry{Path: "link", State: model.FilePresent, Kind: model.FileSymlink, LinkTarget: "../outside"}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			projected, err := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, test.entries))
+			projected, err := projectPublicationSnapshot(
+				selection,
+				publicationProjectionSnapshot(selection, test.entries),
+			)
 			assert.Equal(t, publicationProjection{}, projected)
 			assertPublicationProjectionError(t, err, publicationProjectionReasonSnapshot)
 		})
@@ -231,29 +262,55 @@ func TestProjectPublicationSnapshotRejectsRootAndUnsafeLinkShapes(t *testing.T) 
 	excludedTarget := cloneSelectionTarget(fixture.target)
 	excludedTarget.Root.Exclude = []string{"link"}
 	excludedSelection := publicationCaptureSelectionFor(t, fixture, excludedTarget, nil)
-	external := model.Entry{TargetID: excludedSelection.portable.ID, File: &model.FileEntry{Path: "link", State: model.FilePresent, Kind: model.FileSymlink, LinkTarget: "../outside"}}
-	projected, err := projectPublicationSnapshot(excludedSelection, publicationProjectionSnapshot(excludedSelection, []model.Entry{external}))
+	external := model.Entry{
+		TargetID: excludedSelection.portable.ID,
+		File: &model.FileEntry{
+			Path:       "link",
+			State:      model.FilePresent,
+			Kind:       model.FileSymlink,
+			LinkTarget: "../outside",
+		},
+	}
+	projected, err := projectPublicationSnapshot(
+		excludedSelection,
+		publicationProjectionSnapshot(excludedSelection, []model.Entry{external}),
+	)
 	require.NoError(t, err)
 	assert.Empty(t, projected.entries)
 	assert.Empty(t, projected.untracked)
 
-	fileTarget := config.Target{ID: "single-file", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile}}
+	fileTarget := config.Target{
+		ID:     "single-file",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "single.ini", Kind: model.SelectionFile},
+	}
 	require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "single.ini"), []byte("selected"), 0o600))
 	fileSelection := publicationCaptureSelectionFor(t, fixture, fileTarget, nil)
 	badSymlink := publicationProjectionFile(fileSelection.portable.ID, ".", model.FileSymlink, nil)
 	badSymlink.File.LinkTarget = "inside"
-	belowRoot := publicationProjectionFile(fileSelection.portable.ID, "child", model.FileRegular, []byte("not in a single-file target"))
+	belowRoot := publicationProjectionFile(
+		fileSelection.portable.ID,
+		"child",
+		model.FileRegular,
+		[]byte("not in a single-file target"),
+	)
 	for _, entry := range []model.Entry{
 		publicationProjectionFile(fileSelection.portable.ID, ".", model.FileDirectory, nil),
 		badSymlink,
 		belowRoot,
 	} {
-		projected, projectErr := projectPublicationSnapshot(fileSelection, publicationProjectionSnapshot(fileSelection, []model.Entry{entry}))
+		projected, projectErr := projectPublicationSnapshot(
+			fileSelection,
+			publicationProjectionSnapshot(fileSelection, []model.Entry{entry}),
+		)
 		assert.Equal(t, publicationProjection{}, projected)
 		assertPublicationProjectionError(t, projectErr, publicationProjectionReasonSnapshot)
 	}
 	tombstone := publicationProjectionTombstone(fileSelection.portable.ID, ".")
-	projected, err = projectPublicationSnapshot(fileSelection, publicationProjectionSnapshot(fileSelection, []model.Entry{tombstone}))
+	projected, err = projectPublicationSnapshot(
+		fileSelection,
+		publicationProjectionSnapshot(fileSelection, []model.Entry{tombstone}),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"."}, publicationProjectionPaths(projected.entries))
 }
@@ -268,32 +325,71 @@ func TestProjectPublicationSnapshotRefusesMissingMismatchedAndMalformedDescripto
 
 	mismatched := selection.portable
 	mismatched.Root = &model.FileRoot{Base: model.RootHome, Path: "different", Kind: model.SelectionDirectory}
-	projected, err = projectPublicationSnapshot(selection, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{mismatched}})
+	projected, err = projectPublicationSnapshot(
+		selection,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{mismatched}},
+	)
 	assert.Equal(t, publicationProjection{}, projected)
 	assertPublicationProjectionError(t, err, publicationProjectionReasonSelection)
 
 	other := model.Target{ID: "other", Source: model.SourceGNOME, SourceVersion: model.SourceVersion}
 	entries := []model.Entry{
 		publicationProjectionFile(selection.portable.ID, "keep", model.FileRegular, []byte("kept")),
-		{TargetID: other.ID, File: &model.FileEntry{Path: "wrong", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("bad")}},
+		{
+			TargetID: other.ID,
+			File: &model.FileEntry{
+				Path:    "wrong",
+				State:   model.FilePresent,
+				Kind:    model.FileRegular,
+				Content: []byte("bad"),
+			},
+		},
 	}
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{selection.portable, other}, Entries: entries}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{selection.portable, other},
+		Entries: entries,
+	}
 	projected, err = projectPublicationSnapshot(selection, snapshot)
 	assert.Equal(t, publicationProjection{}, projected)
 	assertPublicationProjectionError(t, err, publicationProjectionReasonSnapshot)
 
-	otherFile := model.Target{ID: "other-files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory}}
-	validOther := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{selection.portable, otherFile}, Entries: []model.Entry{publicationProjectionFile(selection.portable.ID, "keep", model.FileRegular, []byte("kept")), publicationProjectionFile(otherFile.ID, "foreign", model.FileRegular, []byte("ignored"))}}
+	otherFile := model.Target{
+		ID:            "other-files",
+		Source:        model.SourceFiles,
+		SourceVersion: model.SourceVersion,
+		Root:          &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+	}
+	validOther := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{selection.portable, otherFile},
+		Entries: []model.Entry{
+			publicationProjectionFile(selection.portable.ID, "keep", model.FileRegular, []byte("kept")),
+			publicationProjectionFile(otherFile.ID, "foreign", model.FileRegular, []byte("ignored")),
+		},
+	}
 	projected, err = projectPublicationSnapshot(selection, validOther)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"keep"}, publicationProjectionPaths(projected.entries))
 
-	duplicate := publicationProjectionSnapshot(selection, []model.Entry{publicationProjectionFile(selection.portable.ID, "same", model.FileRegular, []byte("a")), publicationProjectionFile(selection.portable.ID, "same", model.FileRegular, []byte("b"))})
+	duplicate := publicationProjectionSnapshot(
+		selection,
+		[]model.Entry{
+			publicationProjectionFile(selection.portable.ID, "same", model.FileRegular, []byte("a")),
+			publicationProjectionFile(selection.portable.ID, "same", model.FileRegular, []byte("b")),
+		},
+	)
 	projected, err = projectPublicationSnapshot(selection, duplicate)
 	assert.Equal(t, publicationProjection{}, projected)
 	assertPublicationProjectionError(t, err, publicationProjectionReasonSnapshot)
 
-	invalidTree := publicationProjectionSnapshot(selection, []model.Entry{publicationProjectionFile(selection.portable.ID, "node", model.FileRegular, []byte("a")), publicationProjectionFile(selection.portable.ID, "node/child", model.FileRegular, []byte("b"))})
+	invalidTree := publicationProjectionSnapshot(
+		selection,
+		[]model.Entry{
+			publicationProjectionFile(selection.portable.ID, "node", model.FileRegular, []byte("a")),
+			publicationProjectionFile(selection.portable.ID, "node/child", model.FileRegular, []byte("b")),
+		},
+	)
 	projected, err = projectPublicationSnapshot(selection, invalidTree)
 	assert.Equal(t, publicationProjection{}, projected)
 	assertPublicationProjectionError(t, err, publicationProjectionReasonSnapshot)
@@ -304,13 +400,28 @@ func TestProjectPublicationSnapshotReturnsGNOMEUntrackedBarrierAndDetachedValues
 	_, selection := publicationCaptureGNOMESelectionFor(t, settings, "desktop")
 	refs := selection.settingRefs
 	require.GreaterOrEqual(t, len(refs), 2)
-	present := publicationCaptureGNOMEEntry(selection.portable.ID, refs[0], model.SettingPresent, &model.VariantValue{Type: "s", Text: "'synthetic'"})
+	present := publicationCaptureGNOMEEntry(
+		selection.portable.ID,
+		refs[0],
+		model.SettingPresent,
+		&model.VariantValue{Type: "s", Text: "'synthetic'"},
+	)
 	reset := publicationCaptureGNOMEEntry(selection.portable.ID, refs[1], model.SettingReset, nil)
 	wrongPathRef := refs[0]
 	wrongPathRef.Path = "/unapproved/"
-	wrongPath := publicationCaptureGNOMEEntry(selection.portable.ID, wrongPathRef, model.SettingPresent, &model.VariantValue{Type: "s", Text: "'untracked'"})
+	wrongPath := publicationCaptureGNOMEEntry(
+		selection.portable.ID,
+		wrongPathRef,
+		model.SettingPresent,
+		&model.VariantValue{Type: "s", Text: "'untracked'"},
+	)
 	unapprovedRef := SettingRef{SchemaID: "org.example.Unapproved", Path: "/", Key: "foreign"}
-	unapproved := publicationCaptureGNOMEEntry(selection.portable.ID, unapprovedRef, model.SettingPresent, &model.VariantValue{Type: "s", Text: "'untracked'"})
+	unapproved := publicationCaptureGNOMEEntry(
+		selection.portable.ID,
+		unapprovedRef,
+		model.SettingPresent,
+		&model.VariantValue{Type: "s", Text: "'untracked'"},
+	)
 	snapshot := publicationProjectionSnapshot(selection, []model.Entry{unapproved, reset, wrongPath, present})
 	resolveCalls := settings.resolveCalls
 	captureCalls := settings.captureCalls
@@ -393,14 +504,20 @@ func TestProjectPublicationSnapshotRequiresApprovedGNOMEPolicyAndMatchingRefs(t 
 		{name: "pending approval", mutate: func(selection *publicationSelection) {
 			selection.target.GNOMEPolicy.Approval = config.GNOMEApprovalPending
 		}},
-		{name: "stale matrix", mutate: func(selection *publicationSelection) { selection.target.GNOMEPolicy.MatrixVersion++ }},
+		{
+			name:   "stale matrix",
+			mutate: func(selection *publicationSelection) { selection.target.GNOMEPolicy.MatrixVersion++ },
+		},
 		{name: "invalid category", mutate: func(selection *publicationSelection) {
 			selection.target.GNOMEPolicy.Categories = []string{"unknown-category"}
 		}},
 		{name: "category digest mismatch", mutate: func(selection *publicationSelection) {
 			selection.target.GNOMEPolicy.Categories = []string{"appearance"}
 		}},
-		{name: "malformed digest", mutate: func(selection *publicationSelection) { selection.target.GNOMEPolicy.KeyDigest = "not-a-digest" }},
+		{
+			name:   "malformed digest",
+			mutate: func(selection *publicationSelection) { selection.target.GNOMEPolicy.KeyDigest = "not-a-digest" },
+		},
 		{name: "forged retained schema key", mutate: func(selection *publicationSelection) {
 			selection.settingRefs[len(selection.settingRefs)-1].Key = "zzzz-forged"
 		}},
@@ -441,7 +558,10 @@ func TestProjectPublicationSnapshotAcceptsEmptySelectedDirectory(t *testing.T) {
 func TestProjectPublicationSnapshotEnforcesWholeInputBoundsBeforeFiltering(t *testing.T) {
 	fixture := newPublicationSelectionFixture(t)
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, nil)
-	valid := publicationProjectionSnapshot(selection, []model.Entry{publicationProjectionFile(selection.portable.ID, "keep", model.FileRegular, []byte("ok"))})
+	valid := publicationProjectionSnapshot(
+		selection,
+		[]model.Entry{publicationProjectionFile(selection.portable.ID, "keep", model.FileRegular, []byte("ok"))},
+	)
 	for _, test := range []struct {
 		name     string
 		snapshot model.Snapshot
@@ -500,7 +620,10 @@ func TestProjectPublicationSnapshotAcceptsMaximumFilePathDepth(t *testing.T) {
 	selection := publicationCaptureSelectionFor(t, fixture, fixture.target, nil)
 	path := strings.Repeat("a/", 31) + "leaf"
 	entry := publicationProjectionFile(selection.portable.ID, path, model.FileRegular, []byte("body"))
-	projected, err := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, []model.Entry{entry}))
+	projected, err := projectPublicationSnapshot(
+		selection,
+		publicationProjectionSnapshot(selection, []model.Entry{entry}),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []model.Entry{entry}, projected.entries)
 }
@@ -510,7 +633,17 @@ func TestProjectPublicationSnapshotRejectsExcludedOversizedFileBeforeFiltering(t
 	target := cloneSelectionTarget(fixture.target)
 	target.Root.Exclude = []string{"large.tmp"}
 	selection := publicationCaptureSelectionFor(t, fixture, target, nil)
-	snapshot := publicationProjectionSnapshot(selection, []model.Entry{publicationProjectionFile(selection.portable.ID, "large.tmp", model.FileRegular, make([]byte, 8*1024*1024+1))})
+	snapshot := publicationProjectionSnapshot(
+		selection,
+		[]model.Entry{
+			publicationProjectionFile(
+				selection.portable.ID,
+				"large.tmp",
+				model.FileRegular,
+				make([]byte, 8*1024*1024+1),
+			),
+		},
+	)
 	projected, err := projectPublicationSnapshot(selection, snapshot)
 	assert.Equal(t, publicationProjection{}, projected)
 	assertPublicationProjectionError(t, err, publicationProjectionReasonBounds)
@@ -525,14 +658,31 @@ func TestProjectPublicationSnapshotEnforcesGNOMEValueAndMetadataBoundsBeforeFilt
 		entries []model.Entry
 	}{
 		{
-			name:    "oversized excluded identity value",
-			entries: []model.Entry{publicationCaptureGNOMEEntry(selection.portable.ID, unapproved, model.SettingPresent, &model.VariantValue{Type: "s", Text: strings.Repeat("x", model.MaxVariantTextBytes+1)})},
+			name: "oversized excluded identity value",
+			entries: []model.Entry{
+				publicationCaptureGNOMEEntry(
+					selection.portable.ID,
+					unapproved,
+					model.SettingPresent,
+					&model.VariantValue{Type: "s", Text: strings.Repeat("x", model.MaxVariantTextBytes+1)},
+				),
+			},
 		},
 		{
 			name: "oversized malformed dual payload",
 			entries: func() []model.Entry {
-				entry := publicationCaptureGNOMEEntry(selection.portable.ID, unapproved, model.SettingPresent, &model.VariantValue{Type: "s", Text: strings.Repeat("x", model.MaxVariantTextBytes+1)})
-				entry.File = &model.FileEntry{Path: "child", State: model.FilePresent, Kind: model.FileRegular, Content: []byte{}}
+				entry := publicationCaptureGNOMEEntry(
+					selection.portable.ID,
+					unapproved,
+					model.SettingPresent,
+					&model.VariantValue{Type: "s", Text: strings.Repeat("x", model.MaxVariantTextBytes+1)},
+				)
+				entry.File = &model.FileEntry{
+					Path:    "child",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte{},
+				}
 				return []model.Entry{entry}
 			}(),
 		},
@@ -542,20 +692,43 @@ func TestProjectPublicationSnapshotEnforcesGNOMEValueAndMetadataBoundsBeforeFilt
 				value := &model.VariantValue{Type: "s", Text: strings.Repeat("x", model.MaxVariantTextBytes)}
 				entries := make([]model.Entry, 257)
 				for index := range entries {
-					ref := SettingRef{SchemaID: "org.example.Unapproved", Path: "/", Key: fmt.Sprintf("foreign-%03d", index)}
-					entries[index] = publicationCaptureGNOMEEntry(selection.portable.ID, ref, model.SettingPresent, value)
+					ref := SettingRef{
+						SchemaID: "org.example.Unapproved",
+						Path:     "/",
+						Key:      fmt.Sprintf("foreign-%03d", index),
+					}
+					entries[index] = publicationCaptureGNOMEEntry(
+						selection.portable.ID,
+						ref,
+						model.SettingPresent,
+						value,
+					)
 				}
 				return entries
 			}(),
 		},
 		{
-			name:    "settings path depth",
-			entries: []model.Entry{publicationCaptureGNOMEEntry(selection.portable.ID, SettingRef{SchemaID: "org.example.Unapproved", Path: "/" + strings.Repeat("a/", 32) + "a/", Key: "foreign"}, model.SettingReset, nil)},
+			name: "settings path depth",
+			entries: []model.Entry{
+				publicationCaptureGNOMEEntry(
+					selection.portable.ID,
+					SettingRef{
+						SchemaID: "org.example.Unapproved",
+						Path:     "/" + strings.Repeat("a/", 32) + "a/",
+						Key:      "foreign",
+					},
+					model.SettingReset,
+					nil,
+				),
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			projected, err := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, test.entries))
+			projected, err := projectPublicationSnapshot(
+				selection,
+				publicationProjectionSnapshot(selection, test.entries),
+			)
 			assert.Equal(t, publicationProjection{}, projected)
 			assertPublicationProjectionError(t, err, publicationProjectionReasonBounds)
 		})
@@ -590,7 +763,12 @@ func TestProjectPublicationSnapshotSyntheticBaseReconciliationWitnessForFileExcl
 	}
 	binding, err := syncengine.NewTargetBinding(selection.portable)
 	require.NoError(t, err)
-	unprojectedPlan, err := syncengine.Reconcile(syncengine.BaseView{Entries: baseEntries, Status: syncengine.BaseKnown}, syncengine.LocalView{Entries: localEntries, Coverage: []string{selection.portable.ID}}, currentEntries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
+	unprojectedPlan, err := syncengine.Reconcile(
+		syncengine.BaseView{Entries: baseEntries, Status: syncengine.BaseKnown},
+		syncengine.LocalView{Entries: localEntries, Coverage: []string{selection.portable.ID}},
+		currentEntries,
+		syncengine.Options{Bindings: []syncengine.TargetBinding{binding}},
+	)
 	require.NoError(t, err)
 	require.Len(t, unprojectedPlan.Decisions, 2)
 	assert.Equal(t, syncengine.ActionDeleteRemote, unprojectedPlan.Decisions[0].Action)
@@ -601,10 +779,19 @@ func TestProjectPublicationSnapshotSyntheticBaseReconciliationWitnessForFileExcl
 	require.NoError(t, err)
 	remote, err := projectPublicationSnapshot(selection, publicationProjectionSnapshot(selection, currentEntries))
 	require.NoError(t, err)
-	plan, err := syncengine.Reconcile(syncengine.BaseView{Entries: base.entries, Status: syncengine.BaseKnown}, syncengine.LocalView{Entries: localEntries, Coverage: []string{selection.portable.ID}}, remote.entries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
+	plan, err := syncengine.Reconcile(
+		syncengine.BaseView{Entries: base.entries, Status: syncengine.BaseKnown},
+		syncengine.LocalView{Entries: localEntries, Coverage: []string{selection.portable.ID}},
+		remote.entries,
+		syncengine.Options{Bindings: []syncengine.TargetBinding{binding}},
+	)
 	require.NoError(t, err)
 	require.Len(t, plan.Decisions, 1)
-	assert.Equal(t, model.EntryKey{TargetID: selection.portable.ID, Source: model.SourceFiles, FilePath: "keep"}, plan.Decisions[0].Key)
+	assert.Equal(
+		t,
+		model.EntryKey{TargetID: selection.portable.ID, Source: model.SourceFiles, FilePath: "keep"},
+		plan.Decisions[0].Key,
+	)
 	assert.Equal(t, syncengine.ActionUnchanged, plan.Decisions[0].Action)
 	assert.Equal(t, syncengine.ReasonEqual, plan.Decisions[0].Reason)
 }

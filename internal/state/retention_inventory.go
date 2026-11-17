@@ -10,13 +10,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
 
 	cid "github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/multiformats/go-multihash"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func (s *Store) RetentionInventory(ctx context.Context, vaultID [32]byte, deviceID string) (RetentionInventory, error) {
@@ -36,25 +38,56 @@ func (s *Store) RetentionInventory(ctx context.Context, vaultID [32]byte, device
 		if err := readRetentionInventoryPoints(ctx, tx, vaultID, deviceID, &inventory, addUnknown); err != nil {
 			return err
 		}
-		if err := readRetentionInventoryMaterials(ctx, tx, vaultID, deviceID, &inventory, knownReferences, addUnknown); err != nil {
+		if err := readRetentionInventoryMaterials(
+			ctx,
+			tx,
+			vaultID,
+			deviceID,
+			&inventory,
+			knownReferences,
+			addUnknown,
+		); err != nil {
 			return err
 		}
 		if err := readRetentionInventoryGlobalReferences(ctx, tx, allRecoveryReferences, addUnknown); err != nil {
 			return err
 		}
-		if err := readRetentionInventoryJournal(ctx, tx, s.payloadDir, vaultID, knownEpochs, knownReferences, allRecoveryReferences, addUnknown); err != nil {
+		if err := readRetentionInventoryJournal(
+			ctx,
+			tx,
+			s.payloadDir,
+			vaultID,
+			knownEpochs,
+			knownReferences,
+			allRecoveryReferences,
+			addUnknown,
+		); err != nil {
 			return err
 		}
-		if err := readRetentionInventoryOtherReferences(ctx, tx, allRecoveryReferences, unclassifiedReferences, addUnknown); err != nil {
+		if err := readRetentionInventoryOtherReferences(
+			ctx,
+			tx,
+			allRecoveryReferences,
+			unclassifiedReferences,
+			addUnknown,
+		); err != nil {
 			return err
 		}
-		if err := s.reconcileRetentionInventoryFiles(&inventory, knownEpochs, knownReferences, allRecoveryReferences, unclassifiedReferences, unknownReasons); err != nil {
+		if err := s.reconcileRetentionInventoryFiles(
+			&inventory,
+			knownEpochs,
+			knownReferences,
+			allRecoveryReferences,
+			unclassifiedReferences,
+			unknownReasons,
+		); err != nil {
 			return err
 		}
 		for epoch := range knownEpochs {
 			inventory.KnownMaterialEpochs = append(inventory.KnownMaterialEpochs, epoch)
 		}
-		sort.Slice(inventory.KnownMaterialEpochs, func(i, j int) bool { return inventory.KnownMaterialEpochs[i] < inventory.KnownMaterialEpochs[j] })
+		slices.Sort(
+			inventory.KnownMaterialEpochs)
 		for reason := range unknownReasons {
 			inventory.UnknownHoldingReasons = append(inventory.UnknownHoldingReasons, reason)
 		}
@@ -67,7 +100,14 @@ func (s *Store) RetentionInventory(ctx context.Context, vaultID [32]byte, device
 	return inventory, nil
 }
 
-func readRetentionInventoryPoints(ctx context.Context, tx *sql.Tx, vaultID [32]byte, deviceID string, inventory *RetentionInventory, addUnknown func(string)) error {
+func readRetentionInventoryPoints(
+	ctx context.Context,
+	tx *sql.Tx,
+	vaultID [32]byte,
+	deviceID string,
+	inventory *RetentionInventory,
+	addUnknown func(string),
+) error {
 	rows, err := tx.QueryContext(ctx, `SELECT epoch, snapshot_cid, policy_digest, control_cid
 FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordinal LIMIT ?`, vaultID[:], deviceID, MaxRetentionInventoryRows+1)
 	if err != nil {
@@ -81,7 +121,8 @@ FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordina
 			_ = rows.Close()
 			return err
 		}
-		if epoch < 0 || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > 128 || len(digest) != 32 || len(point.ControlCID) > 128 {
+		if epoch < 0 || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > 128 || len(digest) != 32 ||
+			len(point.ControlCID) > 128 {
 			_ = rows.Close()
 			return errors.New("stored retention inventory point is malformed")
 		}
@@ -108,7 +149,15 @@ FROM retention_recovery_points WHERE vault = ? AND device_id = ? ORDER BY ordina
 	return nil
 }
 
-func readRetentionInventoryMaterials(ctx context.Context, tx *sql.Tx, vaultID [32]byte, deviceID string, inventory *RetentionInventory, knownReferences map[string]bool, addUnknown func(string)) error {
+func readRetentionInventoryMaterials(
+	ctx context.Context,
+	tx *sql.Tx,
+	vaultID [32]byte,
+	deviceID string,
+	inventory *RetentionInventory,
+	knownReferences map[string]bool,
+	addUnknown func(string),
+) error {
 	rows, err := tx.QueryContext(ctx, `SELECT epoch, snapshot_cid, payload_ref, backup_ref, inventory_complete
 FROM retention_recovery_material WHERE vault = ? AND device_id = ? ORDER BY epoch, snapshot_cid, payload_ref, backup_ref LIMIT ?`, vaultID[:], deviceID, MaxRetentionInventoryRows+1)
 	if err != nil {
@@ -118,11 +167,18 @@ FROM retention_recovery_material WHERE vault = ? AND device_id = ? ORDER BY epoc
 		var epoch int64
 		var material RetentionRecoveryMaterial
 		var complete int
-		if err := rows.Scan(&epoch, &material.SnapshotCID, &material.PayloadReference, &material.BackupReference, &complete); err != nil {
+		if err := rows.Scan(
+			&epoch,
+			&material.SnapshotCID,
+			&material.PayloadReference,
+			&material.BackupReference,
+			&complete,
+		); err != nil {
 			_ = rows.Close()
 			return err
 		}
-		if epoch < 0 || len(material.SnapshotCID) == 0 || len(material.SnapshotCID) > 128 || complete < 0 || complete > 1 {
+		if epoch < 0 || len(material.SnapshotCID) == 0 || len(material.SnapshotCID) > 128 || complete < 0 ||
+			complete > 1 {
 			_ = rows.Close()
 			addUnknown("malformed-recovery-material-binding")
 			continue
@@ -167,7 +223,8 @@ FROM retention_recovery_material WHERE vault = ? AND device_id = ? ORDER BY epoc
 					complete++
 				}
 			}
-			if material.PayloadReference != "" && payloadReferenceMatchesSnapshot(material.PayloadReference, point.SnapshotCID) {
+			if material.PayloadReference != "" &&
+				payloadReferenceMatchesSnapshot(material.PayloadReference, point.SnapshotCID) {
 				bodyCount++
 			}
 		}
@@ -176,7 +233,12 @@ FROM retention_recovery_material WHERE vault = ? AND device_id = ? ORDER BY epoc
 	return nil
 }
 
-func readRetentionInventoryGlobalReferences(ctx context.Context, tx *sql.Tx, references map[string]bool, addUnknown func(string)) error {
+func readRetentionInventoryGlobalReferences(
+	ctx context.Context,
+	tx *sql.Tx,
+	references map[string]bool,
+	addUnknown func(string),
+) error {
 	rows, err := tx.QueryContext(ctx, `SELECT payload_ref FROM retention_recovery_material WHERE payload_ref <> ''
 UNION SELECT backup_ref FROM retention_recovery_material WHERE backup_ref <> '' LIMIT ?`, MaxRetentionInventoryRows+1)
 	if err != nil {
@@ -205,9 +267,21 @@ UNION SELECT backup_ref FROM retention_recovery_material WHERE backup_ref <> '' 
 	return nil
 }
 
-func readRetentionInventoryJournal(ctx context.Context, tx *sql.Tx, payloadDir string, vaultID [32]byte, knownEpochs map[uint64]bool, knownReferences, allRecoveryReferences map[string]bool, addUnknown func(string)) error {
-	rows, err := tx.QueryContext(ctx, `SELECT backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version
-FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`, MaxRetentionInventoryRows+1)
+func readRetentionInventoryJournal(
+	ctx context.Context,
+	tx *sql.Tx,
+	payloadDir string,
+	vaultID [32]byte,
+	knownEpochs map[uint64]bool,
+	knownReferences, allRecoveryReferences map[string]bool,
+	addUnknown func(string),
+) error {
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT backup_ref, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version
+FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`,
+		MaxRetentionInventoryRows+1,
+	)
 	if err != nil {
 		return err
 	}
@@ -217,7 +291,15 @@ FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`, MaxRetentionInve
 		var boundVault, snapshotCID, policyDigest, controlCID []byte
 		var epoch sql.NullInt64
 		var bindingVersion int
-		if err := rows.Scan(&reference, &boundVault, &epoch, &snapshotCID, &policyDigest, &controlCID, &bindingVersion); err != nil {
+		if err := rows.Scan(
+			&reference,
+			&boundVault,
+			&epoch,
+			&snapshotCID,
+			&policyDigest,
+			&controlCID,
+			&bindingVersion,
+		); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -232,12 +314,17 @@ FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`, MaxRetentionInve
 		if !retentionPayloadExists(payloadDir, reference) {
 			continue
 		}
-		if len(boundVault) == 32 && bytes.Equal(boundVault, vaultID[:]) && epoch.Valid && epoch.Int64 >= 0 && bindingVersion != 0 && len(snapshotCID) > 0 && len(policyDigest) == 32 && len(controlCID) > 0 {
+		if len(boundVault) == 32 && bytes.Equal(boundVault, vaultID[:]) && epoch.Valid && epoch.Int64 >= 0 &&
+			bindingVersion != 0 &&
+			len(snapshotCID) > 0 &&
+			len(policyDigest) == 32 &&
+			len(controlCID) > 0 {
 			knownEpochs[uint64(epoch.Int64)] = true
 			knownReferences[reference] = true
 			continue
 		}
-		if len(boundVault) == 0 && !epoch.Valid && len(snapshotCID) == 0 && len(policyDigest) == 0 && len(controlCID) == 0 {
+		if len(boundVault) == 0 && !epoch.Valid && len(snapshotCID) == 0 && len(policyDigest) == 0 &&
+			len(controlCID) == 0 {
 			addUnknown("legacy-unbound-journal-backup")
 			continue
 		}
@@ -268,7 +355,12 @@ FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`, MaxRetentionInve
 	return nil
 }
 
-func readRetentionInventoryOtherReferences(ctx context.Context, tx *sql.Tx, allRecoveryReferences, unclassifiedReferences map[string]bool, addUnknown func(string)) error {
+func readRetentionInventoryOtherReferences(
+	ctx context.Context,
+	tx *sql.Tx,
+	allRecoveryReferences, unclassifiedReferences map[string]bool,
+	addUnknown func(string),
+) error {
 	queries := []string{
 		"SELECT payload_ref FROM applied_base WHERE payload_ref <> '' LIMIT ?",
 		"SELECT payload_ref FROM outbound_intent WHERE payload_ref <> '' LIMIT ?",
@@ -304,7 +396,12 @@ func readRetentionInventoryOtherReferences(ctx context.Context, tx *sql.Tx, allR
 	return nil
 }
 
-func (s *Store) reconcileRetentionInventoryFiles(inventory *RetentionInventory, knownEpochs map[uint64]bool, knownReferences, allRecoveryReferences, unclassifiedReferences map[string]bool, unknownReasons map[string]bool) error {
+func (s *Store) reconcileRetentionInventoryFiles(
+	inventory *RetentionInventory,
+	knownEpochs map[uint64]bool,
+	knownReferences, allRecoveryReferences, unclassifiedReferences map[string]bool,
+	unknownReasons map[string]bool,
+) error {
 	for _, material := range inventory.Materials {
 		for _, reference := range []string{material.PayloadReference, material.BackupReference} {
 			if reference == "" || !retentionPayloadExists(s.payloadDir, reference) {
@@ -344,7 +441,8 @@ func (s *Store) reconcileRetentionInventoryFiles(inventory *RetentionInventory, 
 				continue
 			}
 			for _, reference := range []string{material.PayloadReference, material.BackupReference} {
-				if reference != "" && (!retentionPayloadExists(s.payloadDir, reference) || !retentionPayloadDigestValid(s.payloadDir, reference)) {
+				if reference != "" &&
+					(!retentionPayloadExists(s.payloadDir, reference) || !retentionPayloadDigestValid(s.payloadDir, reference)) {
 					point.InventoryComplete = false
 				}
 			}

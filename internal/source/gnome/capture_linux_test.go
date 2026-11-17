@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func useCaptureOpener(t *testing.T, opener func(string, string) (*Settings, error)) {
@@ -34,7 +35,8 @@ func requireCaptureCoverage(t *testing.T, selected []KeyRef, result CaptureResul
 	for _, entry := range result.Entries {
 		require.NotNil(t, entry.Setting)
 		for _, key := range selected {
-			if key.SchemaID == entry.Setting.SchemaID && key.Key == entry.Setting.Key && (key.Path == "" || key.Path == entry.Setting.Path) {
+			if key.SchemaID == entry.Setting.SchemaID && key.Key == entry.Setting.Key &&
+				(key.Path == "" || key.Path == entry.Setting.Path) {
 				seen[key]++
 			}
 		}
@@ -108,7 +110,10 @@ func TestCaptureFieldLengthBoundaries(t *testing.T) {
 		return nil, ErrSchemaNotFound
 	})
 	selected := []KeyRef{{SchemaID: schemaID, Path: path, Key: key}}
-	result, err := Capture(context.Background(), CaptureRequest{TargetID: strings.Repeat("t", model.MaxTargetIDBytes), Keys: selected})
+	result, err := Capture(
+		context.Background(),
+		CaptureRequest{TargetID: strings.Repeat("t", model.MaxTargetIDBytes), Keys: selected},
+	)
 	require.NoError(t, err)
 	require.True(t, opened)
 	require.Equal(t, selected, result.Unknown)
@@ -213,16 +218,76 @@ func TestCaptureValidatesRequestBeforeOpening(t *testing.T) {
 		{name: "empty-target", request: CaptureRequest{Keys: []KeyRef{valid}}},
 		{name: "control-target", request: CaptureRequest{TargetID: "bad\ntarget", Keys: []KeyRef{valid}}},
 		{name: "empty-schema", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{Key: "enabled"}}}},
-		{name: "oversized-schema", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: strings.Repeat("s", model.MaxSettingSchemaIDBytes+1), Key: "enabled"}}}},
-		{name: "control-schema", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie\x01Test", Key: "enabled"}}}},
-		{name: "empty-key", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test"}}}},
-		{name: "oversized-key", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: strings.Repeat("k", model.MaxSettingKeyBytes+1)}}}},
-		{name: "key-control", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "bad\x7fkey"}}}},
-		{name: "key-separator", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "bad/key"}}}},
-		{name: "oversized-path", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "/" + strings.Repeat("p", model.MaxRelativePathBytes-1) + "/", Key: "label"}}}},
-		{name: "relative-path", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "org/dottie/", Key: "label"}}}},
-		{name: "double-slash-path", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "/org//dottie/", Key: "label"}}}},
-		{name: "path-control", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "/org/\x00/dottie/", Key: "label"}}}},
+		{
+			name: "oversized-schema",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: strings.Repeat("s", model.MaxSettingSchemaIDBytes+1), Key: "enabled"}},
+			},
+		},
+		{
+			name: "control-schema",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie\x01Test", Key: "enabled"}},
+			},
+		},
+		{
+			name:    "empty-key",
+			request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test"}}},
+		},
+		{
+			name: "oversized-key",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie.Test", Key: strings.Repeat("k", model.MaxSettingKeyBytes+1)}},
+			},
+		},
+		{
+			name: "key-control",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie.Test", Key: "bad\x7fkey"}},
+			},
+		},
+		{
+			name:    "key-separator",
+			request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "bad/key"}}},
+		},
+		{
+			name: "oversized-path",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys: []KeyRef{
+					{
+						SchemaID: "org.dottie.Test.Relocatable",
+						Path:     "/" + strings.Repeat("p", model.MaxRelativePathBytes-1) + "/",
+						Key:      "label",
+					},
+				},
+			},
+		},
+		{
+			name: "relative-path",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "org/dottie/", Key: "label"}},
+			},
+		},
+		{
+			name: "double-slash-path",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "/org//dottie/", Key: "label"}},
+			},
+		},
+		{
+			name: "path-control",
+			request: CaptureRequest{
+				TargetID: "desktop",
+				Keys:     []KeyRef{{SchemaID: "org.dottie.Test.Relocatable", Path: "/org/\x00/dottie/", Key: "label"}},
+			},
+		},
 		{name: "duplicate", request: CaptureRequest{TargetID: "desktop", Keys: []KeyRef{valid, valid}}},
 		{name: "257-keys", request: CaptureRequest{TargetID: "desktop", Keys: make([]KeyRef, 257)}},
 	}
@@ -273,7 +338,10 @@ func TestCaptureHonorsCancellationAfterOpening(t *testing.T) {
 		}
 		return settings, err
 	})
-	result, err := Capture(ctx, CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}})
+	result, err := Capture(
+		ctx,
+		CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}},
+	)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, result.Entries)
 	assert.Empty(t, result.Unknown)
@@ -290,7 +358,10 @@ func TestCaptureCanceledBeforeOpening(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := Capture(ctx, CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}})
+	result, err := Capture(
+		ctx,
+		CaptureRequest{TargetID: "desktop", Keys: []KeyRef{{SchemaID: "org.dottie.Test", Key: "enabled"}}},
+	)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, result.Entries)
 	assert.Zero(t, opens)

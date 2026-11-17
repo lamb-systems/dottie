@@ -2,7 +2,6 @@ package vault
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -23,7 +22,12 @@ type checkpointFixture struct {
 
 func newCheckpointFixture(t *testing.T) checkpointFixture {
 	t.Helper()
-	root := DeviceMaterial{DeviceID: "checkpoint-root", KeyID: []byte("checkpoint-root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
+	root := DeviceMaterial{
+		DeviceID:  "checkpoint-root",
+		KeyID:     []byte("checkpoint-root-key"),
+		Signing:   fixedSigningKey(11),
+		Recipient: fixedX25519Key(21),
+	}
 	boot, err := Bootstrap("checkpoint fixture", root)
 	require.NoError(t, err)
 	return checkpointFixture{
@@ -54,7 +58,11 @@ func (f checkpointFixture) policyAtEpoch(t *testing.T, epoch uint64) []byte {
 	return policyBytes
 }
 
-func (f checkpointFixture) evidenceWithPolicy(t *testing.T, epoch uint64, previous, policyBytes []byte) ControlEvidence {
+func (f checkpointFixture) evidenceWithPolicy(
+	t *testing.T,
+	epoch uint64,
+	previous, policyBytes []byte,
+) ControlEvidence {
 	t.Helper()
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
@@ -66,7 +74,11 @@ func (f checkpointFixture) evidenceWithPolicy(t *testing.T, epoch uint64, previo
 	return ControlEvidence{Control: controlBytes, Policy: bytes.Clone(policyBytes), Certificates: [][]byte{f.cert}}
 }
 
-func (f checkpointFixture) evidenceWithPolicyPredecessor(t *testing.T, epoch uint64, previous, predecessorPolicy []byte) ControlEvidence {
+func (f checkpointFixture) evidenceWithPolicyPredecessor(
+	t *testing.T,
+	epoch uint64,
+	previous, predecessorPolicy []byte,
+) ControlEvidence {
 	policyBytes := f.policyWithPredecessor(t, epoch, predecessorPolicy)
 	return f.evidenceWithPolicy(t, epoch, previous, policyBytes)
 }
@@ -81,8 +93,13 @@ func (f checkpointFixture) enrollmentEvidence(t *testing.T, genesis ControlEvide
 	genesisCID, err := rawCID(genesis.Control)
 	require.NoError(t, err)
 	device := DeviceMaterial{
-		DeviceID: fmt.Sprintf("checkpoint-publisher-%d", branch), KeyID: []byte(fmt.Sprintf("checkpoint-publisher-key-%d", branch)),
-		Signing: fixedSigningKey(31 + branch), Recipient: fixedX25519Key(41 + branch),
+		DeviceID: fmt.Sprintf(
+			"checkpoint-publisher-%d",
+			branch,
+		),
+		KeyID:     []byte(fmt.Sprintf("checkpoint-publisher-key-%d", branch)),
+		Signing:   fixedSigningKey(31 + branch),
+		Recipient: fixedX25519Key(41 + branch),
 	}
 	certificate, err := certificateForEnrollment(f.vaultID, device, RolePublisher, 1, f.root, genesisCID)
 	require.NoError(t, err)
@@ -93,7 +110,10 @@ func (f checkpointFixture) enrollmentEvidence(t *testing.T, genesis ControlEvide
 	policy.Roles = append(policy.Roles, RoleBinding{DeviceID: device.DeviceID, Role: RolePublisher})
 	var publicKey [32]byte
 	copy(publicKey[:], device.Recipient.PublicKey().Bytes())
-	policy.Recipients = append(policy.Recipients, PolicyRecipient{DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID), PublicKey: publicKey})
+	policy.Recipients = append(
+		policy.Recipients,
+		PolicyRecipient{DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID), PublicKey: publicKey},
+	)
 	sort.Slice(policy.Roles, func(i, j int) bool { return policy.Roles[i].DeviceID < policy.Roles[j].DeviceID })
 	sort.Slice(policy.Recipients, func(i, j int) bool {
 		return bytes.Compare(policy.Recipients[i].KeyID, policy.Recipients[j].KeyID) < 0
@@ -105,8 +125,14 @@ func (f checkpointFixture) enrollmentEvidence(t *testing.T, genesis ControlEvide
 	headCID, err := rawCID([]byte(device.DeviceID))
 	require.NoError(t, err)
 	controlBytes, err := signControl(Control{
-		Vault: f.vaultID, EpochSeq: 1, PolicyDigest: policyDigest, HeadSnapshotCID: headCID,
-		PrevControlCID: bytes.Clone(genesisCID), Signer: Signer{DeviceID: f.root.DeviceID, KeyID: bytes.Clone(f.root.KeyID)},
+		Vault:           f.vaultID,
+		EpochSeq:        1,
+		PolicyDigest:    policyDigest,
+		HeadSnapshotCID: headCID,
+		PrevControlCID: bytes.Clone(
+			genesisCID,
+		),
+		Signer: Signer{DeviceID: f.root.DeviceID, KeyID: bytes.Clone(f.root.KeyID)},
 	}, f.root.Signing)
 	require.NoError(t, err)
 	return ControlEvidence{Control: controlBytes, Policy: policyBytes, Certificates: [][]byte{f.cert, certificate}}
@@ -120,7 +146,13 @@ func checkpointHeld(t *testing.T, evidence ControlEvidence) *ControlEvidence {
 	}
 }
 
-func verifyFixture(t *testing.T, fixture checkpointFixture, held *ControlEvidence, supplied ControlEvidence, intermediates ...ControlEvidence) VerificationResult {
+func verifyFixture(
+	t *testing.T,
+	fixture checkpointFixture,
+	held *ControlEvidence,
+	supplied ControlEvidence,
+	intermediates ...ControlEvidence,
+) VerificationResult {
 	t.Helper()
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	if held != nil {
@@ -163,8 +195,12 @@ func TestVerifyControlStateRefusesOversizedIntermediatesBeforeAuthentication(t *
 	require.ErrorAs(t, err, &limitErr)
 	assert.Equal(t, MaxCheckpointIntermediates, limitErr.Limit)
 	assert.Equal(t, MaxCheckpointIntermediates+1, limitErr.Observed)
-	assert.ErrorIs(t, err, ErrLimit)
-	assert.False(t, errors.Is(err, ErrInvalidVerification), "oversized input was authenticated before the inventory limit")
+	require.ErrorIs(t, err, ErrLimit)
+	assert.NotErrorIs(
+		t,
+		err, ErrInvalidVerification,
+		"oversized input was authenticated before the inventory limit",
+	)
 }
 
 func TestVerifyControlStateAcceptsExactlyCheckpointIntermediateBoundOnDirectShortcut(t *testing.T) {
@@ -178,7 +214,10 @@ func TestVerifyControlStateAcceptsExactlyCheckpointIntermediateBoundOnDirectShor
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, current)))
 
-	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: current, Intermediates: intermediates})
+	result, err := VerifyControlState(
+		trustedContext,
+		VerificationRequest{Supplied: current, Intermediates: intermediates},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, CheckpointCurrent, result.Outcome)
 }
@@ -194,19 +233,25 @@ func TestVerifyControlStateDirectDescendantAndStaleSkipIntermediateAuthenticatio
 
 	descendantContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
-	descendantResult, err := VerifyControlState(descendantContext, VerificationRequest{Supplied: descendant, Intermediates: []ControlEvidence{invalid}})
+	descendantResult, err := VerifyControlState(
+		descendantContext,
+		VerificationRequest{Supplied: descendant, Intermediates: []ControlEvidence{invalid}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, CheckpointDescendant, descendantResult.Outcome)
 
 	staleContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, staleContext.SetHeldCheckpoint(*checkpointHeld(t, staleContextHeld)))
-	staleResult, err := VerifyControlState(staleContext, VerificationRequest{Supplied: genesis, Intermediates: []ControlEvidence{invalid}})
+	staleResult, err := VerifyControlState(
+		staleContext,
+		VerificationRequest{Supplied: genesis, Intermediates: []ControlEvidence{invalid}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, CheckpointStale, staleResult.Outcome)
 }
 
 func TestVerifyControlStateRefusesSelfSuppliedAnchorAndCheckpoint(t *testing.T) {
-	requestType := reflect.TypeOf(VerificationRequest{})
+	requestType := reflect.TypeFor[VerificationRequest]()
 	_, hasTrustAnchor := requestType.FieldByName("TrustAnchor")
 	_, hasHeldCheckpoint := requestType.FieldByName("Held")
 	assert.False(t, hasTrustAnchor)
@@ -222,9 +267,9 @@ func TestVerifyControlStateRefusesSelfSuppliedAnchorAndCheckpoint(t *testing.T) 
 
 	_, err := VerifyControlState(nil, VerificationRequest{Supplied: artifact.Supplied})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidVerification)
+	require.ErrorIs(t, err, ErrInvalidVerification)
 	var refusal *VerificationRefusal
-	require.True(t, errors.As(err, &refusal))
+	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "missing-trusted-context", refusal.Code)
 }
 
@@ -456,11 +501,14 @@ func TestVerifyControlStateInvalidSignatureCannotReachConsent(t *testing.T) {
 	supplied := fixture.evidence(t, 0, nil)
 	supplied.Control = bytes.Clone(supplied.Control)
 	supplied.Control[len(supplied.Control)-1] ^= 0x80
-	_, err := VerifyControlState(NewTrustedContext(fixture.vaultID, fixture.anchor), VerificationRequest{Supplied: supplied})
+	_, err := VerifyControlState(
+		NewTrustedContext(fixture.vaultID, fixture.anchor),
+		VerificationRequest{Supplied: supplied},
+	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidVerification)
+	require.ErrorIs(t, err, ErrInvalidVerification)
 	var refusal *VerificationRefusal
-	require.True(t, errors.As(err, &refusal))
+	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "control-signature", refusal.Code)
 	_, err = AcceptUnverifiableConsent(VerificationResult{})
 	assert.ErrorIs(t, err, ErrConsentNotOffered)
@@ -494,8 +542,8 @@ func TestVerifyControlStateRefusesInvalidIntermediate(t *testing.T) {
 		Supplied: two, Intermediates: []ControlEvidence{one},
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidVerification)
+	require.ErrorIs(t, err, ErrInvalidVerification)
 	var refusal *VerificationRefusal
-	require.True(t, errors.As(err, &refusal))
+	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "invalid-intermediate", refusal.Code)
 }

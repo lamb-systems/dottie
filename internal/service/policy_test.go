@@ -5,12 +5,13 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type policySettings struct{}
@@ -36,7 +37,10 @@ func approvedGNOMETarget(t *testing.T) config.Target {
 	digest, err := matrix.KeySetDigest(keys)
 	require.NoError(t, err)
 	return config.Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &config.GNOMEPolicy{
-		Approval: config.GNOMEApprovalApproved, Categories: categories, MatrixVersion: matrix.Version, KeyDigest: hex.EncodeToString(digest[:]),
+		Approval:      config.GNOMEApprovalApproved,
+		Categories:    categories,
+		MatrixVersion: matrix.Version,
+		KeyDigest:     hex.EncodeToString(digest[:]),
 	}}
 }
 
@@ -57,7 +61,8 @@ func TestFilterSnapshotKeepsUnapprovedOrWrongPathGNOMEEntriesUntracked(t *testin
 		State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "different"},
 	}
 	filtered, untracked, err := filterSnapshot(context.Background(), configuration, policySettings{}, model.Snapshot{
-		Version: model.SnapshotVersion, Targets: []model.Target{{ID: target.ID, Source: model.SourceGNOME, SourceVersion: model.SourceVersion}},
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{{ID: target.ID, Source: model.SourceGNOME, SourceVersion: model.SourceVersion}},
 		Entries: []model.Entry{approved, unapproved, wrongPath},
 	})
 	require.NoError(t, err)
@@ -78,14 +83,14 @@ func TestApprovedSettingsRefusesPendingMatrixDriftAndDigestDrift(t *testing.T) {
 	pending := target
 	pending.GNOMEPolicy = &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending}
 	_, err = approvedSettings(context.Background(), policySettings{}, pending)
-	assert.ErrorIs(t, err, ErrGNOMEReapproval)
+	require.ErrorIs(t, err, ErrGNOMEReapproval)
 
 	matrixDrift := target
 	policyCopy := *target.GNOMEPolicy
 	policyCopy.MatrixVersion++
 	matrixDrift.GNOMEPolicy = &policyCopy
 	_, err = approvedSettings(context.Background(), policySettings{}, matrixDrift)
-	assert.ErrorIs(t, err, ErrGNOMEReapproval)
+	require.ErrorIs(t, err, ErrGNOMEReapproval)
 
 	digestDrift := target
 	policyCopy = *target.GNOMEPolicy

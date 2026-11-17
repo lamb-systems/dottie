@@ -27,7 +27,7 @@ func TestOpenSnapshotAbsentReturnsDefaultWithoutCreatingState(t *testing.T) {
 	assert.Zero(t, snapshot.Approval.Revision, "absent snapshot approval revision")
 
 	_, err = os.Lstat(paths.AppConfigDir())
-	assert.ErrorIs(t, err, os.ErrNotExist, "OpenSnapshot created the configuration directory")
+	require.ErrorIs(t, err, os.ErrNotExist, "OpenSnapshot created the configuration directory")
 
 	_, guard, err := AcquireReader(paths)
 	require.NoError(t, err)
@@ -68,7 +68,10 @@ func TestUpdateBumpsOnlyAffectedRevisions(t *testing.T) {
 
 	approved, err := updateWithCurrentToken(t, paths, func(c Config) (Config, error) {
 		c.Targets = append(c.Targets, Target{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{
-			Approval: GNOMEApprovalApproved, Categories: []string{"appearance"}, MatrixVersion: 1, KeyDigest: digestTestKey,
+			Approval:      GNOMEApprovalApproved,
+			Categories:    []string{"appearance"},
+			MatrixVersion: 1,
+			KeyDigest:     digestTestKey,
 		}})
 		return c, nil
 	})
@@ -137,7 +140,11 @@ func TestUpdateRefusesInvalidMutationResult(t *testing.T) {
 
 func TestUpdateRefusesRevisionExhaustion(t *testing.T) {
 	paths := testPaths(t)
-	writeRawConfig(t, paths, "config_version = 2\nselection_revision = 9223372036854775807\napproval_revision = 9223372036854775807\n")
+	writeRawConfig(
+		t,
+		paths,
+		"config_version = 2\nselection_revision = 9223372036854775807\napproval_revision = 9223372036854775807\n",
+	)
 	snapshot, err := OpenSnapshot(paths)
 	require.NoError(t, err)
 	require.Equal(t, uint64(math.MaxInt64), snapshot.Selection.Revision, "seed selection revision")
@@ -215,10 +222,10 @@ func TestAcquireReaderHoldsSharedLockAgainstWriters(t *testing.T) {
 	require.NotNil(t, guard)
 	assert.NotEqual(t, Token{}, snapshot.Token, "reader snapshot token")
 
-	assert.ErrorIs(t, probeExclusiveLock(paths), syscall.EWOULDBLOCK, "a shared reader did not block a writer")
+	require.ErrorIs(t, probeExclusiveLock(paths), syscall.EWOULDBLOCK, "a shared reader did not block a writer")
 
 	guard.Release()
-	assert.NoError(t, probeExclusiveLock(paths), "the released reader still blocked a writer")
+	require.NoError(t, probeExclusiveLock(paths), "the released reader still blocked a writer")
 
 	second, secondGuard, err := AcquireReader(paths)
 	require.NoError(t, err)

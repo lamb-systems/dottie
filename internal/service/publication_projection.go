@@ -31,7 +31,10 @@ const (
 	publicationProjectionReasonSelection publicationReconciliationReason = "selection_mismatch"
 )
 
-func projectPublicationSnapshot(selection publicationSelection, snapshot model.Snapshot) (publicationProjection, error) {
+func projectPublicationSnapshot(
+	selection publicationSelection,
+	snapshot model.Snapshot,
+) (publicationProjection, error) {
 	if !publicationProjectionWithinBounds(snapshot) {
 		return publicationProjection{}, publicationProjectionFailure(publicationProjectionReasonBounds)
 	}
@@ -71,7 +74,10 @@ func projectPublicationSnapshot(selection publicationSelection, snapshot model.S
 	}
 }
 
-func projectPublicationFileEntries(selection publicationSelection, snapshot model.Snapshot) (publicationProjection, error) {
+func projectPublicationFileEntries(
+	selection publicationSelection,
+	snapshot model.Snapshot,
+) (publicationProjection, error) {
 	matcher, err := ignore.Compile(selection.excludes)
 	if err != nil {
 		return publicationProjection{}, publicationProjectionFailure(publicationProjectionReasonInput)
@@ -155,7 +161,10 @@ func validPublicationProjectionGNOMESelection(selection publicationSelection) bo
 	return true
 }
 
-func projectPublicationGNOMEEntries(selection publicationSelection, snapshot model.Snapshot) (publicationProjection, error) {
+func projectPublicationGNOMEEntries(
+	selection publicationSelection,
+	snapshot model.Snapshot,
+) (publicationProjection, error) {
 	refs, ok := publicationGNOMESelectedRefs(selection)
 	if !ok || len(refs) > matrix.MaxKeys {
 		return publicationProjection{}, publicationProjectionFailure(publicationProjectionReasonInput)
@@ -203,13 +212,20 @@ func publicationProjectionWithinBounds(snapshot model.Snapshot) bool {
 		return true
 	}
 	for _, target := range snapshot.Targets {
-		if len(target.ID) > model.MaxTargetIDBytes || len(target.Source) > len(string(model.SourceFiles)) || !addMetadata(target.ID) || !addMetadata(string(target.Source)) {
+		if len(target.ID) > model.MaxTargetIDBytes || len(target.Source) > len(string(model.SourceFiles)) ||
+			!addMetadata(target.ID) ||
+			!addMetadata(string(target.Source)) {
 			return false
 		}
 		if target.Root == nil {
 			continue
 		}
-		if len(target.Root.Base) > len(string(model.RootXDGConfig)) || len(target.Root.Path) > model.MaxRelativePathBytes || len(target.Root.Kind) > len(string(model.SelectionDirectory)) || !addMetadata(string(target.Root.Base)) || !addMetadata(target.Root.Path) || !addMetadata(string(target.Root.Kind)) {
+		if len(target.Root.Base) > len(string(model.RootXDGConfig)) ||
+			len(target.Root.Path) > model.MaxRelativePathBytes ||
+			len(target.Root.Kind) > len(string(model.SelectionDirectory)) ||
+			!addMetadata(string(target.Root.Base)) ||
+			!addMetadata(target.Root.Path) ||
+			!addMetadata(string(target.Root.Kind)) {
 			return false
 		}
 	}
@@ -221,28 +237,42 @@ func publicationProjectionWithinBounds(snapshot model.Snapshot) bool {
 		}
 		if entry.File != nil {
 			file := entry.File
-			if len(file.Path) > model.MaxRelativePathBytes || !publicationProjectionDepthWithin(file.Path, limits.MaxDepth) || len(file.LinkTarget) > model.MaxSymlinkTargetBytes || len(file.State) > len(string(model.FileDeleted)) || len(file.Kind) > len(string(model.FileDirectory)) {
+			if len(file.Path) > model.MaxRelativePathBytes ||
+				!publicationProjectionDepthWithin(file.Path, limits.MaxDepth) ||
+				len(file.LinkTarget) > model.MaxSymlinkTargetBytes ||
+				len(file.State) > len(string(model.FileDeleted)) ||
+				len(file.Kind) > len(string(model.FileDirectory)) {
 				return false
 			}
-			if !addMetadata(file.Path) || !addMetadata(string(file.State)) || !addMetadata(string(file.Kind)) || !addMetadata(file.LinkTarget) {
+			if !addMetadata(file.Path) || !addMetadata(string(file.State)) || !addMetadata(string(file.Kind)) ||
+				!addMetadata(file.LinkTarget) {
 				return false
 			}
 			contentBytes := int64(len(file.Content))
-			if contentBytes > int64(fileBudget.MaxFileBytes) || contentBytes > int64(fileBudget.MaxTotalBytes)-fileBytes {
+			if contentBytes > int64(fileBudget.MaxFileBytes) ||
+				contentBytes > int64(fileBudget.MaxTotalBytes)-fileBytes {
 				return false
 			}
 			fileBytes += contentBytes
 		}
 		if entry.Setting != nil {
 			setting := entry.Setting
-			if len(setting.SchemaID) > model.MaxSettingSchemaIDBytes || len(setting.Path) > model.MaxRelativePathBytes || !publicationProjectionSettingDepthWithin(setting.Path, limits.MaxDepth) || len(setting.Key) > model.MaxSettingKeyBytes || len(setting.State) > len(string(model.SettingPresent)) {
+			if len(setting.SchemaID) > model.MaxSettingSchemaIDBytes ||
+				len(setting.Path) > model.MaxRelativePathBytes ||
+				!publicationProjectionSettingDepthWithin(setting.Path, limits.MaxDepth) ||
+				len(setting.Key) > model.MaxSettingKeyBytes ||
+				len(setting.State) > len(string(model.SettingPresent)) {
 				return false
 			}
-			if !addMetadata(setting.SchemaID) || !addMetadata(setting.Path) || !addMetadata(setting.Key) || !addMetadata(string(setting.State)) {
+			if !addMetadata(setting.SchemaID) || !addMetadata(setting.Path) || !addMetadata(setting.Key) ||
+				!addMetadata(string(setting.State)) {
 				return false
 			}
 			if setting.Value != nil {
-				if len(setting.Value.Type) > model.MaxVariantTypeBytes || len(setting.Value.Text) > model.MaxVariantTextBytes || !addMetadata(setting.Value.Type) || !addMetadata(setting.Value.Text) {
+				if len(setting.Value.Type) > model.MaxVariantTypeBytes ||
+					len(setting.Value.Text) > model.MaxVariantTextBytes ||
+					!addMetadata(setting.Value.Type) ||
+					!addMetadata(setting.Value.Text) {
 					return false
 				}
 			}

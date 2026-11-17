@@ -3,8 +3,9 @@ package atproto
 import (
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestAuthenticateVaultRequiresMatchingPolicyPosition(t *testing.T) {
@@ -24,19 +25,40 @@ func TestAuthenticateVaultRequiresMatchingPolicyPosition(t *testing.T) {
 		name   string
 		mutate func(*vault.Policy, *vault.Control, *vault.Head, *vault.Envelope)
 	}{
-		{name: "policy epoch", mutate: func(policy *vault.Policy, _ *vault.Control, _ *vault.Head, _ *vault.Envelope) { policy.EpochSeq++ }},
-		{name: "control epoch", mutate: func(_ *vault.Policy, control *vault.Control, _ *vault.Head, _ *vault.Envelope) { control.EpochSeq++ }},
-		{name: "head epoch", mutate: func(_ *vault.Policy, _ *vault.Control, head *vault.Head, _ *vault.Envelope) { head.EpochSeq++ }},
-		{name: "envelope epoch", mutate: func(_ *vault.Policy, _ *vault.Control, _ *vault.Head, envelope *vault.Envelope) { envelope.EpochSeq++ }},
-		{name: "control policy digest", mutate: func(_ *vault.Policy, control *vault.Control, _ *vault.Head, _ *vault.Envelope) {
-			control.PolicyDigest[0] ^= 0xff
-		}},
-		{name: "head policy digest", mutate: func(_ *vault.Policy, _ *vault.Control, head *vault.Head, _ *vault.Envelope) {
-			head.PolicyDigest[0] ^= 0xff
-		}},
-		{name: "envelope policy digest", mutate: func(_ *vault.Policy, _ *vault.Control, _ *vault.Head, envelope *vault.Envelope) {
-			envelope.PolicyDigest[0] ^= 0xff
-		}},
+		{
+			name:   "policy epoch",
+			mutate: func(policy *vault.Policy, _ *vault.Control, _ *vault.Head, _ *vault.Envelope) { policy.EpochSeq++ },
+		},
+		{
+			name:   "control epoch",
+			mutate: func(_ *vault.Policy, control *vault.Control, _ *vault.Head, _ *vault.Envelope) { control.EpochSeq++ },
+		},
+		{
+			name:   "head epoch",
+			mutate: func(_ *vault.Policy, _ *vault.Control, head *vault.Head, _ *vault.Envelope) { head.EpochSeq++ },
+		},
+		{
+			name:   "envelope epoch",
+			mutate: func(_ *vault.Policy, _ *vault.Control, _ *vault.Head, envelope *vault.Envelope) { envelope.EpochSeq++ },
+		},
+		{
+			name: "control policy digest",
+			mutate: func(_ *vault.Policy, control *vault.Control, _ *vault.Head, _ *vault.Envelope) {
+				control.PolicyDigest[0] ^= 0xff
+			},
+		},
+		{
+			name: "head policy digest",
+			mutate: func(_ *vault.Policy, _ *vault.Control, head *vault.Head, _ *vault.Envelope) {
+				head.PolicyDigest[0] ^= 0xff
+			},
+		},
+		{
+			name: "envelope policy digest",
+			mutate: func(_ *vault.Policy, _ *vault.Control, _ *vault.Head, envelope *vault.Envelope) {
+				envelope.PolicyDigest[0] ^= 0xff
+			},
+		},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {

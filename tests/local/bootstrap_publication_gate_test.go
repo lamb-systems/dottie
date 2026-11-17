@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -23,8 +26,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -56,7 +57,11 @@ type bootstrapGateKeyring struct {
 	items map[string]vault.DeviceMaterial
 }
 
-func (keyring *bootstrapGateKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+func (keyring *bootstrapGateKeyring) LoadDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	deviceID string,
+) (vault.DeviceMaterial, error) {
 	if vaultID == ([32]byte{}) {
 		return vault.DeviceMaterial{}, platform.ErrKeyringItemNotFound
 	}
@@ -67,7 +72,11 @@ func (keyring *bootstrapGateKeyring) LoadDeviceKeys(_ context.Context, vaultID [
 	return device, nil
 }
 
-func (keyring *bootstrapGateKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, device vault.DeviceMaterial) error {
+func (keyring *bootstrapGateKeyring) StoreDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	device vault.DeviceMaterial,
+) error {
 	if vaultID == ([32]byte{}) || device.DeviceID == "" {
 		return errors.New("invalid synthetic device keys")
 	}
@@ -75,7 +84,10 @@ func (keyring *bootstrapGateKeyring) StoreDeviceKeys(_ context.Context, vaultID 
 	return nil
 }
 
-func (keyring *bootstrapGateKeyring) LoadDeviceKeysForVault(_ context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+func (keyring *bootstrapGateKeyring) LoadDeviceKeysForVault(
+	_ context.Context,
+	vaultID [32]byte,
+) ([]vault.DeviceMaterial, error) {
 	if vaultID == ([32]byte{}) || len(keyring.items) == 0 {
 		return nil, platform.ErrKeyringItemNotFound
 	}
@@ -105,7 +117,9 @@ type bootstrapGateReviews struct {
 	review publicationstate.LocalReviewContext
 }
 
-func (reviews bootstrapGateReviews) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
+func (reviews bootstrapGateReviews) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
 	return reviews.review, config.Token{1}, bootstrapGateGuard{}, nil
 }
 
@@ -178,9 +192,14 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 	method := pds.VerificationMethod()
 	reader := atproto.RevisionReader{
 		Transport: pds, DIDDocumentID: bootstrapGateDID,
-		VerificationMethods: []atproto.VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 
 	source := newBootstrapGateHome(t, root, "machine-a", bootstrapGateAlpha, bootstrapGateKeep)
@@ -203,15 +222,28 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	t.Cleanup(func() { clear(signing) })
-	device := vault.DeviceMaterial{DeviceID: bootstrapGateDeviceID, KeyID: bytes.Clone(signing.Public().(ed25519.PublicKey)), Signing: signing, Recipient: recipient}
-	result, err := coordinator.InitializeVault(ctx, service.BootstrapRequest{VaultName: bootstrapGateVault, Device: device})
+	device := vault.DeviceMaterial{
+		DeviceID:  bootstrapGateDeviceID,
+		KeyID:     bytes.Clone(signing.Public().(ed25519.PublicKey)),
+		Signing:   signing,
+		Recipient: recipient,
+	}
+	result, err := coordinator.InitializeVault(
+		ctx,
+		service.BootstrapRequest{VaultName: bootstrapGateVault, Device: device},
+	)
 	require.NoError(t, err)
 	require.Equal(t, service.BootstrapLocalIdentityRecorded, result.Outcome)
 
 	bootstrapped, err := reader.Read(ctx, bootstrapGateDID)
 	require.NoError(t, err)
 	assert.Len(t, bootstrapped.Membership(), 1, "bootstrap must publish no repository record")
-	assert.Contains(t, bootstrapped.Membership(), atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"}, "bootstrap must leave the account's other records untouched")
+	assert.Contains(
+		t,
+		bootstrapped.Membership(),
+		atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"},
+		"bootstrap must leave the account's other records untouched",
+	)
 	assert.Equal(t, seeded.CommitCID(), bootstrapped.CommitCID(), "bootstrap must not change the repository")
 	selections, err := stateStore.VaultSelections(ctx)
 	require.NoError(t, err)
@@ -261,18 +293,31 @@ func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T)
 
 	publishedRevision, err := reader.Read(ctx, bootstrapGateDID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"app.bsky.actor.profile", publication.HeadNSID, publication.SnapshotNSID}, bootstrapGateCollections(t, publishedRevision))
+	assert.Equal(
+		t,
+		[]string{"app.bsky.actor.profile", publication.HeadNSID, publication.SnapshotNSID},
+		bootstrapGateCollections(t, publishedRevision),
+	)
 	view, err := adapter.ReadView(ctx)
 	require.NoError(t, err)
-	assert.NotErrorIs(t, err, service.ErrATProtoMaterialView)
+	require.NotErrorIs(t, err, service.ErrATProtoMaterialView)
 	assert.Len(t, view.Snapshots, 2)
 	assert.NotEmpty(t, view.Head)
 }
 
 func seedBootstrapGateRecord(t *testing.T, pds *atprototest.MemoryPDS, collection, rkey string) {
 	t.Helper()
-	body := []byte(`{"repo":"` + bootstrapGateDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap gate"}}]}`)
-	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+	body := []byte(
+		`{"repo":"` + bootstrapGateDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap gate"}}]}`,
+	)
+	status, _, err := pds.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.applyWrites",
+		nil,
+		body,
+		"application/json",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 }
@@ -291,8 +336,15 @@ func newBootstrapGateHome(t *testing.T, root, name string, content, sentinel []b
 	selected := filepath.Join(paths.Home, "synthetic")
 	require.NoError(t, os.MkdirAll(selected, 0o700))
 	target := config.Target{
-		ID: bootstrapGateTargetID, Source: model.SourceFiles, Mode: config.Review,
-		Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory, Exclude: []string{bootstrapGateSentinel}},
+		ID:     bootstrapGateTargetID,
+		Source: model.SourceFiles,
+		Mode:   config.Review,
+		Root: &config.Root{
+			Base:    model.RootHome,
+			Path:    "synthetic",
+			Kind:    model.SelectionDirectory,
+			Exclude: []string{bootstrapGateSentinel},
+		},
 	}
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
@@ -312,7 +364,16 @@ func newBootstrapGateHome(t *testing.T, root, name string, content, sentinel []b
 	return home
 }
 
-func publishBootstrapGate(t *testing.T, ctx context.Context, coordinator *service.Coordinator, home *bootstrapGateHome, binding publicationstate.Binding, adapter *service.ATProtoMaterialTransport, published *service.PublicationReader, sequence byte) service.MaterialPublishResult {
+func publishBootstrapGate(
+	t *testing.T,
+	ctx context.Context,
+	coordinator *service.Coordinator,
+	home *bootstrapGateHome,
+	binding publicationstate.Binding,
+	adapter *service.ATProtoMaterialTransport,
+	published *service.PublicationReader,
+	sequence byte,
+) service.MaterialPublishResult {
 	t.Helper()
 	store, err := publicationstate.Open(home.storeDir, binding)
 	require.NoError(t, err)
@@ -334,7 +395,14 @@ func publishBootstrapGate(t *testing.T, ctx context.Context, coordinator *servic
 	return result
 }
 
-func joinBootstrapGatePosition(t *testing.T, ctx context.Context, home *bootstrapGateHome, binding publicationstate.Binding, adapter *service.ATProtoMaterialTransport, blobs atproto.VaultReader) publicationstate.Floor {
+func joinBootstrapGatePosition(
+	t *testing.T,
+	ctx context.Context,
+	home *bootstrapGateHome,
+	binding publicationstate.Binding,
+	adapter *service.ATProtoMaterialTransport,
+	blobs atproto.VaultReader,
+) publicationstate.Floor {
 	t.Helper()
 	view, err := adapter.ReadView(ctx)
 	require.NoError(t, err)
@@ -351,12 +419,26 @@ func joinBootstrapGatePosition(t *testing.T, ctx context.Context, home *bootstra
 	defer func() { require.NoError(t, store.Close()) }()
 	proposal, err := store.Prepare(ctx, publicationstate.ModeFirstUse, observation, payload)
 	require.NoError(t, err)
-	accepted, err := store.Accept(ctx, publicationstate.ModeFirstUse, proposal.StateToken, observation, payload, proposal.Confirmation)
+	accepted, err := store.Accept(
+		ctx,
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return accepted
 }
 
-func pullBootstrapGate(t *testing.T, ctx context.Context, home *bootstrapGateHome, binding publicationstate.Binding, adapter *service.ATProtoMaterialTransport, blobs atproto.VaultReader) struct {
+func pullBootstrapGate(
+	t *testing.T,
+	ctx context.Context,
+	home *bootstrapGateHome,
+	binding publicationstate.Binding,
+	adapter *service.ATProtoMaterialTransport,
+	blobs atproto.VaultReader,
+) struct {
 	Plan     service.PublicationApplyPlan
 	Report   service.PublicationApplyReport
 	Accepted publicationstate.Floor
@@ -392,8 +474,14 @@ func pullBootstrapGate(t *testing.T, ctx context.Context, home *bootstrapGateHom
 	report, err := service.ApplyPublication(ctx, request)
 	require.NoError(t, err)
 	accepted, err := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
-		Directory: home.storeDir, Binding: binding, Mode: staged.Mode, FloorRevision: inspection.Floor.Revision,
-		StateToken: staged.StateToken, Confirmation: staged.Confirmation, Observation: observation, Payload: material.payload,
+		Directory:     home.storeDir,
+		Binding:       binding,
+		Mode:          staged.Mode,
+		FloorRevision: inspection.Floor.Revision,
+		StateToken:    staged.StateToken,
+		Confirmation:  staged.Confirmation,
+		Observation:   observation,
+		Payload:       material.payload,
 	})
 	require.NoError(t, journal.Close())
 	require.NoError(t, err)
@@ -404,7 +492,13 @@ func pullBootstrapGate(t *testing.T, ctx context.Context, home *bootstrapGateHom
 	}{Plan: plan, Report: report, Accepted: accepted}
 }
 
-func bootstrapGateMaterialRead(t *testing.T, ctx context.Context, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor, blobs atproto.VaultReader) bootstrapGateMaterial {
+func bootstrapGateMaterialRead(
+	t *testing.T,
+	ctx context.Context,
+	view publicationstate.SuppliedRepositoryView,
+	floor publicationstate.Floor,
+	blobs atproto.VaultReader,
+) bootstrapGateMaterial {
 	t.Helper()
 	require.NotEmpty(t, view.Snapshots)
 	require.Less(t, floor.Sequence, uint64(len(view.Snapshots)))
@@ -418,7 +512,12 @@ func bootstrapGateMaterialRead(t *testing.T, ctx context.Context, view publicati
 	terminal := view.Snapshots[len(view.Snapshots)-1]
 	terminalRecord, err := publication.DecodeSnapshot(terminal.Raw)
 	require.NoError(t, err)
-	terminalPayload, err := blobs.FetchBlob(ctx, bootstrapGateDID, terminalRecord.Blob.CID, int64(terminalRecord.Blob.Size))
+	terminalPayload, err := blobs.FetchBlob(
+		ctx,
+		bootstrapGateDID,
+		terminalRecord.Blob.CID,
+		int64(terminalRecord.Blob.Size),
+	)
 	require.NoError(t, err)
 	remote, err := publication.DecodePayload(terminalPayload, terminalRecord.Blob)
 	require.NoError(t, err)

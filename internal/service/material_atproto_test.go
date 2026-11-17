@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/url"
 	"os"
@@ -20,14 +21,15 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
 	"github.com/ipld/go-car"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -36,7 +38,7 @@ const (
 	atprotoMaterialUploadCap = int64(1 << 20)
 )
 
-var atprotoMaterialLostResponse = errors.New("synthetic repository lost the applyWrites response after commit")
+var errAtprotoMaterialLostResponse = errors.New("synthetic repository lost the applyWrites response after commit")
 
 type atprotoMaterialRepository struct {
 	mu                 sync.Mutex
@@ -75,7 +77,11 @@ func newATProtoMaterialRepository(t *testing.T, did string) *atprotoMaterialRepo
 	return repository
 }
 
-func buildATProtoMaterialRevision(did string, key *atcrypto.PrivateKeyP256, records map[atproto.RecordKey][]byte) (atprototest.SignedRevision, error) {
+func buildATProtoMaterialRevision(
+	did string,
+	key *atcrypto.PrivateKeyP256,
+	records map[atproto.RecordKey][]byte,
+) (atprototest.SignedRevision, error) {
 	keys := make([]atproto.RecordKey, 0, len(records))
 	for key := range records {
 		keys = append(keys, key)
@@ -148,7 +154,11 @@ func (repository *atprotoMaterialRepository) commitRecord(t *testing.T, key atpr
 
 func (repository *atprotoMaterialRepository) commitUnrelatedRecord(t *testing.T) {
 	t.Helper()
-	record, err := atprototest.BuildRecord("app.bsky.feed.post", "self", map[string]any{"text": "synthetic unrelated record"})
+	record, err := atprototest.BuildRecord(
+		"app.bsky.feed.post",
+		"self",
+		map[string]any{"text": "synthetic unrelated record"},
+	)
 	require.NoError(t, err)
 	repository.commitRecord(t, atproto.RecordKey{Collection: "app.bsky.feed.post", RKey: "self"}, record.Data)
 }
@@ -259,7 +269,13 @@ func (repository *atprotoMaterialRepository) overrideUpload(mimeType, identifier
 	repository.uploadMIMEType, repository.uploadCID, repository.uploadSize = mimeType, identifier, size
 }
 
-func (repository *atprotoMaterialRepository) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (repository *atprotoMaterialRepository) Do(
+	ctx context.Context,
+	method, endpoint string,
+	_ url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
@@ -349,9 +365,7 @@ func (repository *atprotoMaterialRepository) applyWrites(body []byte) (int, []by
 	}
 	snapshotWrites, headWrites := 0, 0
 	next := make(map[atproto.RecordKey][]byte, len(repository.records)+2)
-	for key, data := range repository.records {
-		next[key] = data
-	}
+	maps.Copy(next, repository.records)
 	seen := make(map[atproto.RecordKey]bool, len(input.Writes))
 	for _, write := range input.Writes {
 		key := atproto.RecordKey{Collection: write.Collection, RKey: write.RKey}
@@ -413,12 +427,16 @@ func (repository *atprotoMaterialRepository) applyWrites(body []byte) (int, []by
 	repository.servedCAR = nil
 	if repository.loseApplyResponse {
 		repository.loseApplyResponse = false
-		return 0, nil, atprotoMaterialLostResponse
+		return 0, nil, errAtprotoMaterialLostResponse
 	}
 	return atprotoMaterialJSONResponse(map[string]any{"commit": map[string]string{"cid": revision.CommitCID.String()}})
 }
 
-func (repository *atprotoMaterialRepository) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (repository *atprotoMaterialRepository) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	_ url.Values,
+) (int, io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
@@ -470,7 +488,12 @@ func atprotoMaterialTamperSnapshot(t *testing.T, carBytes []byte, target cid.Cid
 	return output.Bytes()
 }
 
-func newATProtoMaterialTransport(t *testing.T, binding publicationstate.Binding, did string, repository *atprotoMaterialRepository) *ATProtoMaterialTransport {
+func newATProtoMaterialTransport(
+	t *testing.T,
+	binding publicationstate.Binding,
+	did string,
+	repository *atprotoMaterialRepository,
+) *ATProtoMaterialTransport {
 	t.Helper()
 	transport, err := NewATProtoMaterialTransport(ATProtoMaterialConfig{
 		Binding: binding, DID: did, Reader: repository.readerFor(did),
@@ -488,7 +511,13 @@ func atprotoMaterialBinding(did string) publicationstate.Binding {
 	return binding
 }
 
-func atprotoMaterialRecords(t *testing.T, binding publicationstate.Binding, publicationID [16]byte, sequence uint64, parent []byte) ([]byte, []byte) {
+func atprotoMaterialRecords(
+	t *testing.T,
+	binding publicationstate.Binding,
+	publicationID [16]byte,
+	sequence uint64,
+	parent []byte,
+) ([]byte, []byte) {
 	t.Helper()
 	payload := []byte(fmt.Sprintf("synthetic atproto repository payload %d", sequence))
 	candidate := materialTestCandidate(t, binding, publicationID, sequence, parent, payload)
@@ -614,8 +643,18 @@ func TestMaterialATProtoGenesisPublishesThroughCoordinator(t *testing.T) {
 	assert.Equal(t, atprotoMaterialCreateAction, bodies[0].Writes[1].Type)
 	assert.Equal(t, materialHeadKey, bodies[0].Writes[1].RKey)
 
-	assert.Equal(t, proposal.Batch.SnapshotRecord, fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey}))
-	assert.Equal(t, proposal.Batch.HeadRecord, fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}))
+	assert.Equal(
+		t,
+		proposal.Batch.SnapshotRecord,
+		fixture.repository.record(
+			atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey},
+		),
+	)
+	assert.Equal(
+		t,
+		proposal.Batch.HeadRecord,
+		fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}),
+	)
 	require.True(t, fixture.repository.blobRetrievable(proposal.Blob.CID))
 	packed, err := vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
@@ -656,13 +695,27 @@ func TestMaterialATProtoSuccessorFencesPreviousCommit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, genesis.Floor.RecordCID, record.Parent)
 
-	assert.Equal(t, []string{string(genesisProposal.Batch.ExpectedContext.RepositoryDigest), afterGenesis}, fixture.repository.swapsSeen())
+	assert.Equal(
+		t,
+		[]string{string(genesisProposal.Batch.ExpectedContext.RepositoryDigest), afterGenesis},
+		fixture.repository.swapsSeen(),
+	)
 	bodies := fixture.repository.appliedBodies()
 	require.Len(t, bodies, 2)
 	assert.Equal(t, atprotoMaterialCreateAction, bodies[1].Writes[0].Type)
 	assert.Equal(t, atprotoMaterialUpdateAction, bodies[1].Writes[1].Type)
-	assert.Equal(t, genesisProposal.Batch.SnapshotRecord, fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: genesisProposal.Batch.SnapshotKey}))
-	assert.Equal(t, proposal.Batch.HeadRecord, fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}))
+	assert.Equal(
+		t,
+		genesisProposal.Batch.SnapshotRecord,
+		fixture.repository.record(
+			atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: genesisProposal.Batch.SnapshotKey},
+		),
+	)
+	assert.Equal(
+		t,
+		proposal.Batch.HeadRecord,
+		fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}),
+	)
 }
 
 func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
@@ -672,7 +725,14 @@ func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
 
 	packed, err := vault.Pack(materialTestSnapshot("synthetic atproto fenced payload"))
 	require.NoError(t, err)
-	candidate := materialTestCandidate(t, fixture.binding, [16]byte{0x35, 0x83}, 1, genesis.Floor.RecordCID, packed.Payload)
+	candidate := materialTestCandidate(
+		t,
+		fixture.binding,
+		[16]byte{0x35, 0x83},
+		1,
+		genesis.Floor.RecordCID,
+		packed.Payload,
+	)
 	view, err := fixture.transport.ReadView(ctx)
 	require.NoError(t, err)
 	captured := genesis.Floor
@@ -703,7 +763,10 @@ func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
 	assert.Equal(t, appliesBefore+1, fixture.repository.applyCount())
 	assert.Equal(t, doBefore+1, fixture.repository.doCount())
 	assert.Equal(t, movedTo, fixture.repository.commitCID())
-	assert.Empty(t, fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: batch.SnapshotKey}))
+	assert.Empty(
+		t,
+		fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: batch.SnapshotKey}),
+	)
 	swaps := fixture.repository.swapsSeen()
 	require.Len(t, swaps, 2)
 	assert.Equal(t, string(batch.ExpectedContext.RepositoryDigest), swaps[1])
@@ -733,8 +796,16 @@ func TestMaterialATProtoRecordsProviderExposureOnRejectedBatch(t *testing.T) {
 	packed, packErr := vault.Pack(fixture.snapshot)
 	require.NoError(t, packErr)
 	assert.Equal(t, packed.Payload, fixture.repository.blob(proposal.Blob.CID))
-	assert.Empty(t, fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey}))
-	assert.Empty(t, fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}))
+	assert.Empty(
+		t,
+		fixture.repository.record(
+			atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey},
+		),
+	)
+	assert.Empty(
+		t,
+		fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}),
+	)
 
 	_, present, loadErr := fixture.store.Load(ctx)
 	require.NoError(t, loadErr)
@@ -759,7 +830,13 @@ func TestMaterialATProtoResolvesAmbiguousDispatchWithoutRetry(t *testing.T) {
 	require.ErrorIs(t, err, atproto.ErrAmbiguousTransport)
 	require.ErrorIs(t, err, atproto.ErrCandidateMayBeDisclosed)
 	assert.Equal(t, 1, fixture.repository.applyCount())
-	assert.Equal(t, proposal.Batch.SnapshotRecord, fixture.repository.record(atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey}))
+	assert.Equal(
+		t,
+		proposal.Batch.SnapshotRecord,
+		fixture.repository.record(
+			atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: proposal.Batch.SnapshotKey},
+		),
+	)
 
 	view, err := fixture.transport.ReadView(ctx)
 	require.NoError(t, err)
@@ -768,7 +845,12 @@ func TestMaterialATProtoResolvesAmbiguousDispatchWithoutRetry(t *testing.T) {
 	resolution, err := fixture.store.ResolveAttempt(ctx, proposal.Proposal.AttemptID, loaded.StateDigest, view)
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.OutcomeCurrent, resolution.Outcome)
-	finalization, err := fixture.store.FinalizeAttempt(ctx, proposal.Proposal.AttemptID, resolution.Attempt.StateDigest, view)
+	finalization, err := fixture.store.FinalizeAttempt(
+		ctx,
+		proposal.Proposal.AttemptID,
+		resolution.Attempt.StateDigest,
+		view,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, finalization.Floor.RecordCID)
 	assert.Equal(t, 1, fixture.repository.applyCount())
@@ -841,7 +923,12 @@ func TestMaterialATProtoRefusesUploadReferenceMismatch(t *testing.T) {
 		reference, uploadErr := transport.UploadPayload(ctx, payload)
 		require.NoError(t, uploadErr)
 		assert.Equal(t, uint64(len(payload)), reference.Size)
-		assert.Equal(t, "application/x-tar", reference.MIMEType, "the provider's canonicalised media type must travel with the reference")
+		assert.Equal(
+			t,
+			"application/x-tar",
+			reference.MIMEType,
+			"the provider's canonicalised media type must travel with the reference",
+		)
 
 		expected, cidErr := publication.RawPayloadCID(payload)
 		require.NoError(t, cidErr)
@@ -958,23 +1045,79 @@ func TestMaterialATProtoRefusesWriteBatchShapes(t *testing.T) {
 		tamper func(*MaterialWriteBatch)
 	}{
 		{name: "missing-head", reason: "record", tamper: func(batch *MaterialWriteBatch) { batch.HeadRecord = nil }},
-		{name: "missing-snapshot", reason: "record", tamper: func(batch *MaterialWriteBatch) { batch.SnapshotRecord = nil }},
-		{name: "wrong-snapshot-collection", reason: "collection", tamper: func(batch *MaterialWriteBatch) { batch.SnapshotCollection = publication.HeadNSID }},
-		{name: "wrong-head-collection", reason: "collection", tamper: func(batch *MaterialWriteBatch) { batch.HeadCollection = publication.SnapshotNSID }},
-		{name: "wrong-head-key", reason: "collection", tamper: func(batch *MaterialWriteBatch) { batch.HeadKey = "current" }},
-		{name: "wrong-snapshot-key", reason: "snapshot_key", tamper: func(batch *MaterialWriteBatch) { batch.SnapshotKey = "0000000000000009" }},
-		{name: "type-mismatch", reason: "head_record", tamper: func(batch *MaterialWriteBatch) { batch.HeadRecord = batch.SnapshotRecord }},
-		{name: "create-only-false", reason: "create_only", tamper: func(batch *MaterialWriteBatch) { batch.SnapshotCreateOnly = false }},
-		{name: "atomic-batch-false", reason: "conditions", tamper: func(batch *MaterialWriteBatch) { batch.RequiresAtomicBatch = false }},
-		{name: "create-exclude-false", reason: "conditions", tamper: func(batch *MaterialWriteBatch) { batch.RequiresCreateExclude = false }},
-		{name: "policy-check-true", reason: "conditions", tamper: func(batch *MaterialWriteBatch) { batch.RequiresPolicyCheck = true }},
+		{
+			name:   "missing-snapshot",
+			reason: "record",
+			tamper: func(batch *MaterialWriteBatch) { batch.SnapshotRecord = nil },
+		},
+		{
+			name:   "wrong-snapshot-collection",
+			reason: "collection",
+			tamper: func(batch *MaterialWriteBatch) { batch.SnapshotCollection = publication.HeadNSID },
+		},
+		{
+			name:   "wrong-head-collection",
+			reason: "collection",
+			tamper: func(batch *MaterialWriteBatch) { batch.HeadCollection = publication.SnapshotNSID },
+		},
+		{
+			name:   "wrong-head-key",
+			reason: "collection",
+			tamper: func(batch *MaterialWriteBatch) { batch.HeadKey = "current" },
+		},
+		{
+			name:   "wrong-snapshot-key",
+			reason: "snapshot_key",
+			tamper: func(batch *MaterialWriteBatch) { batch.SnapshotKey = "0000000000000009" },
+		},
+		{
+			name:   "type-mismatch",
+			reason: "head_record",
+			tamper: func(batch *MaterialWriteBatch) { batch.HeadRecord = batch.SnapshotRecord },
+		},
+		{
+			name:   "create-only-false",
+			reason: "create_only",
+			tamper: func(batch *MaterialWriteBatch) { batch.SnapshotCreateOnly = false },
+		},
+		{
+			name:   "atomic-batch-false",
+			reason: "conditions",
+			tamper: func(batch *MaterialWriteBatch) { batch.RequiresAtomicBatch = false },
+		},
+		{
+			name:   "create-exclude-false",
+			reason: "conditions",
+			tamper: func(batch *MaterialWriteBatch) { batch.RequiresCreateExclude = false },
+		},
+		{
+			name:   "policy-check-true",
+			reason: "conditions",
+			tamper: func(batch *MaterialWriteBatch) { batch.RequiresPolicyCheck = true },
+		},
 		{name: "policy-not-nil", reason: "policy", tamper: func(batch *MaterialWriteBatch) {
-			batch.ExpectedContext.Policy = &publicationstate.Policy{Revision: "synthetic", Identity: []byte{0x01}, OwnerOnly: true}
+			batch.ExpectedContext.Policy = &publicationstate.Policy{
+				Revision:  "synthetic",
+				Identity:  []byte{0x01},
+				OwnerOnly: true,
+			}
 		}},
-		{name: "digest-not-a-cid", reason: "context", tamper: func(batch *MaterialWriteBatch) { batch.ExpectedContext.RepositoryDigest = []byte("synthetic-digest") }},
-		{name: "revision-missing", reason: "context", tamper: func(batch *MaterialWriteBatch) { batch.ExpectedContext.RepositoryRevision = "" }},
+		{
+			name:   "digest-not-a-cid",
+			reason: "context",
+			tamper: func(batch *MaterialWriteBatch) { batch.ExpectedContext.RepositoryDigest = []byte("synthetic-digest") },
+		},
+		{
+			name:   "revision-missing",
+			reason: "context",
+			tamper: func(batch *MaterialWriteBatch) { batch.ExpectedContext.RepositoryRevision = "" },
+		},
 		{name: "unexpected-predecessor", reason: "predecessor", tamper: func(batch *MaterialWriteBatch) {
-			batch.ExpectedPredecessor = &publicationstate.RecordReference{Key: "0000000000000000", CID: bytes.Clone(batch.ExpectedSnapshotCID), Sequence: 0}
+			batch.ExpectedPredecessor = &publicationstate.RecordReference{
+				Key:      "0000000000000000",
+				CID:      bytes.Clone(batch.ExpectedSnapshotCID),
+				Sequence: 0,
+			}
 		}},
 	}
 	for _, testCase := range genesisCases {
@@ -1018,7 +1161,11 @@ func TestMaterialATProtoRefusesWriteBatchShapes(t *testing.T) {
 		reason string
 		tamper func(*MaterialWriteBatch)
 	}{
-		{name: "missing-predecessor", reason: "predecessor", tamper: func(batch *MaterialWriteBatch) { batch.ExpectedPredecessor = nil }},
+		{
+			name:   "missing-predecessor",
+			reason: "predecessor",
+			tamper: func(batch *MaterialWriteBatch) { batch.ExpectedPredecessor = nil },
+		},
 		{name: "predecessor-key-sequence", reason: "predecessor", tamper: func(batch *MaterialWriteBatch) {
 			batch.ExpectedPredecessor.Key = "0000000000000009"
 		}},
@@ -1031,7 +1178,11 @@ func TestMaterialATProtoRefusesWriteBatchShapes(t *testing.T) {
 		{name: "predecessor-cid-differs", reason: "predecessor", tamper: func(batch *MaterialWriteBatch) {
 			batch.ExpectedPredecessor.CID = bytes.Clone(successor.ExpectedSnapshotCID)
 		}},
-		{name: "head-create-true", reason: "predecessor", tamper: func(batch *MaterialWriteBatch) { batch.HeadCreate = true }},
+		{
+			name:   "head-create-true",
+			reason: "predecessor",
+			tamper: func(batch *MaterialWriteBatch) { batch.HeadCreate = true },
+		},
 	}
 	for _, testCase := range successorCases {
 		t.Run("successor-"+testCase.name, func(t *testing.T) {
@@ -1040,7 +1191,9 @@ func TestMaterialATProtoRefusesWriteBatchShapes(t *testing.T) {
 			batch.ExpectedSnapshotCID = bytes.Clone(successor.ExpectedSnapshotCID)
 			batch.HeadRecord = bytes.Clone(successor.HeadRecord)
 			batch.ExpectedPredecessor = &publicationstate.RecordReference{
-				Key: successor.ExpectedPredecessor.Key, CID: bytes.Clone(successor.ExpectedPredecessor.CID), Sequence: successor.ExpectedPredecessor.Sequence,
+				Key:      successor.ExpectedPredecessor.Key,
+				CID:      bytes.Clone(successor.ExpectedPredecessor.CID),
+				Sequence: successor.ExpectedPredecessor.Sequence,
 			}
 			testCase.tamper(&batch)
 			_, err := fixture.transport.PrepareWrites(ctx, batch)
@@ -1068,15 +1221,67 @@ func TestMaterialATProtoClassifiesDispatchOutcomes(t *testing.T) {
 		statusCode int
 		reason     string
 	}{
-		{name: "transport-error", failure: atprotoMaterialLostResponse, reason: "dispatch_ambiguous", expected: []error{atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed}},
-		{name: "rate-limited", status: 429, expected: []error{atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed}, statusCode: 429},
-		{name: "quota", status: 400, code: "StorageQuotaExceeded", expected: []error{atproto.ErrPublicationQuota, atproto.ErrCandidateMayBeDisclosed}, statusCode: 400},
-		{name: "rate-limit-code", status: 400, code: "RateLimitExceeded", expected: []error{atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed}, statusCode: 400},
-		{name: "batch-too-large", status: 413, expected: []error{atproto.ErrPublicationBatchTooLarge, atproto.ErrCandidateMayBeDisclosed}, statusCode: 413},
-		{name: "payload-too-large", status: 400, code: "PayloadTooLarge", expected: []error{atproto.ErrPublicationBatchTooLarge, atproto.ErrCandidateMayBeDisclosed}, statusCode: 400},
-		{name: "authorization", status: 403, expected: []error{atproto.ErrPublicationQueued, atproto.ErrBatchRejected, atproto.ErrCandidateMayBeDisclosed}, statusCode: 403},
-		{name: "batch-rejected", status: 400, expected: []error{atproto.ErrBatchRejected, atproto.ErrCandidateMayBeDisclosed}, statusCode: 400},
-		{name: "server-error", status: 503, expected: []error{atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed}, statusCode: 503},
+		{
+			name:     "transport-error",
+			failure:  errAtprotoMaterialLostResponse,
+			reason:   "dispatch_ambiguous",
+			expected: []error{atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed},
+		},
+		{
+			name:       "rate-limited",
+			status:     429,
+			expected:   []error{atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 429,
+		},
+		{
+			name:       "quota",
+			status:     400,
+			code:       "StorageQuotaExceeded",
+			expected:   []error{atproto.ErrPublicationQuota, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 400,
+		},
+		{
+			name:       "rate-limit-code",
+			status:     400,
+			code:       "RateLimitExceeded",
+			expected:   []error{atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 400,
+		},
+		{
+			name:       "batch-too-large",
+			status:     413,
+			expected:   []error{atproto.ErrPublicationBatchTooLarge, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 413,
+		},
+		{
+			name:       "payload-too-large",
+			status:     400,
+			code:       "PayloadTooLarge",
+			expected:   []error{atproto.ErrPublicationBatchTooLarge, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 400,
+		},
+		{
+			name:   "authorization",
+			status: 403,
+			expected: []error{
+				atproto.ErrPublicationQueued,
+				atproto.ErrBatchRejected,
+				atproto.ErrCandidateMayBeDisclosed,
+			},
+			statusCode: 403,
+		},
+		{
+			name:       "batch-rejected",
+			status:     400,
+			expected:   []error{atproto.ErrBatchRejected, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 400,
+		},
+		{
+			name:       "server-error",
+			status:     503,
+			expected:   []error{atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed},
+			statusCode: 503,
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1261,9 +1466,7 @@ func TestMaterialATProtoRefusesRepositoryViews(t *testing.T) {
 		{name: "unexpected-head-key", reason: "head_key", records: func(t *testing.T) map[atproto.RecordKey][]byte {
 			genesis := atprotoMaterialGenesisRecords(t, binding)
 			records := make(map[atproto.RecordKey][]byte, len(genesis)+1)
-			for key, data := range genesis {
-				records[key] = data
-			}
+			maps.Copy(records, genesis)
 			records[atproto.RecordKey{Collection: publication.HeadNSID, RKey: "current"}] = records[headKey]
 			return records
 		}},
@@ -1275,7 +1478,14 @@ func TestMaterialATProtoRefusesRepositoryViews(t *testing.T) {
 			require.NoError(t, err)
 			identifier, err := cid.Cast(targetCID)
 			require.NoError(t, err)
-			replacementCandidate := materialTestCandidate(t, binding, [16]byte{0x51, 0x79}, 0, nil, []byte("synthetic shadow payload"))
+			replacementCandidate := materialTestCandidate(
+				t,
+				binding,
+				[16]byte{0x51, 0x79},
+				0,
+				nil,
+				[]byte("synthetic shadow payload"),
+			)
 			return atprotoMaterialTamperSnapshot(t, repository.car(), identifier, replacementCandidate.SnapshotRecord)
 		}},
 	}
@@ -1335,7 +1545,14 @@ func TestMaterialATProtoRefusesTamperedCarWithoutShadowRead(t *testing.T) {
 	require.NoError(t, err)
 	identifier, err := cid.Cast(committed)
 	require.NoError(t, err)
-	substitute := materialTestCandidate(t, binding, [16]byte{0x51, 0x7a}, 0, nil, []byte("synthetic substitute payload"))
+	substitute := materialTestCandidate(
+		t,
+		binding,
+		[16]byte{0x51, 0x7a},
+		0,
+		nil,
+		[]byte("synthetic substitute payload"),
+	)
 	repository.serveCar(t, atprotoMaterialTamperSnapshot(t, repository.car(), identifier, substitute.SnapshotRecord))
 	transport := newATProtoMaterialTransport(t, binding, atprotoMaterialDID, repository)
 
@@ -1354,11 +1571,33 @@ func TestMaterialATProtoRefusesRecordByteSubstitution(t *testing.T) {
 	require.NoError(t, err)
 	identifier, err := cid.Cast(committed)
 	require.NoError(t, err)
-	require.NoError(t, atprotoMaterialRoundTrip(atproto.ProvenRecord{CID: identifier.String(), Data: snapshotRecord}, identifier.String()))
+	require.NoError(
+		t,
+		atprotoMaterialRoundTrip(
+			atproto.ProvenRecord{CID: identifier.String(), Data: snapshotRecord},
+			identifier.String(),
+		),
+	)
 
-	substitute := materialTestCandidate(t, binding, [16]byte{0x51, 0x7c}, 0, nil, []byte("synthetic substitute payload"))
-	require.Error(t, atprotoMaterialRoundTrip(atproto.ProvenRecord{CID: identifier.String(), Data: substitute.SnapshotRecord}, identifier.String()))
-	require.Error(t, atprotoMaterialRoundTrip(atproto.ProvenRecord{CID: identifier.String(), Data: headRecord}, identifier.String()))
+	substitute := materialTestCandidate(
+		t,
+		binding,
+		[16]byte{0x51, 0x7c},
+		0,
+		nil,
+		[]byte("synthetic substitute payload"),
+	)
+	require.Error(
+		t,
+		atprotoMaterialRoundTrip(
+			atproto.ProvenRecord{CID: identifier.String(), Data: substitute.SnapshotRecord},
+			identifier.String(),
+		),
+	)
+	require.Error(
+		t,
+		atprotoMaterialRoundTrip(atproto.ProvenRecord{CID: identifier.String(), Data: headRecord}, identifier.String()),
+	)
 }
 
 func TestMaterialATProtoKeepsUnrelatedCollectionsSeparate(t *testing.T) {
@@ -1367,7 +1606,11 @@ func TestMaterialATProtoKeepsUnrelatedCollectionsSeparate(t *testing.T) {
 	repository := newATProtoMaterialRepository(t, atprotoMaterialDID)
 	genesis := atprotoMaterialGenesisRecords(t, binding)
 	repository.setRecords(t, genesis)
-	unrelated, err := atprototest.BuildRecord("app.bsky.feed.post", "self", map[string]any{"text": "synthetic unrelated record"})
+	unrelated, err := atprototest.BuildRecord(
+		"app.bsky.feed.post",
+		"self",
+		map[string]any{"text": "synthetic unrelated record"},
+	)
 	require.NoError(t, err)
 	repository.commitRecord(t, atproto.RecordKey{Collection: "app.bsky.feed.post", RKey: "self"}, unrelated.Data)
 	transport := newATProtoMaterialTransport(t, binding, atprotoMaterialDID, repository)
@@ -1379,5 +1622,9 @@ func TestMaterialATProtoKeepsUnrelatedCollectionsSeparate(t *testing.T) {
 	assert.Nil(t, view.SuppliedContext.Policy)
 	assert.Equal(t, genesis[atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}], view.Head)
 	require.Len(t, view.Snapshots, 1)
-	assert.Equal(t, genesis[atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: view.Snapshots[0].Key}], view.Snapshots[0].Raw)
+	assert.Equal(
+		t,
+		genesis[atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: view.Snapshots[0].Key}],
+		view.Snapshots[0].Raw,
+	)
 }

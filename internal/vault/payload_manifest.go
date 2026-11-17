@@ -186,7 +186,8 @@ func inspectPayloadEntries(decoder *json.Decoder, limits Limits, counts *payload
 		if totalBytes > limits.MaxTotalBytes {
 			return payloadInspectBound("MaxTotalBytes")
 		}
-		if wire.Source == model.SourceFiles && wire.State == string(model.FilePresent) && wire.Kind == model.FileRegular {
+		if wire.Source == model.SourceFiles && wire.State == string(model.FilePresent) &&
+			wire.Kind == model.FileRegular {
 			if wire.Size > int64(^uint64(0)>>1)-counts.plaintextBytes {
 				return payloadInspectBound("MaxTotalBytes")
 			}

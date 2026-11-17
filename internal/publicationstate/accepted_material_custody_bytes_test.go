@@ -5,8 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCapacity(t *testing.T) {
@@ -32,8 +33,8 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Positive(t, successorPayloadBytes)
 	require.LessOrEqual(t, basePayloadBytes, uint64(16<<10))
 	require.LessOrEqual(t, successorPayloadBytes, uint64(16<<10))
-	require.LessOrEqual(t, basePayloadBytes, uint64(publication.MaxBlobBytes))
-	require.LessOrEqual(t, successorPayloadBytes, uint64(publication.MaxBlobBytes))
+	require.LessOrEqual(t, basePayloadBytes, publication.MaxBlobBytes)
+	require.LessOrEqual(t, successorPayloadBytes, publication.MaxBlobBytes)
 	require.LessOrEqual(t, basePayloadBytes, lowCustodyBytes)
 	require.LessOrEqual(t, successorPayloadBytes, lowCustodyBytes)
 	totalPayloadBytes := basePayloadBytes + successorPayloadBytes
@@ -71,7 +72,15 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Equal(t, lowFloor, lowMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, lowMaterial.SnapshotRecord)
 	require.Equal(t, baseCandidate.Payload, lowMaterial.Payload)
-	lowBefore := readAcceptedMaterialCapacityEvidence(t, lowStore, lowDirectory, lowAttempt.ID, lowFloor, baseCandidate, lowAttemptLimits)
+	lowBefore := readAcceptedMaterialCapacityEvidence(
+		t,
+		lowStore,
+		lowDirectory,
+		lowAttempt.ID,
+		lowFloor,
+		baseCandidate,
+		lowAttemptLimits,
+	)
 	require.Equal(t, int64(1), lowBefore.CatalogCount)
 	require.Equal(t, int64(lowCustodyBytes), lowBefore.CatalogBytes)
 	require.Equal(t, int64(lowCustodyBytes), lowBefore.CatalogSize)
@@ -89,7 +98,15 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Equal(t, AttemptProposal{}, proposal)
 	requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
 	require.Equal(t, successorWitness, lowSuccessorCandidate)
-	lowAfterRefusal := readAcceptedMaterialCapacityEvidence(t, lowStore, lowDirectory, lowAttempt.ID, lowFloor, baseCandidate, lowAttemptLimits)
+	lowAfterRefusal := readAcceptedMaterialCapacityEvidence(
+		t,
+		lowStore,
+		lowDirectory,
+		lowAttempt.ID,
+		lowFloor,
+		baseCandidate,
+		lowAttemptLimits,
+	)
 	require.Equal(t, lowBefore, lowAfterRefusal)
 
 	lowMaterialAfterRefusal, err := lowStore.ReadAcceptedMaterial(ctx, f.binding, lowFloor)
@@ -100,7 +117,15 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	lowAfterRead, err := lowStore.ReadAcceptedMaterial(ctx, f.binding, lowFloor)
 	require.NoError(t, err)
 	require.Equal(t, lowMaterialAfterRefusal, lowAfterRead)
-	lowAfterReadEvidence := readAcceptedMaterialCapacityEvidence(t, lowStore, lowDirectory, lowAttempt.ID, lowFloor, baseCandidate, lowAttemptLimits)
+	lowAfterReadEvidence := readAcceptedMaterialCapacityEvidence(
+		t,
+		lowStore,
+		lowDirectory,
+		lowAttempt.ID,
+		lowFloor,
+		baseCandidate,
+		lowAttemptLimits,
+	)
 	require.Equal(t, lowBefore, lowAfterReadEvidence)
 	require.Equal(t, successorWitness, lowSuccessorCandidate)
 
@@ -113,7 +138,15 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Equal(t, lowFloor, reopenedMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, reopenedMaterial.SnapshotRecord)
 	require.Equal(t, baseCandidate.Payload, reopenedMaterial.Payload)
-	lowAfterReopen := readAcceptedMaterialCapacityEvidence(t, reopened, lowDirectory, lowAttempt.ID, lowFloor, baseCandidate, lowAttemptLimits)
+	lowAfterReopen := readAcceptedMaterialCapacityEvidence(
+		t,
+		reopened,
+		lowDirectory,
+		lowAttempt.ID,
+		lowFloor,
+		baseCandidate,
+		lowAttemptLimits,
+	)
 	require.Equal(t, lowBefore, lowAfterReopen)
 	require.Equal(t, successorWitness, lowSuccessorCandidate)
 	require.Equal(t, lowSuccessorCandidate, positiveSuccessorCandidate)
@@ -133,24 +166,53 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.NoError(t, err)
 	defer positiveStore.Close()
 
-	positiveBaseAttempt, positiveFinalized := acceptedMaterialRevisionFinalizeGenesis(t, positiveStore, f, baseCandidate)
+	positiveBaseAttempt, positiveFinalized := acceptedMaterialRevisionFinalizeGenesis(
+		t,
+		positiveStore,
+		f,
+		baseCandidate,
+	)
 	positiveFloor := cloneFloor(positiveFinalized.Floor)
 	require.Equal(t, uint64(0), positiveFloor.Sequence)
 	require.Equal(t, mustRecordCID(t, baseCandidate.SnapshotRecord), positiveFloor.RecordCID)
 	require.NotEqual(t, lowFloor.DatabaseID, positiveFloor.DatabaseID)
-	positiveBefore := readAcceptedMaterialCapacityEvidence(t, positiveStore, positiveDirectory, positiveBaseAttempt.ID, positiveFloor, baseCandidate, positiveOptions.AttemptLimits)
+	positiveBefore := readAcceptedMaterialCapacityEvidence(
+		t,
+		positiveStore,
+		positiveDirectory,
+		positiveBaseAttempt.ID,
+		positiveFloor,
+		baseCandidate,
+		positiveOptions.AttemptLimits,
+	)
 	require.Equal(t, positiveFloor, positiveBefore.Public.Floor)
-	positivePositionLimitBytesBefore, positiveAttemptLimitBytesBefore := readAcceptedMaterialCapacityLimitBytes(t, positiveStore, positiveOptions.AttemptLimits)
+	positivePositionLimitBytesBefore, positiveAttemptLimitBytesBefore := readAcceptedMaterialCapacityLimitBytes(
+		t,
+		positiveStore,
+		positiveOptions.AttemptLimits,
+	)
 
 	require.Equal(t, successorWitness, positiveSuccessorCandidate)
 	require.Equal(t, lowSuccessorCandidate, positiveSuccessorCandidate)
 	positivePredecessorView := attemptView(f, f.observation(1), false)
 	positiveReview := attemptReview()
-	positiveProposal, err := positiveStore.PrepareAttempt(ctx, positiveSuccessorCandidate, positivePredecessorView, positiveReview)
+	positiveProposal, err := positiveStore.PrepareAttempt(
+		ctx,
+		positiveSuccessorCandidate,
+		positivePredecessorView,
+		positiveReview,
+	)
 	require.NoError(t, err)
 	require.NotNil(t, positiveProposal.CapturedFloor)
 	require.Equal(t, positiveFloor, *positiveProposal.CapturedFloor)
-	positiveAttempt, err := positiveStore.CreateAttempt(ctx, positiveProposal.StateToken, positiveSuccessorCandidate, positivePredecessorView, positiveReview, positiveProposal.Confirmation)
+	positiveAttempt, err := positiveStore.CreateAttempt(
+		ctx,
+		positiveProposal.StateToken,
+		positiveSuccessorCandidate,
+		positivePredecessorView,
+		positiveReview,
+		positiveProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, positiveProposal.AttemptID, positiveAttempt.ID)
 	require.Equal(t, AttemptPrepared, positiveAttempt.Lifecycle)
@@ -177,8 +239,21 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Equal(t, positiveSuccessorCandidate.SnapshotRecord, positiveCandidateMaterial.SnapshotRecord)
 	require.Equal(t, positiveSuccessorCandidate.HeadRecord, positiveCandidateMaterial.HeadRecord)
 	require.Equal(t, positiveSuccessorCandidate.Payload, positiveCandidateMaterial.Payload)
-	positivePositionLimitBytesAfter, positiveAttemptLimitBytesAfter := readAcceptedMaterialCapacityLimitBytes(t, positiveStore, positiveOptions.AttemptLimits)
+	positivePositionLimitBytesAfter, positiveAttemptLimitBytesAfter := readAcceptedMaterialCapacityLimitBytes(
+		t,
+		positiveStore,
+		positiveOptions.AttemptLimits,
+	)
 	require.Equal(t, positivePositionLimitBytesBefore, positivePositionLimitBytesAfter)
 	require.Equal(t, positiveAttemptLimitBytesBefore, positiveAttemptLimitBytesAfter)
-	assertAcceptedMaterialCapacityPositiveInventory(t, positiveStore, positiveDirectory, positiveBaseAttempt.ID, positiveAttempt.ID, positiveFloor, baseCandidate, positiveSuccessorCandidate)
+	assertAcceptedMaterialCapacityPositiveInventory(
+		t,
+		positiveStore,
+		positiveDirectory,
+		positiveBaseAttempt.ID,
+		positiveAttempt.ID,
+		positiveFloor,
+		baseCandidate,
+		positiveSuccessorCandidate,
+	)
 }

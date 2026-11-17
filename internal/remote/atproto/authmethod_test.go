@@ -30,7 +30,7 @@ func TestNewAuthMethodRejectsSessionBindingMismatch(t *testing.T) {
 		session := testAuthSession(t, identity, "access-token-shape")
 		mutate(session)
 		_, err := NewAuthMethod(client, identity, testHandle, session)
-		assert.ErrorIs(t, err, ErrAuthMethodConfiguration)
+		require.ErrorIs(t, err, ErrAuthMethodConfiguration)
 	}
 	_, err = NewAuthMethod(client, identity, "bob.example", testAuthSession(t, identity, "access-token-shape"))
 	assert.ErrorIs(t, err, ErrAuthMethodConfiguration)
@@ -44,7 +44,11 @@ func TestAuthMethodRejectsSessionBindingChangeAfterConstruction(t *testing.T) {
 	auth, err := NewAuthMethod(client, identity, testHandle, session)
 	require.NoError(t, err)
 	session.Issuer = "https://other.example"
-	_, err = auth.DoWithAuth(client.HTTPClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	_, err = auth.DoWithAuth(
+		client.HTTPClient,
+		mustAuthRequest(t, "https://shard.example/resource"),
+		syntax.NSID("com.atproto.sync.getBlob"),
+	)
 	require.ErrorIs(t, err, ErrAuthMethodSession)
 	require.Empty(t, fake.resourceRequests)
 }
@@ -60,7 +64,7 @@ func TestAuthMethodRejectsHostBeforeRefreshingOrSending(t *testing.T) {
 		request, err := http.NewRequest(http.MethodGet, endpoint, nil)
 		require.NoError(t, err)
 		_, err = auth.DoWithAuth(client.HTTPClient, request, syntax.NSID("com.atproto.sync.getBlob"))
-		assert.ErrorIs(t, err, ErrAuthMethodHost)
+		require.ErrorIs(t, err, ErrAuthMethodHost)
 	}
 	assert.Empty(t, fake.resourceRequests)
 	assert.Equal(t, 0, fake.tokenRequests)
@@ -69,7 +73,10 @@ func TestAuthMethodRejectsHostBeforeRefreshingOrSending(t *testing.T) {
 func TestAuthMethodNonceChallengeRetriesWithoutRefresh(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
 	fake.resourceResponses = []fakeResourceResponse{
-		{status: http.StatusUnauthorized, header: http.Header{"Www-Authenticate": {`DPoP error="use_dpop_nonce"`}, "Dpop-Nonce": {"fresh-nonce"}}},
+		{
+			status: http.StatusUnauthorized,
+			header: http.Header{"Www-Authenticate": {`DPoP error="use_dpop_nonce"`}, "Dpop-Nonce": {"fresh-nonce"}},
+		},
 		{status: http.StatusNoContent},
 	}
 	identity, err := client.Discover(context.Background(), testHandle)
@@ -136,30 +143,47 @@ func TestAuthMethodRefreshesBeforeRequestWhenAccessTokenIsAbsent(t *testing.T) {
 
 func TestAuthMethodDoesNotRetryNonReplayableBody(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
-	fake.resourceResponses = []fakeResourceResponse{{status: http.StatusBadRequest, header: http.Header{"Dpop-Nonce": {"body-nonce"}}, body: `{"error":"use_dpop_nonce"}`}}
+	fake.resourceResponses = []fakeResourceResponse{
+		{
+			status: http.StatusBadRequest,
+			header: http.Header{"Dpop-Nonce": {"body-nonce"}},
+			body:   `{"error":"use_dpop_nonce"}`,
+		},
+	}
 	identity, err := client.Discover(context.Background(), testHandle)
 	require.NoError(t, err)
 	session := testAuthSession(t, identity, "access-token-shape")
 	auth, err := NewAuthMethod(client, identity, testHandle, session)
 	require.NoError(t, err)
-	request, err := http.NewRequest(http.MethodPost, "https://shard.example/resource", io.NopCloser(strings.NewReader("payload")))
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://shard.example/resource",
+		io.NopCloser(strings.NewReader("payload")),
+	)
 	require.NoError(t, err)
 	request.GetBody = nil
 	_, err = auth.DoWithAuth(client.HTTPClient, request, syntax.NSID("com.atproto.repo.createRecord"))
-	assert.ErrorIs(t, err, ErrAuthMethodNonReplayable)
+	require.ErrorIs(t, err, ErrAuthMethodNonReplayable)
 	assert.Len(t, fake.resourceRequests, 1)
 	assert.Equal(t, 0, fake.tokenRequests)
 }
 
 func TestAuthMethodNeverExceedsTwoAttempts(t *testing.T) {
-	challenge := fakeResourceResponse{status: http.StatusBadRequest, header: http.Header{"Www-Authenticate": {`DPoP error="use_dpop_nonce"`}, "Dpop-Nonce": {"challenge-nonce"}}}
+	challenge := fakeResourceResponse{
+		status: http.StatusBadRequest,
+		header: http.Header{"Www-Authenticate": {`DPoP error="use_dpop_nonce"`}, "Dpop-Nonce": {"challenge-nonce"}},
+	}
 	fake, client, _ := newFakeOAuth(t)
 	fake.resourceResponses = []fakeResourceResponse{challenge, challenge, {status: http.StatusNoContent}}
 	identity, err := client.Discover(context.Background(), testHandle)
 	require.NoError(t, err)
 	auth, err := NewAuthMethod(client, identity, testHandle, testAuthSession(t, identity, "access-token-shape"))
 	require.NoError(t, err)
-	_, err = auth.DoWithAuth(client.HTTPClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	_, err = auth.DoWithAuth(
+		client.HTTPClient,
+		mustAuthRequest(t, "https://shard.example/resource"),
+		syntax.NSID("com.atproto.sync.getBlob"),
+	)
 	require.ErrorIs(t, err, ErrAuthMethodNonce)
 	require.Len(t, fake.resourceRequests, 2)
 	var typed *AuthMethodError
@@ -177,7 +201,11 @@ func TestAuthMethodRefusesPDSRelocationBeforeRefreshRequest(t *testing.T) {
 	fake.pds = "https://new-shard.example"
 	fake.resource = fake.pds
 	fake.tokenAccess = "relocated-access-token"
-	_, err = auth.DoWithAuth(client.HTTPClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	_, err = auth.DoWithAuth(
+		client.HTTPClient,
+		mustAuthRequest(t, "https://shard.example/resource"),
+		syntax.NSID("com.atproto.sync.getBlob"),
+	)
 	require.ErrorIs(t, err, ErrAuthMethodRelocated)
 	assert.Empty(t, fake.resourceRequests)
 	assert.Equal(t, 1, fake.tokenRequests)
@@ -189,7 +217,9 @@ func TestAuthMethodRefusesPDSRelocationBeforeRefreshRequest(t *testing.T) {
 
 func TestAuthMethodRefusesPDSRelocationAfterInvalidTokenBeforeRetry(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
-	fake.resourceResponses = []fakeResourceResponse{{status: http.StatusUnauthorized, header: http.Header{"Www-Authenticate": {`DPoP error="invalid_token"`}}}}
+	fake.resourceResponses = []fakeResourceResponse{
+		{status: http.StatusUnauthorized, header: http.Header{"Www-Authenticate": {`DPoP error="invalid_token"`}}},
+	}
 	identity, err := client.Discover(context.Background(), testHandle)
 	require.NoError(t, err)
 	session := testAuthSession(t, identity, "stale-access-token")
@@ -202,7 +232,11 @@ func TestAuthMethodRefusesPDSRelocationAfterInvalidTokenBeforeRetry(t *testing.T
 			fake.resource = fake.pds
 		}
 	}
-	_, err = auth.DoWithAuth(client.HTTPClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	_, err = auth.DoWithAuth(
+		client.HTTPClient,
+		mustAuthRequest(t, "https://shard.example/resource"),
+		syntax.NSID("com.atproto.sync.getBlob"),
+	)
 	require.ErrorIs(t, err, ErrAuthMethodRelocated)
 	require.Len(t, fake.resourceRequests, 1)
 	assert.Equal(t, "shard.example", fake.resourceRequests[0].host)
@@ -259,7 +293,12 @@ func (t *blockingAuthTransport) RoundTrip(request *http.Request) (*http.Response
 		close(t.entered)
 		<-t.release
 	})
-	return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: request}, nil
+	return &http.Response{
+		StatusCode: http.StatusNoContent,
+		Header:     make(http.Header),
+		Body:       http.NoBody,
+		Request:    request,
+	}, nil
 }
 
 func TestAuthMethodLockHonorsContextCancellation(t *testing.T) {
@@ -272,7 +311,11 @@ func TestAuthMethodLockHonorsContextCancellation(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	done := make(chan error, 1)
 	go func() {
-		_, authErr := auth.DoWithAuth(httpClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+		_, authErr := auth.DoWithAuth(
+			httpClient,
+			mustAuthRequest(t, "https://shard.example/resource"),
+			syntax.NSID("com.atproto.sync.getBlob"),
+		)
 		done <- authErr
 	}()
 	<-transport.entered
@@ -282,7 +325,7 @@ func TestAuthMethodLockHonorsContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = auth.DoWithAuth(httpClient, request, syntax.NSID("com.atproto.sync.getBlob"))
 	require.ErrorIs(t, err, ErrAuthMethodTransport)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Equal(t, int32(1), transport.calls.Load())
 	close(transport.release)
 	assert.NoError(t, <-done)
@@ -301,7 +344,12 @@ type statusBodyTransport struct {
 }
 
 func (t statusBodyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: t.status, Header: make(http.Header), Body: failingAuthBody{}, Request: request}, nil
+	return &http.Response{
+		StatusCode: t.status,
+		Header:     make(http.Header),
+		Body:       failingAuthBody{},
+		Request:    request,
+	}, nil
 }
 
 func TestAuthMethodPreservesStatusOnChallengeBodyReadError(t *testing.T) {
@@ -311,7 +359,11 @@ func TestAuthMethodPreservesStatusOnChallengeBodyReadError(t *testing.T) {
 	auth, err := NewAuthMethod(client, identity, testHandle, testAuthSession(t, identity, "access-token-shape"))
 	require.NoError(t, err)
 	httpClient := &http.Client{Transport: statusBodyTransport{status: http.StatusBadRequest}}
-	_, err = auth.DoWithAuth(httpClient, mustAuthRequest(t, "https://shard.example/resource"), syntax.NSID("com.atproto.sync.getBlob"))
+	_, err = auth.DoWithAuth(
+		httpClient,
+		mustAuthRequest(t, "https://shard.example/resource"),
+		syntax.NSID("com.atproto.sync.getBlob"),
+	)
 	require.ErrorIs(t, err, ErrAuthMethodTransport)
 	assert.Equal(t, http.StatusBadRequest, authStatusFromError(err))
 	assert.NotContains(t, err.Error(), "super-secret-token")

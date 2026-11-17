@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -47,7 +48,13 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err := matchPolicyIdentity(value.Vault, value.PolicyDigest, policy); err != nil {
 			return err
 		}
-		if err := matchSignerCertificate(value.SignerDeviceID, value.SignerKeyID, certificate, policy, true); err != nil {
+		if err := matchSignerCertificate(
+			value.SignerDeviceID,
+			value.SignerKeyID,
+			certificate,
+			policy,
+			true,
+		); err != nil {
 			return err
 		}
 		return nil
@@ -82,7 +89,8 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err != nil {
 			return err
 		}
-		if value.EpochSeq != snapshotRecord.EpochSeq || !bytes.Equal(value.PolicyDigest[:], snapshotRecord.PolicyDigest) {
+		if value.EpochSeq != snapshotRecord.EpochSeq ||
+			!bytes.Equal(value.PolicyDigest, snapshotRecord.PolicyDigest) {
 			return &RecordContextError{Field: "headSnapshotCid"}
 		}
 		return nil
@@ -91,7 +99,13 @@ func VerifyRecordContext(record []byte, context RecordContext) error {
 		if err != nil {
 			return err
 		}
-		if err := matchSignerCertificate(value.SignerDeviceID, value.SignerKeyID, certificate, value, false); err != nil {
+		if err := matchSignerCertificate(
+			value.SignerDeviceID,
+			value.SignerKeyID,
+			certificate,
+			value,
+			false,
+		); err != nil {
 			return err
 		}
 		if !allZero(value.PrevPolicyDigest) {
@@ -285,7 +299,13 @@ func matchControlPolicy(control ControlRecord, policy PolicyRecord) error {
 	return matchPolicyDigest(control.PolicyDigest, policy)
 }
 
-func matchSignerCertificate(deviceID string, keyID []byte, certificate CertificateRecord, policy PolicyRecord, requirePublishRole bool) error {
+func matchSignerCertificate(
+	deviceID string,
+	keyID []byte,
+	certificate CertificateRecord,
+	policy PolicyRecord,
+	requirePublishRole bool,
+) error {
 	if certificate.DeviceID != deviceID || !bytes.Equal(certificate.KeyID, keyID) {
 		return &RecordContextError{Field: "signer"}
 	}

@@ -23,7 +23,7 @@ func ResolveSelection(paths platform.Paths, absPath string) (Root, error) {
 	if err != nil {
 		return Root{}, errors.New("selection path is unavailable")
 	}
-	kind := model.SelectionKind("")
+	var kind model.SelectionKind
 	switch {
 	case info.IsDir():
 		kind = model.SelectionDirectory
@@ -72,7 +72,7 @@ func makeRoot(base model.RootBase, basePath, selected string, kind model.Selecti
 func DeriveID(base model.RootBase, path string) string {
 	var slug strings.Builder
 	lastHyphen := false
-	for i := 0; i < len(path); i++ {
+	for i := range len(path) {
 		b := path[i]
 		if b >= 'A' && b <= 'Z' {
 			b += 'a' - 'A'
@@ -125,7 +125,12 @@ func CheckAddition(c Config, paths platform.Paths, added Target) error {
 	}
 	for _, existing := range c.Targets {
 		if existing.ID == added.ID && !sameLogicalRoot(existing.Root, added.Root) {
-			return fmt.Errorf("target id %q is already used by %q and cannot also identify %q", added.ID, targetSelector(existing), targetSelector(added))
+			return fmt.Errorf(
+				"target id %q is already used by %q and cannot also identify %q",
+				added.ID,
+				targetSelector(existing),
+				targetSelector(added),
+			)
 		}
 		if existing.Root == nil {
 			continue

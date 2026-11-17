@@ -17,10 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 var incomingMaterialUpgradeFixtureHashes = map[string]string{
@@ -68,7 +69,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		require.Len(t, stored, 5)
 
 		recorder := &incomingMaterialUpgradeRecorder{source: conn}
-		snapshot, err := readIncomingMaterialUpgradeSource(ctx, recorder, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		snapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			recorder,
+			1,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, 1, snapshot.version)
 		assert.Equal(t, f.binding, snapshot.binding)
@@ -77,7 +85,9 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		require.Equal(t, stored, snapshot.metadata)
 		assert.Equal(t, uint64Bytes(2), snapshot.metadata["revision"])
 		assert.Equal(t, uint64Bytes(1), snapshot.metadata["generation"])
-		expectedDatabaseID, err := base64.StdEncoding.DecodeString(schema1Metadata(t, companionRows["store_meta"])["database_id"])
+		expectedDatabaseID, err := base64.StdEncoding.DecodeString(
+			schema1Metadata(t, companionRows["store_meta"])["database_id"],
+		)
 		require.NoError(t, err)
 		assert.Equal(t, expectedDatabaseID, snapshot.metadata["database_id"])
 		for _, identity := range recorder.identities() {
@@ -85,7 +95,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 			require.NotContains(t, strings.ToLower(identity), "accepted_material_refs")
 		}
 
-		refused, err := readIncomingMaterialUpgradeSource(ctx, conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
@@ -96,7 +113,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
-		transactionSnapshot, err := readIncomingMaterialUpgradeSource(ctx, tx, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		transactionSnapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			tx,
+			1,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, snapshot.metadata, transactionSnapshot.metadata)
 		assert.Equal(t, snapshot.binding, transactionSnapshot.binding)
@@ -120,7 +144,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		require.Len(t, stored, 7)
 
 		recorder := &incomingMaterialUpgradeRecorder{source: store.conn}
-		snapshot, err := readIncomingMaterialUpgradeSource(ctx, recorder, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		snapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			recorder,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, 2, snapshot.version)
 		require.Equal(t, stored, snapshot.metadata)
@@ -129,7 +160,11 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		assert.Equal(t, uint64Bytes(0), snapshot.metadata["attempt_mutation_revision"])
 		assert.Equal(t, store.databaseID[:], snapshot.metadata["database_id"])
 		var incomingRefs int64
-		require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").Scan(&incomingRefs))
+		require.NoError(
+			t,
+			store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").
+				Scan(&incomingRefs),
+		)
 		assert.Zero(t, incomingRefs)
 		recorder.requireQueryContaining(t, "FROM publication_attempts")
 		recorder.requireQueryContaining(t, "FROM accepted_events")
@@ -164,17 +199,56 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		successorReview := attemptReview()
 		proposal, err := store.PrepareAttempt(ctx, successorCandidate, predecessorView, successorReview)
 		require.NoError(t, err)
-		successor, err := store.CreateAttempt(ctx, proposal.StateToken, successorCandidate, predecessorView, successorReview, proposal.Confirmation)
+		successor, err := store.CreateAttempt(
+			ctx,
+			proposal.StateToken,
+			successorCandidate,
+			predecessorView,
+			successorReview,
+			proposal.Confirmation,
+		)
 		require.NoError(t, err)
 		require.Equal(t, AttemptPrepared, successor.Lifecycle)
-		require.Equal(t, int64(2), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"))
-		require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"))
-		require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
-		require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs"))
-		require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"))
-		require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_events"), int64(2))
-		require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_evidence"), int64(1))
-		require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"), int64(1))
+		require.Equal(
+			t,
+			int64(2),
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"),
+		)
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"),
+		)
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"),
+		)
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs"),
+		)
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"),
+		)
+		require.GreaterOrEqual(
+			t,
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_events"),
+			int64(2),
+		)
+		require.GreaterOrEqual(
+			t,
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_evidence"),
+			int64(1),
+		)
+		require.GreaterOrEqual(
+			t,
+			incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"),
+			int64(1),
+		)
 
 		beforeRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 		require.NoError(t, err)
@@ -191,9 +265,23 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 			}
 		})
 		recorder := &incomingMaterialUpgradeRecorder{source: tx}
-		snapshot, err := readIncomingMaterialUpgradeSource(ctx, recorder, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		snapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			recorder,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
-		directSnapshot, err := readIncomingMaterialUpgradeSource(ctx, tx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		directSnapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			tx,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, snapshot, directSnapshot)
 		require.Equal(t, stored, snapshot.metadata)
@@ -237,34 +325,83 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 
 		var nilContext context.Context
-		refused, err := readIncomingMaterialUpgradeSource(nilContext, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err := readIncomingMaterialUpgradeSource(
+			nilContext,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonContext)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 		canceledContext, cancelRun := context.WithCancel(ctx)
 		cancelRun()
-		refused, err = readIncomingMaterialUpgradeSource(canceledContext, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			canceledContext,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.ErrorIs(t, err, context.Canceled)
 		requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonCanceled)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 		expiredContext, expire := context.WithDeadline(ctx, time.Now().Add(-time.Second))
 		defer expire()
-		refused, err = readIncomingMaterialUpgradeSource(expiredContext, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			expiredContext,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonCanceled)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
 		for _, version := range []int{0, 3} {
-			refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, version, f.binding, DefaultLimits(), DefaultAttemptLimits())
+			refused, err = readIncomingMaterialUpgradeSource(
+				ctx,
+				store.conn,
+				version,
+				f.binding,
+				DefaultLimits(),
+				DefaultAttemptLimits(),
+			)
 			requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 			assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 		}
-		refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, Binding{}, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			Binding{},
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonBinding)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
-		refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, Limits{}, DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			Limits{},
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonLimits)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
-		refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), AttemptLimits{})
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			AttemptLimits{},
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonLimits)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
@@ -274,9 +411,17 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		}{
 			{name: "application id", statements: []string{"PRAGMA application_id=0"}},
 			{name: "future user version", statements: []string{"PRAGMA user_version=4"}},
-			{name: "extra named object", statements: []string{"CREATE INDEX incoming_material_upgrade_probe ON store_meta(key)"}},
+			{
+				name:       "extra named object",
+				statements: []string{"CREATE INDEX incoming_material_upgrade_probe ON store_meta(key)"},
+			},
 			{name: "missing named index", statements: []string{"DROP INDEX payload_objects_basename"}},
-			{name: "extra metadata key", statements: []string{"INSERT INTO store_meta(key,value) VALUES('incoming_material_upgrade_probe',x'00')"}},
+			{
+				name: "extra metadata key",
+				statements: []string{
+					"INSERT INTO store_meta(key,value) VALUES('incoming_material_upgrade_probe',x'00')",
+				},
+			},
 		}
 		for _, refusal := range refusals {
 			t.Run(refusal.name, func(t *testing.T) {
@@ -285,7 +430,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 					_, err := tx.ExecContext(ctx, statement)
 					require.NoError(t, err)
 				}
-				refused, err := readIncomingMaterialUpgradeSource(ctx, tx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+				refused, err := readIncomingMaterialUpgradeSource(
+					ctx,
+					tx,
+					2,
+					f.binding,
+					DefaultLimits(),
+					DefaultAttemptLimits(),
+				)
 				requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 				assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 				require.NoError(t, tx.Rollback())
@@ -303,7 +455,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, foreignConn.Close()) })
 		_, err = foreignConn.ExecContext(ctx, "CREATE TABLE foreign_probe(id INTEGER PRIMARY KEY)")
 		require.NoError(t, err)
-		refused, err = readIncomingMaterialUpgradeSource(ctx, foreignConn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			foreignConn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 	})
@@ -320,22 +479,50 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 
 		other := newFixture(t, BackendSpaces)
 		other.appendRecord(t, 0)
-		refused, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, other.binding, DefaultLimits(), loweredAttemptLimits)
+		refused, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			other.binding,
+			DefaultLimits(),
+			loweredAttemptLimits,
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonBinding)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
 		loweredLimits := DefaultLimits()
 		loweredLimits.MaxLineageLinks = loweredLimits.MaxLineageLinks - 1
 		require.NoError(t, validateLimits(loweredLimits))
-		refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, loweredLimits, loweredAttemptLimits)
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			loweredLimits,
+			loweredAttemptLimits,
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonLimits)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
-		refused, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrInvalid, StageOpen, ReasonLimits)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
-		snapshot, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), loweredAttemptLimits)
+		snapshot, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			loweredAttemptLimits,
+		)
 		require.NoError(t, err)
 		require.Len(t, snapshot.metadata, 7)
 		detached := incomingMaterialUpgradeCloneSource(snapshot)
@@ -343,7 +530,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		snapshot.metadata["database_id"][0] ^= 0xff
 		snapshot.metadata["revision"] = []byte{0}
 		delete(snapshot.metadata, "generation")
-		second, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), loweredAttemptLimits)
+		second, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			loweredAttemptLimits,
+		)
 		require.NoError(t, err)
 		require.Len(t, second.metadata, 7)
 		assert.Equal(t, detached, second)
@@ -396,30 +590,139 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 			wantClass  error
 			wantReason Reason
 		}{
-			{name: "database id short", key: "database_id", statement: "UPDATE store_meta SET value=? WHERE key='database_id'", args: []any{make([]byte, 31)}, wantType: "blob", wantLength: 31, wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "database id zero", key: "database_id", statement: "UPDATE store_meta SET value=? WHERE key='database_id'", args: []any{make([]byte, 32)}, wantType: "blob", wantLength: 32, wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "database id text", key: "database_id", statement: "UPDATE store_meta SET value='not-a-database-id' WHERE key='database_id'", wantType: "text", wantLength: int64(len("not-a-database-id")), wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "revision too long", key: "revision", statement: "UPDATE store_meta SET value=? WHERE key='revision'", args: []any{make([]byte, 9)}, wantType: "blob", wantLength: 9, wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "revision above max sequence", key: "revision", statement: "UPDATE store_meta SET value=? WHERE key='revision'", args: []any{uint64Bytes(publication.MaxSequence + 1)}, wantType: "blob", wantLength: 8, wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "generation text", key: "generation", statement: "UPDATE store_meta SET value='generation' WHERE key='generation'", wantType: "text", wantLength: int64(len("generation")), wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "mutation overflow", key: "attempt_mutation_revision", statement: "UPDATE store_meta SET value=? WHERE key='attempt_mutation_revision'", args: []any{overflow}, wantType: "blob", wantLength: 8, wantClass: ErrSchema, wantReason: ReasonCorrupt},
-			{name: "noncanonical binding", key: "binding", statement: "UPDATE store_meta SET value=? WHERE key='binding'", args: []any{bindingSpaced}, wantType: "blob", wantLength: int64(len(bindingSpaced)), wantClass: ErrInvalid, wantReason: ReasonBinding},
-			{name: "noncanonical position limits", key: "limits", statement: "UPDATE store_meta SET value=? WHERE key='limits'", args: []any{limitsSpaced}, wantType: "blob", wantLength: int64(len(limitsSpaced)), wantClass: ErrInvalid, wantReason: ReasonLimits},
-			{name: "noncanonical attempt limits", key: "attempt_limits", statement: "UPDATE store_meta SET value=? WHERE key='attempt_limits'", args: []any{attemptLimitsSpaced}, wantType: "blob", wantLength: int64(len(attemptLimitsSpaced)), wantClass: ErrInvalid, wantReason: ReasonLimits},
+			{
+				name:       "database id short",
+				key:        "database_id",
+				statement:  "UPDATE store_meta SET value=? WHERE key='database_id'",
+				args:       []any{make([]byte, 31)},
+				wantType:   "blob",
+				wantLength: 31,
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "database id zero",
+				key:        "database_id",
+				statement:  "UPDATE store_meta SET value=? WHERE key='database_id'",
+				args:       []any{make([]byte, 32)},
+				wantType:   "blob",
+				wantLength: 32,
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "database id text",
+				key:        "database_id",
+				statement:  "UPDATE store_meta SET value='not-a-database-id' WHERE key='database_id'",
+				wantType:   "text",
+				wantLength: int64(len("not-a-database-id")),
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "revision too long",
+				key:        "revision",
+				statement:  "UPDATE store_meta SET value=? WHERE key='revision'",
+				args:       []any{make([]byte, 9)},
+				wantType:   "blob",
+				wantLength: 9,
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "revision above max sequence",
+				key:        "revision",
+				statement:  "UPDATE store_meta SET value=? WHERE key='revision'",
+				args:       []any{uint64Bytes(publication.MaxSequence + 1)},
+				wantType:   "blob",
+				wantLength: 8,
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "generation text",
+				key:        "generation",
+				statement:  "UPDATE store_meta SET value='generation' WHERE key='generation'",
+				wantType:   "text",
+				wantLength: int64(len("generation")),
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "mutation overflow",
+				key:        "attempt_mutation_revision",
+				statement:  "UPDATE store_meta SET value=? WHERE key='attempt_mutation_revision'",
+				args:       []any{overflow},
+				wantType:   "blob",
+				wantLength: 8,
+				wantClass:  ErrSchema,
+				wantReason: ReasonCorrupt,
+			},
+			{
+				name:       "noncanonical binding",
+				key:        "binding",
+				statement:  "UPDATE store_meta SET value=? WHERE key='binding'",
+				args:       []any{bindingSpaced},
+				wantType:   "blob",
+				wantLength: int64(len(bindingSpaced)),
+				wantClass:  ErrInvalid,
+				wantReason: ReasonBinding,
+			},
+			{
+				name:       "noncanonical position limits",
+				key:        "limits",
+				statement:  "UPDATE store_meta SET value=? WHERE key='limits'",
+				args:       []any{limitsSpaced},
+				wantType:   "blob",
+				wantLength: int64(len(limitsSpaced)),
+				wantClass:  ErrInvalid,
+				wantReason: ReasonLimits,
+			},
+			{
+				name:       "noncanonical attempt limits",
+				key:        "attempt_limits",
+				statement:  "UPDATE store_meta SET value=? WHERE key='attempt_limits'",
+				args:       []any{attemptLimitsSpaced},
+				wantType:   "blob",
+				wantLength: int64(len(attemptLimitsSpaced)),
+				wantClass:  ErrInvalid,
+				wantReason: ReasonLimits,
+			},
 		}
 		for _, corruption := range corruptions {
 			t.Run(corruption.name, func(t *testing.T) {
 				tx := incomingMaterialUpgradeTransaction(t, ctx, store)
 				_, err := tx.ExecContext(ctx, corruption.statement, corruption.args...)
 				require.NoError(t, err)
-				incomingMaterialUpgradeRequireStoredShape(t, ctx, tx, corruption.key, corruption.wantType, corruption.wantLength)
-				refused, err := readIncomingMaterialUpgradeSource(ctx, tx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+				incomingMaterialUpgradeRequireStoredShape(
+					t,
+					ctx,
+					tx,
+					corruption.key,
+					corruption.wantType,
+					corruption.wantLength,
+				)
+				refused, err := readIncomingMaterialUpgradeSource(
+					ctx,
+					tx,
+					2,
+					f.binding,
+					DefaultLimits(),
+					DefaultAttemptLimits(),
+				)
 				requireErrorMetadata(t, err, corruption.wantClass, StageOpen, corruption.wantReason)
 				assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 				require.NoError(t, tx.Rollback())
 			})
 		}
-		_, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		_, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, stored, incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn))
 	})
@@ -440,7 +743,14 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		successorReview := attemptReview()
 		proposal, err := store.PrepareAttempt(ctx, successorCandidate, predecessorView, successorReview)
 		require.NoError(t, err)
-		successor, err := store.CreateAttempt(ctx, proposal.StateToken, successorCandidate, predecessorView, successorReview, proposal.Confirmation)
+		successor, err := store.CreateAttempt(
+			ctx,
+			proposal.StateToken,
+			successorCandidate,
+			predecessorView,
+			successorReview,
+			proposal.Confirmation,
+		)
 		require.NoError(t, err)
 		require.Equal(t, AttemptPrepared, successor.Lifecycle)
 		require.Positive(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
@@ -452,28 +762,68 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		require.NoError(t, err)
 		var digestType string
 		var digestLength int64
-		require.NoError(t, eventTx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").Scan(&digestType, &digestLength))
+		require.NoError(
+			t,
+			eventTx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").
+				Scan(&digestType, &digestLength),
+		)
 		require.Equal(t, "blob", digestType)
 		require.Equal(t, int64(32), digestLength)
-		refused, err := readIncomingMaterialUpgradeSource(ctx, eventTx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			eventTx,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonCorrupt)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 		require.NoError(t, eventTx.Rollback())
 
 		attemptTx := incomingMaterialUpgradeTransaction(t, ctx, store)
-		_, err = readIncomingMaterialUpgradeSource(ctx, attemptTx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		_, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			attemptTx,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
-		_, err = attemptTx.ExecContext(ctx, "UPDATE publication_attempts SET state_digest=zeroblob(32) WHERE attempt_id=?", successor.ID[:])
+		_, err = attemptTx.ExecContext(
+			ctx,
+			"UPDATE publication_attempts SET state_digest=zeroblob(32) WHERE attempt_id=?",
+			successor.ID[:],
+		)
 		require.NoError(t, err)
-		require.NoError(t, attemptTx.QueryRowContext(ctx, "SELECT typeof(state_digest),length(CAST(state_digest AS BLOB)) FROM publication_attempts WHERE attempt_id=?", successor.ID[:]).Scan(&digestType, &digestLength))
+		require.NoError(
+			t,
+			attemptTx.QueryRowContext(ctx, "SELECT typeof(state_digest),length(CAST(state_digest AS BLOB)) FROM publication_attempts WHERE attempt_id=?", successor.ID[:]).
+				Scan(&digestType, &digestLength),
+		)
 		require.Equal(t, "blob", digestType)
 		require.Equal(t, int64(32), digestLength)
-		refused, err = readIncomingMaterialUpgradeSource(ctx, attemptTx, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		refused, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			attemptTx,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonCorrupt)
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 		require.NoError(t, attemptTx.Rollback())
 
-		_, err = readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		_, err = readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 	})
 }
@@ -497,7 +847,11 @@ func incomingMaterialUpgradeCopyV1(t *testing.T) (fixture, string, map[string]st
 		}
 	})
 	for _, name := range incomingMaterialUpgradeFixtureNames {
-		data := incomingMaterialUpgradeReadPinned(t, filepath.Join(source, name), incomingMaterialUpgradeFixtureSizes[name])
+		data := incomingMaterialUpgradeReadPinned(
+			t,
+			filepath.Join(source, name),
+			incomingMaterialUpgradeFixtureSizes[name],
+		)
 		digest := sha256.Sum256(data)
 		require.Equal(t, incomingMaterialUpgradeFixtureHashes[name], hex.EncodeToString(digest[:]), name)
 		original[name] = data
@@ -513,7 +867,11 @@ func incomingMaterialUpgradeCopyV1(t *testing.T) (fixture, string, map[string]st
 	require.Equal(t, uint32(os.Getuid()), directoryStat.Uid)
 
 	for _, name := range incomingMaterialUpgradeFixtureNames {
-		incomingMaterialUpgradeWriteExclusive(t, filepath.Join(directory, incomingMaterialUpgradeCopyNames[name]), original[name])
+		incomingMaterialUpgradeWriteExclusive(
+			t,
+			filepath.Join(directory, incomingMaterialUpgradeCopyNames[name]),
+			original[name],
+		)
 	}
 	for _, name := range incomingMaterialUpgradeFixtureNames {
 		copied := filepath.Join(directory, incomingMaterialUpgradeCopyNames[name])
@@ -618,7 +976,11 @@ func (r *incomingMaterialUpgradeRecorder) record(query string, args []any) {
 	r.queries = append(r.queries, incomingMaterialUpgradeRecordedQuery{query: query, args: cloned})
 }
 
-func (r *incomingMaterialUpgradeRecorder) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (r *incomingMaterialUpgradeRecorder) QueryContext(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (*sql.Rows, error) {
 	r.record(query, args)
 	return r.source.QueryContext(ctx, query, args...)
 }
@@ -667,7 +1029,13 @@ func (r *incomingMaterialUpgradeRecorder) requireQueryArgument(t *testing.T, fra
 }
 
 func incomingMaterialUpgradeCloneSource(source incomingMaterialUpgradeSource) incomingMaterialUpgradeSource {
-	cloned := incomingMaterialUpgradeSource{version: source.version, binding: source.binding, limits: source.limits, attemptLimits: source.attemptLimits, metadata: make(map[string][]byte, len(source.metadata))}
+	cloned := incomingMaterialUpgradeSource{
+		version:       source.version,
+		binding:       source.binding,
+		limits:        source.limits,
+		attemptLimits: source.attemptLimits,
+		metadata:      make(map[string][]byte, len(source.metadata)),
+	}
 	for key, value := range source.metadata {
 		cloned.metadata[key] = bytes.Clone(value)
 	}
@@ -721,11 +1089,21 @@ func incomingMaterialUpgradeCount(t *testing.T, ctx context.Context, q queryer, 
 	return value
 }
 
-func incomingMaterialUpgradeRequireStoredShape(t *testing.T, ctx context.Context, q queryer, key, wantType string, wantLength int64) {
+func incomingMaterialUpgradeRequireStoredShape(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	key, wantType string,
+	wantLength int64,
+) {
 	t.Helper()
 	var storedType string
 	var storedLength int64
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT typeof(value),length(CAST(value AS BLOB)) FROM store_meta WHERE key=?", key).Scan(&storedType, &storedLength))
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT typeof(value),length(CAST(value AS BLOB)) FROM store_meta WHERE key=?", key).
+			Scan(&storedType, &storedLength),
+	)
 	require.Equal(t, wantType, storedType)
 	require.Equal(t, wantLength, storedLength)
 }
@@ -733,7 +1111,7 @@ func incomingMaterialUpgradeRequireStoredShape(t *testing.T, ctx context.Context
 func incomingMaterialUpgradeSpaceAfterFirstColon(t *testing.T, canonical []byte) []byte {
 	t.Helper()
 	index := bytes.IndexByte(canonical, ':')
-	require.Greater(t, index, 0)
+	require.Positive(t, index)
 	spaced := make([]byte, 0, len(canonical)+1)
 	spaced = append(spaced, canonical[:index+1]...)
 	spaced = append(spaced, ' ')
@@ -824,10 +1202,18 @@ func incomingMaterialUpgradeUserVersion(t *testing.T, ctx context.Context, q que
 
 func incomingMaterialUpgradeIncomingTableRows(t *testing.T, ctx context.Context, q queryer) int64 {
 	t.Helper()
-	return incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'")
+	return incomingMaterialUpgradeCount(
+		t,
+		ctx,
+		q,
+		"SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'",
+	)
 }
 
-func incomingMaterialUpgradePopulatedSource(t *testing.T, ctx context.Context) (fixture, *Store, Attempt, Finalization) {
+func incomingMaterialUpgradePopulatedSource(
+	t *testing.T,
+	ctx context.Context,
+) (fixture, *Store, Attempt, Finalization) {
 	t.Helper()
 	f := newFixture(t, BackendPublicRepo)
 	f.recordMIMEType = publication.BlobMIMEType
@@ -843,17 +1229,56 @@ func incomingMaterialUpgradePopulatedSource(t *testing.T, ctx context.Context) (
 	successorReview := attemptReview()
 	proposal, err := store.PrepareAttempt(ctx, successorCandidate, predecessorView, successorReview)
 	require.NoError(t, err)
-	successor, err := store.CreateAttempt(ctx, proposal.StateToken, successorCandidate, predecessorView, successorReview, proposal.Confirmation)
+	successor, err := store.CreateAttempt(
+		ctx,
+		proposal.StateToken,
+		successorCandidate,
+		predecessorView,
+		successorReview,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, AttemptPrepared, successor.Lifecycle)
-	require.Equal(t, int64(2), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"))
-	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"))
-	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
-	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs"))
-	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"))
-	require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_events"), int64(2))
-	require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_evidence"), int64(1))
-	require.GreaterOrEqual(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"), int64(1))
+	require.Equal(
+		t,
+		int64(2),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_payload_refs"),
+	)
+	require.Equal(
+		t,
+		int64(1),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"),
+	)
+	require.GreaterOrEqual(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_events"),
+		int64(2),
+	)
+	require.GreaterOrEqual(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_evidence"),
+		int64(1),
+	)
+	require.GreaterOrEqual(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"),
+		int64(1),
+	)
 	return f, store, genesis, finalized
 }
 
@@ -868,7 +1293,14 @@ func TestIncomingMaterialUpgradeTransactionCore(t *testing.T) {
 		beforeRows := incomingMaterialUpgradeV1Rows(t, ctx, conn)
 		beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, conn)
 		require.Len(t, beforeMetadata, 5)
-		source, err := readIncomingMaterialUpgradeSource(ctx, conn, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			conn,
+			1,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 
 		tx := incomingMaterialUpgradeTx(t, ctx, conn)
@@ -905,7 +1337,15 @@ func TestIncomingMaterialUpgradeTransactionCore(t *testing.T) {
 		assert.Equal(t, beforeMetadata, incomingMaterialUpgradeStoredMetadata(t, ctx, conn))
 		assert.Equal(t, beforeRows, incomingMaterialUpgradeV1Rows(t, ctx, conn))
 		assert.Zero(t, incomingMaterialUpgradeIncomingTableRows(t, ctx, conn))
-		assert.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'"))
+		assert.Zero(
+			t,
+			incomingMaterialUpgradeCount(
+				t,
+				ctx,
+				conn,
+				"SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'",
+			),
+		)
 	})
 
 	t.Run("populated source two unit store", func(t *testing.T) {
@@ -916,7 +1356,14 @@ func TestIncomingMaterialUpgradeTransactionCore(t *testing.T) {
 		require.NoError(t, err)
 		beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 		require.Len(t, beforeMetadata, 7)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
@@ -951,14 +1398,25 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
 		beforeRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 		require.NoError(t, err)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		_, err = tx.ExecContext(ctx, "UPDATE accepted_events SET digest=zeroblob(32) WHERE revision=1")
 		require.NoError(t, err)
 		var digestType string
 		var digestLength int64
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").Scan(&digestType, &digestLength))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").
+				Scan(&digestType, &digestLength),
+		)
 		require.Equal(t, "blob", digestType)
 		require.Equal(t, int64(32), digestLength)
 		var points []int
@@ -982,7 +1440,14 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
 		beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 		require.Len(t, beforeMetadata, 7)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		stale := incomingMaterialUpgradeCloneSource(source)
 		stale.metadata["revision"] = uint64Bytes(3)
@@ -1006,14 +1471,25 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 		t.Cleanup(cancel)
 		f, conn, _ := incomingMaterialUpgradeCopiedSource(t, ctx)
 		beforeRows := incomingMaterialUpgradeV1Rows(t, ctx, conn)
-		source, err := readIncomingMaterialUpgradeSource(ctx, conn, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			conn,
+			1,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, conn)
 		_, err = tx.ExecContext(ctx, "UPDATE accepted_events SET digest=zeroblob(32) WHERE revision=2")
 		require.NoError(t, err)
 		var digestType string
 		var digestLength int64
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=2").Scan(&digestType, &digestLength))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=2").
+				Scan(&digestType, &digestLength),
+		)
 		require.Equal(t, "blob", digestType)
 		require.Equal(t, int64(32), digestLength)
 		var points []int
@@ -1024,7 +1500,15 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonCorrupt)
 		assert.Empty(t, points)
 		assert.Equal(t, 1, incomingMaterialUpgradeUserVersion(t, ctx, tx))
-		assert.Zero(t, incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'"))
+		assert.Zero(
+			t,
+			incomingMaterialUpgradeCount(
+				t,
+				ctx,
+				tx,
+				"SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'",
+			),
+		)
 		require.NoError(t, tx.Rollback())
 		assert.Equal(t, beforeRows, incomingMaterialUpgradeV1Rows(t, ctx, conn))
 	})
@@ -1036,7 +1520,14 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 			f, conn, _ := incomingMaterialUpgradeCopiedSource(t, ctx)
 			beforeRows := incomingMaterialUpgradeV1Rows(t, ctx, conn)
 			beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, conn)
-			source, err := readIncomingMaterialUpgradeSource(ctx, conn, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+			source, err := readIncomingMaterialUpgradeSource(
+				ctx,
+				conn,
+				1,
+				f.binding,
+				DefaultLimits(),
+				DefaultAttemptLimits(),
+			)
 			require.NoError(t, err)
 			require.Len(t, source.metadata, 5)
 			expected := incomingMaterialUpgradeCloneSource(source)
@@ -1062,7 +1553,15 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 			assert.Empty(t, points)
 			assert.Equal(t, 1, incomingMaterialUpgradeUserVersion(t, ctx, tx))
 			assert.Zero(t, incomingMaterialUpgradeIncomingTableRows(t, ctx, tx))
-			assert.Zero(t, incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'"))
+			assert.Zero(
+				t,
+				incomingMaterialUpgradeCount(
+					t,
+					ctx,
+					tx,
+					"SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'",
+				),
+			)
 			require.NoError(t, tx.Rollback())
 			assert.Equal(t, 1, incomingMaterialUpgradeUserVersion(t, ctx, conn))
 			assert.Equal(t, beforeMetadata, incomingMaterialUpgradeStoredMetadata(t, ctx, conn))
@@ -1076,7 +1575,14 @@ func TestIncomingMaterialUpgradeSourceAuditFence(t *testing.T) {
 			beforeRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 			require.NoError(t, err)
 			beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
-			source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+			source, err := readIncomingMaterialUpgradeSource(
+				ctx,
+				store.conn,
+				2,
+				f.binding,
+				DefaultLimits(),
+				DefaultAttemptLimits(),
+			)
 			require.NoError(t, err)
 			require.Len(t, source.metadata, 7)
 			expected := incomingMaterialUpgradeCloneSource(source)
@@ -1117,7 +1623,14 @@ func TestIncomingMaterialUpgradeValidationUsesQueryer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		t.Cleanup(cancel)
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		require.NoError(t, migrateIncomingMaterialTx(ctx, tx, source, nil))
@@ -1149,15 +1662,36 @@ func TestIncomingMaterialUpgradeValidationUsesQueryer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		t.Cleanup(cancel)
 		f, store, _, finalized := incomingMaterialUpgradePopulatedSource(t, ctx)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		require.NoError(t, migrateIncomingMaterialTx(ctx, tx, source, nil))
-		_, err = tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(finalized.Floor.Revision), finalized.Floor.RecordCID, finalized.Floor.BlobCID)
+		_, err = tx.ExecContext(
+			ctx,
+			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+			int64(finalized.Floor.Revision),
+			finalized.Floor.RecordCID,
+			finalized.Floor.BlobCID,
+		)
 		require.NoError(t, err)
-		require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
+		require.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_material_refs"),
+		)
 		var revisionType, recordType, blobType string
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),typeof(record_cid),typeof(blob_cid) FROM accepted_material_refs").Scan(&revisionType, &recordType, &blobType))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),typeof(record_cid),typeof(blob_cid) FROM accepted_material_refs").
+				Scan(&revisionType, &recordType, &blobType),
+		)
 		require.Equal(t, "integer", revisionType)
 		require.Equal(t, "blob", recordType)
 		require.Equal(t, "blob", blobType)
@@ -1179,7 +1713,14 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
 		beforeRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 		require.NoError(t, err)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		var points []int
@@ -1202,7 +1743,13 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 				require.Len(t, mutationBytes, 8)
 				var databaseID [32]byte
 				copy(databaseID[:], databaseIDBytes)
-				destinationStore := &Store{binding: source.binding, limits: source.limits, attemptLimits: source.attemptLimits, databaseID: databaseID, schemaVersion: 3}
+				destinationStore := &Store{
+					binding:       source.binding,
+					limits:        source.limits,
+					attemptLimits: source.attemptLimits,
+					databaseID:    databaseID,
+					schemaVersion: 3,
+				}
 				destinationStore.attemptMutationRevision = binary.BigEndian.Uint64(mutationBytes)
 				_, stateErr := destinationStore.readState(ctx, tx, StageOpen)
 				require.NoError(t, stateErr)
@@ -1214,10 +1761,27 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		})
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 		assert.Equal(t, []int{13, 14}, points)
-		assert.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM sqlite_master WHERE name='incoming_material_upgrade_extra'"))
+		assert.Equal(
+			t,
+			int64(1),
+			incomingMaterialUpgradeCount(
+				t,
+				ctx,
+				tx,
+				"SELECT COUNT(*) FROM sqlite_master WHERE name='incoming_material_upgrade_extra'",
+			),
+		)
 		assert.Equal(t, 3, incomingMaterialUpgradeUserVersion(t, ctx, tx))
 		require.NoError(t, tx.Rollback())
-		assert.Zero(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM sqlite_master WHERE name='incoming_material_upgrade_extra'"))
+		assert.Zero(
+			t,
+			incomingMaterialUpgradeCount(
+				t,
+				ctx,
+				store.conn,
+				"SELECT COUNT(*) FROM sqlite_master WHERE name='incoming_material_upgrade_extra'",
+			),
+		)
 		restoredRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 		require.NoError(t, err)
 		assert.Equal(t, beforeRows, restoredRows)
@@ -1229,7 +1793,14 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
 		beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 		require.Len(t, beforeMetadata, 7)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		var points []int
@@ -1258,7 +1829,14 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
 		beforeRows, err := sharedCustodyLogicalRows(ctx, store.conn)
 		require.NoError(t, err)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		var points []int
@@ -1274,7 +1852,11 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		assert.Equal(t, []int{13, 14}, points)
 		var digestType string
 		var digestLength int64
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").Scan(&digestType, &digestLength))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(digest),length(CAST(digest AS BLOB)) FROM accepted_events WHERE revision=1").
+				Scan(&digestType, &digestLength),
+		)
 		require.Equal(t, "blob", digestType)
 		require.Equal(t, int64(32), digestLength)
 		require.NoError(t, tx.Rollback())
@@ -1287,7 +1869,14 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		t.Cleanup(cancel)
 		f, store, _, _ := incomingMaterialUpgradePopulatedSource(t, ctx)
-		source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+		source, err := readIncomingMaterialUpgradeSource(
+			ctx,
+			store.conn,
+			2,
+			f.binding,
+			DefaultLimits(),
+			DefaultAttemptLimits(),
+		)
 		require.NoError(t, err)
 		tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 		invalidVersion := incomingMaterialUpgradeCloneSource(source)
@@ -1299,19 +1888,55 @@ func TestIncomingMaterialUpgradeDestinationValidation(t *testing.T) {
 		})
 		requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
 		assert.Empty(t, points)
-		requireErrorMetadata(t, checkIncomingMaterialUpgradeDestination(ctx, tx, invalidVersion), ErrSchema, StageOpen, ReasonSchema)
+		requireErrorMetadata(
+			t,
+			checkIncomingMaterialUpgradeDestination(ctx, tx, invalidVersion),
+			ErrSchema,
+			StageOpen,
+			ReasonSchema,
+		)
 		invalidBinding := incomingMaterialUpgradeCloneSource(source)
 		invalidBinding.binding = Binding{}
-		requireErrorMetadata(t, migrateIncomingMaterialTx(ctx, tx, invalidBinding, nil), ErrInvalid, StageOpen, ReasonBinding)
-		requireErrorMetadata(t, checkIncomingMaterialUpgradeDestination(ctx, tx, invalidBinding), ErrInvalid, StageOpen, ReasonBinding)
+		requireErrorMetadata(
+			t,
+			migrateIncomingMaterialTx(ctx, tx, invalidBinding, nil),
+			ErrInvalid,
+			StageOpen,
+			ReasonBinding,
+		)
+		requireErrorMetadata(
+			t,
+			checkIncomingMaterialUpgradeDestination(ctx, tx, invalidBinding),
+			ErrInvalid,
+			StageOpen,
+			ReasonBinding,
+		)
 		invalidLimits := incomingMaterialUpgradeCloneSource(source)
 		invalidLimits.limits = Limits{}
-		requireErrorMetadata(t, migrateIncomingMaterialTx(ctx, tx, invalidLimits, nil), ErrInvalid, StageOpen, ReasonLimits)
-		requireErrorMetadata(t, checkIncomingMaterialUpgradeDestination(ctx, tx, invalidLimits), ErrInvalid, StageOpen, ReasonLimits)
+		requireErrorMetadata(
+			t,
+			migrateIncomingMaterialTx(ctx, tx, invalidLimits, nil),
+			ErrInvalid,
+			StageOpen,
+			ReasonLimits,
+		)
+		requireErrorMetadata(
+			t,
+			checkIncomingMaterialUpgradeDestination(ctx, tx, invalidLimits),
+			ErrInvalid,
+			StageOpen,
+			ReasonLimits,
+		)
 		malformed := incomingMaterialUpgradeCloneSource(source)
 		delete(malformed.metadata, "revision")
 		requireErrorMetadata(t, migrateIncomingMaterialTx(ctx, tx, malformed, nil), ErrSchema, StageOpen, ReasonCorrupt)
-		requireErrorMetadata(t, checkIncomingMaterialUpgradeDestination(ctx, tx, malformed), ErrSchema, StageOpen, ReasonCorrupt)
+		requireErrorMetadata(
+			t,
+			checkIncomingMaterialUpgradeDestination(ctx, tx, malformed),
+			ErrSchema,
+			StageOpen,
+			ReasonCorrupt,
+		)
 		require.NoError(t, tx.Rollback())
 	})
 }
@@ -1324,14 +1949,27 @@ func TestIncomingMaterialUpgradeCallsB5BeforeCommit(t *testing.T) {
 	require.NoError(t, err)
 	beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 	require.Len(t, beforeMetadata, 7)
-	source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+	source, err := readIncomingMaterialUpgradeSource(
+		ctx,
+		store.conn,
+		2,
+		f.binding,
+		DefaultLimits(),
+		DefaultAttemptLimits(),
+	)
 	require.NoError(t, err)
 	tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 	var points []int
 	err = migrateIncomingMaterialTx(ctx, tx, source, func(point int) error {
 		points = append(points, point)
 		if point == incomingMaterialUpgradeUserVersionFault {
-			_, execErr := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(finalized.Floor.Revision), finalized.Floor.RecordCID, finalized.Floor.BlobCID)
+			_, execErr := tx.ExecContext(
+				ctx,
+				"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+				int64(finalized.Floor.Revision),
+				finalized.Floor.RecordCID,
+				finalized.Floor.BlobCID,
+			)
 			require.NoError(t, execErr)
 		}
 		return nil
@@ -1341,7 +1979,11 @@ func TestIncomingMaterialUpgradeCallsB5BeforeCommit(t *testing.T) {
 	require.NoError(t, checkIncomingMaterialUpgradeSchema(ctx, tx))
 	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_material_refs"))
 	var revisionType, recordType, blobType string
-	require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),typeof(record_cid),typeof(blob_cid) FROM accepted_material_refs").Scan(&revisionType, &recordType, &blobType))
+	require.NoError(
+		t,
+		tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),typeof(record_cid),typeof(blob_cid) FROM accepted_material_refs").
+			Scan(&revisionType, &recordType, &blobType),
+	)
 	require.Equal(t, "integer", revisionType)
 	require.Equal(t, "blob", recordType)
 	require.Equal(t, "blob", blobType)
@@ -1353,16 +1995,34 @@ func TestIncomingMaterialUpgradeCallsB5BeforeCommit(t *testing.T) {
 	require.False(t, allZero(destinationMetadata["database_id"]))
 	require.Len(t, destinationMetadata["attempt_mutation_revision"], 8)
 	copy(databaseID[:], destinationMetadata["database_id"])
-	oldGraph := &Store{binding: source.binding, limits: source.limits, attemptLimits: source.attemptLimits, databaseID: databaseID, schemaVersion: 2}
+	oldGraph := &Store{
+		binding:       source.binding,
+		limits:        source.limits,
+		attemptLimits: source.attemptLimits,
+		databaseID:    databaseID,
+		schemaVersion: 2,
+	}
 	oldGraph.attemptMutationRevision = binary.BigEndian.Uint64(destinationMetadata["attempt_mutation_revision"])
 	_, err = oldGraph.readState(ctx, tx, StageOpen)
 	require.NoError(t, err)
-	destinationStore := &Store{binding: source.binding, limits: source.limits, attemptLimits: source.attemptLimits, databaseID: databaseID, schemaVersion: 3}
+	destinationStore := &Store{
+		binding:       source.binding,
+		limits:        source.limits,
+		attemptLimits: source.attemptLimits,
+		databaseID:    databaseID,
+		schemaVersion: 3,
+	}
 	destinationStore.attemptMutationRevision = oldGraph.attemptMutationRevision
 	refused, err := destinationStore.readState(ctx, tx, StageOpen)
 	requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonCorrupt)
 	require.Equal(t, stateSnapshot{}, refused)
-	requireErrorMetadata(t, destinationStore.checkIncomingMaterialRefs(ctx, tx, StageOpen), ErrSchema, StageOpen, ReasonCorrupt)
+	requireErrorMetadata(
+		t,
+		destinationStore.checkIncomingMaterialRefs(ctx, tx, StageOpen),
+		ErrSchema,
+		StageOpen,
+		ReasonCorrupt,
+	)
 	require.NoError(t, tx.Rollback())
 	assert.Equal(t, beforeMetadata, incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn))
 	restoredRows, err := sharedCustodyLogicalRows(ctx, store.conn)
@@ -1380,7 +2040,14 @@ func TestIncomingMaterialUpgradeRollbackAtEveryWritePoint(t *testing.T) {
 				beforeRows := incomingMaterialUpgradeV1Rows(t, ctx, conn)
 				beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, conn)
 				require.Len(t, beforeMetadata, 5)
-				source, err := readIncomingMaterialUpgradeSource(ctx, conn, 1, f.binding, DefaultLimits(), DefaultAttemptLimits())
+				source, err := readIncomingMaterialUpgradeSource(
+					ctx,
+					conn,
+					1,
+					f.binding,
+					DefaultLimits(),
+					DefaultAttemptLimits(),
+				)
 				require.NoError(t, err)
 				tx := incomingMaterialUpgradeTx(t, ctx, conn)
 				canary := errors.New("injected interval failure")
@@ -1420,7 +2087,15 @@ func TestIncomingMaterialUpgradeRollbackAtEveryWritePoint(t *testing.T) {
 				assert.Equal(t, beforeMetadata, incomingMaterialUpgradeStoredMetadata(t, ctx, conn))
 				assert.Equal(t, beforeRows, incomingMaterialUpgradeV1Rows(t, ctx, conn))
 				assert.Zero(t, incomingMaterialUpgradeIncomingTableRows(t, ctx, conn))
-				assert.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'"))
+				assert.Zero(
+					t,
+					incomingMaterialUpgradeCount(
+						t,
+						ctx,
+						conn,
+						"SELECT COUNT(*) FROM sqlite_master WHERE name='publication_attempts'",
+					),
+				)
 			})
 		}
 	})
@@ -1435,7 +2110,14 @@ func TestIncomingMaterialUpgradeRollbackAtEveryWritePoint(t *testing.T) {
 				require.NoError(t, err)
 				beforeMetadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 				require.Len(t, beforeMetadata, 7)
-				source, err := readIncomingMaterialUpgradeSource(ctx, store.conn, 2, f.binding, DefaultLimits(), DefaultAttemptLimits())
+				source, err := readIncomingMaterialUpgradeSource(
+					ctx,
+					store.conn,
+					2,
+					f.binding,
+					DefaultLimits(),
+					DefaultAttemptLimits(),
+				)
 				require.NoError(t, err)
 				tx := incomingMaterialUpgradeTx(t, ctx, store.conn)
 				canary := errors.New("injected interval failure")

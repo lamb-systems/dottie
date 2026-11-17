@@ -22,7 +22,10 @@ type PublicationCandidateRequest struct {
 	PublicationID  [16]byte
 }
 
-func (coordinator *Coordinator) buildPublicationSnapshot(ctx context.Context, request PublicationCandidateRequest) (model.Snapshot, error) {
+func (coordinator *Coordinator) buildPublicationSnapshot(
+	ctx context.Context,
+	request PublicationCandidateRequest,
+) (model.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Snapshot{}, err
 	}
@@ -69,7 +72,14 @@ func publicationSnapshotTargetEntries(snapshot model.Snapshot, targetID string) 
 	return entries, true
 }
 
-func buildPublicationMaterial(binding publicationstate.Binding, snapshot model.Snapshot, floor publicationstate.Floor, present bool, view publicationstate.SuppliedRepositoryView, publicationID [16]byte) (publicationstate.CandidateInput, publication.BlobReference, MaterialWriteBatch, error) {
+func buildPublicationMaterial(
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	floor publicationstate.Floor,
+	present bool,
+	view publicationstate.SuppliedRepositoryView,
+	publicationID [16]byte,
+) (publicationstate.CandidateInput, publication.BlobReference, MaterialWriteBatch, error) {
 	candidate, blob, err := encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, MaterialWriteBatch{}, err
@@ -91,7 +101,13 @@ func buildPublicationMaterial(binding publicationstate.Binding, snapshot model.S
 	return candidate, blob, batch, nil
 }
 
-func encodePublicationCandidate(binding publicationstate.Binding, snapshot model.Snapshot, floor publicationstate.Floor, present bool, publicationID [16]byte) (publicationstate.CandidateInput, publication.BlobReference, error) {
+func encodePublicationCandidate(
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	floor publicationstate.Floor,
+	present bool,
+	publicationID [16]byte,
+) (publicationstate.CandidateInput, publication.BlobReference, error) {
 	packed, err := vault.Pack(snapshot)
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
@@ -100,7 +116,11 @@ func encodePublicationCandidate(binding publicationstate.Binding, snapshot model
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 	}
-	blob := publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}
+	blob := publication.BlobReference{
+		CID:      blobCID,
+		Size:     uint64(len(packed.Payload)),
+		MIMEType: publication.SnapshotBlobMIMEType,
+	}
 	var sequence uint64
 	parent := []byte{}
 	if present {
@@ -129,7 +149,12 @@ func encodePublicationCandidate(binding publicationstate.Binding, snapshot model
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 	}
-	return publicationstate.CandidateInput{SnapshotKey: key, SnapshotRecord: snapshotRecord, HeadRecord: headRecord, Payload: packed.Payload}, blob, nil
+	return publicationstate.CandidateInput{
+		SnapshotKey:    key,
+		SnapshotRecord: snapshotRecord,
+		HeadRecord:     headRecord,
+		Payload:        packed.Payload,
+	}, blob, nil
 }
 
 type PublicationSyncSnapshotRequest struct {
@@ -139,7 +164,10 @@ type PublicationSyncSnapshotRequest struct {
 	PublicationID  [16]byte
 }
 
-func (coordinator *Coordinator) ComposePublicationSyncSnapshot(ctx context.Context, request PublicationSyncSnapshotRequest) (model.Snapshot, error) {
+func (coordinator *Coordinator) ComposePublicationSyncSnapshot(
+	ctx context.Context,
+	request PublicationSyncSnapshotRequest,
+) (model.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Snapshot{}, err
 	}
@@ -162,7 +190,14 @@ func (coordinator *Coordinator) ComposePublicationSyncSnapshot(ctx context.Conte
 		remoteEntries, _ := publicationSnapshotTargetEntries(request.RemoteSnapshot, target.ID)
 		return publicationSyncPostPullEntries(floorEntries, remoteEntries, entries)
 	}
-	snapshot, _, err := coordinator.composePublicationSnapshotWithLocal(ctx, request.Configuration, base, remote, local, nil)
+	snapshot, _, err := coordinator.composePublicationSnapshotWithLocal(
+		ctx,
+		request.Configuration,
+		base,
+		remote,
+		local,
+		nil,
+	)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
@@ -233,7 +268,9 @@ func publicationSyncEntriesEqual(left, right model.Entry) bool {
 	}
 	if left.File != nil {
 		l, r := left.File, right.File
-		return l.Path == r.Path && l.State == r.State && l.Kind == r.Kind && l.Mode == r.Mode && l.LinkTarget == r.LinkTarget && bytes.Equal(l.Content, r.Content)
+		return l.Path == r.Path && l.State == r.State && l.Kind == r.Kind && l.Mode == r.Mode &&
+			l.LinkTarget == r.LinkTarget &&
+			bytes.Equal(l.Content, r.Content)
 	}
 	l, r := left.Setting, right.Setting
 	if l.SchemaID != r.SchemaID || l.Path != r.Path || l.Key != r.Key || l.State != r.State {
@@ -257,7 +294,10 @@ func publicationSyncAppliedEntry(entry model.Entry) (model.Entry, bool) {
 	}
 	if entry.Setting != nil && entry.Setting.State == model.SettingPresent {
 		clone := model.Entry{TargetID: entry.TargetID, Setting: &model.SettingEntry{
-			SchemaID: entry.Setting.SchemaID, Path: entry.Setting.Path, Key: entry.Setting.Key, State: entry.Setting.State,
+			SchemaID: entry.Setting.SchemaID,
+			Path:     entry.Setting.Path,
+			Key:      entry.Setting.Key,
+			State:    entry.Setting.State,
 		}}
 		if entry.Setting.Value != nil {
 			clone.Setting.Value = &model.VariantValue{Type: entry.Setting.Value.Type, Text: entry.Setting.Value.Text}

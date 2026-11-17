@@ -28,7 +28,7 @@ func TestPublicationAttemptConfirmationIsDatabaseBoundAndIDsAreNeverReused(t *te
 	_, err = storeB.CreateAttempt(ctx, proposalA.StateToken, candidate, view, review, proposalA.Confirmation)
 	requireErrorMetadata(t, err, ErrConsent, StageAttempt, ReasonStale)
 	_, statErr := os.Stat(filepath.Join(directoryB, payloadDirectoryName))
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	attempt, err := storeA.CreateAttempt(ctx, proposalA.StateToken, candidate, view, review, proposalA.Confirmation)
 	require.NoError(t, err)
 	abandon, err := storeA.PrepareAbandon(ctx, attempt.ID, nil)

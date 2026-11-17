@@ -15,6 +15,9 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -25,8 +28,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPlanEscapesPathsAndNeverPrintsContents(t *testing.T) {
@@ -51,13 +52,15 @@ func TestPlanEscapesPathsAndNeverPrintsContents(t *testing.T) {
 		Mode:    0o640,
 	}}
 	bundle := map[string]any{
-		"version":      1,
-		"base_status":  "known",
-		"targets":      []model.Target{target},
-		"base":         []model.Entry{baseEntry},
-		"observations": []model.Observation{{State: model.ObservationPresent, Identity: observedEntry.Identity(), Entry: &observedEntry}},
-		"remote":       []model.Entry{baseEntry},
-		"coverage":     []string{"files"},
+		"version":     1,
+		"base_status": "known",
+		"targets":     []model.Target{target},
+		"base":        []model.Entry{baseEntry},
+		"observations": []model.Observation{
+			{State: model.ObservationPresent, Identity: observedEntry.Identity(), Entry: &observedEntry},
+		},
+		"remote":   []model.Entry{baseEntry},
+		"coverage": []string{"files"},
 	}
 	input, err := json.Marshal(bundle)
 	require.NoError(t, err)
@@ -104,7 +107,12 @@ func TestPlanTextLabelsIncompleteResultingSnapshotAsLowerBound(t *testing.T) {
 		UnresolvedEntries:      2,
 	})
 	assert.Contains(t, output, "transfer bytes=5\n", "transfer amount is explicit")
-	assert.Contains(t, output, "resulting snapshot at least 12 bytes, incomplete: 2 unresolved\n", "incomplete result is labeled as a lower bound")
+	assert.Contains(
+		t,
+		output,
+		"resulting snapshot at least 12 bytes, incomplete: 2 unresolved\n",
+		"incomplete result is labeled as a lower bound",
+	)
 }
 
 func TestPlanRequiresFromFlag(t *testing.T) {
@@ -116,7 +124,9 @@ func TestPlanRequiresFromFlag(t *testing.T) {
 }
 
 func TestPlanInputRequiresFieldsWithTypedError(t *testing.T) {
-	_, err := decodePlanInput([]byte(`{"base_status":"missing","targets":[],"base":[],"observations":[],"remote":[],"coverage":[]}`))
+	_, err := decodePlanInput(
+		[]byte(`{"base_status":"missing","targets":[],"base":[],"observations":[],"remote":[],"coverage":[]}`),
+	)
 	require.Error(t, err, "version is required")
 	var inputError *PlanInputError
 	require.ErrorAs(t, err, &inputError, "missing required fields have a typed error")
@@ -125,7 +135,11 @@ func TestPlanInputRequiresFieldsWithTypedError(t *testing.T) {
 }
 
 func TestPlanInputRejectsUnknownFields(t *testing.T) {
-	_, err := decodePlanInput([]byte(`{"version":1,"base_status":"missing","targets":[],"base":[],"observations":[],"remote":[],"coverage":[],"hook":"run me"}`))
+	_, err := decodePlanInput(
+		[]byte(
+			`{"version":1,"base_status":"missing","targets":[],"base":[],"observations":[],"remote":[],"coverage":[],"hook":"run me"}`,
+		),
+	)
 	require.Error(t, err, "unknown input fields must be rejected")
 	var inputError *PlanInputError
 	require.ErrorAs(t, err, &inputError, "invalid JSON has a typed error")
@@ -152,8 +166,14 @@ func newSyncTestFixture(t *testing.T, mode config.Mode) *syncTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
@@ -167,7 +187,11 @@ func newSyncTestFixture(t *testing.T, mode config.Mode) *syncTestFixture {
 	t.Cleanup(func() { assert.NoError(t, stateStore.Close()) })
 	coordinator, err := service.NewCoordinator(service.Dependencies{State: stateStore, Paths: paths})
 	require.NoError(t, err)
-	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
 	binding.Repository = "at://" + binding.AccountDID
 	directory := paths.AppConfigDir()
 	require.NoError(t, os.MkdirAll(directory, 0o700))
@@ -181,7 +205,12 @@ func newSyncTestFixture(t *testing.T, mode config.Mode) *syncTestFixture {
 	loaded, err := service.FileConfigPort{Paths: paths}.Load(context.Background())
 	require.NoError(t, err)
 	require.NoError(t, loaded.Validate())
-	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x63}, SelectionRevision: 1, ApprovalDigest: [32]byte{0x64}, ApprovalRevision: 1}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest:   [32]byte{0x63},
+		SelectionRevision: 1,
+		ApprovalDigest:    [32]byte{0x64},
+		ApprovalRevision:  1,
+	}
 	return &syncTestFixture{
 		paths: paths, binding: binding, transport: newPushTestTransport(binding),
 		coordinator: coordinator, reviews: pushTestReviews{review: review, calls: new(int)}, configuration: loaded,
@@ -203,10 +232,35 @@ func (fixture *syncTestFixture) blob(_ context.Context, record publication.Snaps
 func (fixture *syncTestFixture) snapshotA(a string) model.Snapshot {
 	return model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
 		Entries: []model.Entry{
-			{TargetID: "files", File: &model.FileEntry{Path: "a.txt", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(a), Mode: 0o600}},
-			{TargetID: "files", File: &model.FileEntry{Path: "b.txt", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(syncTestBaseB), Mode: 0o600}},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "a.txt",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(a),
+					Mode:    0o600,
+				},
+			},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "b.txt",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(syncTestBaseB),
+					Mode:    0o600,
+				},
+			},
 		},
 	}
 }
@@ -217,7 +271,10 @@ func (fixture *syncTestFixture) writeLocal(t *testing.T, a, b string) {
 	require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "config", "b.txt"), []byte(b), 0o600))
 }
 
-func (fixture *syncTestFixture) seed(t *testing.T, snapshot model.Snapshot) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+func (fixture *syncTestFixture) seed(
+	t *testing.T,
+	snapshot model.Snapshot,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -233,7 +290,10 @@ func (fixture *syncTestFixture) seed(t *testing.T, snapshot model.Snapshot) (pub
 	return block, record
 }
 
-func (fixture *syncTestFixture) advance(t *testing.T, snapshot model.Snapshot) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+func (fixture *syncTestFixture) advance(
+	t *testing.T,
+	snapshot model.Snapshot,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -283,7 +343,11 @@ func (fixture *syncTestFixture) terminal(t *testing.T) []byte {
 	return latest
 }
 
-func payloadObservation(binding publicationstate.Binding, head []byte, blocks ...publicationstate.SnapshotBlock) publicationstate.Observation {
+func payloadObservation(
+	binding publicationstate.Binding,
+	head []byte,
+	blocks ...publicationstate.SnapshotBlock,
+) publicationstate.Observation {
 	snapshots := make([]publicationstate.SnapshotBlock, 0, len(blocks))
 	for _, block := range blocks {
 		snapshots = append(snapshots, publicationstate.SnapshotBlock{Key: block.Key, Raw: bytes.Clone(block.Raw)})
@@ -306,18 +370,37 @@ func (fixture *syncTestFixture) accept(t *testing.T, observation publicationstat
 	}
 	proposal, err := store.Prepare(context.Background(), mode, observation, payload)
 	require.NoError(t, err)
-	_, err = store.AcceptMaterial(context.Background(), mode, proposal.StateToken, observation, payload, proposal.Confirmation)
+	_, err = store.AcceptMaterial(
+		context.Background(),
+		mode,
+		proposal.StateToken,
+		observation,
+		payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 }
 
-func syncTestRecord(t *testing.T, binding publicationstate.Binding, payload []byte, sequence uint64, parent []byte) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+func syncTestRecord(
+	t *testing.T,
+	binding publicationstate.Binding,
+	payload []byte,
+	sequence uint64,
+	parent []byte,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
 	record := publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationSeq: sequence, Parent: parent,
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+7)
 	raw, err := publication.EncodeSnapshot(record)
@@ -327,7 +410,12 @@ func syncTestRecord(t *testing.T, binding publicationstate.Binding, payload []by
 	return publicationstate.SnapshotBlock{Key: key, Raw: raw}, record
 }
 
-func syncTestHead(t *testing.T, binding publicationstate.Binding, block publicationstate.SnapshotBlock, record publication.SnapshotRecord) []byte {
+func syncTestHead(
+	t *testing.T,
+	binding publicationstate.Binding,
+	block publicationstate.SnapshotBlock,
+	record publication.SnapshotRecord,
+) []byte {
 	t.Helper()
 	cid, err := publication.RecordCID(block.Raw)
 	require.NoError(t, err)
@@ -383,7 +471,13 @@ func runSyncForTest(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks,
 	return runSyncForTestWithDIDs(t, fixture, hooks, pushTestDIDs(fixture.binding.AccountDID), args...)
 }
 
-func runSyncForTestWithDIDs(t *testing.T, fixture *syncTestFixture, hooks syncTestHooks, dids sessionDIDSource, args ...string) (int, string, string) {
+func runSyncForTestWithDIDs(
+	t *testing.T,
+	fixture *syncTestFixture,
+	hooks syncTestHooks,
+	dids sessionDIDSource,
+	args ...string,
+) (int, string, string) {
 	t.Helper()
 	fixture.setEnvironment(t)
 	var stdout, stderr bytes.Buffer
@@ -415,7 +509,18 @@ func runSyncForTestWithDIDs(t *testing.T, fixture *syncTestFixture, hooks syncTe
 			Configuration: fixture.configuration, Close: func() {},
 		}, nil
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, fixture.pullVaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, dids)
+	command := newSyncCommand(
+		&stdout,
+		&stderr,
+		&exitCode,
+		sessions,
+		remotes,
+		fixture.pullVaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		previews,
+		pushes,
+		dids,
+	)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie", "sync"}, args...)); err != nil && exitCode == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -441,7 +546,15 @@ func TestSyncUnconfirmedPrintsBothHalvesAndChangesNothing(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=1")
@@ -463,11 +576,29 @@ func TestSyncConfirmedAppliesThePullHalfAndPublishesTheReconciledCandidate(t *te
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
-	code, confirmed, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, confirmed, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, confirmed, "pull: applied changes=1 unchanged=1")
 	assert.Contains(t, confirmed, "floor: revision=")
@@ -490,13 +621,31 @@ func TestSyncPlainPushWhenTheAcceptedFloorMatchesTheProvider(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.seed(t, fixture.snapshotA(syncTestBaseA))
 	fixture.writeLocal(t, syncTestBaseA, syncTestLocalB)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: matches")
 	assert.Contains(t, stdout, "apply: changes=0")
 	token := syncTestToken(t, stdout)
 
-	code, confirmed, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, confirmed, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, confirmed, "pull: no changes")
 	assert.Contains(t, confirmed, "push: committed")
@@ -511,12 +660,30 @@ func TestSyncRefusesAChangedPullPlan(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
 	fixture.rewriteProvider(t, fixture.snapshotA("synthetic sync remote a moved"))
-	code, _, stderr = runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, _, stderr = runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"), "a stale sync token applied the pull half")
@@ -530,12 +697,37 @@ func TestSyncRefusesAChangedPullPlan(t *testing.T) {
 func TestSyncRefusesAChangedPushCandidate(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
-	require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "config", "b.txt"), []byte("local changed before confirmation"), 0o600))
-	code, _, stderr = runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(fixture.paths.Home, "config", "b.txt"),
+			[]byte("local changed before confirmation"),
+			0o600,
+		),
+	)
+	code, _, stderr = runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	uploads, sends := fixture.transport.counts()
@@ -549,11 +741,24 @@ func TestSyncRefusesAConflictAtPlanningBeforeAnyChange(t *testing.T) {
 	fixture.advance(t, fixture.snapshotA(syncTestRemoteA))
 	fixture.writeLocal(t, "local conflicting a", syncTestBaseB)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "apply-plan/plan_conflict")
 	assert.NotContains(t, stdout, "confirmation:")
-	assert.Equal(t, "local conflicting a", readSyncFile(t, fixture, "a.txt"), "a conflicting sync applied the pull half")
+	assert.Equal(
+		t,
+		"local conflicting a",
+		readSyncFile(t, fixture, "a.txt"),
+		"a conflicting sync applied the pull half",
+	)
 	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision)
 	uploads, sends := fixture.transport.counts()
 	assert.Zero(t, uploads)
@@ -565,7 +770,15 @@ func TestSyncPullRefusalsStopEverythingBeforeAnyPublication(t *testing.T) {
 	t.Run("backup-only", func(t *testing.T) {
 		fixture := newSyncTestFixture(t, config.BackupOnly)
 		fixture.confirmedScenario(t)
-		code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+		code, stdout, stderr := runSyncForTest(
+			t,
+			fixture,
+			syncTestHooks{},
+			"--did",
+			fixture.binding.AccountDID,
+			"--vault",
+			pullTestVaultHex(),
+		)
 		require.Equal(t, 3, code)
 		assert.Contains(t, stderr, "backup-only")
 		assert.NotContains(t, stdout, "confirmation:")
@@ -574,7 +787,15 @@ func TestSyncPullRefusalsStopEverythingBeforeAnyPublication(t *testing.T) {
 	t.Run("lease held", func(t *testing.T) {
 		fixture := newSyncTestFixture(t, "")
 		fixture.confirmedScenario(t)
-		code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+		code, stdout, stderr := runSyncForTest(
+			t,
+			fixture,
+			syncTestHooks{},
+			"--did",
+			fixture.binding.AccountDID,
+			"--vault",
+			pullTestVaultHex(),
+		)
 		require.Equal(t, 0, code, stderr)
 		token := syncTestToken(t, stdout)
 		journal, err := publicationstate.OpenJournal(fixture.paths.PublicationStateDir())
@@ -583,7 +804,17 @@ func TestSyncPullRefusalsStopEverythingBeforeAnyPublication(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, journal.Close())
 		defer func() { assert.NoError(t, lease.Close()) }()
-		code, _, stderr = runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
+		code, _, stderr = runSyncForTest(
+			t,
+			fixture,
+			syncTestHooks{},
+			"--did",
+			fixture.binding.AccountDID,
+			"--vault",
+			pullTestVaultHex(),
+			"--confirm",
+			token,
+		)
 		require.Equal(t, 3, code)
 		assert.Contains(t, stderr, "apply_lease_held")
 		assertSyncNothingPublished(t, fixture)
@@ -592,7 +823,15 @@ func TestSyncPullRefusalsStopEverythingBeforeAnyPublication(t *testing.T) {
 		fixture := newSyncTestFixture(t, "")
 		fixture.confirmedScenario(t)
 		fixture.transport.viewErr = pullTestViewFailure{reason: "revision", cause: atproto.ErrAmbiguousTransport}
-		code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+		code, stdout, stderr := runSyncForTest(
+			t,
+			fixture,
+			syncTestHooks{},
+			"--did",
+			fixture.binding.AccountDID,
+			"--vault",
+			pullTestVaultHex(),
+		)
 		require.Equal(t, 4, code)
 		assert.Contains(t, stdout, "pull: unreadable (revision)")
 		assert.Contains(t, stderr, "sync is indeterminate")
@@ -604,7 +843,15 @@ func TestSyncPushRefusalAfterThePullHalfLeavesThePullApplied(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
@@ -626,7 +873,15 @@ func TestSyncPushHalfReportsADefiniteProviderRefusalWithoutPublishing(t *testing
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
@@ -638,7 +893,12 @@ func TestSyncPushHalfReportsADefiniteProviderRefusalWithoutPublishing(t *testing
 	assert.Contains(t, stderr, "the push half did not commit")
 	assert.Contains(t, stderr, "nothing was published")
 	assert.Equal(t, syncTestRemoteA, readSyncFile(t, fixture, "a.txt"), "the pull half did not stay applied")
-	assert.Equal(t, before.Revision+1, fixture.readFloor(t).Revision, "the refused push half advanced the accepted floor")
+	assert.Equal(
+		t,
+		before.Revision+1,
+		fixture.readFloor(t).Revision,
+		"the refused push half advanced the accepted floor",
+	)
 	_, sends := fixture.transport.counts()
 	assert.Equal(t, 1, sends, "the refused push half dispatched writes twice")
 }
@@ -647,12 +907,23 @@ func TestSyncRefusesWhenThePostPullCandidateChangesDuringApply(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
 	code, confirmed, stderr := runSyncForTest(t, fixture, syncTestHooks{push: func(fixture *syncTestFixture) {
-		require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "config", "b.txt"), []byte("drifted during apply"), 0o600))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(fixture.paths.Home, "config", "b.txt"), []byte("drifted during apply"), 0o600),
+		)
 	}}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 4, code)
 	assert.Contains(t, confirmed, "pull: applied changes=1")
@@ -688,21 +959,48 @@ func TestSyncRequiresTheDIDSelectorAndRejectsUnknownFlags(t *testing.T) {
 }
 
 func TestSyncConfirmationTokenBindsThePullAndPushHalves(t *testing.T) {
-	binding := publicationstate.Binding{AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
 	binding.Repository = "at://" + pullTestDID
 	plan := sha256.Sum256([]byte("pull plan"))
 	stateToken := sha256.Sum256([]byte("staged state"))
 	observation := sha256.Sum256([]byte("observation"))
 	view := sha256.Sum256([]byte("provider view"))
 	identity := syncPushIdentity{
-		PayloadCID: []byte{0x01}, PayloadDigest: sha256.Sum256([]byte("candidate")), PayloadSize: 9,
-		Review: publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x71}, SelectionRevision: 2, ApprovalDigest: [32]byte{0x72}, ApprovalRevision: 3},
+		PayloadCID:    []byte{0x01},
+		PayloadDigest: sha256.Sum256([]byte("candidate")),
+		PayloadSize:   9,
+		Review: publicationstate.LocalReviewContext{
+			SelectionDigest:   [32]byte{0x71},
+			SelectionRevision: 2,
+			ApprovalDigest:    [32]byte{0x72},
+			ApprovalRevision:  3,
+		},
 	}
 	token := syncConfirmationToken(binding, plan, stateToken, observation, view, identity)
-	assert.NotEqual(t, token, syncConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), stateToken, observation, view, identity))
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation, view, identity))
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, sha256.Sum256([]byte("moved observation")), view, identity))
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, sha256.Sum256([]byte("moved view")), identity))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), stateToken, observation, view, identity),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation, view, identity),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, plan, stateToken, sha256.Sum256([]byte("moved observation")), view, identity),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, plan, stateToken, observation, sha256.Sum256([]byte("moved view")), identity),
+	)
 	moved := identity
 	moved.PayloadDigest = sha256.Sum256([]byte("changed candidate"))
 	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, moved))
@@ -720,10 +1018,23 @@ func TestSyncRefusesAFloorThatDoesNotMatchTheReviewedPosition(t *testing.T) {
 	_, record := fixture.seed(t, fixture.snapshotA(syncTestBaseA))
 	block, _ := syncTestRecord(t, fixture.binding, []byte("other payload"), 0, nil)
 	view := publicationstate.SuppliedRepositoryView{Snapshots: []publicationstate.SnapshotBlock{block}}
-	floor := publicationstate.Floor{RecordCID: record.Blob.CID, BlobCID: record.Blob.CID, BlobSize: record.Blob.Size, Sequence: 0, SnapshotKey: block.Key}
-	assert.ErrorIs(t, syncViewMatchesFloor(floor, view), errSyncFloorMismatch)
+	floor := publicationstate.Floor{
+		RecordCID:   record.Blob.CID,
+		BlobCID:     record.Blob.CID,
+		BlobSize:    record.Blob.Size,
+		Sequence:    0,
+		SnapshotKey: block.Key,
+	}
+	require.ErrorIs(t, syncViewMatchesFloor(floor, view), errSyncFloorMismatch)
 	assert.NoError(t, syncViewMatchesFloor(publicationstate.Floor{
-		RecordCID: mustPullRecordCID(t, block.Raw), BlobCID: mustPullBlobCID(t, block.Raw), BlobSize: mustPullBlobSize(t, block.Raw), Sequence: 0, SnapshotKey: block.Key,
+		RecordCID: mustPullRecordCID(
+			t,
+			block.Raw,
+		),
+		BlobCID:     mustPullBlobCID(t, block.Raw),
+		BlobSize:    mustPullBlobSize(t, block.Raw),
+		Sequence:    0,
+		SnapshotKey: block.Key,
 	}, view))
 }
 
@@ -780,7 +1091,15 @@ func TestSyncRefusesAProviderViewThatDivergesWhileTheFloorStillMatches(t *testin
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTest(t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	token := syncTestToken(t, stdout)
 
@@ -811,9 +1130,20 @@ func TestSyncResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
-	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(fixture.binding.AccountDID), "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTestWithDIDs(
+		t,
+		fixture,
+		syncTestHooks{},
+		pushTestDIDs(fixture.binding.AccountDID),
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
-	assert.Contains(t, stdout, "account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)")
+	assert.Contains(
+		t,
+		stdout,
+		"account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)",
+	)
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 	assert.Contains(t, stdout, "sync: plan only; nothing was applied or published")
 	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision, "the unconfirmed run advanced the floor")
@@ -828,8 +1158,17 @@ func TestSyncRefusesWithoutAnyAuthorisedSession(t *testing.T) {
 	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs())
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout)
-	assert.Equal(t, "dottie: sync refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr)
-	assert.Equal(t, before, publicationStateEntries(t, fixture.paths.PublicationStateDir()), "the refusal wrote local state")
+	assert.Equal(
+		t,
+		"dottie: sync refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n",
+		stderr,
+	)
+	assert.Equal(
+		t,
+		before,
+		publicationStateEntries(t, fixture.paths.PublicationStateDir()),
+		"the refusal wrote local state",
+	)
 }
 
 func TestSyncRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
@@ -837,10 +1176,21 @@ func TestSyncRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
 	fixture.confirmedScenario(t)
 	before := fixture.readFloor(t)
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(fixture.binding.AccountDID, other), "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTestWithDIDs(
+		t,
+		fixture,
+		syncTestHooks{},
+		pushTestDIDs(fixture.binding.AccountDID, other),
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout)
-	assert.Equal(t, "dottie: sync refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr)
+	assert.Equal(
+		t,
+		"dottie: sync refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n",
+		stderr,
+	)
 	uploads, sends := fixture.transport.counts()
 	assert.Zero(t, uploads, "the ambiguous refusal uploaded a payload")
 	assert.Zero(t, sends, "the ambiguous refusal dispatched writes")
@@ -853,9 +1203,23 @@ func TestSyncProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T
 	fixture := newSyncTestFixture(t, "")
 	fixture.confirmedScenario(t)
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	code, stdout, stderr := runSyncForTestWithDIDs(t, fixture, syncTestHooks{}, pushTestDIDs(other, fixture.binding.AccountDID), "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runSyncForTestWithDIDs(
+		t,
+		fixture,
+		syncTestHooks{},
+		pushTestDIDs(other, fixture.binding.AccountDID),
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
-	assert.NotContains(t, stdout, "resolved from the only authorised session", "an explicit --did reported a session resolution")
+	assert.NotContains(
+		t,
+		stdout,
+		"resolved from the only authorised session",
+		"an explicit --did reported a session resolution",
+	)
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 }
 
@@ -877,7 +1241,18 @@ func TestSyncRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return publicationPushSources{}, errors.New("the push sources must not be constructed")
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, fixture.pullVaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
+	command := newSyncCommand(
+		&stdout,
+		&stderr,
+		&exitCode,
+		sessions,
+		remotes,
+		fixture.pullVaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		previews,
+		pushes,
+		pushTestDIDs(fixture.binding.AccountDID),
+	)
 	args := []string{"dottie", "sync", "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex()}
 	if err := command.Run(context.Background(), args); err != nil && exitCode == 0 {
 		command.ExitErrHandler(context.Background(), command, err)
@@ -907,13 +1282,36 @@ func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 	pushes := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return publicationPushSources{}, errors.New("the push sources must not be constructed")
 	}
-	command := newSyncCommand(&stdout, &stderr, &exitCode, sessions, remotes, vaults, productionPullApplySourcesFactory(os.Getenv), previews, pushes, pushTestDIDs(fixture.binding.AccountDID))
+	command := newSyncCommand(
+		&stdout,
+		&stderr,
+		&exitCode,
+		sessions,
+		remotes,
+		vaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		previews,
+		pushes,
+		pushTestDIDs(fixture.binding.AccountDID),
+	)
 	ctx := context.Background()
-	if err := command.Run(ctx, []string{"dottie", "sync", "--did", fixture.binding.AccountDID}); err != nil && exitCode == 0 {
+	if err := command.Run(
+		ctx,
+		[]string{"dottie", "sync", "--did", fixture.binding.AccountDID},
+	); err != nil &&
+		exitCode == 0 {
 		command.ExitErrHandler(ctx, command, err)
 	}
 	require.Equal(t, 3, exitCode)
 	assert.Equal(t, 1, vaultCalls, "the sync did not resolve the published vault exactly once")
-	assert.Equal(t, "vault: "+pullTestVaultHex()+" (adopted from the published position at self)\npull: unreadable (position_absent)\n", stdout.String())
-	assert.Equal(t, "dottie: sync refused: the local position store cannot be inspected read-only; nothing was changed\n", stderr.String())
+	assert.Equal(
+		t,
+		"vault: "+pullTestVaultHex()+" (adopted from the published position at self)\npull: unreadable (position_absent)\n",
+		stdout.String(),
+	)
+	assert.Equal(
+		t,
+		"dottie: sync refused: the local position store cannot be inspected read-only; nothing was changed\n",
+		stderr.String(),
+	)
 }

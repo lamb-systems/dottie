@@ -47,8 +47,7 @@ type keyringItemLister interface {
 }
 
 func keyringErrorClass(err error) string {
-	var dbusErr dbus.Error
-	if errors.As(err, &dbusErr) {
+	if dbusErr, ok := errors.AsType[dbus.Error](err); ok {
 		return dbusErr.Name
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -103,7 +102,14 @@ func (k *Keyring) Delete(ctx context.Context, itemName string) error {
 }
 
 func (k *Keyring) StoreDeviceKeys(ctx context.Context, vaultID [32]byte, material vault.DeviceMaterial) error {
-	if k == nil || k.backend == nil || material.DeviceID == "" || len(material.DeviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(material.DeviceID) || len(material.KeyID) == 0 || len(material.KeyID) > vault.MaxKeyIDBytes || material.Recipient == nil || len(material.Signing) != ed25519.PrivateKeySize || len(material.Recipient.Bytes()) != 32 || !validDeviceSigningKey(material.Signing) {
+	if k == nil || k.backend == nil || material.DeviceID == "" || len(material.DeviceID) > vault.MaxDeviceIDBytes ||
+		!utf8.ValidString(material.DeviceID) ||
+		len(material.KeyID) == 0 ||
+		len(material.KeyID) > vault.MaxKeyIDBytes ||
+		material.Recipient == nil ||
+		len(material.Signing) != ed25519.PrivateKeySize ||
+		len(material.Recipient.Bytes()) != 32 ||
+		!validDeviceSigningKey(material.Signing) {
 		return ErrKeyringUnavailable
 	}
 	name := deviceKeyringItemName(vaultID, material.DeviceID)
@@ -112,7 +118,8 @@ func (k *Keyring) StoreDeviceKeys(ctx context.Context, vaultID [32]byte, materia
 }
 
 func (k *Keyring) LoadDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
-	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes ||
+		!utf8.ValidString(deviceID) {
 		return vault.DeviceMaterial{}, ErrKeyringUnavailable
 	}
 	payload, err := k.Load(ctx, deviceKeyringItemName(vaultID, deviceID))
@@ -127,7 +134,8 @@ func (k *Keyring) LoadDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID
 }
 
 func (k *Keyring) DeleteDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) error {
-	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes ||
+		!utf8.ValidString(deviceID) {
 		return ErrKeyringUnavailable
 	}
 	return k.Delete(ctx, deviceKeyringItemName(vaultID, deviceID))
@@ -203,7 +211,8 @@ func decodeDeviceKeyMaterial(deviceID string, payload []byte) (vault.DeviceMater
 		return vault.DeviceMaterial{}, ErrKeyringUnavailable
 	}
 	keyIDLength := int(binary.BigEndian.Uint16(payload[4:6]))
-	if keyIDLength == 0 || keyIDLength > vault.MaxKeyIDBytes || len(payload) != 4+2+keyIDLength+ed25519.PrivateKeySize+32 {
+	if keyIDLength == 0 || keyIDLength > vault.MaxKeyIDBytes ||
+		len(payload) != 4+2+keyIDLength+ed25519.PrivateKeySize+32 {
 		return vault.DeviceMaterial{}, ErrKeyringUnavailable
 	}
 	offset := 6
@@ -236,7 +245,8 @@ func (k *Keyring) Close() error {
 }
 
 func classifyKeyringError(err error) error {
-	if err == nil || errors.Is(err, ErrKeyringLocked) || errors.Is(err, ErrKeyringUnavailable) || errors.Is(err, ErrKeyringItemNotFound) {
+	if err == nil || errors.Is(err, ErrKeyringLocked) || errors.Is(err, ErrKeyringUnavailable) ||
+		errors.Is(err, ErrKeyringItemNotFound) {
 		return err
 	}
 	return fmt.Errorf("%w: %s", ErrKeyringUnavailable, keyringErrorClass(err))
@@ -264,11 +274,15 @@ func (b *secretServiceBackend) Close() error {
 func (b *secretServiceBackend) collection(ctx context.Context) (dbus.ObjectPath, error) {
 	object := b.connection.Object(secretServiceName, secretServicePath)
 	var collection dbus.ObjectPath
-	if err := object.CallWithContext(ctx, secretServiceInterface+".ReadAlias", 0, secretDefaultAlias).Store(&collection); err != nil {
+	if err := object.CallWithContext(ctx, secretServiceInterface+".ReadAlias", 0, secretDefaultAlias).
+		Store(&collection); err != nil {
 		return "", fmt.Errorf("%w: read default collection alias: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	if collection == "/" || collection == "" {
-		return "", fmt.Errorf("%w: no default secret collection; unlock or create one in the desktop keyring", ErrKeyringUnavailable)
+		return "", fmt.Errorf(
+			"%w: no default secret collection; unlock or create one in the desktop keyring",
+			ErrKeyringUnavailable,
+		)
 	}
 	if err := b.ensureUnlocked(ctx, collection); err != nil {
 		return "", err
@@ -278,7 +292,9 @@ func (b *secretServiceBackend) collection(ctx context.Context) (dbus.ObjectPath,
 
 func (b *secretServiceBackend) ensureUnlocked(ctx context.Context, path dbus.ObjectPath) error {
 	var locked dbus.Variant
-	if err := b.connection.Object(secretServiceName, path).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Locked").Store(&locked); err != nil {
+	if err := b.connection.Object(secretServiceName, path).
+		CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Locked").
+		Store(&locked); err != nil {
 		return fmt.Errorf("%w: read collection lock state: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	value, ok := locked.Value().(bool)
@@ -294,15 +310,24 @@ func (b *secretServiceBackend) ensureUnlocked(ctx context.Context, path dbus.Obj
 func (b *secretServiceBackend) openSession(ctx context.Context) (dbus.ObjectPath, error) {
 	var output dbus.Variant
 	var session dbus.ObjectPath
-	if err := b.connection.Object(secretServiceName, secretServicePath).CallWithContext(ctx, secretServiceInterface+".OpenSession", 0, "plain", dbus.MakeVariant("")).Store(&output, &session); err != nil || session == "/" {
+	if err := b.connection.Object(secretServiceName, secretServicePath).
+		CallWithContext(ctx, secretServiceInterface+".OpenSession", 0, "plain", dbus.MakeVariant("")).
+		Store(&output, &session); err != nil ||
+		session == "/" {
 		return "", fmt.Errorf("%w: open secret session: %s", ErrKeyringUnavailable, keyringErrorClass(err))
 	}
 	return session, nil
 }
 
-func (b *secretServiceBackend) search(ctx context.Context, collection dbus.ObjectPath, itemName string) ([]dbus.ObjectPath, error) {
+func (b *secretServiceBackend) search(
+	ctx context.Context,
+	collection dbus.ObjectPath,
+	itemName string,
+) ([]dbus.ObjectPath, error) {
 	var property dbus.Variant
-	if err := b.connection.Object(secretServiceName, collection).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Items").Store(&property); err != nil {
+	if err := b.connection.Object(secretServiceName, collection).
+		CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Items").
+		Store(&property); err != nil {
 		return nil, ErrKeyringUnavailable
 	}
 	items, ok := property.Value().([]dbus.ObjectPath)
@@ -312,7 +337,9 @@ func (b *secretServiceBackend) search(ctx context.Context, collection dbus.Objec
 	matches := make([]dbus.ObjectPath, 0, 1)
 	for _, item := range items {
 		var attributes dbus.Variant
-		if err := b.connection.Object(secretServiceName, item).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Attributes").Store(&attributes); err != nil {
+		if err := b.connection.Object(secretServiceName, item).
+			CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Attributes").
+			Store(&attributes); err != nil {
 			return nil, ErrKeyringUnavailable
 		}
 		values, ok := attributes.Value().(map[string]string)
@@ -334,7 +361,9 @@ func (b *secretServiceBackend) ListItems(ctx context.Context, prefix string) ([]
 		return nil, err
 	}
 	var property dbus.Variant
-	if err := b.connection.Object(secretServiceName, collection).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Items").Store(&property); err != nil {
+	if err := b.connection.Object(secretServiceName, collection).
+		CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretCollectionInterface, "Items").
+		Store(&property); err != nil {
 		return nil, ErrKeyringUnavailable
 	}
 	items, ok := property.Value().([]dbus.ObjectPath)
@@ -344,7 +373,9 @@ func (b *secretServiceBackend) ListItems(ctx context.Context, prefix string) ([]
 	names := make([]string, 0)
 	for _, item := range items {
 		var attributes dbus.Variant
-		if err := b.connection.Object(secretServiceName, item).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Attributes").Store(&attributes); err != nil {
+		if err := b.connection.Object(secretServiceName, item).
+			CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Attributes").
+			Store(&attributes); err != nil {
 			return nil, ErrKeyringUnavailable
 		}
 		values, ok := attributes.Value().(map[string]string)
@@ -372,12 +403,20 @@ func (b *secretServiceBackend) Save(ctx context.Context, itemName string, payloa
 	}
 	defer b.closeSession(session)
 	properties := map[string]dbus.Variant{
-		"org.freedesktop.Secret.Item.Label":      dbus.MakeVariant("Dottie session"),
-		"org.freedesktop.Secret.Item.Attributes": dbus.MakeVariant(map[string]string{"application": "dottie", "name": itemName}),
+		"org.freedesktop.Secret.Item.Label": dbus.MakeVariant("Dottie session"),
+		"org.freedesktop.Secret.Item.Attributes": dbus.MakeVariant(
+			map[string]string{"application": "dottie", "name": itemName},
+		),
 	}
-	secret := secretItemValue{Session: session, Value: append([]byte(nil), payload...), ContentType: "application/octet-stream"}
+	secret := secretItemValue{
+		Session:     session,
+		Value:       append([]byte(nil), payload...),
+		ContentType: "application/octet-stream",
+	}
 	var item, prompt dbus.ObjectPath
-	if err := b.connection.Object(secretServiceName, collection).CallWithContext(ctx, secretCollectionInterface+".CreateItem", 0, properties, secret, true).Store(&item, &prompt); err != nil {
+	if err := b.connection.Object(secretServiceName, collection).
+		CallWithContext(ctx, secretCollectionInterface+".CreateItem", 0, properties, secret, true).
+		Store(&item, &prompt); err != nil {
 		return ErrKeyringUnavailable
 	}
 	if prompt != "/" {
@@ -409,7 +448,9 @@ func (b *secretServiceBackend) Load(ctx context.Context, itemName string) ([]byt
 	}
 	defer b.closeSession(session)
 	var secret secretItemValue
-	if err := b.connection.Object(secretServiceName, items[0]).CallWithContext(ctx, secretItemInterface+".GetSecret", 0, session).Store(&secret); err != nil {
+	if err := b.connection.Object(secretServiceName, items[0]).
+		CallWithContext(ctx, secretItemInterface+".GetSecret", 0, session).
+		Store(&secret); err != nil {
 		return nil, ErrKeyringUnavailable
 	}
 	return append([]byte(nil), secret.Value...), nil
@@ -417,7 +458,9 @@ func (b *secretServiceBackend) Load(ctx context.Context, itemName string) ([]byt
 
 func (b *secretServiceBackend) ensureItemUnlocked(ctx context.Context, item dbus.ObjectPath) error {
 	var locked dbus.Variant
-	if err := b.connection.Object(secretServiceName, item).CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Locked").Store(&locked); err != nil {
+	if err := b.connection.Object(secretServiceName, item).
+		CallWithContext(ctx, secretPropertiesInterface+".Get", 0, secretItemInterface, "Locked").
+		Store(&locked); err != nil {
 		return ErrKeyringUnavailable
 	}
 	isLocked, ok := locked.Value().(bool)
@@ -443,7 +486,9 @@ func (b *secretServiceBackend) Delete(ctx context.Context, itemName string) erro
 	}
 	for _, item := range items {
 		var prompt dbus.ObjectPath
-		if err := b.connection.Object(secretServiceName, item).CallWithContext(ctx, secretItemInterface+".Delete", 0).Store(&prompt); err != nil {
+		if err := b.connection.Object(secretServiceName, item).
+			CallWithContext(ctx, secretItemInterface+".Delete", 0).
+			Store(&prompt); err != nil {
 			return ErrKeyringUnavailable
 		}
 		if prompt != "/" {
@@ -454,5 +499,7 @@ func (b *secretServiceBackend) Delete(ctx context.Context, itemName string) erro
 }
 
 func (b *secretServiceBackend) closeSession(session dbus.ObjectPath) {
-	_ = b.connection.Object(secretServiceName, secretServicePath).Call(secretServiceInterface+".CloseSession", 0, session).Err
+	_ = b.connection.Object(secretServiceName, secretServicePath).
+		Call(secretServiceInterface+".CloseSession", 0, session).
+		Err
 }

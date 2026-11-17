@@ -27,7 +27,13 @@ func testPaths(t *testing.T) platform.Paths {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
 		require.NoError(t, os.Chmod(directory, 0o700))
 	}
-	return platform.Paths{Home: home, ConfigHome: configHome, StateHome: stateHome, CacheHome: cacheHome, DataHome: dataHome}
+	return platform.Paths{
+		Home:       home,
+		ConfigHome: configHome,
+		StateHome:  stateHome,
+		CacheHome:  cacheHome,
+		DataHome:   dataHome,
+	}
 }
 
 func filesTarget(id string, base model.RootBase, path string, kind model.SelectionKind) Target {
@@ -44,7 +50,10 @@ func writeRawConfig(t *testing.T, paths platform.Paths, text string) {
 }
 
 func TestAbsentDefaultModeResolvesToReview(t *testing.T) {
-	current := Config{Version: Version, Targets: []Target{filesTarget("target", model.RootHome, "dotfiles", model.SelectionDirectory)}}
+	current := Config{
+		Version: Version,
+		Targets: []Target{filesTarget("target", model.RootHome, "dotfiles", model.SelectionDirectory)},
+	}
 	require.NoError(t, current.Validate())
 	assert.Equal(t, Review, current.Targets[0].ModeOrDefault(current.Defaults), "mode without a default")
 }
@@ -75,7 +84,11 @@ func TestLoadUpgradesVersionOneWithoutInventingGNOMEApproval(t *testing.T) {
 	assert.Empty(t, loaded.Targets[0].GNOMEPolicy.KeyDigest)
 
 	filesOnly := testPaths(t)
-	writeRawConfig(t, filesOnly, "config_version = 1\n[[targets]]\nid = 'files'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'config'\nkind = 'directory'\n")
+	writeRawConfig(
+		t,
+		filesOnly,
+		"config_version = 1\n[[targets]]\nid = 'files'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'config'\nkind = 'directory'\n",
+	)
 	loaded, err = Load(filesOnly)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), loaded.Version)
@@ -94,7 +107,9 @@ func seedConfig(t *testing.T, paths platform.Paths, value Config) {
 func TestPendingGNOMEApprovalRoundTripsThroughUpdateAndLoad(t *testing.T) {
 	paths := testPaths(t)
 	current := Default()
-	current.Targets = []Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
+	current.Targets = []Target{
+		{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}},
+	}
 	seedConfig(t, paths, current)
 	loaded, err := Load(paths)
 	require.NoError(t, err)
@@ -131,7 +146,18 @@ func TestGNOMEPolicyValidationRequiresExactApprovalShape(t *testing.T) {
 	}
 
 	approved := Default()
-	approved.Targets = []Target{{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalApproved, Categories: []string{"appearance", "clock"}, MatrixVersion: 1, KeyDigest: validDigest}}}
+	approved.Targets = []Target{
+		{
+			ID:     "desktop",
+			Source: model.SourceGNOME,
+			GNOMEPolicy: &GNOMEPolicy{
+				Approval:      GNOMEApprovalApproved,
+				Categories:    []string{"appearance", "clock"},
+				MatrixVersion: 1,
+				KeyDigest:     validDigest,
+			},
+		},
+	}
 	assert.NoError(t, approved.Validate())
 }
 
@@ -139,7 +165,9 @@ func TestLoadSymlinkedRegularConfig(t *testing.T) {
 	paths := testPaths(t)
 	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o700))
 	target := filepath.Join(t.TempDir(), "config.toml")
-	content := []byte("config_version = 1\n[defaults]\nmode = 'backup-only'\n[[targets]]\nid = 'saved'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'dotfiles'\nkind = 'directory'\n")
+	content := []byte(
+		"config_version = 1\n[defaults]\nmode = 'backup-only'\n[[targets]]\nid = 'saved'\nsource = 'files'\n[targets.root]\nbase = 'home'\npath = 'dotfiles'\nkind = 'directory'\n",
+	)
 	require.NoError(t, os.WriteFile(target, content, 0o600))
 	require.NoError(t, os.Symlink(target, filepath.Join(paths.AppConfigDir(), FileName)))
 
@@ -197,19 +225,55 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 		text string
 		want string
 	}{
-		{name: "unknown key", text: "config_version = 1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\nhook=true\n", want: "targets.root.hook"},
+		{
+			name: "unknown key",
+			text: "config_version = 1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\nhook=true\n",
+			want: "targets.root.hook",
+		},
 		{name: "missing version", text: "[defaults]\nmode = 'review'\n", want: "version"},
 		{name: "unsupported version", text: "config_version = 3\n", want: "version"},
 		{name: "wrong type", text: "config_version = 'one'\n", want: "decode"},
-		{name: "duplicate id", text: "config_version = 1\n[[targets]]\nid='same'\nsource='gnome'\n[[targets]]\nid='same'\nsource='gnome'\n", want: "duplicate"},
+		{
+			name: "duplicate id",
+			text: "config_version = 1\n[[targets]]\nid='same'\nsource='gnome'\n[[targets]]\nid='same'\nsource='gnome'\n",
+			want: "duplicate",
+		},
 		{name: "bad mode", text: "config_version=1\n[defaults]\nmode='prompt'\n", want: "mode"},
-		{name: "bad base", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='tmp'\npath='x'\nkind='directory'\n", want: "base"},
-		{name: "bad path", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='../x'\nkind='directory'\n", want: "path"},
-		{name: "whole base", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='.'\nkind='directory'\n", want: "whole base"},
-		{name: "bad kind", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='socket'\n", want: "kind"},
-		{name: "bad exclude", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\nexclude=['../secret']\n", want: "exclude"},
-		{name: "gnome root", text: "config_version=1\n[[targets]]\nid='x'\nsource='gnome'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\n", want: "GNOME"},
-		{name: "files without root", text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n", want: "requires a root"},
+		{
+			name: "bad base",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='tmp'\npath='x'\nkind='directory'\n",
+			want: "base",
+		},
+		{
+			name: "bad path",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='../x'\nkind='directory'\n",
+			want: "path",
+		},
+		{
+			name: "whole base",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='.'\nkind='directory'\n",
+			want: "whole base",
+		},
+		{
+			name: "bad kind",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='socket'\n",
+			want: "kind",
+		},
+		{
+			name: "bad exclude",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\nexclude=['../secret']\n",
+			want: "exclude",
+		},
+		{
+			name: "gnome root",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='gnome'\n[targets.root]\nbase='home'\npath='x'\nkind='directory'\n",
+			want: "GNOME",
+		},
+		{
+			name: "files without root",
+			text: "config_version=1\n[[targets]]\nid='x'\nsource='files'\n",
+			want: "requires a root",
+		},
 		{name: "unknown source", text: "config_version=1\n[[targets]]\nid='x'\nsource='remote'\n", want: "source"},
 	}
 	for _, tt := range tests {
@@ -233,7 +297,10 @@ func TestUpdateLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	target := filesTarget("nvim", model.RootXDGConfig, "nvim", model.SelectionDirectory)
 	target.Mode = AutoApply
 	target.Root.Exclude = []string{".git", ".git/**", ".git"}
-	c.Targets = []Target{target, {ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}}}
+	c.Targets = []Target{
+		target,
+		{ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}},
+	}
 	seedConfig(t, paths, c)
 
 	assert.Len(t, c.Targets[0].Root.Exclude, 3, "Update mutated the caller's excludes")
@@ -253,7 +320,12 @@ func TestUpdateLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	assert.Equal(t, AutoApply, loaded.Targets[0].Mode, "round trip lost overrides")
 	assert.Empty(t, loaded.Targets[1].Mode, "round trip invented an override")
 	assert.Equal(t, []string{".git", ".git/**"}, loaded.Targets[0].Root.Exclude, "excludes")
-	assert.Equal(t, &GNOMEPolicy{Approval: GNOMEApprovalPending}, loaded.Targets[1].GNOMEPolicy, "pending GNOME approval")
+	assert.Equal(
+		t,
+		&GNOMEPolicy{Approval: GNOMEApprovalPending},
+		loaded.Targets[1].GNOMEPolicy,
+		"pending GNOME approval",
+	)
 }
 
 func TestUpdateRefusesUnsafePaths(t *testing.T) {
@@ -340,7 +412,12 @@ func TestUpdateCommitPointFailures(t *testing.T) {
 			entries, err := os.ReadDir(paths.AppConfigDir())
 			require.NoError(t, err)
 			for _, entry := range entries {
-				assert.False(t, strings.HasPrefix(entry.Name(), ".config.toml.tmp-"), "temporary file remains: %s", entry.Name())
+				assert.False(
+					t,
+					strings.HasPrefix(entry.Name(), ".config.toml.tmp-"),
+					"temporary file remains: %s",
+					entry.Name(),
+				)
 			}
 		})
 	}

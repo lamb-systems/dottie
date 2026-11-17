@@ -11,22 +11,29 @@ func validateAttemptJournalProjection(kinds []string, stored storedAttempt, stag
 		}
 		switch kind {
 		case "upload-started":
-			if projection.lifecycle != AttemptPrepared || projection.outcome != OutcomeNotSubmitted || projection.blocked != "" {
+			if projection.lifecycle != AttemptPrepared || projection.outcome != OutcomeNotSubmitted ||
+				projection.blocked != "" {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.lifecycle = AttemptUploadStarted
 		case "may-have-submitted":
-			if projection.lifecycle != AttemptUploadStarted || projection.outcome != OutcomeNotSubmitted || projection.blocked != "" {
+			if projection.lifecycle != AttemptUploadStarted || projection.outcome != OutcomeNotSubmitted ||
+				projection.blocked != "" {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.lifecycle = AttemptMayHaveSubmitted
 			projection.outcome = OutcomeUnresolved
 		case "blocked-floor-replaced":
-			if projection.blocked != "" || (projection.lifecycle != AttemptPrepared && projection.lifecycle != AttemptUploadStarted && projection.lifecycle != AttemptMayHaveSubmitted) {
+			if projection.blocked != "" ||
+				(projection.lifecycle != AttemptPrepared && projection.lifecycle != AttemptUploadStarted && projection.lifecycle != AttemptMayHaveSubmitted) {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.blocked = "blocked-floor-replaced"
-		case "outcome-observed-absent-unresolved", "outcome-observed-current", "outcome-committed-superseded", "outcome-lost-fence", "outcome-provider-rejected":
+		case "outcome-observed-absent-unresolved",
+			"outcome-observed-current",
+			"outcome-committed-superseded",
+			"outcome-lost-fence",
+			"outcome-provider-rejected":
 			if projection.lifecycle != AttemptMayHaveSubmitted {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
@@ -36,22 +43,24 @@ func validateAttemptJournalProjection(kinds []string, stored storedAttempt, stag
 			}
 			projection.outcome = outcome
 		case "retired-success":
-			if projection.lifecycle != AttemptMayHaveSubmitted || projection.blocked != "" || (projection.outcome != OutcomeUnresolved && projection.outcome != OutcomeAbsentUnresolved && projection.outcome != OutcomeCurrent) {
+			if projection.lifecycle != AttemptMayHaveSubmitted || projection.blocked != "" ||
+				(projection.outcome != OutcomeUnresolved && projection.outcome != OutcomeAbsentUnresolved && projection.outcome != OutcomeCurrent) {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.lifecycle = AttemptRetiredSuccess
 			projection.outcome = OutcomeCurrent
 			projection.retired = true
 		case "retired-abandoned":
-			if projection.lifecycle == AttemptPrepared || projection.lifecycle == AttemptUploadStarted {
+			switch projection.lifecycle {
+			case AttemptPrepared, AttemptUploadStarted:
 				if projection.outcome != OutcomeNotSubmitted {
 					return classified(ErrSchema, stage, ReasonCorrupt)
 				}
-			} else if projection.lifecycle == AttemptMayHaveSubmitted {
+			case AttemptMayHaveSubmitted:
 				if !terminalOutcome(projection.outcome) {
 					return classified(ErrSchema, stage, ReasonCorrupt)
 				}
-			} else {
+			default:
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			projection.lifecycle = AttemptRetiredAbandoned
@@ -60,7 +69,8 @@ func validateAttemptJournalProjection(kinds []string, stored storedAttempt, stag
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 	}
-	if projection.lifecycle != stored.lifecycle || projection.outcome != stored.outcome || projection.blocked != stored.blocked {
+	if projection.lifecycle != stored.lifecycle || projection.outcome != stored.outcome ||
+		projection.blocked != stored.blocked {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return nil
@@ -96,7 +106,9 @@ func attemptOutcomeTransitionAllowed(previous, next AttemptOutcome) bool {
 	}
 	switch previous {
 	case OutcomeUnresolved, OutcomeAbsentUnresolved:
-		return next == OutcomeAbsentUnresolved || next == OutcomeCurrent || next == OutcomeSuperseded || next == OutcomeLostFence || next == OutcomeRejected
+		return next == OutcomeAbsentUnresolved || next == OutcomeCurrent || next == OutcomeSuperseded ||
+			next == OutcomeLostFence ||
+			next == OutcomeRejected
 	case OutcomeCurrent:
 		return next == OutcomeSuperseded
 	default:

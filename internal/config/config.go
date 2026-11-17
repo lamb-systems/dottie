@@ -156,7 +156,9 @@ func validateGNOMEPolicy(target Target, version uint32) error {
 	switch policy.Approval {
 	case GNOMEApprovalPending:
 		if len(policy.Categories) != 0 || policy.MatrixVersion != 0 || policy.KeyDigest != "" {
-			return errors.New("pending GNOME category policy cannot carry approved categories, matrix version or key digest")
+			return errors.New(
+				"pending GNOME category policy cannot carry approved categories, matrix version or key digest",
+			)
 		}
 	case GNOMEApprovalApproved:
 		if len(policy.Categories) == 0 || policy.MatrixVersion == 0 {

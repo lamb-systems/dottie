@@ -77,7 +77,13 @@ type proofTransport struct {
 	repoQuery     url.Values
 }
 
-func (f *proofTransport) Do(_ context.Context, method, endpoint string, query url.Values, body []byte, _ string) (int, []byte, error) {
+func (f *proofTransport) Do(
+	_ context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	_ string,
+) (int, []byte, error) {
 	f.requestMethod = method
 	f.requestPath = endpoint
 	f.requestBody = append([]byte(nil), body...)
@@ -123,9 +129,11 @@ func makeProofFixture(t *testing.T, recordCount int) proofFixture {
 	tree := mst.NewEmptyTree()
 	blocksList := make([]proofBlock, 0, recordCount+16)
 	records := make(map[string]cid.Cid, recordCount)
-	for index := 0; index < recordCount; index++ {
+	for index := range recordCount {
 		recordPath := fmt.Sprintf("systems.lamb.dottie.vaultSnapshot/r%d", index)
-		data, err := atdata.MarshalCBOR(map[string]any{"$type": "systems.lamb.dottie.vaultSnapshot", "probe": fmt.Sprintf("p%d", index)})
+		data, err := atdata.MarshalCBOR(
+			map[string]any{"$type": "systems.lamb.dottie.vaultSnapshot", "probe": fmt.Sprintf("p%d", index)},
+		)
 		if err != nil {
 			require.NoError(t, err)
 		}
@@ -149,11 +157,18 @@ func makeProofFixture(t *testing.T, recordCount int) proofFixture {
 	blocksList = append(blocksList, proofBlock{cid: commitCID, data: commitBytes.Bytes()})
 	carBytes := encodeProofCAR(t, commitCID, blocksList)
 	return proofFixture{
-		car:          carBytes,
-		root:         commitCID,
-		private:      privateKey,
-		public:       publicKey,
-		methods:      []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: publicKey.Multibase()}},
+		car:     carBytes,
+		root:    commitCID,
+		private: privateKey,
+		public:  publicKey,
+		methods: []VerificationMethod{
+			{
+				ID:                 proofTestDID + "#atproto",
+				Type:               "Multikey",
+				Controller:         proofTestDID,
+				PublicKeyMultibase: publicKey.Multibase(),
+			},
+		},
 		blocks:       blocksList,
 		recordBlocks: records,
 		commit:       commit,
@@ -206,24 +221,49 @@ func encodeProofCAR(t *testing.T, root cid.Cid, blocksList []proofBlock) []byte 
 }
 
 func proofReader(fixture proofFixture, transport Transport, budgets Budgets) RevisionReader {
-	return RevisionReader{Transport: transport, Budgets: budgets, DIDDocumentID: proofTestDID, VerificationMethods: fixture.methods}
+	return RevisionReader{
+		Transport:           transport,
+		Budgets:             budgets,
+		DIDDocumentID:       proofTestDID,
+		VerificationMethods: fixture.methods,
+	}
 }
 
 func TestRevisionReaderVerifiesSignatureAndCARMembership(t *testing.T) {
 	fixture := makeProofFixture(t, 2)
-	transport := &proofTransport{carBytes: fixture.car, latestCIDs: []string{fixture.root.String(), fixture.root.String()}, streamStatus: 200}
+	transport := &proofTransport{
+		carBytes:     fixture.car,
+		latestCIDs:   []string{fixture.root.String(), fixture.root.String()},
+		streamStatus: 200,
+	}
 	revision, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
 	if err != nil {
 		require.NoError(t, err)
 	}
 	if revision.commitCID != fixture.root.String() || len(revision.membership) != 2 || len(revision.records) != 2 {
-		require.False(t, revision.commitCID != fixture.root.String() || len(revision.membership) != 2 || len(revision.records) != 2, "verified revision=%+v", revision)
+		require.False(
+			t,
+			revision.commitCID != fixture.root.String() || len(revision.membership) != 2 || len(revision.records) != 2,
+			"verified revision=%+v",
+			revision,
+		)
 	}
 	if transport.latestCalls != 2 || transport.streamCalls != 1 {
-		require.False(t, transport.latestCalls != 2 || transport.streamCalls != 1, "read call counts latest=%d repo=%d", transport.latestCalls, transport.streamCalls)
+		require.False(
+			t,
+			transport.latestCalls != 2 || transport.streamCalls != 1,
+			"read call counts latest=%d repo=%d",
+			transport.latestCalls,
+			transport.streamCalls,
+		)
 	}
 	if transport.repoQuery.Get("did") != proofTestDID || transport.repoQuery.Has("since") {
-		require.False(t, transport.repoQuery.Get("did") != proofTestDID || transport.repoQuery.Has("since"), "getRepo request query=%v", transport.repoQuery)
+		require.False(
+			t,
+			transport.repoQuery.Get("did") != proofTestDID || transport.repoQuery.Has("since"),
+			"getRepo request query=%v",
+			transport.repoQuery,
+		)
 	}
 	key := RecordKey{Collection: "systems.lamb.dottie.vaultSnapshot", RKey: "r0"}
 	membership := revision.Membership()
@@ -231,8 +271,14 @@ func TestRevisionReaderVerifiesSignatureAndCARMembership(t *testing.T) {
 	records := revision.Records()
 	record := records[key]
 	record.Data[0] ^= 0xff
-	if !revision.HasRecord(key) || revision.Membership()[key] == "tampered" || bytes.Equal(revision.Records()[key].Data, record.Data) {
-		require.False(t, !revision.HasRecord(key) || revision.Membership()[key] == "tampered" || bytes.Equal(revision.Records()[key].Data, record.Data), "revision membership or record bytes were mutable through the public view")
+	if !revision.HasRecord(key) || revision.Membership()[key] == "tampered" ||
+		bytes.Equal(revision.Records()[key].Data, record.Data) {
+		require.False(
+			t,
+			!revision.HasRecord(key) || revision.Membership()[key] == "tampered" ||
+				bytes.Equal(revision.Records()[key].Data, record.Data),
+			"revision membership or record bytes were mutable through the public view",
+		)
 	}
 }
 
@@ -279,11 +325,46 @@ func TestRevisionReaderRejectsDIDBindingMismatch(t *testing.T) {
 func TestRevisionReaderRetriesWhenAdvertisedCommitMoves(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	otherCID := proofCID(t, []byte("other advertised root")).String()
-	transport := &proofTransport{carBytes: fixture.car, latestCIDs: []string{fixture.root.String(), otherCID, fixture.root.String(), otherCID, fixture.root.String(), otherCID}, streamStatus: 200}
+	transport := &proofTransport{
+		carBytes: fixture.car,
+		latestCIDs: []string{
+			fixture.root.String(),
+			otherCID,
+			fixture.root.String(),
+			otherCID,
+			fixture.root.String(),
+			otherCID,
+		},
+		streamStatus: 200,
+	}
 	_, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
-	require.ErrorIs(t, err, ErrRevisionMoving, "moving read error=%v latest=%d repo=%d", err, transport.latestCalls, transport.streamCalls)
-	require.Equal(t, 6, transport.latestCalls, "moving read error=%v latest=%d repo=%d", err, transport.latestCalls, transport.streamCalls)
-	require.Equal(t, 3, transport.streamCalls, "moving read error=%v latest=%d repo=%d", err, transport.latestCalls, transport.streamCalls)
+	require.ErrorIs(
+		t,
+		err,
+		ErrRevisionMoving,
+		"moving read error=%v latest=%d repo=%d",
+		err,
+		transport.latestCalls,
+		transport.streamCalls,
+	)
+	require.Equal(
+		t,
+		6,
+		transport.latestCalls,
+		"moving read error=%v latest=%d repo=%d",
+		err,
+		transport.latestCalls,
+		transport.streamCalls,
+	)
+	require.Equal(
+		t,
+		3,
+		transport.streamCalls,
+		"moving read error=%v latest=%d repo=%d",
+		err,
+		transport.latestCalls,
+		transport.streamCalls,
+	)
 }
 
 func TestRevisionReaderRejectsOversizedCARDuringIngestion(t *testing.T) {
@@ -307,7 +388,11 @@ func TestRevisionReaderAppliesEveryCARBudget(t *testing.T) {
 	}{
 		{name: "block count", change: func(b *Budgets) { b.MaxBlocks = 1 }, want: "MaxBlocks"},
 		{name: "block bytes", change: func(b *Budgets) { b.MaxBlockBytes = 1 }, want: "MaxBlockBytes"},
-		{name: "membership count", change: func(b *Budgets) { b.MaxMembershipRecords = 1 }, want: "MaxMembershipRecords"},
+		{
+			name:   "membership count",
+			change: func(b *Budgets) { b.MaxMembershipRecords = 1 },
+			want:   "MaxMembershipRecords",
+		},
 		{name: "MST depth", change: func(b *Budgets) { b.MaxMSTDepth = 1 }, want: "MaxMSTDepth"},
 	}
 	for _, check := range checks {
@@ -318,7 +403,11 @@ func TestRevisionReaderAppliesEveryCARBudget(t *testing.T) {
 			if check.want == "MaxMSTDepth" {
 				testFixture = makeProofFixture(t, 300)
 			}
-			transport := &proofTransport{carBytes: testFixture.car, latestCIDs: []string{testFixture.root.String()}, streamStatus: 200}
+			transport := &proofTransport{
+				carBytes:     testFixture.car,
+				latestCIDs:   []string{testFixture.root.String()},
+				streamStatus: 200,
+			}
 			_, err := proofReader(testFixture, transport, budgets).Read(context.Background(), proofTestDID)
 			require.ErrorIs(t, err, ErrUntrustedCar, "budget error=%v want bound %s", err, check.want)
 			require.ErrorContains(t, err, check.want, "budget error=%v want bound %s", err, check.want)
@@ -385,12 +474,19 @@ func TestRevisionReaderRejectsDuplicateMSTKeys(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
 	recordCID := fixture.recordBlocks["systems.lamb.dottie.vaultSnapshot/r0"]
 	path := []byte("systems.lamb.dottie.vaultSnapshot/r0")
-	nodeData := mst.NodeData{Entries: []mst.EntryData{{KeySuffix: path, Value: recordCID}, {KeySuffix: path, Value: recordCID}}}
+	nodeData := mst.NodeData{
+		Entries: []mst.EntryData{{KeySuffix: path, Value: recordCID}, {KeySuffix: path, Value: recordCID}},
+	}
 	nodeBytes, nodeCID, err := nodeData.Bytes()
 	if err != nil {
 		require.NoError(t, err)
 	}
-	commit := &repo.Commit{DID: proofTestDID, Version: repo.ATPROTO_REPO_VERSION, Data: *nodeCID, Rev: fixture.commit.Rev}
+	commit := &repo.Commit{
+		DID:     proofTestDID,
+		Version: repo.ATPROTO_REPO_VERSION,
+		Data:    *nodeCID,
+		Rev:     fixture.commit.Rev,
+	}
 	if err := commit.Sign(fixture.private); err != nil {
 		require.NoError(t, err)
 	}
@@ -399,7 +495,15 @@ func TestRevisionReaderRejectsDuplicateMSTKeys(t *testing.T) {
 		require.NoError(t, err)
 	}
 	commitCID := proofCID(t, commitBytes.Bytes())
-	carBytes := encodeProofCAR(t, commitCID, []proofBlock{{cid: recordCID, data: mustRecordData(t, fixture, recordCID)}, {cid: *nodeCID, data: nodeBytes}, {cid: commitCID, data: commitBytes.Bytes()}})
+	carBytes := encodeProofCAR(
+		t,
+		commitCID,
+		[]proofBlock{
+			{cid: recordCID, data: mustRecordData(t, fixture, recordCID)},
+			{cid: *nodeCID, data: nodeBytes},
+			{cid: commitCID, data: commitBytes.Bytes()},
+		},
+	)
 	transport := &proofTransport{carBytes: carBytes, latestCIDs: []string{commitCID.String()}, streamStatus: 200}
 	revision, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
 	if !errors.Is(err, ErrUntrustedCar) {
@@ -439,20 +543,43 @@ func TestRepositorySigningKeyBindingAndAlgorithm(t *testing.T) {
 			assert.ErrorIs(t, err, ErrKeyBinding, "invalid verification methods error=%v", err)
 		}
 	}
-	wrongPurpose := []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "JsonWebKey", Controller: proofTestDID, PublicKeyMultibase: fixture.public.Multibase()}}
+	wrongPurpose := []VerificationMethod{
+		{
+			ID:                 proofTestDID + "#atproto",
+			Type:               "JsonWebKey",
+			Controller:         proofTestDID,
+			PublicKeyMultibase: fixture.public.Multibase(),
+		},
+	}
 	_, err := repositorySigningKey(wrongPurpose, proofTestDID)
 	require.ErrorIs(t, err, ErrWrongKeyPurpose, "wrong-purpose key error=%v", err)
 	require.ErrorIs(t, err, ErrKeyBinding, "wrong-purpose key error=%v", err)
-	malformed := []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: "not-multibase"}}
+	malformed := []VerificationMethod{
+		{
+			ID:                 proofTestDID + "#atproto",
+			Type:               "Multikey",
+			Controller:         proofTestDID,
+			PublicKeyMultibase: "not-multibase",
+		},
+	}
 	_, err = repositorySigningKey(malformed, proofTestDID)
 	require.ErrorIs(t, err, ErrMalformedPublicKey, "malformed public key error=%v", err)
 	require.ErrorIs(t, err, ErrKeyBinding, "malformed public key error=%v", err)
 	secp256k1 := "zQ3shcnfWLQN1bY4d2patsEAYFzy4xp1zdckEvHsV7S4ocTnC"
-	accepted := []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: secp256k1}}
+	accepted := []VerificationMethod{
+		{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: secp256k1},
+	}
 	if _, err := repositorySigningKey(accepted, proofTestDID); err != nil {
 		require.NoError(t, err, "the live network uses secp256k1 Multikey keys and must be accepted: %v", err)
 	}
-	unsupported := []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"}}
+	unsupported := []VerificationMethod{
+		{
+			ID:                 proofTestDID + "#atproto",
+			Type:               "Multikey",
+			Controller:         proofTestDID,
+			PublicKeyMultibase: "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+		},
+	}
 	_, err = repositorySigningKey(unsupported, proofTestDID)
 	require.ErrorIs(t, err, ErrUnsupportedSigningAlgorithm, "unsupported signing algorithm error=%v", err)
 	require.ErrorIs(t, err, ErrKeyBinding, "unsupported signing algorithm error=%v", err)
@@ -460,8 +587,16 @@ func TestRepositorySigningKeyBindingAndAlgorithm(t *testing.T) {
 
 func TestDefaultBudgetsMatchPublicationFenceLimits(t *testing.T) {
 	budgets := DefaultBudgets()
-	if budgets.MaxCarBytes != 8<<20 || budgets.MaxBlocks != 8192 || budgets.MaxBlockBytes != 1<<20 || budgets.MaxMembershipRecords != 4096 || budgets.MaxMSTDepth != 32 {
-		require.False(t, budgets.MaxCarBytes != 8<<20 || budgets.MaxBlocks != 8192 || budgets.MaxBlockBytes != 1<<20 || budgets.MaxMembershipRecords != 4096 || budgets.MaxMSTDepth != 32, "default budgets=%+v", budgets)
+	if budgets.MaxCarBytes != 8<<20 || budgets.MaxBlocks != 8192 || budgets.MaxBlockBytes != 1<<20 ||
+		budgets.MaxMembershipRecords != 4096 ||
+		budgets.MaxMSTDepth != 32 {
+		require.False(
+			t,
+			budgets.MaxCarBytes != 8<<20 || budgets.MaxBlocks != 8192 || budgets.MaxBlockBytes != 1<<20 || budgets.MaxMembershipRecords != 4096 ||
+				budgets.MaxMSTDepth != 32,
+			"default budgets=%+v",
+			budgets,
+		)
 	}
 }
 
@@ -481,7 +616,7 @@ func TestRevisionReaderPreservesTransportCauseAndTypesReadStatus(t *testing.T) {
 	transport := &proofTransport{latestStatus: 401, doError: cause}
 	_, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
 	require.ErrorIs(t, err, ErrAmbiguousTransport)
-	assert.ErrorIs(t, err, cause)
+	require.ErrorIs(t, err, cause)
 
 	for _, status := range []int{401, 429} {
 		body := []byte(`{"error":"AuthRequired","message":"private provider body"}`)
@@ -502,7 +637,11 @@ func TestRevisionReaderPreservesTransportCauseAndTypesReadStatus(t *testing.T) {
 
 func TestTransportStreamErrorIsAmbiguous(t *testing.T) {
 	fixture := makeProofFixture(t, 1)
-	transport := &proofTransport{latestCIDs: []string{fixture.root.String()}, streamError: errors.New("connection interrupted"), streamStatus: 200}
+	transport := &proofTransport{
+		latestCIDs:   []string{fixture.root.String()},
+		streamError:  errors.New("connection interrupted"),
+		streamStatus: 200,
+	}
 	_, err := proofReader(fixture, transport, DefaultBudgets()).Read(context.Background(), proofTestDID)
 	if !errors.Is(err, ErrAmbiguousTransport) {
 		require.ErrorIs(t, err, ErrAmbiguousTransport, "stream failure error=%v", err)
@@ -527,7 +666,7 @@ func TestSafeTransportCauseSanitizesTypedStatusCodes(t *testing.T) {
 		&AuthStatusError{StatusCode: 401, Err: errors.New("super-secret-token")},
 	} {
 		safe := safeTransportCause(cause)
-		require.NotNil(t, safe)
+		require.Error(t, safe)
 		assert.NotContains(t, safe.Error(), "super-secret-token")
 	}
 }

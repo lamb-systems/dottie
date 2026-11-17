@@ -22,16 +22,27 @@ func TestPublicationAttemptMetadataCorruptionRefusesReadback(t *testing.T) {
 			review := attemptReview()
 			proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 			require.NoError(t, err)
-			attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+			attempt, err := store.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidate,
+				view,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			var statement string
 			switch damage {
 			case "event-digest":
-				statement = "UPDATE attempt_events SET digest=zeroblob(32) WHERE attempt_id=x'" + hexID(attempt.ID) + "' AND ordinal=1"
+				statement = "UPDATE attempt_events SET digest=zeroblob(32) WHERE attempt_id=x'" + hexID(
+					attempt.ID,
+				) + "' AND ordinal=1"
 			case "reference":
 				statement = "DELETE FROM attempt_payload_refs WHERE attempt_id=x'" + hexID(attempt.ID) + "'"
 			case "reservation":
-				statement = "UPDATE attempt_reservations SET accepted_records=-1 WHERE attempt_id=x'" + hexID(attempt.ID) + "'"
+				statement = "UPDATE attempt_reservations SET accepted_records=-1 WHERE attempt_id=x'" + hexID(
+					attempt.ID,
+				) + "'"
 			}
 			_, err = store.conn.ExecContext(ctx, statement)
 			require.NoError(t, err)
@@ -54,13 +65,28 @@ type attemptProjectionSnapshot struct {
 func readAttemptProjectionSnapshot(t *testing.T, store *Store, id [16]byte) attemptProjectionSnapshot {
 	t.Helper()
 	var snapshot attemptProjectionSnapshot
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT lifecycle,outcome,blocked,state_digest,mutation_revision,terminal_evidence,retirement_evidence FROM publication_attempts WHERE attempt_id=?", id[:]).Scan(&snapshot.lifecycle, &snapshot.outcome, &snapshot.blocked, &snapshot.stateDigest, &snapshot.mutationRevision, &snapshot.terminalEvidence, &snapshot.retirementEvidence))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT lifecycle,outcome,blocked,state_digest,mutation_revision,terminal_evidence,retirement_evidence FROM publication_attempts WHERE attempt_id=?", id[:]).
+			Scan(&snapshot.lifecycle, &snapshot.outcome, &snapshot.blocked, &snapshot.stateDigest, &snapshot.mutationRevision, &snapshot.terminalEvidence, &snapshot.retirementEvidence),
+	)
 	return snapshot
 }
 
 func restoreAttemptProjectionSnapshot(t *testing.T, store *Store, id [16]byte, snapshot attemptProjectionSnapshot) {
 	t.Helper()
-	result, err := store.conn.ExecContext(context.Background(), "UPDATE publication_attempts SET lifecycle=?,outcome=?,blocked=?,state_digest=?,mutation_revision=?,terminal_evidence=?,retirement_evidence=? WHERE attempt_id=?", snapshot.lifecycle, snapshot.outcome, snapshot.blocked, snapshot.stateDigest, snapshot.mutationRevision, snapshot.terminalEvidence, snapshot.retirementEvidence, id[:])
+	result, err := store.conn.ExecContext(
+		context.Background(),
+		"UPDATE publication_attempts SET lifecycle=?,outcome=?,blocked=?,state_digest=?,mutation_revision=?,terminal_evidence=?,retirement_evidence=? WHERE attempt_id=?",
+		snapshot.lifecycle,
+		snapshot.outcome,
+		snapshot.blocked,
+		snapshot.stateDigest,
+		snapshot.mutationRevision,
+		snapshot.terminalEvidence,
+		snapshot.retirementEvidence,
+		id[:],
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -89,11 +115,22 @@ func TestPublicationAttemptReadbackRejectsPreSubmissionProjectionWithSubmissionJ
 	assert.Equal(t, string(OutcomeNotSubmitted), oldProjection.outcome)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	firstBatch, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	firstBatch, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, attempt.SnapshotRecordCID, firstBatch.ExpectedSnapshotCID)
 	var submissionEvents int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).Scan(&submissionEvents))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).
+			Scan(&submissionEvents),
+	)
 	assert.Equal(t, 1, submissionEvents)
 	restoreAttemptProjectionSnapshot(t, store, attempt.ID, oldProjection)
 	corruptRows := readAttemptLogicalRows(t, store)
@@ -102,7 +139,14 @@ func TestPublicationAttemptReadbackRejectsPreSubmissionProjectionWithSubmissionJ
 	requireErrorMetadata(t, err, ErrSchema, StageLoad, ReasonCorrupt)
 	assert.True(t, store.needsReadback)
 	assert.Equal(t, corruptRows, readAttemptLogicalRows(t, store))
-	secondBatch, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	secondBatch, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	requireErrorMetadata(t, err, ErrStorage, StageDispatch, ReasonCommitUnknown)
 	assert.Equal(t, SubmissionMaterial{}, secondBatch)
 	assert.Equal(t, corruptRows, readAttemptLogicalRows(t, store))
@@ -155,8 +199,16 @@ func TestPublicationAttemptJournalRejectsSubmissionBeforeUpload(t *testing.T) {
 	attempt := createAndSubmitGenesis(t, store, f, empty, candidate, review)
 	var uploadBody, submissionBody []byte
 	var uploadDigest, submissionDigest []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND ordinal=2", attempt.ID[:]).Scan(&uploadBody, &uploadDigest))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND ordinal=3", attempt.ID[:]).Scan(&submissionBody, &submissionDigest))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND ordinal=2", attempt.ID[:]).
+			Scan(&uploadBody, &uploadDigest),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND ordinal=3", attempt.ID[:]).
+			Scan(&submissionBody, &submissionDigest),
+	)
 	var uploadEvent, submissionEvent attemptEventWire
 	require.NoError(t, strictJSON(uploadBody, &uploadEvent))
 	require.NoError(t, strictJSON(submissionBody, &submissionEvent))
@@ -174,9 +226,21 @@ func TestPublicationAttemptJournalRejectsSubmissionBeforeUpload(t *testing.T) {
 	misorderedSubmission, err := encodeAttemptEvent(submissionEvent)
 	require.NoError(t, err)
 	misorderedSubmissionDigest := domainHash("systems.lamb.dottie.publication-attempt-event.v1", misorderedSubmission)
-	_, err = store.conn.ExecContext(ctx, "UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND ordinal=2", misorderedUpload, misorderedUploadDigest[:], attempt.ID[:])
+	_, err = store.conn.ExecContext(
+		ctx,
+		"UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND ordinal=2",
+		misorderedUpload,
+		misorderedUploadDigest[:],
+		attempt.ID[:],
+	)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND ordinal=3", misorderedSubmission, misorderedSubmissionDigest[:], attempt.ID[:])
+	_, err = store.conn.ExecContext(
+		ctx,
+		"UPDATE attempt_events SET body=?,digest=? WHERE attempt_id=? AND ordinal=3",
+		misorderedSubmission,
+		misorderedSubmissionDigest[:],
+		attempt.ID[:],
+	)
 	require.NoError(t, err)
 	assertAttemptLogicalBytesExact(t, store, attempt.ID)
 	corruptRows := readAttemptLogicalRows(t, store)
@@ -184,7 +248,11 @@ func TestPublicationAttemptJournalRejectsSubmissionBeforeUpload(t *testing.T) {
 	requireErrorMetadata(t, err, ErrSchema, StageLoad, ReasonCorrupt)
 	assert.Equal(t, corruptRows, readAttemptLogicalRows(t, store))
 	var attemptEvents int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&attemptEvents))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&attemptEvents),
+	)
 	assert.Equal(t, 3, attemptEvents)
 }
 
@@ -199,13 +267,21 @@ func TestPublicationAttemptJournalAcceptsRepeatedUploadAndRolledBackSubmission(t
 	review := attemptReview()
 	attempt := createAndSubmitPreparationForFaultTest(t, store, candidate, empty, review)
 	var eventCount int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&eventCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&eventCount),
+	)
 	assert.Equal(t, 2, eventCount)
 	repeatProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, empty, review)
 	require.NoError(t, err)
 	_, err = store.BeginUpload(ctx, attempt.ID, repeatProposal.StateToken, empty, review, repeatProposal.Confirmation)
 	require.NoError(t, err)
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&eventCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&eventCount),
+	)
 	assert.Equal(t, 2, eventCount)
 	loaded, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -215,8 +291,19 @@ func TestPublicationAttemptJournalAcceptsRepeatedUploadAndRolledBackSubmission(t
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	installDeferredAttemptCommitFailure(t, store, "CREATE TEMP TRIGGER fail_projection_submission AFTER INSERT ON main.attempt_events WHEN NEW.kind='may-have-submitted' BEGIN INSERT INTO attempt_commit_child(id) VALUES(105); END")
-	material, err := store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	installDeferredAttemptCommitFailure(
+		t,
+		store,
+		"CREATE TEMP TRIGGER fail_projection_submission AFTER INSERT ON main.attempt_events WHEN NEW.kind='may-have-submitted' BEGIN INSERT INTO attempt_commit_child(id) VALUES(105); END",
+	)
+	material, err := store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	requireErrorMetadata(t, err, ErrStorage, StageDispatch, ReasonCommitUnknown)
 	assert.Equal(t, SubmissionMaterial{}, material)
 	assert.True(t, store.needsReadback)
@@ -268,7 +355,11 @@ func TestPublicationAttemptCorruptTerminalEvidenceRefusesReadback(t *testing.T) 
 	require.NoError(t, err)
 	_, err = store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, current)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "UPDATE attempt_evidence SET digest=zeroblob(32) WHERE attempt_id=? AND role='outcome'", attempt.ID[:])
+	_, err = store.conn.ExecContext(
+		ctx,
+		"UPDATE attempt_evidence SET digest=zeroblob(32) WHERE attempt_id=? AND role='outcome'",
+		attempt.ID[:],
+	)
 	require.NoError(t, err)
 	_, _, err = store.Load(ctx)
 	requireErrorMetadata(t, err, ErrSchema, StageLoad, ReasonCorrupt)

@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationAttemptLostFenceRequiresExactOccupiedKeyAndPredecessor(t *testing.T) {
@@ -37,7 +38,14 @@ func TestPublicationAttemptLostFenceRequiresExactOccupiedKeyAndPredecessor(t *te
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 
 	competingRecord, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -48,9 +56,23 @@ func TestPublicationAttemptLostFenceRequiresExactOccupiedKeyAndPredecessor(t *te
 	require.NoError(t, err)
 	competingCID, err := publication.RecordCID(competingRaw)
 	require.NoError(t, err)
-	competingHead, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 1, SnapshotCID: competingCID, BlobCID: competingRecord.Blob.CID})
+	competingHead, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          f.binding.Vault,
+			PublicationSeq: 1,
+			SnapshotCID:    competingCID,
+			BlobCID:        competingRecord.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	competingView := SuppliedRepositoryView{Origin: f.binding, Scope: ViewScopeWholeRepository, SuppliedContext: cloneContext(view.SuppliedContext), Head: competingHead, Snapshots: []SnapshotBlock{f.blocks[0], {Key: f.blocks[1].Key, Raw: competingRaw}}}
+	competingView := SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           ViewScopeWholeRepository,
+		SuppliedContext: cloneContext(view.SuppliedContext),
+		Head:            competingHead,
+		Snapshots:       []SnapshotBlock{f.blocks[0], {Key: f.blocks[1].Key, Raw: competingRaw}},
+	}
 	loaded, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	resolution, err := store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, competingView)
@@ -76,14 +98,35 @@ func TestPublicationAttemptCompetingGenesisUsesDifferentVaultOnlyForLostFence(t 
 	attempt := createAndSubmitGenesis(t, store, f, empty, candidate, review)
 	otherVault := f.binding.Vault
 	otherVault[0] ^= 0x20
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: otherVault, PublicationID: [16]byte{0x42}, PublicationSeq: 0, Parent: []byte{}, Blob: blobForCandidate(t, candidate)}
+	record := publication.SnapshotRecord{
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          otherVault,
+		PublicationID:  [16]byte{0x42},
+		PublicationSeq: 0,
+		Parent:         []byte{},
+		Blob:           blobForCandidate(t, candidate),
+	}
 	otherRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	otherCID, err := publication.RecordCID(otherRaw)
 	require.NoError(t, err)
-	otherHead, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: otherVault, PublicationSeq: 0, SnapshotCID: otherCID, BlobCID: record.Blob.CID})
+	otherHead, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          otherVault,
+			PublicationSeq: 0,
+			SnapshotCID:    otherCID,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	competing := SuppliedRepositoryView{Origin: f.binding, Scope: ViewScopeWholeRepository, SuppliedContext: cloneContext(empty.SuppliedContext), Head: otherHead, Snapshots: []SnapshotBlock{{Key: f.blocks[0].Key, Raw: otherRaw}}}
+	competing := SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           ViewScopeWholeRepository,
+		SuppliedContext: cloneContext(empty.SuppliedContext),
+		Head:            otherHead,
+		Snapshots:       []SnapshotBlock{{Key: f.blocks[0].Key, Raw: otherRaw}},
+	}
 	loaded, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	resolution, err := store.ResolveAttempt(ctx, attempt.ID, loaded.StateDigest, competing)
@@ -119,7 +162,14 @@ func TestSuppliedViewRejectsGapsAndWrongPredecessorBeforeOutcomeMutation(t *test
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	before, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -136,9 +186,23 @@ func TestSuppliedViewRejectsGapsAndWrongPredecessorBeforeOutcomeMutation(t *test
 	require.NoError(t, err)
 	wrongCID, err := publication.RecordCID(wrongRaw)
 	require.NoError(t, err)
-	wrongHead, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: 1, SnapshotCID: wrongCID, BlobCID: record.Blob.CID})
+	wrongHead, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          f.binding.Vault,
+			PublicationSeq: 1,
+			SnapshotCID:    wrongCID,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	bad := SuppliedRepositoryView{Origin: f.binding, Scope: ViewScopeWholeRepository, SuppliedContext: cloneContext(view.SuppliedContext), Head: wrongHead, Snapshots: []SnapshotBlock{f.blocks[0], {Key: f.blocks[1].Key, Raw: wrongRaw}}}
+	bad := SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           ViewScopeWholeRepository,
+		SuppliedContext: cloneContext(view.SuppliedContext),
+		Head:            wrongHead,
+		Snapshots:       []SnapshotBlock{f.blocks[0], {Key: f.blocks[1].Key, Raw: wrongRaw}},
+	}
 	_, err = store.ResolveAttempt(ctx, attempt.ID, before.StateDigest, bad)
 	require.ErrorIs(t, err, ErrInvalid)
 	after, err := store.LoadAttempt(ctx, attempt.ID)
@@ -189,7 +253,12 @@ func TestAttemptReadbackRejectsStoredSuffixBeyondLineageLimit(t *testing.T) {
 	assert.Nil(t, rejected)
 }
 
-func competingSuccessorWithOneDescendant(t *testing.T, f fixture, preflight SuppliedRepositoryView, candidate CandidateInput) SuppliedRepositoryView {
+func competingSuccessorWithOneDescendant(
+	t *testing.T,
+	f fixture,
+	preflight SuppliedRepositoryView,
+	candidate CandidateInput,
+) SuppliedRepositoryView {
 	t.Helper()
 	occupant, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	require.NoError(t, err)
@@ -205,10 +274,28 @@ func competingSuccessorWithOneDescendant(t *testing.T, f fixture, preflight Supp
 	require.NoError(t, err)
 	descendantCID, err := publication.RecordCID(descendantRaw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: descendant.Vault, PublicationSeq: descendant.PublicationSeq, SnapshotCID: descendantCID, BlobCID: descendant.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          descendant.Vault,
+			PublicationSeq: descendant.PublicationSeq,
+			SnapshotCID:    descendantCID,
+			BlobCID:        descendant.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	blocks := []SnapshotBlock{cloneSnapshotBlocks(f.blocks[:1])[0], {Key: candidate.SnapshotKey, Raw: occupantRaw}, {Key: f.blocks[2].Key, Raw: descendantRaw}}
-	return SuppliedRepositoryView{Origin: f.binding, Scope: preflight.Scope, SuppliedContext: cloneContext(preflight.SuppliedContext), Head: head, Snapshots: blocks}
+	blocks := []SnapshotBlock{
+		cloneSnapshotBlocks(f.blocks[:1])[0],
+		{Key: candidate.SnapshotKey, Raw: occupantRaw},
+		{Key: f.blocks[2].Key, Raw: descendantRaw},
+	}
+	return SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           preflight.Scope,
+		SuppliedContext: cloneContext(preflight.SuppliedContext),
+		Head:            head,
+		Snapshots:       blocks,
+	}
 }
 
 func TestAttemptLineageLimitAppliesToResolveAndDirectAbandon(t *testing.T) {

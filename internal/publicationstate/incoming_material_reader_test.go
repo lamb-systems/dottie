@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/model"
-	"github.com/lamb-systems/dottie/internal/publication"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/publication"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestIncomingMaterialReaderExactCurrent(t *testing.T) {
@@ -43,7 +44,10 @@ func TestIncomingMaterialReaderExactCurrent(t *testing.T) {
 			beforeRefs := b8IncomingRows(t, ctx, store.conn)
 			beforeHistory, err := store.History(ctx, 0, 10)
 			require.NoError(t, err)
-			beforeFile, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, name), len(f.payload))
+			beforeFile, err := observeAcceptedMaterialPayloadFile(
+				filepath.Join(directory, payloadDirectoryName, name),
+				len(f.payload),
+			)
 			require.NoError(t, err)
 			require.True(t, beforeFile.Exists)
 			require.Equal(t, f.payload, beforeFile.Bytes)
@@ -66,7 +70,10 @@ func TestIncomingMaterialReaderExactCurrent(t *testing.T) {
 			beforeReadRefs := b8IncomingRows(t, ctx, reopened.conn)
 			beforeReadHistory, err := reopened.History(ctx, 0, 10)
 			require.NoError(t, err)
-			beforeReadFile, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, name), len(f.payload))
+			beforeReadFile, err := observeAcceptedMaterialPayloadFile(
+				filepath.Join(directory, payloadDirectoryName, name),
+				len(f.payload),
+			)
 			require.NoError(t, err)
 			require.Equal(t, beforeFile, beforeReadFile)
 
@@ -102,7 +109,10 @@ func TestIncomingMaterialReaderExactCurrent(t *testing.T) {
 			afterHistory, err := reopened.History(ctx, 0, 10)
 			require.NoError(t, err)
 			assert.Equal(t, beforeReadHistory, afterHistory)
-			afterFile, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, name), len(f.payload))
+			afterFile, err := observeAcceptedMaterialPayloadFile(
+				filepath.Join(directory, payloadDirectoryName, name),
+				len(f.payload),
+			)
 			require.NoError(t, err)
 			assert.Equal(t, beforeReadFile, afterFile)
 			assert.Equal(t, beforeRefs, beforeReadRefs)
@@ -129,7 +139,7 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 		require.Empty(t, name)
 		require.Nil(t, record)
 		require.Equal(t, publication.BlobReference{}, blob)
-		require.Nil(t, ctx.Err())
+		require.NoError(t, ctx.Err())
 		b8RequireQueryTrace(t, recorder.calls, []string{
 			"SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?",
 			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?",
@@ -183,7 +193,7 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 			{int64(finalized.Floor.Revision)}, {int64(finalized.Floor.Revision)}, {int64(finalized.Floor.Revision)},
 			{attempt.ID[:]}, {attempt.ID[:]}, {finalized.Floor.RecordCID}, {finalized.Floor.RecordCID},
 		})
-		require.Nil(t, ctx.Err())
+		require.NoError(t, ctx.Err())
 		lease.restoreRollbackClose(t)
 	})
 
@@ -216,7 +226,17 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 		require.NoError(t, fileErr)
 		require.Equal(t, beforeFile, afterFile)
 		assert.Equal(t, before, b8CapturePrivateOwnerState(t, ctx, store, lease.tx))
-		require.Equal(t, int64(1), b8Count(t, ctx, lease.tx, "SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)))
+		require.Equal(
+			t,
+			int64(1),
+			b8Count(
+				t,
+				ctx,
+				lease.tx,
+				"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?",
+				int64(floor.Revision),
+			),
+		)
 		b8RequireQueryTrace(t, recorder.calls, []string{
 			"SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?",
 			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=?",
@@ -300,19 +320,37 @@ func TestIncomingMaterialReaderRevisionOwnership(t *testing.T) {
 		advanceObservation := f.observation(2)
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, f.payload)
 		require.NoError(t, err)
-		_, err = store.Accept(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, f.payload, advanceProposal.Confirmation)
+		_, err = store.Accept(
+			ctx,
+			ModeAdvance,
+			advanceProposal.StateToken,
+			advanceObservation,
+			f.payload,
+			advanceProposal.Confirmation,
+		)
 		require.NoError(t, err)
 		replacementObservation := f.observation(1)
 		replacementProposal, err := store.Prepare(ctx, ModeReplaceFloor, replacementObservation, f.payload)
 		require.NoError(t, err)
-		current, err := store.Accept(ctx, ModeReplaceFloor, replacementProposal.StateToken, replacementObservation, f.payload, replacementProposal.Confirmation)
+		current, err := store.Accept(
+			ctx,
+			ModeReplaceFloor,
+			replacementProposal.StateToken,
+			replacementObservation,
+			f.payload,
+			replacementProposal.Confirmation,
+		)
 		require.NoError(t, err)
 		require.Equal(t, finalized.Floor.RecordCID, current.RecordCID)
 		require.Equal(t, finalized.Floor.BlobCID, current.BlobCID)
 		require.NotEqual(t, finalized.Floor.Revision, current.Revision)
 		b8CommitIncomingRef(t, ctx, store, current, f.payload)
 		var retainedRevision int64
-		require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.ID[:]).Scan(&retainedRevision))
+		require.NoError(
+			t,
+			store.conn.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.ID[:]).
+				Scan(&retainedRevision),
+		)
 		require.Equal(t, int64(finalized.Floor.Revision), retainedRevision)
 		refs := b8IncomingRows(t, ctx, store.conn)
 		require.Len(t, refs, 1)
@@ -367,7 +405,12 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, f.blocks[0].Raw, healthy.SnapshotRecord)
 		tx := b8BeginTx(t, ctx, store)
-		result, err := tx.ExecContext(ctx, "UPDATE accepted_material_refs SET record_cid=? WHERE accepted_revision=?", second.RecordCID, int64(current.Revision))
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE accepted_material_refs SET record_cid=? WHERE accepted_revision=?",
+			second.RecordCID,
+			int64(current.Revision),
+		)
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -403,7 +446,12 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		tx := b8BeginTx(t, ctx, store)
 		alternate := b8BuildOtherPackedPayload(t)
 		b8PersistCatalogPayload(t, ctx, store, tx, alternate.payload, alternate.blob, alternate.name)
-		result, err := tx.ExecContext(ctx, "UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=?", alternate.blob.CID, int64(floor.Revision))
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=?",
+			alternate.blob.CID,
+			int64(floor.Revision),
+		)
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
 		require.NoError(t, err)
@@ -438,7 +486,10 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		require.Equal(t, f.payload, healthy.Payload)
 		beforeRows := readAttemptLogicalRows(t, store)
 		beforeRefs := b8IncomingRows(t, ctx, store.conn)
-		beforeFile, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, name), len(f.payload))
+		beforeFile, err := observeAcceptedMaterialPayloadFile(
+			filepath.Join(directory, payloadDirectoryName, name),
+			len(f.payload),
+		)
 		require.NoError(t, err)
 
 		tx := b8BeginTx(t, ctx, store)
@@ -451,14 +502,23 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, tx.QueryRowContext(ctx, "PRAGMA defer_foreign_keys").Scan(&deferred))
 		require.Equal(t, int64(1), deferred)
-		result, err := tx.ExecContext(ctx, "UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=?", "wrong-text-cid", int64(floor.Revision))
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE accepted_material_refs SET blob_cid=? WHERE accepted_revision=?",
+			"wrong-text-cid",
+			int64(floor.Revision),
+		)
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(1), affected)
 		var valueType string
 		var valueLength int64
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(blob_cid),length(CAST(blob_cid AS BLOB)) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).Scan(&valueType, &valueLength))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(blob_cid),length(CAST(blob_cid AS BLOB)) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).
+				Scan(&valueType, &valueLength),
+		)
 		require.Equal(t, "text", valueType)
 		require.Equal(t, int64(len("wrong-text-cid")), valueLength)
 		recorder := &b8QueryRecorder{source: tx}
@@ -475,7 +535,10 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		require.Equal(t, int64(0), deferred)
 		assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 		assert.Equal(t, beforeRefs, b8IncomingRows(t, ctx, store.conn))
-		afterFile, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, name), len(f.payload))
+		afterFile, err := observeAcceptedMaterialPayloadFile(
+			filepath.Join(directory, payloadDirectoryName, name),
+			len(f.payload),
+		)
 		require.NoError(t, err)
 		assert.Equal(t, beforeFile, afterFile)
 		assert.Equal(t, f.payload, healthy.Payload)
@@ -524,7 +587,10 @@ func TestIncomingMaterialReaderCustodyRefusals(t *testing.T) {
 				replacement := filepath.Join(directory, "payloads-replacement")
 				held := filepath.Join(directory, "payloads-held")
 				require.NoError(t, os.Mkdir(replacement, 0o700))
-				require.NoError(t, os.WriteFile(filepath.Join(replacement, "sentinel"), []byte("synthetic replacement"), 0o600))
+				require.NoError(
+					t,
+					os.WriteFile(filepath.Join(replacement, "sentinel"), []byte("synthetic replacement"), 0o600),
+				)
 				require.NoError(t, os.Rename(filepath.Join(directory, payloadDirectoryName), held))
 				require.NoError(t, os.Rename(replacement, filepath.Join(directory, payloadDirectoryName)))
 				wantReason = ReasonIO
@@ -534,7 +600,11 @@ func TestIncomingMaterialReaderCustodyRefusals(t *testing.T) {
 
 			paths := []string{payloadPath}
 			if fault == "replaced-directory" {
-				paths = append(paths, filepath.Join(directory, "payloads-held", name), filepath.Join(directory, payloadDirectoryName, "sentinel"))
+				paths = append(
+					paths,
+					filepath.Join(directory, "payloads-held", name),
+					filepath.Join(directory, payloadDirectoryName, "sentinel"),
+				)
 				var held, replacement unix.Stat_t
 				require.NoError(t, unix.Fstat(store.payloadFD, &held))
 				require.NoError(t, unix.Lstat(filepath.Join(directory, payloadDirectoryName), &replacement))
@@ -614,8 +684,16 @@ func TestIncomingMaterialReaderDoesNotRestoreCandidateOwnership(t *testing.T) {
 	require.False(t, present)
 	require.Equal(t, Attempt{}, active)
 	var attemptRefs, retainedRefs int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).Scan(&attemptRefs))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(position.Revision)).Scan(&retainedRefs))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&attemptRefs),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(position.Revision)).
+			Scan(&retainedRefs),
+	)
 	require.Zero(t, attemptRefs)
 	require.Zero(t, retainedRefs)
 	_, err = store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
@@ -628,7 +706,10 @@ func TestIncomingMaterialReaderDoesNotRestoreCandidateOwnership(t *testing.T) {
 	assert.Equal(t, beforeHistory, afterHistory)
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 	assert.Equal(t, beforeRefs, b8IncomingRows(t, ctx, store.conn))
-	file, err := observeAcceptedMaterialPayloadFile(filepath.Join(store.directory, payloadDirectoryName, name), len(f.payload))
+	file, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(store.directory, payloadDirectoryName, name),
+		len(f.payload),
+	)
 	require.NoError(t, err)
 	require.True(t, file.Exists)
 	require.Equal(t, f.payload, file.Bytes)
@@ -687,14 +768,27 @@ func b8BeginTx(t *testing.T, ctx context.Context, store *Store) *sql.Tx {
 	return tx
 }
 
-func b8InsertIncomingRef(t *testing.T, ctx context.Context, store *Store, tx *sql.Tx, floor Floor, payload []byte) string {
+func b8InsertIncomingRef(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	tx *sql.Tx,
+	floor Floor,
+	payload []byte,
+) string {
 	t.Helper()
 	blob := publication.BlobReference{CID: bytes.Clone(floor.BlobCID), Size: floor.BlobSize}
 	name, err := payloadBasenameFromCID(blob.CID)
 	require.NoError(t, err)
 	require.Equal(t, payloadBasename(payload), name)
 	b8PersistCatalogPayload(t, ctx, store, tx, payload, blob, name)
-	result, err := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(floor.Revision), floor.RecordCID, floor.BlobCID)
+	result, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+		int64(floor.Revision),
+		floor.RecordCID,
+		floor.BlobCID,
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -702,15 +796,30 @@ func b8InsertIncomingRef(t *testing.T, ctx context.Context, store *Store, tx *sq
 	return name
 }
 
-func b8PersistCatalogPayload(t *testing.T, ctx context.Context, store *Store, tx *sql.Tx, payload []byte, blob publication.BlobReference, name string) {
+func b8PersistCatalogPayload(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	tx *sql.Tx,
+	payload []byte,
+	blob publication.BlobReference,
+	name string,
+) {
 	t.Helper()
 	canonicalName, err := payloadBasenameFromCID(blob.CID)
 	require.NoError(t, err)
 	require.Equal(t, canonicalName, name)
 	var initialCatalogCount int64
-	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&initialCatalogCount))
+	require.NoError(
+		t,
+		tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blob.CID).
+			Scan(&initialCatalogCount),
+	)
 	require.LessOrEqual(t, initialCatalogCount, int64(1))
-	beforePhysical, err := observeAcceptedMaterialPayloadFile(filepath.Join(store.directory, payloadDirectoryName, name), len(payload))
+	beforePhysical, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(store.directory, payloadDirectoryName, name),
+		len(payload),
+	)
 	require.NoError(t, err)
 	newPayload := initialCatalogCount == 0 && !beforePhysical.Exists
 	storedName, storedBytes, err := store.persistPayload(ctx, tx, payload, blob, name)
@@ -722,10 +831,20 @@ func b8PersistCatalogPayload(t *testing.T, ctx context.Context, store *Store, tx
 		require.Nil(t, storedBytes)
 	}
 	var catalogCount int64
-	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&catalogCount))
+	require.NoError(
+		t,
+		tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&catalogCount),
+	)
 	require.LessOrEqual(t, catalogCount, int64(1))
 	if catalogCount == 0 {
-		result, insertErr := tx.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)", blob.CID, int64(blob.Size), name, int64(blob.Size))
+		result, insertErr := tx.ExecContext(
+			ctx,
+			"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)",
+			blob.CID,
+			int64(blob.Size),
+			name,
+			int64(blob.Size),
+		)
 		require.NoError(t, insertErr)
 		affected, rowsErr := result.RowsAffected()
 		require.NoError(t, rowsErr)
@@ -734,7 +853,11 @@ func b8PersistCatalogPayload(t *testing.T, ctx context.Context, store *Store, tx
 		var sizeType, nameType, logicalType string
 		var size, logical int64
 		var storedBasename string
-		require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(size),size,typeof(basename),basename,typeof(logical_bytes),logical_bytes FROM payload_objects WHERE blob_cid=?", blob.CID).Scan(&sizeType, &size, &nameType, &storedBasename, &logicalType, &logical))
+		require.NoError(
+			t,
+			tx.QueryRowContext(ctx, "SELECT typeof(size),size,typeof(basename),basename,typeof(logical_bytes),logical_bytes FROM payload_objects WHERE blob_cid=?", blob.CID).
+				Scan(&sizeType, &size, &nameType, &storedBasename, &logicalType, &logical),
+		)
 		require.Equal(t, "integer", sizeType)
 		require.Equal(t, int64(blob.Size), size)
 		require.Equal(t, "text", nameType)
@@ -742,7 +865,10 @@ func b8PersistCatalogPayload(t *testing.T, ctx context.Context, store *Store, tx
 		require.Equal(t, "integer", logicalType)
 		require.Equal(t, int64(blob.Size), logical)
 	}
-	physical, err := observeAcceptedMaterialPayloadFile(filepath.Join(store.directory, payloadDirectoryName, name), len(payload))
+	physical, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(store.directory, payloadDirectoryName, name),
+		len(payload),
+	)
 	require.NoError(t, err)
 	require.True(t, physical.Exists)
 	require.Equal(t, payload, physical.Bytes)
@@ -759,7 +885,10 @@ func b8PersistCatalogPayload(t *testing.T, ctx context.Context, store *Store, tx
 
 func b8IncomingRows(t *testing.T, ctx context.Context, q queryer) [][]any {
 	t.Helper()
-	rows, err := q.QueryContext(ctx, "SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision")
+	rows, err := q.QueryContext(
+		ctx,
+		"SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs ORDER BY accepted_revision",
+	)
 	require.NoError(t, err)
 	var result [][]any
 	var scanErr error
@@ -930,7 +1059,7 @@ func b8AttachClosedDecoy(t *testing.T, ctx context.Context, store *Store) *b8Que
 	require.NoError(t, closeErr)
 	require.NoError(t, poolErr)
 	require.ErrorIs(t, lease.decoyConn.PingContext(ctx), sql.ErrConnDone)
-	require.Nil(t, ctx.Err())
+	require.NoError(t, ctx.Err())
 	store.conn = lease.decoyConn
 	return lease
 }
@@ -979,8 +1108,26 @@ func b8BuildOtherPackedPayload(t *testing.T) b8AlternatePayloadFixture {
 	t.Helper()
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "other.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("second synthetic incoming material payload"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "other.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("second synthetic incoming material payload"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)

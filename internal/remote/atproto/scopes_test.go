@@ -8,9 +8,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestVaultScopesContainEveryRecordCollectionAndBlob(t *testing.T) {
@@ -36,7 +37,7 @@ func TestValidatePublicationScopesRequiresTheV2Collections(t *testing.T) {
 		}
 		legacy = append(legacy, scope)
 	}
-	require.Equal(t, len(VaultScopes())-2, len(legacy))
+	require.Len(t, legacy, len(VaultScopes())-2)
 
 	err := ValidatePublicationScopes(legacy)
 	require.ErrorIs(t, err, ErrInsufficientPublicationScope)
@@ -59,9 +60,14 @@ func TestValidatePublicationScopesRequiresTheV2Collections(t *testing.T) {
 
 	err = ValidatePublicationScopes([]string{"atproto", "not-a-scope"})
 	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrInsufficientPublicationScope)
+	require.NotErrorIs(t, err, ErrInsufficientPublicationScope)
 
-	require.NoError(t, ValidatePublicationScopes([]string{"atproto", "repo:" + publication.HeadNSID, "repo:" + publication.SnapshotNSID}))
+	require.NoError(
+		t,
+		ValidatePublicationScopes(
+			[]string{"atproto", "repo:" + publication.HeadNSID, "repo:" + publication.SnapshotNSID},
+		),
+	)
 	session := &Session{Scopes: VaultScopes()}
 	require.NoError(t, session.RequirePublicationScopes())
 	var absent *Session
@@ -136,9 +142,17 @@ func legacyScopeSession(t *testing.T) *Session {
 		legacy = append(legacy, scope)
 	}
 	return &Session{
-		DID: testDID, Handle: testHandle, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token",
-		Scopes: legacy, State: SessionStateUsable,
-		AccessToken: NewSecret("legacy-access-token-shape"), RefreshToken: NewSecret("refresh-token-shape"), DPoPPrivateKey: key,
+		DID:           testDID,
+		Handle:        testHandle,
+		Issuer:        "https://bsky.social",
+		TokenEndpoint: "https://bsky.social/token",
+		Scopes:        legacy,
+		State:         SessionStateUsable,
+		AccessToken: NewSecret(
+			"legacy-access-token-shape",
+		),
+		RefreshToken:   NewSecret("refresh-token-shape"),
+		DPoPPrivateKey: key,
 	}
 }
 
@@ -153,18 +167,29 @@ func (c *countingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) 
 
 func TestAtprotoScopeGrantExactRequiredAndRequestedRules(t *testing.T) {
 	requested := []string{"atproto", "repo:systems.lamb.dottie.vaultHead", "blob:application/octet-stream"}
-	if err := ValidateScopes(requested, []string{"atproto", "repo:systems.lamb.dottie.vaultHead"}, requested); err != nil {
+	if err := ValidateScopes(
+		requested,
+		[]string{"atproto", "repo:systems.lamb.dottie.vaultHead"},
+		requested,
+	); err != nil {
 		require.NoError(t, err, "exact grant rejected: %v", err)
 	}
-	if err := ValidateScopes(requested, []string{"atproto", "repo:systems.lamb.dottie.vaultHead"}, []string{"repo:systems.lamb.dottie.vaultHead"}); err == nil {
+	if err := ValidateScopes(
+		requested,
+		[]string{"atproto", "repo:systems.lamb.dottie.vaultHead"},
+		[]string{"repo:systems.lamb.dottie.vaultHead"},
+	); err == nil {
 		require.Error(t, err, "missing required scope was accepted")
 	} else {
-		var scopeError *ScopeError
-		if !errors.As(err, &scopeError) {
+		if scopeError, ok := errors.AsType[*ScopeError](err); !ok {
 			require.ErrorAs(t, err, &scopeError, "missing scope error type = %T", err)
 		}
 	}
-	if err := ValidateScopes(requested, []string{"atproto"}, append(requested, "repo:com.example.unrequested")); err == nil {
+	if err := ValidateScopes(
+		requested,
+		[]string{"atproto"},
+		append(requested, "repo:com.example.unrequested"),
+	); err == nil {
 		require.Error(t, err, "unrequested scope was accepted")
 	}
 }

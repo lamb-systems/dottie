@@ -8,14 +8,19 @@ import (
 	urfave "github.com/urfave/cli/v3"
 )
 
-var errNoAuthorizedAccount = errors.New("no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID")
+var errNoAuthorizedAccount = errors.New(
+	"no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID",
+)
 
 type ambiguousAccountError struct {
 	Accounts int
 }
 
 func (e *ambiguousAccountError) Error() string {
-	return fmt.Sprintf("%d accounts are authorised locally; --did is required to choose the account this command acts on", e.Accounts)
+	return fmt.Sprintf(
+		"%d accounts are authorised locally; --did is required to choose the account this command acts on",
+		e.Accounts,
+	)
 }
 
 type sessionDIDSource func(context.Context) ([]string, error)

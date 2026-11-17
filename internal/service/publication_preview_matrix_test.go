@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
@@ -14,8 +17,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPreviewPublicationTargetKeepsOlderBaseEligibleAfterReopen(t *testing.T) {
@@ -95,7 +96,12 @@ func TestPreviewPublicationTargetRefusesBaseFromRecreatedMatchingStore(t *testin
 	assert.Zero(t, captureCalls)
 	assert.Equal(t, syncengine.Preview{}, preview)
 	assert.Empty(t, disposition)
-	publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilityLineage))
+	publicationBaseAssertFailure(
+		t,
+		err,
+		string(publicationBaseEligibilityStage),
+		string(publicationBaseEligibilityLineage),
+	)
 	assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 	preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -119,14 +125,35 @@ func TestPreviewPublicationTargetDoesNotResurrectBaseAfterReplaceAwayAndBack(t *
 	originalPayload := bytes.Clone(fixture.request.Payload)
 	portable, err := fixture.target.Model()
 	require.NoError(t, err)
-	branch := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: publicationPreviewFileEntries(fixture.target.ID, map[string]string{"settings.ini": "branch B"})}
-	branchRecord, branchPayload := publicationPreviewGenesisMaterialForTest(t, fixture.request.Binding, branch, [16]byte{0x77, 0x71})
-	branchFloor := publicationPreviewAcceptFloorReplacementForTest(t, fixture.accepted.store, fixture.request.Binding, branchRecord, branchPayload)
+	branch := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{portable},
+		Entries: publicationPreviewFileEntries(fixture.target.ID, map[string]string{"settings.ini": "branch B"}),
+	}
+	branchRecord, branchPayload := publicationPreviewGenesisMaterialForTest(
+		t,
+		fixture.request.Binding,
+		branch,
+		[16]byte{0x77, 0x71},
+	)
+	branchFloor := publicationPreviewAcceptFloorReplacementForTest(
+		t,
+		fixture.accepted.store,
+		fixture.request.Binding,
+		branchRecord,
+		branchPayload,
+	)
 	assert.NotEqual(t, originalFloor.RecordCID, branchFloor.RecordCID)
 	assert.Equal(t, originalFloor.DatabaseID, branchFloor.DatabaseID)
 	assert.Equal(t, originalFloor.Generation+1, branchFloor.Generation)
 
-	returnedFloor := publicationPreviewAcceptFloorReplacementForTest(t, fixture.accepted.store, fixture.request.Binding, originalRecord, originalPayload)
+	returnedFloor := publicationPreviewAcceptFloorReplacementForTest(
+		t,
+		fixture.accepted.store,
+		fixture.request.Binding,
+		originalRecord,
+		originalPayload,
+	)
 	assert.Equal(t, originalFloor.DatabaseID, returnedFloor.DatabaseID)
 	assert.Equal(t, originalFloor.Generation+2, returnedFloor.Generation)
 	assert.Equal(t, originalFloor.Binding, returnedFloor.Binding)
@@ -144,7 +171,12 @@ func TestPreviewPublicationTargetDoesNotResurrectBaseAfterReplaceAwayAndBack(t *
 	assert.Zero(t, captureCalls)
 	assert.Equal(t, syncengine.Preview{}, preview)
 	assert.Empty(t, disposition)
-	publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilityLineage))
+	publicationBaseAssertFailure(
+		t,
+		err,
+		string(publicationBaseEligibilityStage),
+		string(publicationBaseEligibilityLineage),
+	)
 	assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 	preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -160,7 +192,10 @@ type publicationPreviewBaseWitness struct {
 	entries        []model.Entry
 }
 
-func publicationPreviewBaseWitnessForTest(t *testing.T, base *PublicationReconciliationBase) publicationPreviewBaseWitness {
+func publicationPreviewBaseWitnessForTest(
+	t *testing.T,
+	base *PublicationReconciliationBase,
+) publicationPreviewBaseWitness {
 	t.Helper()
 	require.NotNil(t, base)
 	return publicationPreviewBaseWitness{
@@ -169,7 +204,11 @@ func publicationPreviewBaseWitnessForTest(t *testing.T, base *PublicationReconci
 	}
 }
 
-func assertPublicationPreviewBaseWitnessForTest(t *testing.T, base *PublicationReconciliationBase, expected publicationPreviewBaseWitness) {
+func assertPublicationPreviewBaseWitnessForTest(
+	t *testing.T,
+	base *PublicationReconciliationBase,
+	expected publicationPreviewBaseWitness,
+) {
 	t.Helper()
 	require.NotNil(t, base)
 	assert.Equal(t, expected.floor, base.position.floor)
@@ -177,21 +216,38 @@ func assertPublicationPreviewBaseWitnessForTest(t *testing.T, base *PublicationR
 	assert.Equal(t, expected.entries, base.entries)
 }
 
-func publicationPreviewGenesisMaterialForTest(t *testing.T, binding publicationstate.Binding, snapshot model.Snapshot, publicationID [16]byte) ([]byte, []byte) {
+func publicationPreviewGenesisMaterialForTest(
+	t *testing.T,
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	publicationID [16]byte,
+) ([]byte, []byte) {
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
 	blobCID, err := publication.RawPayloadCID(packed.Payload)
 	require.NoError(t, err)
 	record, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		Parent: []byte{}, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion: publication.SchemaVersion,
+		Vault:         binding.Vault,
+		PublicationID: publicationID,
+		Parent:        []byte{},
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	return record, bytes.Clone(packed.Payload)
 }
 
-func publicationPreviewAcceptFloorReplacementForTest(t *testing.T, store *publicationstate.Store, binding publicationstate.Binding, record, payload []byte) publicationstate.Floor {
+func publicationPreviewAcceptFloorReplacementForTest(
+	t *testing.T,
+	store *publicationstate.Store,
+	binding publicationstate.Binding,
+	record, payload []byte,
+) publicationstate.Floor {
 	t.Helper()
 	decoded, err := publication.DecodeSnapshot(record)
 	require.NoError(t, err)
@@ -213,7 +269,14 @@ func publicationPreviewAcceptFloorReplacementForTest(t *testing.T, store *public
 	}
 	proposal, err := store.Prepare(context.Background(), publicationstate.ModeReplaceFloor, observation, payload)
 	require.NoError(t, err)
-	floor, err := store.Accept(context.Background(), publicationstate.ModeReplaceFloor, proposal.StateToken, observation, payload, proposal.Confirmation)
+	floor, err := store.Accept(
+		context.Background(),
+		publicationstate.ModeReplaceFloor,
+		proposal.StateToken,
+		observation,
+		payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return floor
 }
@@ -247,7 +310,12 @@ func TestPreviewPublicationTargetRequiresOriginalContextForEqualSelections(t *te
 		assert.Zero(t, captureCalls)
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
-		publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationBaseEligibilityStage),
+			string(publicationBaseEligibilitySelection),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 		preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -285,7 +353,12 @@ func TestPreviewPublicationTargetRequiresOriginalContextForEqualSelections(t *te
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
 		assert.Zero(t, settings.captureCalls)
-		publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationBaseEligibilityStage),
+			string(publicationBaseEligibilitySelection),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 		preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -315,7 +388,12 @@ func TestPreviewPublicationTargetRefusesCurrentFileSelectionDrift(t *testing.T) 
 		assert.Zero(t, captureCalls)
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
-		publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationBaseEligibilityStage),
+			string(publicationBaseEligibilitySelection),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 		preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -336,7 +414,10 @@ func TestPreviewPublicationTargetRefusesCurrentFileSelectionDrift(t *testing.T) 
 		heldRoot := filepath.Join(fixture.paths.Home, "synthetic-held")
 		require.NoError(t, os.Rename(root, heldRoot))
 		require.NoError(t, os.Mkdir(root, 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(root, "settings.ini"), []byte("synthetic accepted publication"), 0o600))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(root, "settings.ini"), []byte("synthetic accepted publication"), 0o600),
+		)
 		oldInfo, err := os.Stat(heldRoot)
 		require.NoError(t, err)
 		newInfo, err := os.Stat(root)
@@ -348,7 +429,12 @@ func TestPreviewPublicationTargetRefusesCurrentFileSelectionDrift(t *testing.T) 
 		assert.Zero(t, captureCalls)
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
-		publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationBaseEligibilityStage),
+			string(publicationBaseEligibilitySelection),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 		preview, disposition, err = PreviewPublicationTarget(context.Background(), fixture.request, nil)
@@ -381,7 +467,12 @@ func TestPreviewPublicationTargetRequiresCurrentGNOMEApprovalAndPolicy(t *testin
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
 		assert.Zero(t, settings.captureCalls)
-		publicationBaseAssertFailure(t, err, string(publicationSelectionStage), string(publicationSelectionReasonSettings))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationSelectionStage),
+			string(publicationSelectionReasonSettings),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 	})
 
@@ -400,7 +491,11 @@ func TestPreviewPublicationTargetRequiresCurrentGNOMEApprovalAndPolicy(t *testin
 		require.NoError(t, err)
 		require.NotEmpty(t, changedRefs)
 		changedEntries := publicationBaseGNOMEEntries(changedTarget.ID, changedRefs)
-		updatedSnapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fixture.portable}, Entries: changedEntries}
+		updatedSnapshot := model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{fixture.portable},
+			Entries: changedEntries,
+		}
 		record, payload, floor := publicationPreviewAcceptSuccessor(t, fixture.accepted, updatedSnapshot)
 		request := fixture.request
 		request.ExpectedFloor = floor
@@ -415,7 +510,12 @@ func TestPreviewPublicationTargetRequiresCurrentGNOMEApprovalAndPolicy(t *testin
 		assert.Equal(t, syncengine.Preview{}, preview)
 		assert.Empty(t, disposition)
 		assert.Zero(t, settings.captureCalls)
-		publicationBaseAssertFailure(t, err, string(publicationBaseEligibilityStage), string(publicationBaseEligibilitySelection))
+		publicationBaseAssertFailure(
+			t,
+			err,
+			string(publicationBaseEligibilityStage),
+			string(publicationBaseEligibilitySelection),
+		)
 		assertPublicationPreviewBaseWitnessForTest(t, base, before)
 
 		preview, disposition, err = PreviewPublicationTarget(context.Background(), request, nil)
@@ -428,13 +528,27 @@ func TestPreviewPublicationTargetRequiresCurrentGNOMEApprovalAndPolicy(t *testin
 
 func TestPreviewPublicationTargetKeepsTombstoneDistinctFromAbsenceOnResurrection(t *testing.T) {
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
-	tombstone := model.Entry{TargetID: target.ID, File: &model.FileEntry{Path: "settings.ini", State: model.FileDeleted}}
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: []model.Entry{tombstone}})
+	tombstone := model.Entry{
+		TargetID: target.ID,
+		File:     &model.FileEntry{Path: "settings.ini", State: model.FileDeleted},
+	}
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{portable},
+			Entries: []model.Entry{tombstone},
+		},
+	)
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
 	local, err := NewPublicationLocalContext(selectionFixture.paths, nil, nil)
@@ -447,7 +561,11 @@ func TestPreviewPublicationTargetKeepsTombstoneDistinctFromAbsenceOnResurrection
 	before := publicationPreviewBaseWitnessForTest(t, base)
 
 	resurrected := publicationPreviewFileEntries(target.ID, map[string]string{"settings.ini": "resurrected content"})
-	record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: resurrected})
+	record, payload, floor := publicationPreviewAcceptSuccessor(
+		t,
+		accepted,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: resurrected},
+	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = bytes.Clone(record)
 	request.Payload = bytes.Clone(payload)
@@ -547,7 +665,11 @@ func TestPreviewPublicationTargetClassifiesFileEditAndDeletionMatrix(t *testing.
 			before := publicationPreviewBaseWitnessForTest(t, base)
 
 			remoteEntries := test.remote(targetID)
-			updatedSnapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{base.selection.portable}, Entries: remoteEntries}
+			updatedSnapshot := model.Snapshot{
+				Version: model.SnapshotVersion,
+				Targets: []model.Target{base.selection.portable},
+				Entries: remoteEntries,
+			}
 			record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, updatedSnapshot)
 			request.ExpectedFloor = floor
 			request.SnapshotRecord = bytes.Clone(record)
@@ -568,15 +690,30 @@ func TestPreviewPublicationTargetClassifiesFileEditAndDeletionMatrix(t *testing.
 	}
 }
 
-func newPublicationPreviewFileRequestForTest(t *testing.T, entries []model.Entry, capture CapturePort) (acceptedMaterialTestFixture, PublicationReconciliationRequest) {
+func newPublicationPreviewFileRequestForTest(
+	t *testing.T,
+	entries []model.Entry,
+	capture CapturePort,
+) (acceptedMaterialTestFixture, PublicationReconciliationRequest) {
 	t.Helper()
 	selectionFixture := newPublicationSelectionFixture(t)
-	target := config.Target{ID: "synthetic-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "synthetic-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 	portable, err := target.Model()
 	require.NoError(t, err)
 	root := filepath.Join(selectionFixture.paths.Home, "synthetic")
 	require.NoError(t, os.Mkdir(root, 0o700))
-	accepted := newAcceptedSnapshotForPublicationBaseTest(t, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: clonePublicationProjectionEntriesForTest(entries)})
+	accepted := newAcceptedSnapshotForPublicationBaseTest(
+		t,
+		model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{portable},
+			Entries: clonePublicationProjectionEntriesForTest(entries),
+		},
+	)
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
 	local, err := NewPublicationLocalContext(selectionFixture.paths, capture, nil)
@@ -589,7 +726,11 @@ func publicationPreviewFileResultForTest(entries []model.Entry) files.Result {
 	observations := make([]model.Observation, len(entries))
 	for index, original := range entries {
 		entry := clonePublicationProjectionEntry(original)
-		observations[index] = model.Observation{State: model.ObservationPresent, Identity: entry.Identity(), Entry: &entry}
+		observations[index] = model.Observation{
+			State:    model.ObservationPresent,
+			Identity: entry.Identity(),
+			Entry:    &entry,
+		}
 	}
 	return files.Result{Observations: observations}
 }
@@ -599,8 +740,10 @@ func publicationPreviewFileTombstoneForTest(targetID, path string) model.Entry {
 }
 
 func publicationPreviewCountingCaptureForTest(calls *int) CapturePort {
-	return publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		*calls = *calls + 1
-		return (LocalFilesCapture{}).Capture(ctx, target, path)
-	})
+	return publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			*calls = *calls + 1
+			return (LocalFilesCapture{}).Capture(ctx, target, path)
+		},
+	)
 }

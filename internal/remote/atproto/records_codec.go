@@ -7,6 +7,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -49,25 +50,49 @@ func policyRecordMap(value PolicyRecord) map[string]any {
 	}
 	recipients := make([]any, len(value.Recipients))
 	for index, entry := range value.Recipients {
-		recipients[index] = map[string]any{"deviceId": entry.DeviceID, "keyId": entry.KeyID, "publicKey": entry.PublicKey}
+		recipients[index] = map[string]any{
+			"deviceId":  entry.DeviceID,
+			"keyId":     entry.KeyID,
+			"publicKey": entry.PublicKey,
+		}
 	}
 	return map[string]any{
-		"$type": VaultPolicyNSID, "schemaVersion": value.SchemaVersion, "vault": value.Vault,
-		"epochSeq": int64(value.EpochSeq), "roles": roles, "recipients": recipients,
-		"policyRetentionFloor": int64(value.PolicyRetentionFloor), "retainedRecoveryPoints": int64(value.RetainedRecoveryPoints),
-		"maxPublications": int64(value.MaxPublications), "maxEpochAge": int64(value.MaxEpochAge),
-		"recoveryAnchor": value.RecoveryAnchor, "prevPolicyDigest": value.PrevPolicyDigest,
-		"signerDeviceId": value.SignerDeviceID, "signerKeyId": value.SignerKeyID, "signature": value.Signature,
+		"$type":         VaultPolicyNSID,
+		"schemaVersion": value.SchemaVersion,
+		"vault":         value.Vault,
+		"epochSeq":      int64(value.EpochSeq),
+		"roles":         roles,
+		"recipients":    recipients,
+		"policyRetentionFloor": int64(
+			value.PolicyRetentionFloor,
+		),
+		"retainedRecoveryPoints": int64(value.RetainedRecoveryPoints),
+		"maxPublications":        int64(value.MaxPublications),
+		"maxEpochAge":            int64(value.MaxEpochAge),
+		"recoveryAnchor":         value.RecoveryAnchor,
+		"prevPolicyDigest":       value.PrevPolicyDigest,
+		"signerDeviceId":         value.SignerDeviceID,
+		"signerKeyId":            value.SignerKeyID,
+		"signature":              value.Signature,
 	}
 }
 
 func certificateRecordMap(value CertificateRecord) map[string]any {
 	return map[string]any{
-		"$type": VaultCertificateNSID, "schemaVersion": value.SchemaVersion, "vault": value.Vault,
-		"deviceId": value.DeviceID, "keyId": value.KeyID, "signingPublicKey": value.SigningPublicKey,
-		"encryptionPublicKey": value.EncryptionPublicKey, "role": int64(value.Role), "certEpoch": int64(value.CertEpoch),
-		"issuer": value.Issuer, "revocationRef": value.RevocationRef, "signerDeviceId": value.SignerDeviceID,
-		"signerKeyId": value.SignerKeyID, "signature": value.Signature,
+		"$type":               VaultCertificateNSID,
+		"schemaVersion":       value.SchemaVersion,
+		"vault":               value.Vault,
+		"deviceId":            value.DeviceID,
+		"keyId":               value.KeyID,
+		"signingPublicKey":    value.SigningPublicKey,
+		"encryptionPublicKey": value.EncryptionPublicKey,
+		"role":                int64(value.Role),
+		"certEpoch":           int64(value.CertEpoch),
+		"issuer":              value.Issuer,
+		"revocationRef":       value.RevocationRef,
+		"signerDeviceId":      value.SignerDeviceID,
+		"signerKeyId":         value.SignerKeyID,
+		"signature":           value.Signature,
 	}
 }
 
@@ -98,7 +123,21 @@ func attestationRecordMap(value AttestationRecord) map[string]any {
 }
 
 func decodeSnapshotRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "publicationId", "epochSeq", "policyDigest", "parent", "blob", "signerDeviceId", "signerKeyId", "envelopeSignatureDigest", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"publicationId",
+		"epochSeq",
+		"policyDigest",
+		"parent",
+		"blob",
+		"signerDeviceId",
+		"signerKeyId",
+		"envelopeSignatureDigest",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := SnapshotRecord{}
@@ -143,7 +182,21 @@ func decodeSnapshotRecord(object map[string]any) (Record, error) {
 }
 
 func decodeHeadRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "epochSeq", "policyDigest", "snapshotCid", "blobCid", "publicationCount", "prevHeadCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"epochSeq",
+		"policyDigest",
+		"snapshotCid",
+		"blobCid",
+		"publicationCount",
+		"prevHeadCid",
+		"signerDeviceId",
+		"signerKeyId",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := HeadRecord{}
@@ -188,7 +241,20 @@ func decodeHeadRecord(object map[string]any) (Record, error) {
 }
 
 func decodeControlRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "epochSeq", "policyDigest", "headSnapshotCid", "revoked", "prevControlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"epochSeq",
+		"policyDigest",
+		"headSnapshotCid",
+		"revoked",
+		"prevControlCid",
+		"signerDeviceId",
+		"signerKeyId",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := ControlRecord{}
@@ -230,7 +296,24 @@ func decodeControlRecord(object map[string]any) (Record, error) {
 }
 
 func decodePolicyRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "epochSeq", "roles", "recipients", "policyRetentionFloor", "retainedRecoveryPoints", "maxPublications", "maxEpochAge", "recoveryAnchor", "prevPolicyDigest", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"epochSeq",
+		"roles",
+		"recipients",
+		"policyRetentionFloor",
+		"retainedRecoveryPoints",
+		"maxPublications",
+		"maxEpochAge",
+		"recoveryAnchor",
+		"prevPolicyDigest",
+		"signerDeviceId",
+		"signerKeyId",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := PolicyRecord{}
@@ -296,7 +379,23 @@ func decodePolicyRecord(object map[string]any) (Record, error) {
 }
 
 func decodeCertificateRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "keyId", "signingPublicKey", "encryptionPublicKey", "role", "certEpoch", "issuer", "revocationRef", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"deviceId",
+		"keyId",
+		"signingPublicKey",
+		"encryptionPublicKey",
+		"role",
+		"certEpoch",
+		"issuer",
+		"revocationRef",
+		"signerDeviceId",
+		"signerKeyId",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := CertificateRecord{}
@@ -313,7 +412,12 @@ func decodeCertificateRecord(object map[string]any) (Record, error) {
 	if value.KeyID, err = fieldBytes(object, "keyId", 0, vault.MaxKeyIDBytes); err != nil {
 		return nil, err
 	}
-	if value.SigningPublicKey, err = fieldBytes(object, "signingPublicKey", ed25519.PublicKeySize, ed25519.PublicKeySize); err != nil {
+	if value.SigningPublicKey, err = fieldBytes(
+		object,
+		"signingPublicKey",
+		ed25519.PublicKeySize,
+		ed25519.PublicKeySize,
+	); err != nil {
 		return nil, err
 	}
 	if value.EncryptionPublicKey, err = fieldBytes(object, "encryptionPublicKey", 32, 32); err != nil {
@@ -349,7 +453,20 @@ func decodeCertificateRecord(object map[string]any) (Record, error) {
 }
 
 func decodeCheckpointRecord(object map[string]any) (Record, error) {
-	if err := exactKeys(object, "$type", "schemaVersion", "vault", "snapshotCid", "epochSeq", "policyDigest", "anchor", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+	if err := exactKeys(
+		object,
+		"$type",
+		"schemaVersion",
+		"vault",
+		"snapshotCid",
+		"epochSeq",
+		"policyDigest",
+		"anchor",
+		"controlCid",
+		"signerDeviceId",
+		"signerKeyId",
+		"signature",
+	); err != nil {
 		return nil, err
 	}
 	value := CheckpointRecord{}
@@ -398,11 +515,38 @@ func decodeAttestationRecord(object map[string]any) (Record, error) {
 	}
 	switch value.SchemaVersion {
 	case 1:
-		if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "policyDigest", "retentionFloor", "retainedRecoveryPoints", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+		if err := exactKeys(
+			object,
+			"$type",
+			"schemaVersion",
+			"vault",
+			"deviceId",
+			"policyDigest",
+			"retentionFloor",
+			"retainedRecoveryPoints",
+			"controlCid",
+			"signerDeviceId",
+			"signerKeyId",
+			"signature",
+		); err != nil {
 			return nil, err
 		}
 	case 2:
-		if err := exactKeys(object, "$type", "schemaVersion", "vault", "deviceId", "policyDigest", "retentionFloor", "retainedRecoveryPoints", "recoveryPoints", "controlCid", "signerDeviceId", "signerKeyId", "signature"); err != nil {
+		if err := exactKeys(
+			object,
+			"$type",
+			"schemaVersion",
+			"vault",
+			"deviceId",
+			"policyDigest",
+			"retentionFloor",
+			"retainedRecoveryPoints",
+			"recoveryPoints",
+			"controlCid",
+			"signerDeviceId",
+			"signerKeyId",
+			"signature",
+		); err != nil {
 			return nil, err
 		}
 		if value.RecoveryPoints, err = fieldAttestationRecoveryPoints(object, "recoveryPoints"); err != nil {

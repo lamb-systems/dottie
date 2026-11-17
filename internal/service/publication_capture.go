@@ -74,7 +74,11 @@ func capturePublicationFiles(ctx context.Context, selection publicationSelection
 }
 
 func validPublicationFileSelection(selection publicationSelection) bool {
-	if selection.context == nil || selection.context.affinity == nil || selection.context.files == nil || !validPublicationContextPaths(selection.context.paths) || selection.target.Source != model.SourceFiles || selection.target.Root == nil || selection.anchorInfo == nil {
+	if selection.context == nil || selection.context.affinity == nil || selection.context.files == nil ||
+		!validPublicationContextPaths(selection.context.paths) ||
+		selection.target.Source != model.SourceFiles ||
+		selection.target.Root == nil ||
+		selection.anchorInfo == nil {
 		return false
 	}
 	portable, err := selection.target.Model()
@@ -91,7 +95,9 @@ func validPublicationFileSelection(selection publicationSelection) bool {
 	case model.SelectionDirectory:
 		return selection.anchorName == "" && selection.resolvedPath == selection.anchorPath
 	case model.SelectionFile:
-		return selection.anchorName != "" && selection.anchorName != "." && selection.anchorName != ".." && selection.anchorName == filepath.Base(selection.resolvedPath) && filepath.Dir(selection.resolvedPath) == selection.anchorPath
+		return selection.anchorName != "" && selection.anchorName != "." && selection.anchorName != ".." &&
+			selection.anchorName == filepath.Base(selection.resolvedPath) &&
+			filepath.Dir(selection.resolvedPath) == selection.anchorPath
 	default:
 		return false
 	}
@@ -111,33 +117,48 @@ func samePublicationStrings(left, right []string) bool {
 
 func publicationCaptureAnchorMatches(selection publicationSelection) bool {
 	anchorInfo, err := os.Lstat(selection.anchorPath)
-	if err != nil || anchorInfo.Mode()&os.ModeSymlink != 0 || !anchorInfo.IsDir() || !os.SameFile(selection.anchorInfo, anchorInfo) {
+	if err != nil || anchorInfo.Mode()&os.ModeSymlink != 0 || !anchorInfo.IsDir() ||
+		!os.SameFile(selection.anchorInfo, anchorInfo) {
 		return false
 	}
 	if config.CheckAddition(config.Default(), selection.context.paths, selection.target) != nil {
 		return false
 	}
-	resolvedPath, anchorPath, anchorName, currentInfo, _, err := resolvePublicationFileAnchor(selection.target, selection.context.paths)
-	if err != nil || resolvedPath != selection.resolvedPath || anchorPath != selection.anchorPath || anchorName != selection.anchorName || !os.SameFile(selection.anchorInfo, currentInfo) {
+	resolvedPath, anchorPath, anchorName, currentInfo, _, err := resolvePublicationFileAnchor(
+		selection.target,
+		selection.context.paths,
+	)
+	if err != nil || resolvedPath != selection.resolvedPath || anchorPath != selection.anchorPath ||
+		anchorName != selection.anchorName ||
+		!os.SameFile(selection.anchorInfo, currentInfo) {
 		return false
 	}
 	finalInfo, err := os.Lstat(selection.anchorPath)
-	return err == nil && finalInfo.Mode()&os.ModeSymlink == 0 && finalInfo.IsDir() && os.SameFile(selection.anchorInfo, finalInfo)
+	return err == nil && finalInfo.Mode()&os.ModeSymlink == 0 && finalInfo.IsDir() &&
+		os.SameFile(selection.anchorInfo, finalInfo)
 }
 
-func adaptPublicationFileCapture(selection publicationSelection, matcher ignore.Matcher, result files.Result, callbackUsed bool) (publicationCapture, publicationReconciliationReason) {
+func adaptPublicationFileCapture(
+	selection publicationSelection,
+	matcher ignore.Matcher,
+	result files.Result,
+	callbackUsed bool,
+) (publicationCapture, publicationReconciliationReason) {
 	budget := files.DefaultBudget()
-	if len(result.Observations) > budget.MaxEntries || len(result.Skipped) > budget.MaxEntries-len(result.Observations) {
+	if len(result.Observations) > budget.MaxEntries ||
+		len(result.Skipped) > budget.MaxEntries-len(result.Observations) {
 		return publicationCapture{}, publicationCaptureReasonBounds
 	}
 
 	var totalBytes int64
 	for _, observation := range result.Observations {
 		path := observation.Identity.FilePath
-		if observation.Identity.Source == model.SourceFiles && (len(path) > model.MaxRelativePathBytes || !publicationCapturePathDepthWithin(path, budget.MaxDepth)) {
+		if observation.Identity.Source == model.SourceFiles &&
+			(len(path) > model.MaxRelativePathBytes || !publicationCapturePathDepthWithin(path, budget.MaxDepth)) {
 			return publicationCapture{}, publicationCaptureReasonBounds
 		}
-		if observation.Entry != nil && observation.Entry.File != nil && observation.Entry.File.Kind == model.FileRegular {
+		if observation.Entry != nil && observation.Entry.File != nil &&
+			observation.Entry.File.Kind == model.FileRegular {
 			size := len(observation.Entry.File.Content)
 			if size > budget.MaxFileBytes || int64(size) > int64(budget.MaxTotalBytes)-totalBytes {
 				return publicationCapture{}, publicationCaptureReasonBounds
@@ -146,7 +167,8 @@ func adaptPublicationFileCapture(selection publicationSelection, matcher ignore.
 		}
 	}
 	for _, skip := range result.Skipped {
-		if len(skip.Path) > model.MaxRelativePathBytes || !publicationCapturePathDepthWithin(skip.Path, budget.MaxDepth) {
+		if len(skip.Path) > model.MaxRelativePathBytes ||
+			!publicationCapturePathDepthWithin(skip.Path, budget.MaxDepth) {
 			return publicationCapture{}, publicationCaptureReasonBounds
 		}
 	}
@@ -241,7 +263,8 @@ func adaptPublicationFileCapture(selection publicationSelection, matcher ignore.
 		byPath[skip.Path] = model.Observation{State: model.ObservationUnknown, Identity: identity}
 		complete = false
 	}
-	if selection.target.Root.Kind == model.SelectionFile && callbackUsed && len(result.Observations) == 0 && len(result.Skipped) == 0 {
+	if selection.target.Root.Kind == model.SelectionFile && callbackUsed && len(result.Observations) == 0 &&
+		len(result.Skipped) == 0 {
 		identity := model.EntryKey{TargetID: selection.target.ID, Source: model.SourceFiles, FilePath: "."}
 		byPath["."] = model.Observation{State: model.ObservationUnknown, Identity: identity}
 		complete = false
@@ -258,7 +281,9 @@ func adaptPublicationFileCapture(selection publicationSelection, matcher ignore.
 }
 
 func validPublicationFileObservation(selection publicationSelection, observation model.Observation) bool {
-	if observation.Identity.TargetID != selection.target.ID || observation.Identity.Source != model.SourceFiles || observation.Identity.Validate() != nil || observation.Validate() != nil {
+	if observation.Identity.TargetID != selection.target.ID || observation.Identity.Source != model.SourceFiles ||
+		observation.Identity.Validate() != nil ||
+		observation.Validate() != nil {
 		return false
 	}
 	if !publicationCapturePathAllowed(selection, observation.Identity.FilePath) {
@@ -303,11 +328,11 @@ func publicationCapturePathDepthWithin(path string, maximum int) bool {
 }
 
 func publicationCaptureParent(path string) string {
-	index := strings.LastIndexByte(path, '/')
-	if index < 0 {
+	before, _, ok := strings.CutLast(path, "/")
+	if !ok {
 		return "."
 	}
-	return path[:index]
+	return before
 }
 
 func publicationFilePathExcluded(kind model.SelectionKind, matcher ignore.Matcher, path string) bool {

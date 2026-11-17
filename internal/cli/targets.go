@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	urfave "github.com/urfave/cli/v3"
@@ -78,10 +79,8 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 			if options.modeSet && options.mode == "" {
 				return usageExit("missing value for --mode")
 			}
-			for _, exclude := range options.excludes {
-				if exclude == "" {
-					return usageExit("missing value for --exclude")
-				}
+			if slices.Contains(options.excludes, "") {
+				return usageExit("missing value for --exclude")
 			}
 			if options.modeSet && !validMode(options.mode) {
 				return urfave.Exit(modeError{value: string(options.mode)}.Error(), 1)
@@ -93,9 +92,13 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 			if !filepath.IsAbs(selectionPath) {
 				return usageExit("selection path must be absolute")
 			}
-			output, err := updateTargetsConfig(ctx, env, func(paths platform.Paths, current config.Config) (config.Config, string, error) {
-				return addTarget(options, selectionPath, paths, current)
-			})
+			output, err := updateTargetsConfig(
+				ctx,
+				env,
+				func(paths platform.Paths, current config.Config) (config.Config, string, error) {
+					return addTarget(options, selectionPath, paths, current)
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -109,9 +112,13 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 			if command.NArg() != 1 || command.Args().First() == "" {
 				return usageExit("usage: dottie targets remove <id>")
 			}
-			output, err := updateTargetsConfig(ctx, env, func(paths platform.Paths, current config.Config) (config.Config, string, error) {
-				return removeTarget(command.Args().First(), current)
-			})
+			output, err := updateTargetsConfig(
+				ctx,
+				env,
+				func(_ platform.Paths, current config.Config) (config.Config, string, error) {
+					return removeTarget(command.Args().First(), current)
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -125,9 +132,13 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 			if command.NArg() != 2 || command.Args().First() == "" || command.Args().Get(1) == "" {
 				return usageExit("usage: dottie targets mode <id> <auto-apply|review|backup-only>")
 			}
-			output, err := updateTargetsConfig(ctx, env, func(_ platform.Paths, current config.Config) (config.Config, string, error) {
-				return setTargetMode(command.Args().First(), config.Mode(command.Args().Get(1)), current)
-			})
+			output, err := updateTargetsConfig(
+				ctx,
+				env,
+				func(_ platform.Paths, current config.Config) (config.Config, string, error) {
+					return setTargetMode(command.Args().First(), config.Mode(command.Args().Get(1)), current)
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -148,8 +159,7 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 	root.ErrWriter = stderr
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code >= 3 {
@@ -204,12 +214,24 @@ func listTargets(current config.Config) string {
 			}
 			count = len(target.Root.Exclude)
 		}
-		fmt.Fprintf(&output, "%s\t%s\t%s\texcludes=%d\n", escapeField(target.ID), escapeField(string(target.ModeOrDefault(current.Defaults))), escapeField(selector), count)
+		fmt.Fprintf(
+			&output,
+			"%s\t%s\t%s\texcludes=%d\n",
+			escapeField(target.ID),
+			escapeField(string(target.ModeOrDefault(current.Defaults))),
+			escapeField(selector),
+			count,
+		)
 	}
 	return output.String()
 }
 
-func addTarget(options addOptions, selectionPath string, paths platform.Paths, current config.Config) (config.Config, string, error) {
+func addTarget(
+	options addOptions,
+	selectionPath string,
+	paths platform.Paths,
+	current config.Config,
+) (config.Config, string, error) {
 	root, err := config.ResolveSelection(paths, selectionPath)
 	if err != nil {
 		return current, "", urfave.Exit(err.Error(), 1)
@@ -231,8 +253,15 @@ func addTarget(options addOptions, selectionPath string, paths platform.Paths, c
 		if !sameRoot(existing.Root, target.Root) {
 			continue
 		}
-		if (options.idSet && options.id != existing.ID) || (options.modeSet && options.mode != existing.Mode) || (len(options.excludes) > 0 && !sameStrings(uniqueStrings(options.excludes), existingExcludes(existing.Root))) {
-			return current, "", urfave.Exit(fmt.Sprintf("selection already belongs to %s; use 'targets mode' or 'targets remove' to change it", escapeField(existing.ID)), 1)
+		if (options.idSet && options.id != existing.ID) || (options.modeSet && options.mode != existing.Mode) ||
+			(len(options.excludes) > 0 && !sameStrings(uniqueStrings(options.excludes), existingExcludes(existing.Root))) {
+			return current, "", urfave.Exit(
+				fmt.Sprintf(
+					"selection already belongs to %s; use 'targets mode' or 'targets remove' to change it",
+					escapeField(existing.ID),
+				),
+				1,
+			)
 		}
 		return current, "already selected " + escapeField(existing.ID) + "\n", nil
 	}
@@ -242,7 +271,12 @@ func addTarget(options addOptions, selectionPath string, paths platform.Paths, c
 	current.Targets = append(current.Targets, target)
 	selector := "files:" + string(root.Base) + "/" + root.Path
 	mode := target.ModeOrDefault(current.Defaults)
-	return current, fmt.Sprintf("added %s (%s, mode %s)\n", escapeField(id), escapeField(selector), escapeField(string(mode))), nil
+	return current, fmt.Sprintf(
+		"added %s (%s, mode %s)\n",
+		escapeField(id),
+		escapeField(selector),
+		escapeField(string(mode)),
+	), nil
 }
 
 type modeError struct{ value string }
@@ -294,7 +328,11 @@ func setTargetMode(id string, mode config.Mode, current config.Config) (config.C
 
 const targetConfigUpdateAttempts = 3
 
-func updateTargetsConfig(ctx context.Context, env func(string) string, update func(platform.Paths, config.Config) (config.Config, string, error)) (string, error) {
+func updateTargetsConfig(
+	ctx context.Context,
+	env func(string) string,
+	update func(platform.Paths, config.Config) (config.Config, string, error),
+) (string, error) {
 	paths, err := platform.Resolve(env)
 	if err != nil {
 		return "", urfave.Exit(err.Error(), 1)
@@ -304,12 +342,14 @@ func updateTargetsConfig(ctx context.Context, env func(string) string, update fu
 		return "", urfave.Exit(err.Error(), 1)
 	}
 	defer store.Close()
-	coordinator, err := service.NewCoordinator(service.Dependencies{Config: service.FileConfigPort{Paths: paths}, State: store})
+	coordinator, err := service.NewCoordinator(
+		service.Dependencies{Config: service.FileConfigPort{Paths: paths}, State: store},
+	)
 	if err != nil {
 		return "", urfave.Exit(err.Error(), 1)
 	}
 	var output string
-	for attempt := 0; attempt < targetConfigUpdateAttempts; attempt++ {
+	for range targetConfigUpdateAttempts {
 		output = ""
 		_, err = coordinator.UpdateConfig(ctx, func(current config.Config) (config.Config, error) {
 			updated, result, updateErr := update(paths, current)

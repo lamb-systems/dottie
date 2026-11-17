@@ -10,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationAttemptReservesStandaloneHistoryEvidenceCapacity(t *testing.T) {
@@ -33,7 +34,14 @@ func TestPublicationAttemptReservesStandaloneHistoryEvidenceCapacity(t *testing.
 		if err != nil {
 			return false
 		}
-		if _, err := store.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation); err != nil {
+		if _, err := store.Accept(
+			ctx,
+			ModeFirstUse,
+			first.StateToken,
+			floorObservation,
+			f.payload,
+			first.Confirmation,
+		); err != nil {
 			return false
 		}
 		_, err = store.PrepareAttempt(ctx, candidate, view, review)
@@ -63,7 +71,7 @@ func TestPublicationAttemptReservesStandaloneHistoryEvidenceCapacity(t *testing.
 	_, err = under.PrepareAttempt(ctx, candidate, view, review)
 	requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
 	_, statErr := os.Stat(filepath.Join(under.directory, payloadDirectoryName))
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	var attempts int
 	require.NoError(t, under.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
 	assert.Equal(t, 0, attempts)
@@ -91,7 +99,14 @@ func TestPublicationAttemptReservesStandaloneHistoryEvidenceCapacity(t *testing.
 	require.NoError(t, err)
 	submissionProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = reopened.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	_, err = reopened.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(2), false)
 	active, present, err := reopened.ActiveAttempt(ctx)
@@ -109,7 +124,9 @@ func TestPublicationAttemptTightMetadataLimitCompletesAfterReopen(t *testing.T) 
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	limits := DefaultAttemptLimits()
-	expectedReservation := uint64(limits.CoreBytes) + uint64(limits.LifecycleEvents)*limits.EventBytes + 3*limits.EvidenceSlotBytes + 3*32
+	expectedReservation := limits.CoreBytes + uint64(
+		limits.LifecycleEvents,
+	)*limits.EventBytes + 3*limits.EvidenceSlotBytes + 3*32
 	limits.MetadataBytes = expectedReservation
 	options := DefaultOpenOptions()
 	options.AttemptLimits = limits
@@ -126,7 +143,11 @@ func TestPublicationAttemptTightMetadataLimitCompletesAfterReopen(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, expectedReservation, store.attemptReservationSize())
 	var reservation int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT metadata_bytes FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).Scan(&reservation))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT metadata_bytes FROM attempt_reservations WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&reservation),
+	)
 	assert.Equal(t, int64(expectedReservation), reservation)
 	assertAttemptLogicalBytesExact(t, store, attempt.ID)
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, empty, review)
@@ -135,7 +156,14 @@ func TestPublicationAttemptTightMetadataLimitCompletesAfterReopen(t *testing.T) 
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		empty,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(1), false)
 	loaded, err := store.LoadAttempt(ctx, attempt.ID)
@@ -147,7 +175,7 @@ func TestPublicationAttemptTightMetadataLimitCompletesAfterReopen(t *testing.T) 
 	reopened, err := OpenWithOptions(directory, f.binding, options)
 	require.NoError(t, err)
 	defer reopened.Close()
-	loaded, err = reopened.LoadAttempt(ctx, attempt.ID)
+	_, err = reopened.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assertAttemptLogicalBytesExact(t, reopened, attempt.ID)
 	finalized, err := reopened.FinalizeAttempt(ctx, attempt.ID, resolution.Attempt.StateDigest, current)
@@ -201,7 +229,14 @@ func TestPublicationAttemptRejectsTooFewLifecycleEventsBeforeCustody(t *testing.
 	attempt, preflight, review := createSuccessorAttempt(t, store, f)
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	_, err = store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	repeatUpload, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
@@ -209,7 +244,14 @@ func TestPublicationAttemptRejectsTooFewLifecycleEventsBeforeCustody(t *testing.
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	absent, err := store.ResolveAttempt(ctx, attempt.ID, stateDigestForAttempt(t, store, attempt.ID), preflight)
 	require.NoError(t, err)
@@ -234,7 +276,11 @@ func TestPublicationAttemptRejectsTooFewLifecycleEventsBeforeCustody(t *testing.
 	assert.Equal(t, AttemptRetiredAbandoned, retired.Lifecycle)
 	assert.Equal(t, OutcomeSuperseded, retired.Outcome)
 	var events int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&events))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&events),
+	)
 	assert.Equal(t, 8, events)
 }
 
@@ -256,10 +302,18 @@ func TestPublicationAttemptRejectsOversizeCreatedEventBeforeCustody(t *testing.T
 	attempt, err := probe.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
 	require.NoError(t, err)
 	var bodyLength, digestLength int64
-	require.NoError(t, probe.conn.QueryRowContext(ctx, "SELECT length(body),length(digest) FROM attempt_events WHERE attempt_id=? AND ordinal=1", attempt.ID[:]).Scan(&bodyLength, &digestLength))
+	require.NoError(
+		t,
+		probe.conn.QueryRowContext(ctx, "SELECT length(body),length(digest) FROM attempt_events WHERE attempt_id=? AND ordinal=1", attempt.ID[:]).
+			Scan(&bodyLength, &digestLength),
+	)
 	createdEventBytes := uint64(bodyLength + digestLength)
 	var coreBytes []byte
-	require.NoError(t, probe.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).Scan(&coreBytes))
+	require.NoError(
+		t,
+		probe.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&coreBytes),
+	)
 	require.NoError(t, probe.Close())
 
 	for _, eventLimit := range []uint64{1, createdEventBytes - 1} {
@@ -341,13 +395,24 @@ func TestPublicationAttemptSubmissionEventAdmissionCoversEscapedContext(t *testi
 	escapedView.SuppliedContext.RepositoryRevision = strings.Repeat("\x01", 128)
 	submissionProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, escapedView, review)
 	require.NoError(t, err)
-	_, err = exact.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, escapedView, review, submissionProposal.Confirmation)
+	_, err = exact.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		escapedView,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	loaded, err := exact.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptMayHaveSubmitted, loaded.Lifecycle)
 	var eventBody, eventDigest []byte
-	require.NoError(t, exact.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).Scan(&eventBody, &eventDigest))
+	require.NoError(
+		t,
+		exact.conn.QueryRowContext(ctx, "SELECT body,digest FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).
+			Scan(&eventBody, &eventDigest),
+	)
 	assert.LessOrEqual(t, uint64(len(eventBody)+len(eventDigest)), bound)
 	var event attemptEventWire
 	require.NoError(t, strictJSON(eventBody, &event))
@@ -395,11 +460,25 @@ func TestPublicationAttemptCurrentRetirementEvidenceSlotAdmissionBoundary(t *tes
 	require.NoError(t, err)
 	uploadProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	_, err = exact.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	_, err = exact.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	submissionProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = exact.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = exact.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(1), false)
 	loaded, err := exact.LoadAttempt(ctx, attempt.ID)
@@ -504,11 +583,25 @@ func TestPublicationAttemptMaxBlobConflictFitsGuaranteedEvidenceSlot(t *testing.
 	require.NoError(t, err)
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	_, err = store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	conflict := maxBlobCompetingSuccessorView(t, f, preflight, candidate)
 	abandon, err := store.PrepareAbandon(ctx, attempt.ID, &conflict)
@@ -536,7 +629,12 @@ func TestPublicationAttemptMaxBlobConflictFitsGuaranteedEvidenceSlot(t *testing.
 	assert.Equal(t, firstConflict.Evidence, stored.Evidence)
 }
 
-func maxBlobCompetingSuccessorView(t *testing.T, f fixture, preflight SuppliedRepositoryView, candidate CandidateInput) SuppliedRepositoryView {
+func maxBlobCompetingSuccessorView(
+	t *testing.T,
+	f fixture,
+	preflight SuppliedRepositoryView,
+	candidate CandidateInput,
+) SuppliedRepositoryView {
 	t.Helper()
 	record, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	require.NoError(t, err)
@@ -549,9 +647,26 @@ func maxBlobCompetingSuccessorView(t *testing.T, f fixture, preflight SuppliedRe
 	require.NoError(t, err)
 	occupantCID, err := publication.RecordCID(occupant)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: record.Vault, PublicationSeq: record.PublicationSeq, SnapshotCID: occupantCID, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          record.Vault,
+			PublicationSeq: record.PublicationSeq,
+			SnapshotCID:    occupantCID,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	return SuppliedRepositoryView{Origin: f.binding, Scope: preflight.Scope, SuppliedContext: cloneContext(preflight.SuppliedContext), Head: head, Snapshots: []SnapshotBlock{cloneSnapshotBlocks(f.blocks[:1])[0], {Key: candidate.SnapshotKey, Raw: occupant}}}
+	return SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           preflight.Scope,
+		SuppliedContext: cloneContext(preflight.SuppliedContext),
+		Head:            head,
+		Snapshots: []SnapshotBlock{
+			cloneSnapshotBlocks(f.blocks[:1])[0],
+			{Key: candidate.SnapshotKey, Raw: occupant},
+		},
+	}
 }
 
 func TestPublicationAttemptEvidenceAdmissionAggregateBoundary(t *testing.T) {
@@ -591,11 +706,25 @@ func TestPublicationAttemptEvidenceAdmissionAggregateBoundary(t *testing.T) {
 	require.NoError(t, err)
 	uploadProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	_, err = exact.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	_, err = exact.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	submissionProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = exact.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = exact.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(1), false)
 	loaded, err := exact.LoadAttempt(ctx, attempt.ID)
@@ -625,7 +754,11 @@ func TestPublicationAttemptEvidenceAdmissionAggregateBoundary(t *testing.T) {
 	assert.True(t, outcome)
 	assert.True(t, retirement)
 	var evidenceBytes int64
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence").Scan(&evidenceBytes))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence").
+			Scan(&evidenceBytes),
+	)
 	assert.LessOrEqual(t, evidenceBytes, int64(exactLimits.EvidenceBytes))
 }
 
@@ -639,7 +772,15 @@ func TestPublicationAttemptEvidenceAdmissionIncludesRetiredEvidence(t *testing.T
 	secondCandidate := candidateWithPublicationID(t, firstCandidate, [16]byte{0x77})
 	preflight := attemptView(f, f.observation(1), true)
 	review := attemptReview()
-	retirementBody, err := encodeAttemptEvidence(attemptEvidenceWire{Version: 1, Role: "retirement", AttemptedKey: firstCandidate.SnapshotKey, AttemptedRecord: bytes.Clone(firstCandidate.SnapshotRecord), Outcome: string(OutcomeNotSubmitted)})
+	retirementBody, err := encodeAttemptEvidence(
+		attemptEvidenceWire{
+			Version:         1,
+			Role:            "retirement",
+			AttemptedKey:    firstCandidate.SnapshotKey,
+			AttemptedRecord: bytes.Clone(firstCandidate.SnapshotRecord),
+			Outcome:         string(OutcomeNotSubmitted),
+		},
+	)
 	require.NoError(t, err)
 	priorEvidenceBytes := uint64(len(retirementBody) + 32)
 	slot := uint64(4096)
@@ -660,14 +801,25 @@ func TestPublicationAttemptEvidenceAdmissionIncludesRetiredEvidence(t *testing.T
 			t.Cleanup(func() { _ = store.Close() })
 			firstProposal, err := store.PrepareAttempt(ctx, firstCandidate, preflight, review)
 			require.NoError(t, err)
-			first, err := store.CreateAttempt(ctx, firstProposal.StateToken, firstCandidate, preflight, review, firstProposal.Confirmation)
+			first, err := store.CreateAttempt(
+				ctx,
+				firstProposal.StateToken,
+				firstCandidate,
+				preflight,
+				review,
+				firstProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			abandon, err := store.PrepareAbandon(ctx, first.ID, nil)
 			require.NoError(t, err)
 			_, err = store.AbandonAttempt(ctx, first.ID, abandon.StateToken, nil, abandon.Confirmation)
 			require.NoError(t, err)
 			var existingBytes int64
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence").Scan(&existingBytes))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence").
+					Scan(&existingBytes),
+			)
 			assert.Equal(t, int64(priorEvidenceBytes), existingBytes)
 
 			proposal, err := store.PrepareAttempt(ctx, secondCandidate, preflight, review)
@@ -677,17 +829,34 @@ func TestPublicationAttemptEvidenceAdmissionIncludesRetiredEvidence(t *testing.T
 				requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
 				assert.Equal(t, Attempt{}, result)
 				var attempts int
-				require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
+				require.NoError(
+					t,
+					store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+				)
 				assert.Equal(t, 1, attempts)
 				var active int
-				require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active))
+				require.NoError(
+					t,
+					store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active),
+				)
 				assert.Zero(t, active)
 			} else {
 				require.NoError(t, err)
-				second, err := store.CreateAttempt(ctx, proposal.StateToken, secondCandidate, preflight, review, proposal.Confirmation)
+				second, err := store.CreateAttempt(
+					ctx,
+					proposal.StateToken,
+					secondCandidate,
+					preflight,
+					review,
+					proposal.Confirmation,
+				)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				reopened, err := OpenWithOptions(directory, f.binding, attemptOpenOptions(positionLimits, attemptLimits))
+				reopened, err := OpenWithOptions(
+					directory,
+					f.binding,
+					attemptOpenOptions(positionLimits, attemptLimits),
+				)
 				require.NoError(t, err)
 				defer reopened.Close()
 				loaded, err := reopened.LoadAttempt(ctx, second.ID)
@@ -702,7 +871,13 @@ func TestPublicationAttemptEvidenceAdmissionIncludesRetiredEvidence(t *testing.T
 	}
 }
 
-func independentSubmissionEventAdmissionBound(t *testing.T, store *Store, candidate CandidateInput, view SuppliedRepositoryView, review LocalReviewContext) uint64 {
+func independentSubmissionEventAdmissionBound(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+) uint64 {
 	t.Helper()
 	state, err := store.readState(context.Background(), store.conn, StageAttempt)
 	require.NoError(t, err)
@@ -711,7 +886,21 @@ func independentSubmissionEventAdmissionBound(t *testing.T, store *Store, candid
 	contextBytes, err := canonicalJSON(contextToWire(validated.view.input.SuppliedContext))
 	require.NoError(t, err)
 	require.LessOrEqual(t, uint64(len(contextBytes)), uint64(store.limits.SuppliedContextBytes))
-	submission, err := encodeAttemptEvidence(attemptEvidenceWire{Version: 1, Role: "submission", Scope: string(validated.view.input.Scope), ViewDigest: bytes.Clone(validated.view.digest[:]), Origin: bindingToWire(validated.view.input.Origin), Context: contextToWire(validated.view.input.SuppliedContext), Head: bytes.Clone(validated.view.input.Head), AttemptedKey: validated.key, AttemptedRecord: bytes.Clone(validated.snapshotRaw), PredecessorRecord: candidatePredecessorRaw(validated), Outcome: string(OutcomeUnresolved)})
+	submission, err := encodeAttemptEvidence(
+		attemptEvidenceWire{
+			Version:           1,
+			Role:              "submission",
+			Scope:             string(validated.view.input.Scope),
+			ViewDigest:        bytes.Clone(validated.view.digest[:]),
+			Origin:            bindingToWire(validated.view.input.Origin),
+			Context:           contextToWire(validated.view.input.SuppliedContext),
+			Head:              bytes.Clone(validated.view.input.Head),
+			AttemptedKey:      validated.key,
+			AttemptedRecord:   bytes.Clone(validated.snapshotRaw),
+			PredecessorRecord: candidatePredecessorRaw(validated),
+			Outcome:           string(OutcomeUnresolved),
+		},
+	)
 	require.NoError(t, err)
 	maxEvidence := uint64(len(submission)) + uint64(store.limits.SuppliedContextBytes) - uint64(len(contextBytes))
 	kind := "outcome-observed-absent-unresolved"
@@ -720,12 +909,25 @@ func independentSubmissionEventAdmissionBound(t *testing.T, store *Store, candid
 			kind = candidateKind
 		}
 	}
-	body, digest, err := makeAttemptEvent(validated.id, store.attemptLimits.LifecycleEvents, kind, make([]byte, 32), make([]byte, int(maxEvidence)), [32]byte{})
+	body, digest, err := makeAttemptEvent(
+		validated.id,
+		store.attemptLimits.LifecycleEvents,
+		kind,
+		make([]byte, 32),
+		make([]byte, int(maxEvidence)),
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	return uint64(len(body) + len(digest))
 }
 
-func independentCurrentRetirementEvidenceSlotBound(t *testing.T, store *Store, candidate CandidateInput, view SuppliedRepositoryView, review LocalReviewContext) uint64 {
+func independentCurrentRetirementEvidenceSlotBound(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+) uint64 {
 	t.Helper()
 	state, err := store.readState(context.Background(), store.conn, StageAttempt)
 	require.NoError(t, err)
@@ -734,16 +936,40 @@ func independentCurrentRetirementEvidenceSlotBound(t *testing.T, store *Store, c
 	contextBytes, err := canonicalJSON(contextToWire(validated.view.input.SuppliedContext))
 	require.NoError(t, err)
 	currentViewInput := cloneSuppliedView(validated.view.input)
-	currentViewInput.Snapshots = append(currentViewInput.Snapshots, SnapshotBlock{Key: validated.key, Raw: bytes.Clone(validated.snapshotRaw)})
+	currentViewInput.Snapshots = append(
+		currentViewInput.Snapshots,
+		SnapshotBlock{Key: validated.key, Raw: bytes.Clone(validated.snapshotRaw)},
+	)
 	currentViewInput.Head = bytes.Clone(validated.headRaw)
 	currentView, err := validateSuppliedRepositoryView(currentViewInput, store.binding, store.limits, false)
 	require.NoError(t, err)
-	proof, err := encodeAttemptEvidence(attemptEvidenceWire{Version: 1, Role: "retirement", Scope: string(currentView.input.Scope), ViewDigest: bytes.Clone(currentView.digest[:]), Origin: bindingToWire(currentView.input.Origin), Context: contextToWire(currentView.input.SuppliedContext), Head: bytes.Clone(currentView.input.Head), AttemptedKey: validated.key, AttemptedRecord: bytes.Clone(validated.snapshotRaw), PredecessorRecord: candidatePredecessorRaw(validated), Suffix: []SnapshotBlock{{Key: validated.key, Raw: bytes.Clone(validated.snapshotRaw)}}, Outcome: string(OutcomeCurrent)})
+	proof, err := encodeAttemptEvidence(
+		attemptEvidenceWire{
+			Version:           1,
+			Role:              "retirement",
+			Scope:             string(currentView.input.Scope),
+			ViewDigest:        bytes.Clone(currentView.digest[:]),
+			Origin:            bindingToWire(currentView.input.Origin),
+			Context:           contextToWire(currentView.input.SuppliedContext),
+			Head:              bytes.Clone(currentView.input.Head),
+			AttemptedKey:      validated.key,
+			AttemptedRecord:   bytes.Clone(validated.snapshotRaw),
+			PredecessorRecord: candidatePredecessorRaw(validated),
+			Suffix:            []SnapshotBlock{{Key: validated.key, Raw: bytes.Clone(validated.snapshotRaw)}},
+			Outcome:           string(OutcomeCurrent),
+		},
+	)
 	require.NoError(t, err)
 	return uint64(len(proof)) + uint64(store.limits.SuppliedContextBytes) - uint64(len(contextBytes))
 }
 
-func independentFirstConflictEvidenceSlotBound(t *testing.T, store *Store, candidate CandidateInput, view SuppliedRepositoryView, review LocalReviewContext) uint64 {
+func independentFirstConflictEvidenceSlotBound(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+) uint64 {
 	t.Helper()
 	state, err := store.readState(context.Background(), store.conn, StageAttempt)
 	require.NoError(t, err)
@@ -761,16 +987,51 @@ func independentFirstConflictEvidenceSlotBound(t *testing.T, store *Store, candi
 	require.NoError(t, err)
 	occupantCID, err := publication.RecordCID(occupantRaw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: occupant.Vault, PublicationSeq: occupant.PublicationSeq, SnapshotCID: occupantCID, BlobCID: bytes.Clone(occupant.Blob.CID)})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          occupant.Vault,
+			PublicationSeq: occupant.PublicationSeq,
+			SnapshotCID:    occupantCID,
+			BlobCID:        bytes.Clone(occupant.Blob.CID),
+		},
+	)
 	require.NoError(t, err)
-	proof := attemptEvidenceWire{Version: 1, Role: "outcome", Scope: string(validated.view.input.Scope), ViewDigest: make([]byte, 32), Origin: bindingToWire(validated.view.input.Origin), Context: contextToWire(validated.view.input.SuppliedContext), Head: head, AttemptedKey: validated.key, AttemptedRecord: occupantRaw, PredecessorRecord: candidatePredecessorRaw(validated), Suffix: []SnapshotBlock{{Key: validated.key, Raw: occupantRaw}}, Outcome: string(OutcomeLostFence)}
-	wire := firstConflictWire{Version: 1, AttemptID: bytes.Clone(validated.id[:]), CoreDigest: make([]byte, 32), EventOrdinal: store.attemptLimits.LifecycleEvents, MutationRevision: ^uint64(0) >> 1, EventStateDigest: make([]byte, 32), Blocked: "blocked-floor-replaced", Proof: proof}
+	proof := attemptEvidenceWire{
+		Version:           1,
+		Role:              "outcome",
+		Scope:             string(validated.view.input.Scope),
+		ViewDigest:        make([]byte, 32),
+		Origin:            bindingToWire(validated.view.input.Origin),
+		Context:           contextToWire(validated.view.input.SuppliedContext),
+		Head:              head,
+		AttemptedKey:      validated.key,
+		AttemptedRecord:   occupantRaw,
+		PredecessorRecord: candidatePredecessorRaw(validated),
+		Suffix:            []SnapshotBlock{{Key: validated.key, Raw: occupantRaw}},
+		Outcome:           string(OutcomeLostFence),
+	}
+	wire := firstConflictWire{
+		Version:          1,
+		AttemptID:        bytes.Clone(validated.id[:]),
+		CoreDigest:       make([]byte, 32),
+		EventOrdinal:     store.attemptLimits.LifecycleEvents,
+		MutationRevision: ^uint64(0) >> 1,
+		EventStateDigest: make([]byte, 32),
+		Blocked:          "blocked-floor-replaced",
+		Proof:            proof,
+	}
 	encoded, err := canonicalJSON(wire)
 	require.NoError(t, err)
 	return uint64(len(encoded)) + uint64(store.limits.SuppliedContextBytes) - uint64(len(contextBytes))
 }
 
-func openAttemptStoreWithAttemptLimits(t *testing.T, f fixture, limits Limits, attemptLimits AttemptLimits) (*Store, string) {
+func openAttemptStoreWithAttemptLimits(
+	t *testing.T,
+	f fixture,
+	limits Limits,
+	attemptLimits AttemptLimits,
+) (*Store, string) {
 	t.Helper()
 	directory := t.TempDir()
 	require.NoError(t, os.Chmod(directory, 0o700))
@@ -790,9 +1051,19 @@ func attemptOpenOptions(limits Limits, attemptLimits AttemptLimits) OpenOptions 
 func assertNoAdditionalAttemptRows(t *testing.T, store *Store, directory string, count int) {
 	t.Helper()
 	var attempts, active, objects int
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM active_publication_attempt").
+			Scan(&active),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects),
+	)
 	assert.Equal(t, count, attempts)
 	assert.Zero(t, active)
 	assert.Equal(t, 1, objects)
@@ -804,9 +1075,19 @@ func assertNoAdditionalAttemptRows(t *testing.T, store *Store, directory string,
 func assertNoAttemptCustodyMutation(t *testing.T, store *Store, directory string) {
 	t.Helper()
 	var attempts, objects, active int
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM active_publication_attempt").
+			Scan(&active),
+	)
 	assert.Equal(t, 0, attempts)
 	assert.Equal(t, 0, objects)
 	assert.Equal(t, 0, active)
@@ -838,7 +1119,14 @@ func TestPublicationAttemptHistoryReserveCoversEscapedFinalContext(t *testing.T)
 				floorObservation = f.observation(1)
 				first, err := baseStore.Prepare(ctx, ModeFirstUse, floorObservation, f.payload)
 				require.NoError(t, err)
-				_, err = baseStore.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation)
+				_, err = baseStore.Accept(
+					ctx,
+					ModeFirstUse,
+					first.StateToken,
+					floorObservation,
+					f.payload,
+					first.Confirmation,
+				)
 				require.NoError(t, err)
 				preflight = attemptView(f, floorObservation, false)
 				candidateSequence = 1
@@ -858,7 +1146,14 @@ func TestPublicationAttemptHistoryReserveCoversEscapedFinalContext(t *testing.T)
 			if kind == "successor" {
 				first, err := under.Prepare(ctx, ModeFirstUse, floorObservation, f.payload)
 				require.NoError(t, err)
-				_, err = under.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation)
+				_, err = under.Accept(
+					ctx,
+					ModeFirstUse,
+					first.StateToken,
+					floorObservation,
+					f.payload,
+					first.Confirmation,
+				)
 				require.NoError(t, err)
 			}
 			_, err := under.PrepareAttempt(ctx, candidate, preflight, review)
@@ -872,20 +1167,48 @@ func TestPublicationAttemptHistoryReserveCoversEscapedFinalContext(t *testing.T)
 			if kind == "successor" {
 				first, err := exact.Prepare(ctx, ModeFirstUse, floorObservation, f.payload)
 				require.NoError(t, err)
-				_, err = exact.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation)
+				_, err = exact.Accept(
+					ctx,
+					ModeFirstUse,
+					first.StateToken,
+					floorObservation,
+					f.payload,
+					first.Confirmation,
+				)
 				require.NoError(t, err)
 			}
 			proposal, err := exact.PrepareAttempt(ctx, candidate, preflight, review)
 			require.NoError(t, err)
-			attempt, err := exact.CreateAttempt(ctx, proposal.StateToken, candidate, preflight, review, proposal.Confirmation)
+			attempt, err := exact.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidate,
+				preflight,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			uploadProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 			require.NoError(t, err)
-			_, err = exact.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+			_, err = exact.BeginUpload(
+				ctx,
+				attempt.ID,
+				uploadProposal.StateToken,
+				preflight,
+				review,
+				uploadProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			submissionProposal, err := exact.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 			require.NoError(t, err)
-			_, err = exact.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+			_, err = exact.BeginSubmission(
+				ctx,
+				attempt.ID,
+				submissionProposal.StateToken,
+				preflight,
+				review,
+				submissionProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			require.NoError(t, exact.Close())
 
@@ -928,7 +1251,14 @@ func TestLoweredContextLimitAdmitsFeasibleAttempt(t *testing.T) {
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	finalView := attemptView(f, f.observation(1), false)
 	finalView.SuppliedContext.RepositoryRevision = "short-final"
@@ -962,7 +1292,13 @@ func openAttemptStoreWithLimits(t *testing.T, f fixture, limits Limits) (*Store,
 	return store, directory
 }
 
-func independentFinalizationHistoryBound(t *testing.T, store *Store, candidate CandidateInput, view SuppliedRepositoryView, review LocalReviewContext) uint64 {
+func independentFinalizationHistoryBound(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+) uint64 {
 	t.Helper()
 	ctx := context.Background()
 	state, err := store.readState(ctx, store.conn, StageAttempt)
@@ -970,7 +1306,10 @@ func independentFinalizationHistoryBound(t *testing.T, store *Store, candidate C
 	validatedCandidate, err := store.validateAttemptInput(ctx, candidate, view, review, state, StageAttempt)
 	require.NoError(t, err)
 	finalViewInput := cloneSuppliedView(view)
-	finalViewInput.Snapshots = append(finalViewInput.Snapshots, SnapshotBlock{Key: validatedCandidate.key, Raw: bytes.Clone(validatedCandidate.snapshotRaw)})
+	finalViewInput.Snapshots = append(
+		finalViewInput.Snapshots,
+		SnapshotBlock{Key: validatedCandidate.key, Raw: bytes.Clone(validatedCandidate.snapshotRaw)},
+	)
 	finalViewInput.Head = bytes.Clone(validatedCandidate.headRaw)
 	finalView, err := validateSuppliedRepositoryView(finalViewInput, store.binding, store.limits, false)
 	require.NoError(t, err)
@@ -978,17 +1317,41 @@ func independentFinalizationHistoryBound(t *testing.T, store *Store, candidate C
 	validatedObservation, err := validateObservation(observation, store.binding, store.limits)
 	require.NoError(t, err)
 	mode := ModeAdvance
-	trace := resolvedTrace{refs: []RecordReference{cloneReference(validatedObservation.candidate.ref)}, records: []validatedRecord{cloneValidatedRecord(validatedObservation.candidate)}, stop: "joined"}
+	trace := resolvedTrace{
+		refs:    []RecordReference{cloneReference(validatedObservation.candidate.ref)},
+		records: []validatedRecord{cloneValidatedRecord(validatedObservation.candidate)},
+		stop:    "joined",
+	}
 	if state.floor == nil {
 		mode = ModeFirstUse
 		trace.stop = "first_use"
 	} else {
-		trace.refs = append(trace.refs, RecordReference{Key: state.floor.SnapshotKey, CID: bytes.Clone(state.floor.RecordCID), Sequence: state.floor.Sequence})
+		trace.refs = append(
+			trace.refs,
+			RecordReference{
+				Key:      state.floor.SnapshotKey,
+				CID:      bytes.Clone(state.floor.RecordCID),
+				Sequence: state.floor.Sequence,
+			},
+		)
 		require.NotNil(t, validatedCandidate.predecessor)
 		trace.records = append(trace.records, cloneValidatedRecord(*validatedCandidate.predecessor))
 	}
 	floor := buildFloor(store.databaseID, store.binding, validatedObservation, state, trace, mode)
-	body := oracleJSON(t, oracleEvent{Version: 1, Mode: string(mode), Reason: string(trace.reason), OldFloor: oracleFloorFrom(state.floor), NewFloor: oracleCoreFrom(floor), Trace: oracleRefs(trace.refs), Stop: trace.stop, ObservationDigest: bytes.Clone(validatedObservation.observationDigest[:]), SuppliedSetDigest: bytes.Clone(validatedObservation.setDigest[:])})
+	body := oracleJSON(
+		t,
+		oracleEvent{
+			Version:           1,
+			Mode:              string(mode),
+			Reason:            string(trace.reason),
+			OldFloor:          oracleFloorFrom(state.floor),
+			NewFloor:          oracleCoreFrom(floor),
+			Trace:             oracleRefs(trace.refs),
+			Stop:              trace.stop,
+			ObservationDigest: bytes.Clone(validatedObservation.observationDigest[:]),
+			SuppliedSetDigest: bytes.Clone(validatedObservation.setDigest[:]),
+		},
+	)
 	contextWire := oracleJSON(t, oracleCtx(validatedObservation.context))
 	require.LessOrEqual(t, len(contextWire), int(store.limits.SuppliedContextBytes))
 	bound := uint64(len(body) + 32 + 8)
@@ -1001,7 +1364,14 @@ func independentFinalizationHistoryBound(t *testing.T, store *Store, candidate C
 		bound += uint64(len(record.raw) + len(record.ref.CID) + len(record.ref.Key) + 8)
 	}
 	if state.floor != nil && !seen[string(state.floor.RecordCID)] {
-		anchor, err := store.loadRecordByCID(ctx, store.conn, state.floor.RecordCID, state.floor.SnapshotKey, state.floor.Sequence, StageAttempt)
+		anchor, err := store.loadRecordByCID(
+			ctx,
+			store.conn,
+			state.floor.RecordCID,
+			state.floor.SnapshotKey,
+			state.floor.Sequence,
+			StageAttempt,
+		)
 		require.NoError(t, err)
 		bound += uint64(len(anchor.raw) + len(anchor.ref.CID) + len(anchor.ref.Key) + 8)
 	}
@@ -1087,7 +1457,14 @@ func TestPublicationAttemptOrphanReuseEnforcesCompletedUnionBytes(t *testing.T) 
 			require.NoError(t, os.WriteFile(candidatePath, candidate.Payload, 0o600))
 			otherPath := filepath.Join(payloadDirectory, otherName)
 			require.NoError(t, os.WriteFile(otherPath, other, 0o600))
-			_, err = store.conn.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)", otherCID, int64(otherSize), otherName, int64(otherSize))
+			_, err = store.conn.ExecContext(
+				ctx,
+				"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)",
+				otherCID,
+				int64(otherSize),
+				otherName,
+				int64(otherSize),
+			)
 			require.NoError(t, err)
 			beforeCandidate, err := os.ReadFile(candidatePath)
 			require.NoError(t, err)
@@ -1106,7 +1483,14 @@ func TestPublicationAttemptOrphanReuseEnforcesCompletedUnionBytes(t *testing.T) 
 				assert.Equal(t, beforeNames, directoryEntryNames(afterEntries))
 			} else {
 				require.NoError(t, err)
-				attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+				attempt, err := store.CreateAttempt(
+					ctx,
+					proposal.StateToken,
+					candidate,
+					view,
+					review,
+					proposal.Confirmation,
+				)
 				require.NoError(t, err)
 				assert.Equal(t, proposal.AttemptID, attempt.ID)
 			}
@@ -1151,7 +1535,14 @@ func TestPublicationAttemptCataloguedMissingObjectCountsTowardUnionLimit(t *test
 			candidatePath := filepath.Join(payloadDirectory, payloadBasename(candidate.Payload))
 			otherPath := filepath.Join(payloadDirectory, otherName)
 			require.NoError(t, os.WriteFile(candidatePath, candidate.Payload, 0o600))
-			_, err = store.conn.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)", otherCID, otherSize, otherName, otherSize)
+			_, err = store.conn.ExecContext(
+				ctx,
+				"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)",
+				otherCID,
+				otherSize,
+				otherName,
+				otherSize,
+			)
 			require.NoError(t, err)
 			beforeRows := readAttemptLogicalRows(t, store)
 			beforeFile, err := os.ReadFile(candidatePath)
@@ -1160,14 +1551,28 @@ func TestPublicationAttemptCataloguedMissingObjectCountsTowardUnionLimit(t *test
 			_, err = store.PrepareAttempt(ctx, candidate, view, review)
 			if objectLimit == 1 {
 				requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
-				result, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+				result, err := store.CreateAttempt(
+					ctx,
+					proposal.StateToken,
+					candidate,
+					view,
+					review,
+					proposal.Confirmation,
+				)
 				requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
 				assert.Equal(t, Attempt{}, result)
 				assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 				assert.Equal(t, beforeNames, directoryEntryNames(mustReadDir(t, payloadDirectory)))
 			} else {
 				require.NoError(t, err)
-				result, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+				result, err := store.CreateAttempt(
+					ctx,
+					proposal.StateToken,
+					candidate,
+					view,
+					review,
+					proposal.Confirmation,
+				)
 				require.NoError(t, err)
 				assert.Equal(t, proposal.AttemptID, result.ID)
 			}
@@ -1239,10 +1644,17 @@ func TestAttemptCustodyInventoryFailureBlocksIntakeButNotInspection(t *testing.T
 	missingCatalogCandidate := candidateWithPublicationID(t, candidate, [16]byte{0x56})
 	missingProposal, err := store.PrepareAttempt(ctx, missingCatalogCandidate, view, review)
 	require.NoError(t, err)
-	_, err = store.CreateAttempt(ctx, missingProposal.StateToken, missingCatalogCandidate, view, review, missingProposal.Confirmation)
+	_, err = store.CreateAttempt(
+		ctx,
+		missingProposal.StateToken,
+		missingCatalogCandidate,
+		view,
+		review,
+		missingProposal.Confirmation,
+	)
 	requireErrorMetadata(t, err, ErrStorage, StageCustody, ReasonCandidateMissing)
 	_, statErr := os.Stat(payloadPath)
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	var active int
 	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active))
 	assert.Equal(t, 0, active)
@@ -1251,7 +1663,7 @@ func TestAttemptCustodyInventoryFailureBlocksIntakeButNotInspection(t *testing.T
 	_, err = store.PrepareAttempt(ctx, different, view, review)
 	requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
 	_, statErr = os.Stat(payloadPath)
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	loaded, err = store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredAbandoned, loaded.Lifecycle)
@@ -1296,7 +1708,11 @@ func TestPublicationAttemptEvidenceLogicalBytesTrackReplacementExactly(t *testin
 	assertAttemptLogicalBytesExact(t, store, attempt.ID)
 	assert.Equal(t, shortBytes, attemptLogicalBytes(t, store, attempt.ID))
 	var eventCount int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&eventCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&eventCount),
+	)
 	assert.Equal(t, 4, eventCount)
 	require.NoError(t, store.Close())
 
@@ -1317,7 +1733,11 @@ func TestPublicationAttemptEvidenceLogicalBytesTrackReplacementExactly(t *testin
 func attemptLogicalBytes(t *testing.T, store *Store, id [16]byte) uint64 {
 	t.Helper()
 	var logical int64
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT logical_bytes FROM publication_attempts WHERE attempt_id=?", id[:]).Scan(&logical))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT logical_bytes FROM publication_attempts WHERE attempt_id=?", id[:]).
+			Scan(&logical),
+	)
 	require.GreaterOrEqual(t, logical, int64(0))
 	return uint64(logical)
 }
@@ -1325,10 +1745,26 @@ func attemptLogicalBytes(t *testing.T, store *Store, id [16]byte) uint64 {
 func assertAttemptLogicalBytesExact(t *testing.T, store *Store, id [16]byte) {
 	t.Helper()
 	var actual, coreBytes, eventBytes, evidenceBytes int64
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT logical_bytes FROM publication_attempts WHERE attempt_id=?", id[:]).Scan(&actual))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT length(core) FROM publication_attempts WHERE attempt_id=?", id[:]).Scan(&coreBytes))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_events WHERE attempt_id=?", id[:]).Scan(&eventBytes))
-	require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence WHERE attempt_id=?", id[:]).Scan(&evidenceBytes))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT logical_bytes FROM publication_attempts WHERE attempt_id=?", id[:]).
+			Scan(&actual),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT length(core) FROM publication_attempts WHERE attempt_id=?", id[:]).
+			Scan(&coreBytes),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_events WHERE attempt_id=?", id[:]).
+			Scan(&eventBytes),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(context.Background(), "SELECT COALESCE(SUM(length(body)+length(digest)),0) FROM attempt_evidence WHERE attempt_id=?", id[:]).
+			Scan(&evidenceBytes),
+	)
 	assert.Equal(t, coreBytes+eventBytes+evidenceBytes, actual)
 }
 
@@ -1341,14 +1777,14 @@ func TestPublicationAttemptSequence4078CurrentProofExcludesPrehistory(t *testing
 	t.Cleanup(func() { _ = low.store.Close() })
 
 	highFixture := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence <= 4079; sequence++ {
+	for sequence := range uint64(4080) {
 		highFixture.appendRecord(t, sequence)
 	}
 	high := createCurrentProofRun(t, highFixture, singleSequenceObservation(t, highFixture, 4077), 4078)
 	t.Cleanup(func() { _ = high.store.Close() })
 
-	assert.Equal(t, 3, len(low.current.Snapshots))
-	assert.Equal(t, 4079, len(high.current.Snapshots))
+	assert.Len(t, low.current.Snapshots, 3)
+	assert.Len(t, high.current.Snapshots, 4079)
 	require.Len(t, low.proof.Suffix, 1)
 	require.Len(t, high.proof.Suffix, 1)
 	assert.Equal(t, low.proof.Scope, high.proof.Scope)
@@ -1383,7 +1819,12 @@ func TestPublicationAttemptSequence4078CurrentProofExcludesPrehistory(t *testing
 	assert.Equal(t, expectedDelta, len(highOracle)-len(lowOracle))
 	assert.Equal(t, expectedDelta, len(high.resolution.Evidence)-len(low.resolution.Evidence))
 
-	finalized, err := high.store.FinalizeAttempt(context.Background(), high.attempt.ID, high.resolution.Attempt.StateDigest, high.current)
+	finalized, err := high.store.FinalizeAttempt(
+		context.Background(),
+		high.attempt.ID,
+		high.resolution.Attempt.StateDigest,
+		high.current,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredSuccess, finalized.Attempt.Lifecycle)
 	assert.Equal(t, uint64(4078), finalized.Floor.Sequence)
@@ -1425,7 +1866,12 @@ func createCurrentProofRun(t *testing.T, f fixture, floorObservation Observation
 	require.NoError(t, err)
 	var acceptedRecords int
 	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM accepted_records").Scan(&acceptedRecords))
-	require.Equal(t, 1, acceptedRecords, "the synthetic high-sequence prehistory is held in memory, not persisted as thousands of accepted points")
+	require.Equal(
+		t,
+		1,
+		acceptedRecords,
+		"the synthetic high-sequence prehistory is held in memory, not persisted as thousands of accepted points",
+	)
 
 	preflight := attemptView(f, f.observation(int(sequence)), false)
 	candidate := attemptCandidate(f, sequence)
@@ -1436,11 +1882,25 @@ func createCurrentProofRun(t *testing.T, f fixture, floorObservation Observation
 	require.NoError(t, err)
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, preflight, review, uploadProposal.Confirmation)
+	_, err = store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		preflight,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, preflight, review)
 	require.NoError(t, err)
-	_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, preflight, review, submissionProposal.Confirmation)
+	_, err = store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		preflight,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	current := attemptView(f, f.observation(int(sequence+1)), false)
 	loaded, err := store.LoadAttempt(ctx, attempt.ID)
@@ -1449,15 +1909,31 @@ func createCurrentProofRun(t *testing.T, f fixture, floorObservation Observation
 	require.NoError(t, err)
 	assert.Equal(t, OutcomeCurrent, resolution.Outcome)
 	var acceptedAfterResolve int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM accepted_records").Scan(&acceptedAfterResolve))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM accepted_records").Scan(&acceptedAfterResolve),
+	)
 	assert.Equal(t, 1, acceptedAfterResolve)
 	var storedOutcome []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attempt.ID[:]).Scan(&storedOutcome))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attempt.ID[:]).
+			Scan(&storedOutcome),
+	)
 	assert.Equal(t, resolution.Evidence, storedOutcome)
 	var proof attemptEvidenceWire
 	require.NoError(t, strictJSON(storedOutcome, &proof))
 	predecessor := bytes.Clone(f.blocks[sequence-1].Raw)
-	return currentProofRun{store: store, directory: directory, attempt: attempt, candidate: candidate, current: current, predecessor: predecessor, resolution: resolution, proof: proof}
+	return currentProofRun{
+		store:       store,
+		directory:   directory,
+		attempt:     attempt,
+		candidate:   candidate,
+		current:     current,
+		predecessor: predecessor,
+		resolution:  resolution,
+		proof:       proof,
+	}
 }
 
 func singleSequenceObservation(t *testing.T, f fixture, sequence uint64) Observation {
@@ -1467,15 +1943,46 @@ func singleSequenceObservation(t *testing.T, f fixture, sequence uint64) Observa
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(block.Raw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: record.Vault, PublicationSeq: sequence, SnapshotCID: cid, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          record.Vault,
+			PublicationSeq: sequence,
+			SnapshotCID:    cid,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
 	context := f.observation(1).SuppliedContext
-	return Observation{Origin: f.binding, SuppliedContext: context, Head: head, Snapshots: []SnapshotBlock{{Key: block.Key, Raw: bytes.Clone(block.Raw)}}}
+	return Observation{
+		Origin:          f.binding,
+		SuppliedContext: context,
+		Head:            head,
+		Snapshots:       []SnapshotBlock{{Key: block.Key, Raw: bytes.Clone(block.Raw)}},
+	}
 }
 
 func currentOutcomeOracle(t *testing.T, run currentProofRun) []byte {
 	t.Helper()
-	return oracleCanonicalJSON(t, wireOracleEvidence{Version: 1, Role: "outcome", Scope: string(run.current.Scope), ViewDigest: bytes.Clone(run.resolution.ViewDigest[:]), Origin: wireVectorBinding(run.current.Origin), Context: wireVectorContext(run.current.SuppliedContext), Head: bytes.Clone(run.current.Head), AttemptedKey: run.candidate.SnapshotKey, AttemptedRecord: bytes.Clone(run.candidate.SnapshotRecord), PredecessorRecord: bytes.Clone(run.predecessor), Suffix: []wireOracleSnapshot{{Key: run.candidate.SnapshotKey, Raw: bytes.Clone(run.candidate.SnapshotRecord)}}, Outcome: string(OutcomeCurrent)})
+	return oracleCanonicalJSON(
+		t,
+		wireOracleEvidence{
+			Version:           1,
+			Role:              "outcome",
+			Scope:             string(run.current.Scope),
+			ViewDigest:        bytes.Clone(run.resolution.ViewDigest[:]),
+			Origin:            wireVectorBinding(run.current.Origin),
+			Context:           wireVectorContext(run.current.SuppliedContext),
+			Head:              bytes.Clone(run.current.Head),
+			AttemptedKey:      run.candidate.SnapshotKey,
+			AttemptedRecord:   bytes.Clone(run.candidate.SnapshotRecord),
+			PredecessorRecord: bytes.Clone(run.predecessor),
+			Suffix: []wireOracleSnapshot{
+				{Key: run.candidate.SnapshotKey, Raw: bytes.Clone(run.candidate.SnapshotRecord)},
+			},
+			Outcome: string(OutcomeCurrent),
+		},
+	)
 }
 
 func payloadDirectorySnapshot(t *testing.T, directory string) map[string][]byte {

@@ -40,7 +40,14 @@ func newInspectionStore(t *testing.T, backend Backend) (fixture, string, Floor) 
 	store, directory := newStore(t, f)
 	observation := f.observation(1)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
-	floor, err := store.Accept(context.Background(), ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	floor, err := store.Accept(
+		context.Background(),
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	return f, directory, floor
@@ -63,7 +70,12 @@ func TestInspectDirectoryGuardsPrecedeStoreDecision(t *testing.T) {
 	}{
 		{name: "missing directory", directory: missing, class: ErrSchema, reason: ReasonPositionAbsent},
 		{name: "non-private directory", directory: openDirectory, class: ErrStorage, reason: ReasonIO},
-		{name: "symlinked directory", directory: filepath.Join(linkParent, "link"), class: ErrStorage, reason: ReasonIO},
+		{
+			name:      "symlinked directory",
+			directory: filepath.Join(linkParent, "link"),
+			class:     ErrStorage,
+			reason:    ReasonIO,
+		},
 		{name: "relative directory", directory: "relative/publication", class: ErrInvalid, reason: ReasonBinding},
 	}
 	for _, test := range tests {
@@ -74,7 +86,11 @@ func TestInspectDirectoryGuardsPrecedeStoreDecision(t *testing.T) {
 		})
 	}
 	assert.Empty(t, inspectionDirectoryEntries(t, private), "guard must not create a store in a private directory")
-	assert.Empty(t, inspectionDirectoryEntries(t, openDirectory), "guard must not create a store in a non-private directory")
+	assert.Empty(
+		t,
+		inspectionDirectoryEntries(t, openDirectory),
+		"guard must not create a store in a non-private directory",
+	)
 	_, err := os.Lstat(missing)
 	assert.ErrorIs(t, err, os.ErrNotExist, "guard must not create the missing directory")
 }
@@ -112,7 +128,12 @@ func TestInspectRefusesZeroByteDatabaseWithoutCreatingStore(t *testing.T) {
 	info, err := os.Stat(databasePath)
 	require.NoError(t, err)
 	assert.Zero(t, info.Size(), "inspection wrote to the zero-byte database")
-	assert.Equal(t, []string{"publication.db=0"}, inspectionDirectoryEntries(t, directory), "inspection created sidecars")
+	assert.Equal(
+		t,
+		[]string{"publication.db=0"},
+		inspectionDirectoryEntries(t, directory),
+		"inspection created sidecars",
+	)
 }
 
 func TestInspectRefusesUncheckpointedWAL(t *testing.T) {
@@ -202,13 +223,13 @@ func TestInspectProbeDoesNotExcludeOtherInspectors(t *testing.T) {
 	assert.Equal(t, floor, inspection.Floor)
 
 	results := make(chan error, 8)
-	for index := 0; index < 8; index++ {
+	for range 8 {
 		go func() {
 			_, inspectErr := Inspect(context.Background(), directory, f.binding)
 			results <- inspectErr
 		}()
 	}
-	for index := 0; index < 8; index++ {
+	for range 8 {
 		assert.NoError(t, <-results, "concurrent inspections must not observe each other as a lock holder")
 	}
 }

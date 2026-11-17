@@ -187,9 +187,13 @@ func BuildBlob(data []byte) (Blob, error) {
 		return Blob{}, fmt.Errorf("build raw blob CID: %w", err)
 	}
 	return Blob{
-		Reference: atdata.Blob{Ref: atdata.CIDLink(identifier), MimeType: "application/octet-stream", Size: int64(len(data))},
-		CID:       identifier,
-		Data:      bytes.Clone(data),
+		Reference: atdata.Blob{
+			Ref:      atdata.CIDLink(identifier),
+			MimeType: "application/octet-stream",
+			Size:     int64(len(data)),
+		},
+		CID:  identifier,
+		Data: bytes.Clone(data),
 	}, nil
 }
 
@@ -207,7 +211,11 @@ func BuildSignedRevision(did string, signingKey *atcrypto.PrivateKeyP256, record
 	}
 	ordered := make([]Record, len(records))
 	for index := range records {
-		ordered[index] = Record{Collection: records[index].Collection, RKey: records[index].RKey, Data: bytes.Clone(records[index].Data)}
+		ordered[index] = Record{
+			Collection: records[index].Collection,
+			RKey:       records[index].RKey,
+			Data:       bytes.Clone(records[index].Data),
+		}
 	}
 	sort.Slice(ordered, func(i, j int) bool {
 		left := ordered[i].Collection + "/" + ordered[i].RKey

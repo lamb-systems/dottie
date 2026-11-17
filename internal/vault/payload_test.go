@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestUnpackPayloadReconstructsPlaintextAcrossRegularFiles(t *testing.T) {
@@ -64,7 +65,14 @@ func TestPayloadLimitsAreLowerOnlyAndDefaultsAreIndependent(t *testing.T) {
 	assert.Equal(t, int64(402653184), first.MaxPackedBytes)
 	assert.Equal(t, DefaultLimits(), first.Snapshot)
 	first.MaxPackedBytes = 1
-	first.Snapshot = Limits{MaxEntries: -1, MaxDepth: -1, MaxEntryBytes: -1, MaxTotalBytes: -1, MaxManifestBytes: -1, MaxPathBytes: -1}
+	first.Snapshot = Limits{
+		MaxEntries:       -1,
+		MaxDepth:         -1,
+		MaxEntryBytes:    -1,
+		MaxTotalBytes:    -1,
+		MaxManifestBytes: -1,
+		MaxPathBytes:     -1,
+	}
 	assert.Equal(t, DefaultPayloadLimits(), second)
 
 	blob, err := Pack(payloadTestSnapshot())
@@ -188,7 +196,10 @@ func TestPayloadSnapshotLimitsAcceptExactBoundsAndRejectNextValue(t *testing.T) 
 	}
 
 	twoEntries := snapshot
-	twoEntries.Entries = append(twoEntries.Entries, fileEntry("files", "other", model.FileRegular, model.FilePresent, []byte{}))
+	twoEntries.Entries = append(
+		twoEntries.Entries,
+		fileEntry("files", "other", model.FileRegular, model.FilePresent, []byte{}),
+	)
 	twoBlob, err := Pack(twoEntries)
 	require.NoError(t, err)
 	limits := DefaultPayloadLimits()
@@ -203,8 +214,25 @@ func TestPayloadDeclaredAggregateBoundsAllMembers(t *testing.T) {
 		Version: Version, Codec: CodecNone, SnapshotVersion: model.SnapshotVersion,
 		Targets: []model.Target{},
 		Entries: []wireEntry{
-			{TargetID: "files", Source: model.SourceFiles, Path: "a", State: string(model.FilePresent), Kind: model.FileRegular, Size: 2, SHA256: strings.Repeat("0", 64), Member: ordinal(1)},
-			{TargetID: "files", Source: model.SourceFiles, Path: "b", State: string(model.FileDeleted), Size: 2, SHA256: strings.Repeat("0", 64), Member: ordinal(2)},
+			{
+				TargetID: "files",
+				Source:   model.SourceFiles,
+				Path:     "a",
+				State:    string(model.FilePresent),
+				Kind:     model.FileRegular,
+				Size:     2,
+				SHA256:   strings.Repeat("0", 64),
+				Member:   ordinal(1),
+			},
+			{
+				TargetID: "files",
+				Source:   model.SourceFiles,
+				Path:     "b",
+				State:    string(model.FileDeleted),
+				Size:     2,
+				SHA256:   strings.Repeat("0", 64),
+				Member:   ordinal(2),
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -232,31 +260,48 @@ func TestPayloadStreamingEntryCountStopsBeforeTypedArrayAccumulation(t *testing.
 
 func TestPayloadStreamingRejectsRepeatedFieldsAndInvalidTargetsEarly(t *testing.T) {
 	t.Run("null top-level arrays", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":null,"entries":null}`))
+		payload := payloadArchive(
+			t,
+			[]byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":null,"entries":null}`),
+		)
 		got, err := UnpackPayload(payload)
 		require.NoError(t, err)
 		assert.True(t, equalSnapshots(model.Snapshot{Version: model.SnapshotVersion}, got))
 	})
 	t.Run("repeated entries", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[],"entries":[{},{}]}`))
+		payload := payloadArchive(
+			t,
+			[]byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[],"entries":[{},{}]}`),
+		)
 		got, err := UnpackPayload(payload)
 		assert.Equal(t, model.Snapshot{}, got)
 		assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
 	})
 	t.Run("repeated empty targets", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"targets":[],"entries":[]}`))
+		payload := payloadArchive(
+			t,
+			[]byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"targets":[],"entries":[]}`),
+		)
 		got, err := UnpackPayload(payload)
 		assert.Equal(t, model.Snapshot{}, got)
 		assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
 	})
 	t.Run("empty target", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[{}],"entries":[]}`))
+		payload := payloadArchive(
+			t,
+			[]byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[{}],"entries":[]}`),
+		)
 		got, err := UnpackPayload(payload)
 		assert.Equal(t, model.Snapshot{}, got)
 		assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
 	})
 	t.Run("first target path bound before invalid next JSON", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[{"id":"files","source":"files","source_version":1,"root":{"base":"home","path":"ab","kind":"directory"}},x`))
+		payload := payloadArchive(
+			t,
+			[]byte(
+				`{"version":1,"codec":"none","snapshot_version":1,"targets":[{"id":"files","source":"files","source_version":1,"root":{"base":"home","path":"ab","kind":"directory"}},x`,
+			),
+		)
 		limits := DefaultPayloadLimits()
 		limits.Snapshot.MaxPathBytes = 1
 		got, err := UnpackPayloadWithLimits(payload, limits)
@@ -270,7 +315,12 @@ func TestPayloadStreamingRejectsRepeatedFieldsAndInvalidTargetsEarly(t *testing.
 		assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
 	})
 	t.Run("targets must be ascending", func(t *testing.T) {
-		payload := payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[{"id":"z","source":"gnome","source_version":1},{"id":"a","source":"gnome","source_version":1}],"entries":[]}`))
+		payload := payloadArchive(
+			t,
+			[]byte(
+				`{"version":1,"codec":"none","snapshot_version":1,"targets":[{"id":"z","source":"gnome","source_version":1},{"id":"a","source":"gnome","source_version":1}],"entries":[]}`,
+			),
+		)
 		got, err := UnpackPayload(payload)
 		assert.Equal(t, model.Snapshot{}, got)
 		assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
@@ -283,7 +333,13 @@ func TestPayloadErrorVocabularyAndSafeRedaction(t *testing.T) {
 	assertPayloadError(t, err, "size", "invalid", "", ErrInvalidPayload)
 
 	marker := "private/path-value-canary"
-	manifest := []byte(fmt.Sprintf(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[{"target_id":"files","source":"files","path":%q,"state":"present","kind":"regular","size":0,"sha256":"%s","member":"000001"}]}`, strings.Repeat("x", model.MaxRelativePathBytes+1)+marker, strings.Repeat("0", 64)))
+	manifest := []byte(
+		fmt.Sprintf(
+			`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[{"target_id":"files","source":"files","path":%q,"state":"present","kind":"regular","size":0,"sha256":"%s","member":"000001"}]}`,
+			strings.Repeat("x", model.MaxRelativePathBytes+1)+marker,
+			strings.Repeat("0", 64),
+		),
+	)
 	payload := payloadArchive(t, manifest)
 	limits := DefaultPayloadLimits()
 	require.Contains(t, string(payload), marker)
@@ -309,7 +365,12 @@ func TestPayloadErrorVocabularyAndSafeRedaction(t *testing.T) {
 	unknownField := "private_unknown_field_canary"
 	unknownValue := "private_unknown_value_canary"
 	members := readMembers(t, valid.Payload)
-	members[0].data = bytes.Replace(members[0].data, []byte(`"member":"000001"`), []byte(fmt.Sprintf(`%q:%q,"member":"000001"`, unknownField, unknownValue)), 1)
+	members[0].data = bytes.Replace(
+		members[0].data,
+		[]byte(`"member":"000001"`),
+		[]byte(fmt.Sprintf(`%q:%q,"member":"000001"`, unknownField, unknownValue)),
+		1,
+	)
 	unknownFieldPayload := encodeMembers(t, members)
 	require.Contains(t, string(unknownFieldPayload), unknownField)
 	require.Contains(t, string(unknownFieldPayload), unknownValue)
@@ -359,10 +420,25 @@ func TestPayloadInvalidModelAndCanonicalManifestRefusals(t *testing.T) {
 	settings, err := Pack(model.Snapshot{
 		Version: model.SnapshotVersion,
 		Targets: []model.Target{{ID: "settings", Source: model.SourceGNOME, SourceVersion: model.SourceVersion}},
-		Entries: []model.Entry{{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "theme", State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "'dark'"}}}},
+		Entries: []model.Entry{
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Desktop",
+					Path:     "/org/example/",
+					Key:      "theme",
+					State:    model.SettingPresent,
+					Value:    &model.VariantValue{Type: "s", Text: "'dark'"},
+				},
+			},
+		},
 	})
 	require.NoError(t, err)
-	badSetting := rewriteManifest(t, settings, func(manifest *wireManifest) { manifest.Entries[0].Value = &model.VariantValue{Text: "private-value"} })
+	badSetting := rewriteManifest(
+		t,
+		settings,
+		func(manifest *wireManifest) { manifest.Entries[0].Value = &model.VariantValue{Text: "private-value"} },
+	)
 	got, err = UnpackPayload(badSetting.Payload)
 	assert.Equal(t, model.Snapshot{}, got)
 	assertPayloadError(t, err, "validate", "malformed", "", ErrInvalidPayload)
@@ -377,15 +453,87 @@ func TestPayloadInspectAndValidateFailureStages(t *testing.T) {
 		kind     string
 		sentinel error
 	}{
-		{name: "short framing", input: []byte("short"), stage: "inspect", reason: "malformed", sentinel: ErrInvalidPayload},
-		{name: "invalid JSON", input: payloadArchive(t, []byte("{")), stage: "inspect", reason: "malformed", sentinel: ErrInvalidPayload},
-		{name: "unsupported version", input: payloadArchive(t, []byte(`{"version":2,"codec":"none","snapshot_version":1,"targets":[],"entries":[]}`)), stage: "inspect", reason: "unsupported_profile", sentinel: ErrInvalidPayload},
-		{name: "unsupported codec", input: payloadArchive(t, []byte(`{"version":1,"codec":"gzip","snapshot_version":1,"targets":[],"entries":[]}`)), stage: "inspect", reason: "unsupported_profile", sentinel: ErrInvalidPayload},
-		{name: "unsupported snapshot version", input: payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":2,"targets":[],"entries":[]}`)), stage: "inspect", reason: "unsupported_profile", sentinel: ErrInvalidPayload},
-		{name: "duplicate field", input: payloadArchive(t, []byte(`{"version":1,"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[]}`)), stage: "inspect", reason: "malformed", sentinel: ErrInvalidPayload},
-		{name: "unknown field", input: payloadArchive(t, []byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[],"unsafe":"canary"}`)), stage: "inspect", reason: "malformed", sentinel: ErrInvalidPayload},
-		{name: "truncated manifest body", input: payloadTruncatedManifest(t), stage: "inspect", reason: "malformed", sentinel: ErrInvalidPayload},
-		{name: "noncanonical JSON", input: payloadArchive(t, []byte("{ \"version\":1,\"codec\":\"none\",\"snapshot_version\":1,\"targets\":[],\"entries\":[]}")), stage: "validate", reason: "malformed", sentinel: ErrInvalidPayload},
+		{
+			name:     "short framing",
+			input:    []byte("short"),
+			stage:    "inspect",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name:     "invalid JSON",
+			input:    payloadArchive(t, []byte("{")),
+			stage:    "inspect",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "unsupported version",
+			input: payloadArchive(
+				t,
+				[]byte(`{"version":2,"codec":"none","snapshot_version":1,"targets":[],"entries":[]}`),
+			),
+			stage:    "inspect",
+			reason:   "unsupported_profile",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "unsupported codec",
+			input: payloadArchive(
+				t,
+				[]byte(`{"version":1,"codec":"gzip","snapshot_version":1,"targets":[],"entries":[]}`),
+			),
+			stage:    "inspect",
+			reason:   "unsupported_profile",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "unsupported snapshot version",
+			input: payloadArchive(
+				t,
+				[]byte(`{"version":1,"codec":"none","snapshot_version":2,"targets":[],"entries":[]}`),
+			),
+			stage:    "inspect",
+			reason:   "unsupported_profile",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "duplicate field",
+			input: payloadArchive(
+				t,
+				[]byte(`{"version":1,"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[]}`),
+			),
+			stage:    "inspect",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "unknown field",
+			input: payloadArchive(
+				t,
+				[]byte(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[],"unsafe":"canary"}`),
+			),
+			stage:    "inspect",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name:     "truncated manifest body",
+			input:    payloadTruncatedManifest(t),
+			stage:    "inspect",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
+		{
+			name: "noncanonical JSON",
+			input: payloadArchive(
+				t,
+				[]byte("{ \"version\":1,\"codec\":\"none\",\"snapshot_version\":1,\"targets\":[],\"entries\":[]}"),
+			),
+			stage:    "validate",
+			reason:   "malformed",
+			sentinel: ErrInvalidPayload,
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -459,7 +607,17 @@ func TestPayloadStrictValidationRemainsMandatory(t *testing.T) {
 	assertPayloadError(t, err, "inspect", "malformed", "", ErrInvalidPayload)
 
 	members = readMembers(t, blob.Payload)
-	members = append(members, testMember{header: tar.Header{Name: ordinal(len(members)), Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}})
+	members = append(
+		members,
+		testMember{
+			header: tar.Header{
+				Name:     ordinal(len(members)),
+				Mode:     0o600,
+				Typeflag: tar.TypeReg,
+				Format:   tar.FormatUSTAR,
+			},
+		},
+	)
 	changed.Payload = encodeMembers(t, members)
 	got, err = UnpackPayload(changed.Payload)
 	assert.Equal(t, model.Snapshot{}, got)
@@ -481,7 +639,13 @@ func TestPayloadManifestAndPackedBoundsPrecedeBodyParsing(t *testing.T) {
 	assert.Equal(t, model.Snapshot{}, got)
 	assertPayloadError(t, err, "inspect", "bound", "MaxManifestBytes", ErrPayloadBound)
 
-	largeEntryManifest := []byte(fmt.Sprintf(`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[{"target_id":"files","source":"files","path":"tiny","state":"present","kind":"regular","size":%d,"sha256":"%s","member":"000001"}]}`, DefaultLimits().MaxEntryBytes+1, strings.Repeat("0", 64)))
+	largeEntryManifest := []byte(
+		fmt.Sprintf(
+			`{"version":1,"codec":"none","snapshot_version":1,"targets":[],"entries":[{"target_id":"files","source":"files","path":"tiny","state":"present","kind":"regular","size":%d,"sha256":"%s","member":"000001"}]}`,
+			DefaultLimits().MaxEntryBytes+1,
+			strings.Repeat("0", 64),
+		),
+	)
 	got, err = UnpackPayload(payloadArchive(t, largeEntryManifest))
 	assert.Equal(t, model.Snapshot{}, got)
 	assertPayloadError(t, err, "inspect", "bound", "MaxEntryBytes", ErrPayloadBound)
@@ -526,11 +690,45 @@ func payloadTestSnapshot() model.Snapshot {
 		Targets: []model.Target{files, settings},
 		Entries: []model.Entry{
 			fileEntry("files", "editor", model.FileDirectory, model.FilePresent, nil),
-			{TargetID: "files", File: &model.FileEntry{Path: "editor/init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic editor configuration\n"), Mode: 0o600}},
-			{TargetID: "files", File: &model.FileEntry{Path: "editor/link", State: model.FilePresent, Kind: model.FileSymlink, LinkTarget: "../shared"}},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "editor/init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("synthetic editor configuration\n"),
+					Mode:    0o600,
+				},
+			},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:       "editor/link",
+					State:      model.FilePresent,
+					Kind:       model.FileSymlink,
+					LinkTarget: "../shared",
+				},
+			},
 			fileEntry("files", "old.conf", "", model.FileDeleted, nil),
-			{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "theme", State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "'dark'"}}},
-			{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "enabled", State: model.SettingReset}},
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Desktop",
+					Path:     "/org/example/",
+					Key:      "theme",
+					State:    model.SettingPresent,
+					Value:    &model.VariantValue{Type: "s", Text: "'dark'"},
+				},
+			},
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Desktop",
+					Path:     "/org/example/",
+					Key:      "enabled",
+					State:    model.SettingReset,
+				},
+			},
 		},
 	}
 }

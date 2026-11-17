@@ -12,14 +12,15 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -27,9 +28,13 @@ var (
 	errMaterialTestStaleContext   = errors.New("material transport: stale expected context")
 	errMaterialTestCreateConflict = errors.New("material transport: snapshot create conflict")
 	errMaterialTestHeadExists     = errors.New("material transport: head already exists")
-	errMaterialTestPredecessor    = errors.New("material transport: expected predecessor does not match the committed head")
+	errMaterialTestPredecessor    = errors.New(
+		"material transport: expected predecessor does not match the committed head",
+	)
 	errMaterialTestPayloadMissing = errors.New("material transport: referenced payload was never uploaded")
-	errMaterialTestRecordMismatch = errors.New("material transport: record bytes do not hash to the expected snapshot cid")
+	errMaterialTestRecordMismatch = errors.New(
+		"material transport: record bytes do not hash to the expected snapshot cid",
+	)
 	errMaterialTestBeforeCommit   = errors.New("material transport: failed before commit")
 	errMaterialTestCommitUnknown  = errors.New("material transport: committed but the response was lost")
 	errMaterialTestUploadRejected = errors.New("material transport: upload rejected")
@@ -92,7 +97,10 @@ func (transport *materialTestTransport) uploadMIMEType() string {
 	return publication.SnapshotBlobMIMEType
 }
 
-func (transport *materialTestTransport) UploadPayload(ctx context.Context, payload []byte) (publication.BlobReference, error) {
+func (transport *materialTestTransport) UploadPayload(
+	ctx context.Context,
+	payload []byte,
+) (publication.BlobReference, error) {
 	if err := ctx.Err(); err != nil {
 		return publication.BlobReference{}, err
 	}
@@ -112,12 +120,19 @@ func (transport *materialTestTransport) UploadPayload(ctx context.Context, paylo
 		transport.advanceContextLocked()
 	}
 	if len(transport.uploadCID) != 0 {
-		return publication.BlobReference{CID: bytes.Clone(transport.uploadCID), Size: uint64(len(payload)), MIMEType: transport.uploadMIMEType()}, nil
+		return publication.BlobReference{
+			CID:      bytes.Clone(transport.uploadCID),
+			Size:     uint64(len(payload)),
+			MIMEType: transport.uploadMIMEType(),
+		}, nil
 	}
 	return publication.BlobReference{CID: cid, Size: uint64(len(payload)), MIMEType: transport.uploadMIMEType()}, nil
 }
 
-func (transport *materialTestTransport) PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error) {
+func (transport *materialTestTransport) PrepareWrites(
+	ctx context.Context,
+	batch MaterialWriteBatch,
+) (MaterialPreparedWrites, error) {
 	if err := ctx.Err(); err != nil {
 		return MaterialPreparedWrites{}, err
 	}
@@ -148,7 +163,10 @@ func (transport *materialTestTransport) PrepareWrites(ctx context.Context, batch
 	return MaterialPreparedWrites{Secret: secret, Dispatch: dispatch}, nil
 }
 
-func (transport *materialTestTransport) SendWrites(ctx context.Context, prepared MaterialPreparedWrites) (MaterialWriteOutcome, error) {
+func (transport *materialTestTransport) SendWrites(
+	ctx context.Context,
+	prepared MaterialPreparedWrites,
+) (MaterialWriteOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return MaterialWriteOutcome{}, err
 	}
@@ -205,7 +223,10 @@ func (transport *materialTestTransport) ReadView(ctx context.Context) (publicati
 		Snapshots: make([]publicationstate.SnapshotBlock, 0, len(keys)),
 	}
 	for _, key := range keys {
-		view.Snapshots = append(view.Snapshots, publicationstate.SnapshotBlock{Key: key, Raw: bytes.Clone(transport.blocks[key])})
+		view.Snapshots = append(
+			view.Snapshots,
+			publicationstate.SnapshotBlock{Key: key, Raw: bytes.Clone(transport.blocks[key])},
+		)
 	}
 	return view, nil
 }
@@ -217,10 +238,15 @@ func (transport *materialTestTransport) validateMaterialBatch(batch MaterialWrit
 	if batch.RequiresPolicyCheck {
 		return errMaterialTestPolicyCheck
 	}
-	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID || batch.HeadKey != materialHeadKey || !batch.SnapshotCreateOnly || !batch.RequiresAtomicBatch || !batch.RequiresCreateExclude {
+	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID ||
+		batch.HeadKey != materialHeadKey ||
+		!batch.SnapshotCreateOnly ||
+		!batch.RequiresAtomicBatch ||
+		!batch.RequiresCreateExclude {
 		return errMaterialTestBatchShape
 	}
-	if batch.SnapshotKey == "" || len(batch.SnapshotRecord) == 0 || len(batch.ExpectedSnapshotCID) == 0 || len(batch.HeadRecord) == 0 {
+	if batch.SnapshotKey == "" || len(batch.SnapshotRecord) == 0 || len(batch.ExpectedSnapshotCID) == 0 ||
+		len(batch.HeadRecord) == 0 {
 		return errMaterialTestBatchShape
 	}
 	if batch.ExpectedContext.RepositoryRevision == "" {
@@ -242,7 +268,8 @@ func (transport *materialTestTransport) validateMaterialBatch(batch MaterialWrit
 		return errMaterialTestBatchShape
 	}
 	head, err := publication.DecodeHead(batch.HeadRecord)
-	if err != nil || head.Vault != transport.binding.Vault || head.PublicationSeq != snapshot.PublicationSeq || !bytes.Equal(head.SnapshotCID, cid) {
+	if err != nil || head.Vault != transport.binding.Vault || head.PublicationSeq != snapshot.PublicationSeq ||
+		!bytes.Equal(head.SnapshotCID, cid) {
 		return errMaterialTestBatchShape
 	}
 	if batch.HeadCreate {
@@ -257,7 +284,8 @@ func (transport *materialTestTransport) validateMaterialBatch(batch MaterialWrit
 	if batch.ExpectedPredecessor == nil {
 		return errMaterialTestPredecessor
 	}
-	if snapshot.PublicationSeq != batch.ExpectedPredecessor.Sequence+1 || !bytes.Equal(snapshot.Parent, batch.ExpectedPredecessor.CID) {
+	if snapshot.PublicationSeq != batch.ExpectedPredecessor.Sequence+1 ||
+		!bytes.Equal(snapshot.Parent, batch.ExpectedPredecessor.CID) {
 		return errMaterialTestPredecessor
 	}
 	return nil
@@ -290,7 +318,8 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 			return errMaterialTestPredecessor
 		}
 		committed, err := publication.DecodeHead(transport.head)
-		if err != nil || committed.PublicationSeq != batch.ExpectedPredecessor.Sequence || !bytes.Equal(committed.SnapshotCID, batch.ExpectedPredecessor.CID) {
+		if err != nil || committed.PublicationSeq != batch.ExpectedPredecessor.Sequence ||
+			!bytes.Equal(committed.SnapshotCID, batch.ExpectedPredecessor.CID) {
 			return errMaterialTestPredecessor
 		}
 		if _, ok := transport.blocks[batch.ExpectedPredecessor.Key]; !ok {
@@ -487,7 +516,9 @@ func newMaterialReviewSource(review publicationstate.LocalReviewContext) *materi
 	return &materialReviewSource{review: review, token: config.Token{0x52, 0x4d}}
 }
 
-func (source *materialReviewSource) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
+func (source *materialReviewSource) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
 	source.mu.Lock()
 	review, token, err, hook := source.review, source.token, source.err, source.hook
 	source.mu.Unlock()
@@ -541,7 +572,11 @@ type materialPublishFixture struct {
 
 func newMaterialPublishFixture(t *testing.T) *materialPublishFixture {
 	t.Helper()
-	binding := publicationstate.Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x41, 0x52, 0x63}}
+	binding := publicationstate.Binding{
+		AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x41, 0x52, 0x63},
+	}
 	binding.Repository = "at://" + binding.AccountDID
 	directory := t.TempDir()
 	require.NoError(t, os.Chmod(directory, 0o700))
@@ -550,7 +585,12 @@ func newMaterialPublishFixture(t *testing.T) *materialPublishFixture {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	coordinator, err := NewCoordinator(Dependencies{State: openCoordinatorState(t)})
 	require.NoError(t, err)
-	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{1}, SelectionRevision: 1, ApprovalDigest: [32]byte{2}, ApprovalRevision: 1}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest:   [32]byte{1},
+		SelectionRevision: 1,
+		ApprovalDigest:    [32]byte{2},
+		ApprovalRevision:  1,
+	}
 	return &materialPublishFixture{
 		binding: binding, store: store, transport: newMaterialTestTransport(binding), coordinator: coordinator,
 		snapshot: materialTestSnapshot("synthetic genesis payload"), publicationID: [16]byte{0x25, 0x71},
@@ -582,22 +622,44 @@ func materialTestSnapshot(content string) model.Snapshot {
 			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 		}},
-		Entries: []model.Entry{{
-			TargetID: "files",
-			File:     &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: 0o600},
-		}},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte(content),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 }
 
-func materialTestCandidate(t *testing.T, binding publicationstate.Binding, publicationID [16]byte, sequence uint64, parent, payload []byte) publicationstate.CandidateInput {
+func materialTestCandidate(
+	t *testing.T,
+	binding publicationstate.Binding,
+	publicationID [16]byte,
+	sequence uint64,
+	parent, payload []byte,
+) publicationstate.CandidateInput {
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(sequence)
 	require.NoError(t, err)
 	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          binding.Vault,
+		PublicationID:  publicationID,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)
@@ -607,7 +669,12 @@ func materialTestCandidate(t *testing.T, binding publicationstate.Binding, publi
 		SnapshotCID: snapshotCID, BlobCID: blobCID,
 	})
 	require.NoError(t, err)
-	return publicationstate.CandidateInput{SnapshotKey: key, SnapshotRecord: snapshotRecord, HeadRecord: headRecord, Payload: payload}
+	return publicationstate.CandidateInput{
+		SnapshotKey:    key,
+		SnapshotRecord: snapshotRecord,
+		HeadRecord:     headRecord,
+		Payload:        payload,
+	}
 }
 
 func (fixture *materialPublishFixture) request() MaterialPublishRequest {
@@ -658,9 +725,19 @@ func (fixture *materialPublishFixture) witnessMaterialWrites(t *testing.T) *mate
 func (witness *materialWriteWitness) assertPreparedPreSubmission(t *testing.T) {
 	t.Helper()
 	assert.True(t, witness.prepareActive, "PrepareWrites ran without a live attempt")
-	assert.Equal(t, publicationstate.AttemptUploadStarted, witness.prepareLifecycle, "PrepareWrites did not run on a pre-submission attempt")
+	assert.Equal(
+		t,
+		publicationstate.AttemptUploadStarted,
+		witness.prepareLifecycle,
+		"PrepareWrites did not run on a pre-submission attempt",
+	)
 	assert.True(t, witness.sendActive, "SendWrites ran without a live attempt")
-	assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, witness.sendLifecycle, "SendWrites did not run after BeginSubmission reserved the attempt")
+	assert.Equal(
+		t,
+		publicationstate.AttemptMayHaveSubmitted,
+		witness.sendLifecycle,
+		"SendWrites did not run after BeginSubmission reserved the attempt",
+	)
 }
 
 func requireMaterialRefusal(t *testing.T, err error, stage, reason string) {
@@ -701,21 +778,34 @@ func materialBatchTamperCases() []struct {
 		{"snapshot-record", func(batch *MaterialWriteBatch) {
 			batch.SnapshotRecord = append(bytes.Clone(batch.SnapshotRecord), 0x00)
 		}},
-		{"expected-snapshot-cid", func(batch *MaterialWriteBatch) { batch.ExpectedSnapshotCID = flip(batch.ExpectedSnapshotCID) }},
+		{
+			"expected-snapshot-cid",
+			func(batch *MaterialWriteBatch) { batch.ExpectedSnapshotCID = flip(batch.ExpectedSnapshotCID) },
+		},
 		{"snapshot-create-only", func(batch *MaterialWriteBatch) { batch.SnapshotCreateOnly = false }},
 		{"head-collection", func(batch *MaterialWriteBatch) { batch.HeadCollection = publication.SnapshotNSID }},
 		{"head-key", func(batch *MaterialWriteBatch) { batch.HeadKey = "other" }},
-		{"head-record", func(batch *MaterialWriteBatch) { batch.HeadRecord = append(bytes.Clone(batch.HeadRecord), 0x00) }},
+		{
+			"head-record",
+			func(batch *MaterialWriteBatch) { batch.HeadRecord = append(bytes.Clone(batch.HeadRecord), 0x00) },
+		},
 		{"head-create", func(batch *MaterialWriteBatch) { batch.HeadCreate = !batch.HeadCreate }},
 		{"expected-predecessor", func(batch *MaterialWriteBatch) {
-			batch.ExpectedPredecessor = &publicationstate.RecordReference{Key: batch.SnapshotKey, CID: bytes.Clone(batch.ExpectedSnapshotCID), Sequence: 0}
+			batch.ExpectedPredecessor = &publicationstate.RecordReference{
+				Key:      batch.SnapshotKey,
+				CID:      bytes.Clone(batch.ExpectedSnapshotCID),
+				Sequence: 0,
+			}
 		}},
 		{"expected-context", func(batch *MaterialWriteBatch) {
 			batch.ExpectedContext.RepositoryRevision = "synthetic-revision-forged"
 		}},
 		{"requires-atomic-batch", func(batch *MaterialWriteBatch) { batch.RequiresAtomicBatch = false }},
 		{"requires-create-exclude", func(batch *MaterialWriteBatch) { batch.RequiresCreateExclude = false }},
-		{"requires-policy-check", func(batch *MaterialWriteBatch) { batch.RequiresPolicyCheck = !batch.RequiresPolicyCheck }},
+		{
+			"requires-policy-check",
+			func(batch *MaterialWriteBatch) { batch.RequiresPolicyCheck = !batch.RequiresPolicyCheck },
+		},
 	}
 }
 
@@ -728,7 +818,11 @@ func TestPublishMaterialGenesisCommitsFloorAndRetiresAttempt(t *testing.T) {
 	proposal, result := fixture.publish(t)
 
 	witness.assertPreparedPreSubmission(t)
-	assert.Equal(t, []string{"read-view", "read-view", "upload-payload", "prepare-writes", "send-writes", "read-view"}, fixture.transport.callOrder())
+	assert.Equal(
+		t,
+		[]string{"read-view", "read-view", "upload-payload", "prepare-writes", "send-writes", "read-view"},
+		fixture.transport.callOrder(),
+	)
 	assert.Equal(t, 1, fixture.transport.prepareCount())
 	assert.Equal(t, 1, fixture.transport.sendCount())
 	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
@@ -772,7 +866,15 @@ func TestPublishMaterialSuccessorExtendsCapturedFloor(t *testing.T) {
 	proposal := fixture.prepare(t)
 	assert.False(t, proposal.Batch.HeadCreate)
 	require.NotNil(t, proposal.Batch.ExpectedPredecessor)
-	assert.Equal(t, publicationstate.RecordReference{Key: genesisProposal.Batch.SnapshotKey, CID: genesis.Floor.RecordCID, Sequence: 0}, *proposal.Batch.ExpectedPredecessor)
+	assert.Equal(
+		t,
+		publicationstate.RecordReference{
+			Key:      genesisProposal.Batch.SnapshotKey,
+			CID:      genesis.Floor.RecordCID,
+			Sequence: 0,
+		},
+		*proposal.Batch.ExpectedPredecessor,
+	)
 
 	result, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
 	require.NoError(t, err)
@@ -784,7 +886,11 @@ func TestPublishMaterialSuccessorExtendsCapturedFloor(t *testing.T) {
 	record, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
 	assert.Equal(t, genesis.Floor.RecordCID, record.Parent)
-	assert.Equal(t, genesisProposal.Batch.SnapshotRecord, fixture.transport.committed(genesisProposal.Batch.SnapshotKey))
+	assert.Equal(
+		t,
+		genesisProposal.Batch.SnapshotRecord,
+		fixture.transport.committed(genesisProposal.Batch.SnapshotKey),
+	)
 	assert.Equal(t, proposal.Batch.HeadRecord, fixture.transport.committedHead())
 }
 
@@ -855,7 +961,12 @@ func TestPublishMaterialSurvivesCommittedResponseLoss(t *testing.T) {
 	resolution, resolveErr := fixture.store.ResolveAttempt(ctx, proposal.Proposal.AttemptID, loaded.StateDigest, view)
 	require.NoError(t, resolveErr)
 	assert.Equal(t, publicationstate.OutcomeCurrent, resolution.Outcome)
-	finalization, finalizeErr := fixture.store.FinalizeAttempt(ctx, proposal.Proposal.AttemptID, resolution.Attempt.StateDigest, view)
+	finalization, finalizeErr := fixture.store.FinalizeAttempt(
+		ctx,
+		proposal.Proposal.AttemptID,
+		resolution.Attempt.StateDigest,
+		view,
+	)
 	require.NoError(t, finalizeErr)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, finalization.Floor.RecordCID)
 	assert.Equal(t, 1, fixture.transport.applyCount())
@@ -911,11 +1022,24 @@ func TestPublishMaterialRefusesStaleProposal(t *testing.T) {
 	otherCandidate := materialTestCandidate(t, fixture.binding, [16]byte{0x30}, 0, nil, packed.Payload)
 	otherProposal, err := fixture.store.PrepareAttempt(ctx, otherCandidate, view, fixture.review)
 	require.NoError(t, err)
-	otherAttempt, err := fixture.store.CreateAttempt(ctx, otherProposal.StateToken, otherCandidate, view, fixture.review, otherProposal.Confirmation)
+	otherAttempt, err := fixture.store.CreateAttempt(
+		ctx,
+		otherProposal.StateToken,
+		otherCandidate,
+		view,
+		fixture.review,
+		otherProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	abandonProposal, err := fixture.store.PrepareAbandon(ctx, otherAttempt.ID, nil)
 	require.NoError(t, err)
-	_, err = fixture.store.AbandonAttempt(ctx, otherAttempt.ID, abandonProposal.StateToken, nil, abandonProposal.Confirmation)
+	_, err = fixture.store.AbandonAttempt(
+		ctx,
+		otherAttempt.ID,
+		abandonProposal.StateToken,
+		nil,
+		abandonProposal.Confirmation,
+	)
 	require.NoError(t, err)
 
 	_, publishErr := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
@@ -940,15 +1064,25 @@ func TestPublishMaterialRefusesSelectionChangeAfterPrepare(t *testing.T) {
 	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
 	requireMaterialRefusal(t, err, "consent", "review_changed")
 	require.ErrorIs(t, err, ErrConfigChangedSincePrepare, "selection drift did not refuse the publication")
-	assert.Greater(t, review, 0, "prepare did not acquire the configuration review")
+	assert.Positive(t, review, "prepare did not acquire the configuration review")
 	assert.Equal(t, 1, fixture.transport.uploadCount(), "the fence refused before upload")
 	assert.Equal(t, 0, fixture.transport.prepareCount(), "the fence prepared writes after a configuration change")
 	assert.Equal(t, 0, fixture.transport.sendCount(), "the fence dispatched writes after a configuration change")
 	assert.Equal(t, 0, fixture.transport.applyCount(), "the fence applied writes after a configuration change")
 	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
 	require.NoError(t, loadErr)
-	assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle, "the refused publication consumed the reservation")
-	assert.Equal(t, publicationstate.OutcomeNotSubmitted, attempt.Outcome, "the refused publication claimed a submission")
+	assert.Equal(
+		t,
+		publicationstate.AttemptUploadStarted,
+		attempt.Lifecycle,
+		"the refused publication consumed the reservation",
+	)
+	assert.Equal(
+		t,
+		publicationstate.OutcomeNotSubmitted,
+		attempt.Outcome,
+		"the refused publication claimed a submission",
+	)
 	_, present, loadErr := fixture.store.Load(ctx)
 	require.NoError(t, loadErr)
 	assert.False(t, present, "the refused publication advanced the floor")
@@ -971,7 +1105,12 @@ func TestPublishMaterialRefusesApprovalChangeAfterPrepare(t *testing.T) {
 	assert.Equal(t, 0, fixture.transport.applyCount(), "the fence applied writes after an approval change")
 	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
 	require.NoError(t, loadErr)
-	assert.Equal(t, publicationstate.AttemptUploadStarted, attempt.Lifecycle, "the refused publication consumed the reservation")
+	assert.Equal(
+		t,
+		publicationstate.AttemptUploadStarted,
+		attempt.Lifecycle,
+		"the refused publication consumed the reservation",
+	)
 }
 
 func TestPublishMaterialRefusesTamperedReviewIdentity(t *testing.T) {
@@ -1015,7 +1154,12 @@ func TestPublishMaterialRefusesIdentityNoConfigurationSupports(t *testing.T) {
 
 	_, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
 	requireMaterialRefusal(t, err, "consent", "review_mismatch")
-	require.ErrorIs(t, err, ErrReviewMismatch, "an identity the unchanged configuration cannot support was not refused as a mismatch")
+	require.ErrorIs(
+		t,
+		err,
+		ErrReviewMismatch,
+		"an identity the unchanged configuration cannot support was not refused as a mismatch",
+	)
 	assert.Equal(t, 0, fixture.transport.prepareCount(), "the forged identity reached write preparation")
 	assert.Equal(t, 0, fixture.transport.sendCount(), "the forged identity reached dispatch")
 }
@@ -1025,7 +1169,14 @@ func TestPublishMaterialFencesConfigurationWritesThroughSubmission(t *testing.T)
 	fixture := newMaterialPublishFixture(t)
 	port := FileConfigPort{Paths: fixture.paths}
 	_, err := port.Update(ctx, config.Token{}, func(c config.Config) (config.Config, error) {
-		c.Targets = append(c.Targets, config.Target{ID: "files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "dotfiles", Kind: model.SelectionDirectory}})
+		c.Targets = append(
+			c.Targets,
+			config.Target{
+				ID:     "files",
+				Source: model.SourceFiles,
+				Root:   &config.Root{Base: model.RootHome, Path: "dotfiles", Kind: model.SelectionDirectory},
+			},
+		)
 		return c, nil
 	})
 	require.NoError(t, err)
@@ -1049,18 +1200,27 @@ func TestPublishMaterialFencesConfigurationWritesThroughSubmission(t *testing.T)
 	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
 	assert.Equal(t, 1, fixture.transport.sendCount())
 	require.ErrorIs(t, fenced, syscall.EWOULDBLOCK, "a configuration writer was not fenced during SendWrites")
-	assert.NoError(t, probeConfigWriter(fixture.paths), "the published fence kept the configuration lock")
+	require.NoError(t, probeConfigWriter(fixture.paths), "the published fence kept the configuration lock")
 
 	updated, err := port.Update(ctx, snapshot.Token, func(c config.Config) (config.Config, error) {
 		c.Targets[0].Mode = config.AutoApply
 		return c, nil
 	})
 	require.NoError(t, err, "a configuration write after publication was refused")
-	assert.Equal(t, snapshot.Selection.Revision+1, updated.Selection.Revision, "the fenced write did not advance the selection revision")
+	assert.Equal(
+		t,
+		snapshot.Selection.Revision+1,
+		updated.Selection.Revision,
+		"the fenced write did not advance the selection revision",
+	)
 }
 
 func probeConfigWriter(paths platform.Paths) error {
-	file, err := os.OpenFile(filepath.Join(paths.AppConfigDir(), config.LockFileName), os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	file, err := os.OpenFile(
+		filepath.Join(paths.AppConfigDir(), config.LockFileName),
+		os.O_RDWR|syscall.O_NOFOLLOW,
+		0o600,
+	)
 	if err != nil {
 		return err
 	}
@@ -1195,7 +1355,12 @@ func TestPublishMaterialRefusesLostFenceResolution(t *testing.T) {
 	resolution, resolveErr := fixture.store.ResolveAttempt(ctx, proposal.Proposal.AttemptID, loaded.StateDigest, view)
 	require.NoError(t, resolveErr)
 	assert.Equal(t, publicationstate.OutcomeLostFence, resolution.Outcome)
-	_, finalizeErr := fixture.store.FinalizeAttempt(ctx, proposal.Proposal.AttemptID, resolution.Attempt.StateDigest, view)
+	_, finalizeErr := fixture.store.FinalizeAttempt(
+		ctx,
+		proposal.Proposal.AttemptID,
+		resolution.Attempt.StateDigest,
+		view,
+	)
 	requireMaterialStoreRefusal(t, finalizeErr, publicationstate.ErrContinuity, publicationstate.ReasonSubmittedUnknown)
 	_, present, loadErr := fixture.store.Load(ctx)
 	require.NoError(t, loadErr)
@@ -1212,23 +1377,70 @@ func TestPublishMaterialRefusesObsoleteTokens(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMaterialPublishFixture(t)
 	proposal := fixture.prepare(t)
-	attempt, err := fixture.store.CreateAttempt(ctx, proposal.Proposal.StateToken, proposal.Candidate, proposal.View, proposal.Review, proposal.Confirmation)
+	attempt, err := fixture.store.CreateAttempt(
+		ctx,
+		proposal.Proposal.StateToken,
+		proposal.Candidate,
+		proposal.View,
+		proposal.Review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	preDispatch, err := fixture.store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 
-	uploadProposal, err := fixture.store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchUpload, proposal.View, proposal.Review)
+	uploadProposal, err := fixture.store.PrepareDispatch(
+		ctx,
+		attempt.ID,
+		publicationstate.DispatchUpload,
+		proposal.View,
+		proposal.Review,
+	)
 	require.NoError(t, err)
-	_, wrongDomainUpload := fixture.store.BeginUpload(ctx, attempt.ID, attempt.StateDigest, proposal.View, proposal.Review, uploadProposal.Confirmation)
+	_, wrongDomainUpload := fixture.store.BeginUpload(
+		ctx,
+		attempt.ID,
+		attempt.StateDigest,
+		proposal.View,
+		proposal.Review,
+		uploadProposal.Confirmation,
+	)
 	requireMaterialStoreRefusal(t, wrongDomainUpload, publicationstate.ErrConsent, publicationstate.ReasonStale)
-	_, err = fixture.store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, proposal.View, proposal.Review, uploadProposal.Confirmation)
+	_, err = fixture.store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		proposal.View,
+		proposal.Review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
-	_, reusedErr := fixture.store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, proposal.View, proposal.Review, uploadProposal.Confirmation)
+	_, reusedErr := fixture.store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		proposal.View,
+		proposal.Review,
+		uploadProposal.Confirmation,
+	)
 	requireMaterialStoreRefusal(t, reusedErr, publicationstate.ErrConsent, publicationstate.ReasonStale)
 
-	submissionProposal, err := fixture.store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchSubmission, proposal.View, proposal.Review)
+	submissionProposal, err := fixture.store.PrepareDispatch(
+		ctx,
+		attempt.ID,
+		publicationstate.DispatchSubmission,
+		proposal.View,
+		proposal.Review,
+	)
 	require.NoError(t, err)
-	_, err = fixture.store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, proposal.View, proposal.Review, submissionProposal.Confirmation)
+	_, err = fixture.store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		proposal.View,
+		proposal.Review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	postSubmission, err := fixture.store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -1249,7 +1461,10 @@ type materialCancelingTransport struct {
 	cancel context.CancelFunc
 }
 
-func (transport materialCancelingTransport) SendWrites(context.Context, MaterialPreparedWrites) (MaterialWriteOutcome, error) {
+func (transport materialCancelingTransport) SendWrites(
+	context.Context,
+	MaterialPreparedWrites,
+) (MaterialWriteOutcome, error) {
 	transport.cancel()
 	return MaterialWriteOutcome{}, errMaterialTestBeforeCommit
 }
@@ -1271,15 +1486,48 @@ func TestPublishMaterialBatchMatchesSubmissionMaterial(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMaterialPublishFixture(t)
 	proposal := fixture.prepare(t)
-	attempt, err := fixture.store.CreateAttempt(ctx, proposal.Proposal.StateToken, proposal.Candidate, proposal.View, proposal.Review, proposal.Confirmation)
+	attempt, err := fixture.store.CreateAttempt(
+		ctx,
+		proposal.Proposal.StateToken,
+		proposal.Candidate,
+		proposal.View,
+		proposal.Review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
-	uploadProposal, err := fixture.store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchUpload, proposal.View, proposal.Review)
+	uploadProposal, err := fixture.store.PrepareDispatch(
+		ctx,
+		attempt.ID,
+		publicationstate.DispatchUpload,
+		proposal.View,
+		proposal.Review,
+	)
 	require.NoError(t, err)
-	_, err = fixture.store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, proposal.View, proposal.Review, uploadProposal.Confirmation)
+	_, err = fixture.store.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		proposal.View,
+		proposal.Review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
-	submissionProposal, err := fixture.store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchSubmission, proposal.View, proposal.Review)
+	submissionProposal, err := fixture.store.PrepareDispatch(
+		ctx,
+		attempt.ID,
+		publicationstate.DispatchSubmission,
+		proposal.View,
+		proposal.Review,
+	)
 	require.NoError(t, err)
-	submission, err := fixture.store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, proposal.View, proposal.Review, submissionProposal.Confirmation)
+	submission, err := fixture.store.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		proposal.View,
+		proposal.Review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 
 	material := materialWriteBatchFromSubmission(submission)
@@ -1317,7 +1565,12 @@ func TestPublishMaterialTransportEnforcesConditionalBatch(t *testing.T) {
 	competing := materialTestCandidate(t, fixture.binding, [16]byte{0x41}, 0, nil, packed.Payload)
 	fixture.transport.installSnapshotQuietly(t, competing.SnapshotRecord, false)
 	_, err = fixture.transport.SendWrites(ctx, prepared)
-	require.ErrorIs(t, err, errMaterialTestCreateConflict, "the transport accepted a create-only snapshot that already exists")
+	require.ErrorIs(
+		t,
+		err,
+		errMaterialTestCreateConflict,
+		"the transport accepted a create-only snapshot that already exists",
+	)
 	assert.Nil(t, fixture.transport.committedHead())
 
 	fixture = newMaterialPublishFixture(t)
@@ -1356,7 +1609,12 @@ func TestPublishMaterialTransportEnforcesConditionalBatch(t *testing.T) {
 	forged := cloneMaterialWriteBatch(proposal.Batch)
 	forged.SnapshotRecord = other.SnapshotRecord
 	_, err = fixture.transport.PrepareWrites(ctx, forged)
-	require.ErrorIs(t, err, errMaterialTestRecordMismatch, "the transport prepared record bytes that do not hash to the expected snapshot cid")
+	require.ErrorIs(
+		t,
+		err,
+		errMaterialTestRecordMismatch,
+		"the transport prepared record bytes that do not hash to the expected snapshot cid",
+	)
 	assert.Equal(t, 0, fixture.transport.sendCount())
 	assert.Nil(t, fixture.transport.committedHead())
 }

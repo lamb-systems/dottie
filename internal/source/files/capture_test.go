@@ -60,7 +60,18 @@ func TestCaptureFixtureRoundTripAndInstallability(t *testing.T) {
 	}
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "neovim", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config/nvim", Kind: model.SelectionDirectory}}},
+		Targets: []model.Target{
+			{
+				ID:            "neovim",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{
+					Base: model.RootHome,
+					Path: "config/nvim",
+					Kind: model.SelectionDirectory,
+				},
+			},
+		},
 		Entries: entries,
 	}
 	require.NoError(t, snapshot.Validate())
@@ -148,7 +159,11 @@ func TestCaptureRepresentsInternalLinksAndSkipsExternalAndSpecialFiles(t *testin
 		skips[skipped.Path] = skipped
 	}
 	assert.Equal(t, Skip{Path: "absolute-link", Reason: SkipExternalLink, Detail: outsideFile}, skips["absolute-link"])
-	assert.Equal(t, Skip{Path: "escaping-link", Reason: SkipExternalLink, Detail: "../outside.txt"}, skips["escaping-link"])
+	assert.Equal(
+		t,
+		Skip{Path: "escaping-link", Reason: SkipExternalLink, Detail: "../outside.txt"},
+		skips["escaping-link"],
+	)
 	assert.Equal(t, Skip{Path: "pipe", Reason: SkipSpecialFile}, skips["pipe"])
 	assert.Len(t, skips, 3)
 
@@ -312,7 +327,11 @@ func TestCaptureSingleFileSwapBetweenInspectAndOpenIsUnknown(t *testing.T) {
 }
 
 func TestCaptureBudgetsReturnTypedErrorsWithoutPartialResults(t *testing.T) {
-	assert.Equal(t, Budget{MaxEntries: 20000, MaxDepth: 32, MaxFileBytes: 8 * 1024 * 1024, MaxTotalBytes: 256 * 1024 * 1024}, DefaultBudget())
+	assert.Equal(
+		t,
+		Budget{MaxEntries: 20000, MaxDepth: 32, MaxFileBytes: 8 * 1024 * 1024, MaxTotalBytes: 256 * 1024 * 1024},
+		DefaultBudget(),
+	)
 	t.Run("entry count", func(t *testing.T) {
 		root := makeBudgetTree(t)
 		budget := DefaultBudget()
@@ -381,7 +400,7 @@ func TestCaptureSingleFileInvalidParentIsUnknown(t *testing.T) {
 func TestCaptureRejectsInvalidRootAndBudget(t *testing.T) {
 	base := captureRoot("relative", model.SelectionDirectory)
 	_, err := Capture(base)
-	assert.Error(t, err)
+	require.Error(t, err)
 	base = captureRoot(filepath.Join(t.TempDir(), "unused"), model.SelectionDirectory)
 	base.Budget.MaxEntries = 0
 	_, err = Capture(base)

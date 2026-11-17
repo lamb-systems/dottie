@@ -195,7 +195,14 @@ func Verify(label string, preimage, signature []byte, key ed25519.PublicKey) err
 
 func knownSignatureContext(label string) bool {
 	switch label {
-	case "dottie/v1/sig-snapshot", "dottie/v1/sig-record", "dottie/v1/sig-policy", "dottie/v1/sig-control", "dottie/v1/sig-certificate", "dottie/v1/sig-checkpoint", "dottie/v1/sig-attestation", "dottie/v1/sig-head":
+	case "dottie/v1/sig-snapshot",
+		"dottie/v1/sig-record",
+		"dottie/v1/sig-policy",
+		"dottie/v1/sig-control",
+		"dottie/v1/sig-certificate",
+		"dottie/v1/sig-checkpoint",
+		"dottie/v1/sig-attestation",
+		"dottie/v1/sig-head":
 		return true
 	default:
 		return false
@@ -307,7 +314,8 @@ func SealPrepared(prepared PreparedSeal) (Envelope, error) {
 	recipients := append([]PreparedRecipient(nil), prepared.Recipients...)
 	sort.Slice(recipients, func(i, j int) bool { return bytes.Compare(recipients[i].KeyID, recipients[j].KeyID) < 0 })
 	for index := range recipients {
-		if len(recipients[index].KeyID) > MaxKeyIDBytes || len(recipients[index].PublicKey) != 32 || len(recipients[index].EphemeralPrivate) != 32 {
+		if len(recipients[index].KeyID) > MaxKeyIDBytes || len(recipients[index].PublicKey) != 32 ||
+			len(recipients[index].EphemeralPrivate) != 32 {
 			return Envelope{}, fmt.Errorf("%w: recipient", ErrRecipient)
 		}
 		if index > 0 && bytes.Equal(recipients[index-1].KeyID, recipients[index].KeyID) {
@@ -335,11 +343,24 @@ func SealPrepared(prepared PreparedSeal) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("%w: X25519", ErrRecipient)
 		}
 		ephemeralPublic := privateKey.PublicKey().Bytes()
-		wrapKey, err := deriveWrapKey(sharedSecret, prepared.Vault, recipient.KeyID, prepared.EpochSeq, prepared.Purpose)
+		wrapKey, err := deriveWrapKey(
+			sharedSecret,
+			prepared.Vault,
+			recipient.KeyID,
+			prepared.EpochSeq,
+			prepared.Purpose,
+		)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("%w: wrap key", ErrRecipient)
 		}
-		wrapAD := wrapAssociatedData(prepared.Vault, recipient.KeyID, prepared.EpochSeq, prepared.Purpose, recipient.PublicKey, ephemeralPublic)
+		wrapAD := wrapAssociatedData(
+			prepared.Vault,
+			recipient.KeyID,
+			prepared.EpochSeq,
+			prepared.Purpose,
+			recipient.PublicKey,
+			ephemeralPublic,
+		)
 		wrapAEAD, err := chacha20poly1305.NewX(wrapKey)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("%w: wrap key", ErrRecipient)
@@ -464,7 +485,12 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: policy", ErrAuthorization)
 	}
-	if err := Verify("dottie/v1/sig-policy", objectSignaturePreimage(policyPrefix), policy.Signature[:], policySigner.SigningPublicKey[:]); err != nil {
+	if err := Verify(
+		"dottie/v1/sig-policy",
+		objectSignaturePreimage(policyPrefix),
+		policy.Signature[:],
+		policySigner.SigningPublicKey[:],
+	); err != nil {
 		return nil, fmt.Errorf("%w: policy signature", ErrSignature)
 	}
 	certificate, err := authorizedSigner(envelope, request, policy)
@@ -480,7 +506,8 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 			return nil, fmt.Errorf("%w: signer revocation", ErrAuthorization)
 		}
 	}
-	if envelope.Vault != request.Vault || envelope.EpochSeq != request.EpochSeq || envelope.PolicyDigest != request.PolicyDigest {
+	if envelope.Vault != request.Vault || envelope.EpochSeq != request.EpochSeq ||
+		envelope.PolicyDigest != request.PolicyDigest {
 		return nil, fmt.Errorf("%w: vault, epoch_seq, or policy_digest", ErrAuthorization)
 	}
 	prefix, err := encodeEnvelopePrefix(envelope)
@@ -488,7 +515,12 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 		return nil, err
 	}
 	preimage := append([]byte(preimageSig), prefix...)
-	if err := Verify(contextForPurpose(envelope.Purpose), preimage, envelope.Signature[:], certificate.SigningPublicKey[:]); err != nil {
+	if err := Verify(
+		contextForPurpose(envelope.Purpose),
+		preimage,
+		envelope.Signature[:],
+		certificate.SigningPublicKey[:],
+	); err != nil {
 		return nil, fmt.Errorf("%w: envelope", ErrSignature)
 	}
 	recipientIndex := -1
@@ -522,7 +554,14 @@ func Open(envelope Envelope, request OpenRequest) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: wrapping", ErrRecipient)
 	}
-	wrapAD := wrapAssociatedData(envelope.Vault, recipient.KeyID, envelope.EpochSeq, envelope.Purpose, devicePublic, recipient.Ephemeral[:])
+	wrapAD := wrapAssociatedData(
+		envelope.Vault,
+		recipient.KeyID,
+		envelope.EpochSeq,
+		envelope.Purpose,
+		devicePublic,
+		recipient.Ephemeral[:],
+	)
 	wrapAEAD, err := chacha20poly1305.NewX(wrapKey)
 	if err != nil {
 		return nil, fmt.Errorf("%w: wrapping", ErrRecipient)
@@ -619,7 +658,15 @@ func encodeEnvelopePrefix(envelope Envelope) ([]byte, error) {
 	if err := validateEnvelopeFields(envelope); err != nil {
 		return nil, err
 	}
-	capacity := 6 + 1 + 32 + 16 + 8 + 32 + 2 + len(envelope.Parent) + 2 + len(envelope.DeviceID) + 2 + len(envelope.KeyID) + 32 + 2 + 24 + 4 + len(envelope.Ciphertext) + 16
+	capacity := 6 + 1 + 32 + 16 + 8 + 32 + 2 + len(
+		envelope.Parent,
+	) + 2 + len(
+		envelope.DeviceID,
+	) + 2 + len(
+		envelope.KeyID,
+	) + 32 + 2 + 24 + 4 + len(
+		envelope.Ciphertext,
+	) + 16
 	for _, recipient := range envelope.Recipients {
 		capacity += 2 + len(recipient.KeyID) + 32 + 24 + 2 + len(recipient.WrappedKey)
 	}
@@ -661,7 +708,15 @@ func validateEnvelopeFields(envelope Envelope) error {
 	if err := validateEnvelopeMetadata(envelope.Parent, envelope.DeviceID, envelope.KeyID); err != nil {
 		return err
 	}
-	encodedLength := 6 + 1 + 32 + 16 + 8 + 32 + 2 + len(envelope.Parent) + 2 + len(envelope.DeviceID) + 2 + len(envelope.KeyID) + 32 + 2 + 24 + 4 + len(envelope.Ciphertext) + 16 + ed25519.SignatureSize
+	encodedLength := 6 + 1 + 32 + 16 + 8 + 32 + 2 + len(
+		envelope.Parent,
+	) + 2 + len(
+		envelope.DeviceID,
+	) + 2 + len(
+		envelope.KeyID,
+	) + 32 + 2 + 24 + 4 + len(
+		envelope.Ciphertext,
+	) + 16 + ed25519.SignatureSize
 	for _, recipient := range envelope.Recipients {
 		encodedLength += 2 + len(recipient.KeyID) + 32 + 24 + 2 + len(recipient.WrappedKey)
 	}
@@ -680,7 +735,8 @@ func validateEnvelopeFields(envelope Envelope) error {
 }
 
 func validateEnvelopeMetadata(parent []byte, deviceID string, keyID []byte) error {
-	if len(parent) > MaxParentBytes || len(deviceID) > MaxDeviceIDBytes || !utf8.ValidString(deviceID) || len(keyID) > MaxKeyIDBytes {
+	if len(parent) > MaxParentBytes || len(deviceID) > MaxDeviceIDBytes || !utf8.ValidString(deviceID) ||
+		len(keyID) > MaxKeyIDBytes {
 		return fmt.Errorf("%w: parent, device_id, or key_id", ErrLimit)
 	}
 	return nil
@@ -720,7 +776,7 @@ func scanEnvelope(data []byte) error {
 		return fmt.Errorf("%w: recipients", ErrLimit)
 	}
 	var previous []byte
-	for index := 0; index < count; index++ {
+	for index := range count {
 		id := cursor.length16(MaxKeyIDBytes)
 		if !id.ok {
 			return id.err
@@ -764,7 +820,7 @@ func contentAssociatedData(envelope Envelope) []byte {
 	buffer := make([]byte, 0, len(preimageAD)+4+1+32+16+8+32+2+len(envelope.Parent)+32)
 	buffer = append(buffer, preimageAD...)
 	buffer = append(buffer, wireMagic[:]...)
-	buffer = append(buffer, wireVersion, byte(objectKindEnvelope), byte(envelope.Purpose))
+	buffer = append(buffer, wireVersion, objectKindEnvelope, byte(envelope.Purpose))
 	buffer = append(buffer, envelope.Vault[:]...)
 	buffer = append(buffer, envelope.PublicationID[:]...)
 	buffer = appendU64(buffer, envelope.EpochSeq)
@@ -774,7 +830,13 @@ func contentAssociatedData(envelope Envelope) []byte {
 	return buffer
 }
 
-func wrapAssociatedData(vault [32]byte, keyID []byte, epoch uint64, purpose Purpose, recipientPublicKey, ephemeralPublicKey []byte) []byte {
+func wrapAssociatedData(
+	vault [32]byte,
+	keyID []byte,
+	epoch uint64,
+	purpose Purpose,
+	recipientPublicKey, ephemeralPublicKey []byte,
+) []byte {
 	buffer := make([]byte, 0, len(preimageWrapAD)+32+2+len(keyID)+8+1+32+32)
 	buffer = append(buffer, preimageWrapAD...)
 	buffer = append(buffer, vault[:]...)
@@ -853,7 +915,8 @@ func verifyCertificateChain(certificate Certificate, request OpenRequest, depth 
 	visited[identity] = true
 	defer delete(visited, identity)
 	if certificate.Issuer == certificate.DeviceID {
-		if certificate.Role != RoleRoot || certificate.Signer.DeviceID != certificate.DeviceID || !bytes.Equal(certificate.Signer.KeyID, certificate.KeyID) {
+		if certificate.Role != RoleRoot || certificate.Signer.DeviceID != certificate.DeviceID ||
+			!bytes.Equal(certificate.Signer.KeyID, certificate.KeyID) {
 			return fmt.Errorf("%w: root certificate", ErrAuthorization)
 		}
 		fingerprint := sha256.Sum256(certificate.SigningPublicKey[:])
@@ -861,7 +924,13 @@ func verifyCertificateChain(certificate Certificate, request OpenRequest, depth 
 			return fmt.Errorf("%w: trust_anchor", ErrAuthorization)
 		}
 		prefix, err := encodeCertificatePrefix(certificate)
-		if err != nil || Verify("dottie/v1/sig-certificate", objectSignaturePreimage(prefix), certificate.Signature[:], certificate.SigningPublicKey[:]) != nil {
+		if err != nil ||
+			Verify(
+				"dottie/v1/sig-certificate",
+				objectSignaturePreimage(prefix),
+				certificate.Signature[:],
+				certificate.SigningPublicKey[:],
+			) != nil {
 			return fmt.Errorf("%w: root certificate signature", ErrAuthorization)
 		}
 		return nil
@@ -891,7 +960,13 @@ func verifyCertificateChain(certificate Certificate, request OpenRequest, depth 
 		return err
 	}
 	prefix, err := encodeCertificatePrefix(certificate)
-	if err != nil || Verify("dottie/v1/sig-certificate", objectSignaturePreimage(prefix), certificate.Signature[:], issuer.SigningPublicKey[:]) != nil {
+	if err != nil ||
+		Verify(
+			"dottie/v1/sig-certificate",
+			objectSignaturePreimage(prefix),
+			certificate.Signature[:],
+			issuer.SigningPublicKey[:],
+		) != nil {
 		return fmt.Errorf("%w: certificate signature", ErrAuthorization)
 	}
 	return nil
@@ -907,14 +982,20 @@ func authorizeControl(request OpenRequest, policy Policy) (Control, error) {
 	}
 	signerCertificate, err := resolveTrustedCertificate(control.Signer.DeviceID, control.Signer.KeyID, request)
 	controlSignerRole, controlSignerRoleExists := policyRole(policy, control.Signer.DeviceID)
-	if err != nil || signerCertificate.Role != RoleRoot || !controlSignerRoleExists || controlSignerRole != signerCertificate.Role {
+	if err != nil || signerCertificate.Role != RoleRoot || !controlSignerRoleExists ||
+		controlSignerRole != signerCertificate.Role {
 		return Control{}, fmt.Errorf("%w: control signer", ErrAuthorization)
 	}
 	prefix, err := encodeControlPrefix(control)
 	if err != nil {
 		return Control{}, fmt.Errorf("%w: control", ErrAuthorization)
 	}
-	if err := Verify("dottie/v1/sig-control", objectSignaturePreimage(prefix), control.Signature[:], signerCertificate.SigningPublicKey[:]); err != nil {
+	if err := Verify(
+		"dottie/v1/sig-control",
+		objectSignaturePreimage(prefix),
+		control.Signature[:],
+		signerCertificate.SigningPublicKey[:],
+	); err != nil {
 		return Control{}, fmt.Errorf("%w: control signature", ErrSignature)
 	}
 	if control.PolicyDigest != request.PolicyDigest {
@@ -1033,12 +1114,12 @@ func (cursor *wireCursor) u64() uint64 {
 	return binary.BigEndian.Uint64(b)
 }
 
-func (cursor *wireCursor) length16(max int) lengthValue {
+func (cursor *wireCursor) length16(limit int) lengthValue {
 	length := int(cursor.u16())
 	if cursor.err != nil {
 		return lengthValue{err: cursor.err}
 	}
-	if length > max {
+	if length > limit {
 		return lengthValue{err: fmt.Errorf("%w: variable field", ErrLimit)}
 	}
 	start := cursor.offset
@@ -1048,8 +1129,8 @@ func (cursor *wireCursor) length16(max int) lengthValue {
 	return lengthValue{start: start, length: length, ok: true}
 }
 
-func (cursor *wireCursor) bytes16(max int) []byte {
-	value := cursor.length16(max)
+func (cursor *wireCursor) bytes16(limit int) []byte {
+	value := cursor.length16(limit)
 	if !value.ok {
 		cursor.err = value.err
 		return nil

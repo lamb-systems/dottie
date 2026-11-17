@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/platform"
 )
 
 func newSchema2UnitStore(t *testing.T, f fixture, limits ...Limits) (*Store, string) {
@@ -27,7 +28,12 @@ func newSchema2UnitStore(t *testing.T, f fixture, limits ...Limits) (*Store, str
 	return newSchema2UnitStoreWithLimits(t, f, positionLimits, DefaultAttemptLimits())
 }
 
-func newSchema2UnitStoreWithLimits(t *testing.T, f fixture, limits Limits, attemptLimits AttemptLimits) (*Store, string) {
+func newSchema2UnitStoreWithLimits(
+	t *testing.T,
+	f fixture,
+	limits Limits,
+	attemptLimits AttemptLimits,
+) (*Store, string) {
 	t.Helper()
 	require.NoError(t, validateBinding(f.binding))
 	require.NoError(t, validateLimits(limits))
@@ -98,7 +104,17 @@ func newSchema2UnitStoreWithLimits(t *testing.T, f fixture, limits Limits, attem
 		_, execErr := tx.ExecContext(ctx, statement)
 		require.NoError(t, execErr)
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO store_meta(key,value) VALUES ('database_id',?),('revision',?),('generation',?),('binding',?),('limits',?),('attempt_limits',?),('attempt_mutation_revision',?)", databaseID[:], uint64Bytes(0), uint64Bytes(0), bindingBytes, limitsBytes, attemptLimitsBytes, uint64Bytes(0))
+	_, err = tx.ExecContext(
+		ctx,
+		"INSERT INTO store_meta(key,value) VALUES ('database_id',?),('revision',?),('generation',?),('binding',?),('limits',?),('attempt_limits',?),('attempt_mutation_revision',?)",
+		databaseID[:],
+		uint64Bytes(0),
+		uint64Bytes(0),
+		bindingBytes,
+		limitsBytes,
+		attemptLimitsBytes,
+		uint64Bytes(0),
+	)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, "PRAGMA application_id=1146376242")
 	require.NoError(t, err)
@@ -118,7 +134,11 @@ func newSchema2UnitStoreWithLimits(t *testing.T, f fixture, limits Limits, attem
 	require.Equal(t, uint64Bytes(0), snapshot.metadata["generation"])
 	require.Equal(t, uint64Bytes(0), snapshot.metadata["attempt_mutation_revision"])
 	var incomingObjects int64
-	require.NoError(t, tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").Scan(&incomingObjects))
+	require.NoError(
+		t,
+		tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").
+			Scan(&incomingObjects),
+	)
 	require.Zero(t, incomingObjects)
 	require.NoError(t, unix.Fsync(store.rootFD))
 	require.NoError(t, tx.Commit())
@@ -167,7 +187,14 @@ func TestSchema2UnitStoreSourceSetup(t *testing.T) {
 	})
 }
 
-func incomingMaterialUpgradeAssertSchema2UnitSource(t *testing.T, store *Store, directory string, f fixture, limits Limits, attemptLimits AttemptLimits) {
+func incomingMaterialUpgradeAssertSchema2UnitSource(
+	t *testing.T,
+	store *Store,
+	directory string,
+	f fixture,
+	limits Limits,
+	attemptLimits AttemptLimits,
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -247,10 +274,29 @@ func incomingMaterialUpgradeAssertSchema2UnitSource(t *testing.T, store *Store, 
 	require.Equal(t, attemptLimits, snapshot.attemptLimits)
 	require.Equal(t, metadata, snapshot.metadata)
 	var incomingObjects int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").Scan(&incomingObjects))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name='accepted_material_refs'").
+			Scan(&incomingObjects),
+	)
 	require.Zero(t, incomingObjects)
 	require.Equal(t, int64(7), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM store_meta"))
-	emptyTables := []string{"cache_records", "cache_observations", "accepted_records", "accepted_events", "active_floor", "publication_attempts", "active_publication_attempt", "pending_genesis", "attempt_events", "attempt_evidence", "payload_objects", "attempt_payload_refs", "retained_publications", "attempt_reservations"}
+	emptyTables := []string{
+		"cache_records",
+		"cache_observations",
+		"accepted_records",
+		"accepted_events",
+		"active_floor",
+		"publication_attempts",
+		"active_publication_attempt",
+		"pending_genesis",
+		"attempt_events",
+		"attempt_evidence",
+		"payload_objects",
+		"attempt_payload_refs",
+		"retained_publications",
+		"attempt_reservations",
+	}
 	for _, table := range emptyTables {
 		require.Zero(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM "+table), table)
 	}

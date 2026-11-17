@@ -14,13 +14,14 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func runManualCommandForTest(command *urfave.Command, exitCode *int, args ...string) int {
@@ -53,9 +54,18 @@ func TestManualStatusReportsSelectedTargetsWithoutJournalRows(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	configuration := config.Default()
-	configuration.Targets = []config.Target{{ID: "prefs", Source: model.SourceFiles, Mode: config.Review, Root: &config.Root{Base: model.RootHome, Path: "prefs", Kind: model.SelectionDirectory}}}
+	configuration.Targets = []config.Target{
+		{
+			ID:     "prefs",
+			Source: model.SourceFiles,
+			Mode:   config.Review,
+			Root:   &config.Root{Base: model.RootHome, Path: "prefs", Kind: model.SelectionDirectory},
+		},
+	}
 	factory := func() (*service.Coordinator, func(), error) {
-		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: configuration}, State: store})
+		coordinator, err := service.NewCoordinator(
+			service.Dependencies{Config: statusTestConfig{value: configuration}, State: store},
+		)
 		return coordinator, func() {}, err
 	}
 	var stdout, stderr bytes.Buffer
@@ -83,7 +93,9 @@ func TestManualStatusPrintsRecordedVaultSelection(t *testing.T) {
 	require.NoError(t, store.PutVaultSelection(context.Background(), selection))
 	configuration := config.Default()
 	factory := func() (*service.Coordinator, func(), error) {
-		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: configuration}, State: store})
+		coordinator, err := service.NewCoordinator(
+			service.Dependencies{Config: statusTestConfig{value: configuration}, State: store},
+		)
 		return coordinator, func() {}, err
 	}
 	var stdout, stderr bytes.Buffer
@@ -92,7 +104,12 @@ func TestManualStatusPrintsRecordedVaultSelection(t *testing.T) {
 	code = runManualCommandForTest(command, &code, "status")
 	require.Equal(t, 0, code, "exit code")
 	assert.Empty(t, stderr.String(), "stderr")
-	assert.Equal(t, "vault\t"+hex.EncodeToString(selection.Vault[:])+"\tdevice=synthetic-device\nno targets selected\n", stdout.String(), "stdout")
+	assert.Equal(
+		t,
+		"vault\t"+hex.EncodeToString(selection.Vault[:])+"\tdevice=synthetic-device\nno targets selected\n",
+		stdout.String(),
+		"stdout",
+	)
 	_, statErr := os.Lstat(paths.PublicationStateDir())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "status opened the publication position store")
 }
@@ -100,7 +117,9 @@ func TestManualStatusPrintsRecordedVaultSelection(t *testing.T) {
 func TestManualStatusPrintsAbsentVaultSelection(t *testing.T) {
 	store, _ := newManualStatusTestStore(t)
 	factory := func() (*service.Coordinator, func(), error) {
-		coordinator, err := service.NewCoordinator(service.Dependencies{Config: statusTestConfig{value: config.Default()}, State: store})
+		coordinator, err := service.NewCoordinator(
+			service.Dependencies{Config: statusTestConfig{value: config.Default()}, State: store},
+		)
 		return coordinator, func() {}, err
 	}
 	var stdout, stderr bytes.Buffer
@@ -159,6 +178,10 @@ func (statusTestConfig) Snapshot(context.Context) (config.Snapshot, error) {
 	return config.Snapshot{}, errors.New("unexpected config snapshot")
 }
 
-func (statusTestConfig) Update(context.Context, config.Token, func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+func (statusTestConfig) Update(
+	context.Context,
+	config.Token,
+	func(config.Config) (config.Config, error),
+) (config.Snapshot, error) {
 	return config.Snapshot{}, errors.New("unexpected config update")
 }

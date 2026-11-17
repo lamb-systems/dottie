@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/ignore"
 	"github.com/lamb-systems/dottie/internal/model"
@@ -148,9 +149,16 @@ func BuildPreview(p Preset, paths platform.Paths) (Preview, error) {
 			base = paths.ConfigHome
 		}
 		if base == "" || !filepath.IsAbs(base) {
-			return Preview{}, fmt.Errorf("preset %q key \"roots[%d].base\": destination base must be absolute", p.ID, index)
+			return Preview{}, fmt.Errorf(
+				"preset %q key \"roots[%d].base\": destination base must be absolute",
+				p.ID,
+				index,
+			)
 		}
-		preview.ResolvedRoots = append(preview.ResolvedRoots, filepath.Clean(filepath.Join(base, filepath.FromSlash(root.Path))))
+		preview.ResolvedRoots = append(
+			preview.ResolvedRoots,
+			filepath.Clean(filepath.Join(base, filepath.FromSlash(root.Path))),
+		)
 		preview.Excludes = append(preview.Excludes, root.Exclude...)
 	}
 	return preview, nil
@@ -181,20 +189,37 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 			}
 			policy := target.GNOMEPolicy
 			if policy == nil || policy.Approval == config.GNOMEApprovalPending {
-				return config.Config{}, &ReapprovalError{TargetID: target.ID, Reason: "select GNOME categories and approve their resolved key set"}
+				return config.Config{}, &ReapprovalError{
+					TargetID: target.ID,
+					Reason:   "select GNOME categories and approve their resolved key set",
+				}
 			}
-			if policy.Approval != config.GNOMEApprovalApproved || !sameStrings(normalizedCategories(policy.Categories), categoryIDs) || policy.MatrixVersion != matrix.Version || policy.KeyDigest != keyDigest {
-				return config.Config{}, &ReapprovalError{TargetID: target.ID, Reason: "stored GNOME category policy does not match the catalog selection and current matrix"}
+			if policy.Approval != config.GNOMEApprovalApproved ||
+				!sameStrings(normalizedCategories(policy.Categories), categoryIDs) ||
+				policy.MatrixVersion != matrix.Version ||
+				policy.KeyDigest != keyDigest {
+				return config.Config{}, &ReapprovalError{
+					TargetID: target.ID,
+					Reason:   "stored GNOME category policy does not match the catalog selection and current matrix",
+				}
 			}
 			return proposal, nil
 		}
-		return config.Config{}, &ReapprovalError{Reason: "create or re-approve a GNOME target with the catalog categories before materializing"}
+		return config.Config{}, &ReapprovalError{
+			Reason: "create or re-approve a GNOME target with the catalog categories before materializing",
+		}
 	}
 	for index, root := range p.Roots {
 		existing, found := matchingRoot(proposal, root)
 		if found {
 			if !sameExcludes(existing.Root.Exclude, root.Exclude) {
-				return config.Config{}, fmt.Errorf("%w: preset %q key \"roots[%d].exclude\" differs from existing target %q", ErrConsentConflict, p.ID, index, existing.ID)
+				return config.Config{}, fmt.Errorf(
+					"%w: preset %q key \"roots[%d].exclude\" differs from existing target %q",
+					ErrConsentConflict,
+					p.ID,
+					index,
+					existing.ID,
+				)
 			}
 			continue
 		}
@@ -215,7 +240,12 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 		candidate := cloneConfig(proposal)
 		candidate.Targets = append(candidate.Targets, cloneTarget(added))
 		if err := candidate.Validate(); err != nil {
-			return config.Config{}, fmt.Errorf("preset %q key \"roots[%d]\": proposed target is invalid: %w", p.ID, index, err)
+			return config.Config{}, fmt.Errorf(
+				"preset %q key \"roots[%d]\": proposed target is invalid: %w",
+				p.ID,
+				index,
+				err,
+			)
 		}
 		proposal = candidate
 	}
@@ -281,7 +311,11 @@ func decodePreset(data []byte) (Preset, error) {
 		}
 	}
 	if doc.SchemaVersion != 1 {
-		return Preset{}, validationError(preset.ID, "schema_version", fmt.Errorf("unsupported schema version %d", doc.SchemaVersion))
+		return Preset{}, validationError(
+			preset.ID,
+			"schema_version",
+			fmt.Errorf("unsupported schema version %d", doc.SchemaVersion),
+		)
 	}
 	if err := validatePreset(preset); err != nil {
 		return Preset{}, err
@@ -291,7 +325,11 @@ func decodePreset(data []byte) (Preset, error) {
 
 func validatePreset(p Preset) error {
 	if !validPresetID(p.ID) {
-		return validationError(p.ID, "id", errors.New("must be a non-empty lowercase identifier using letters, digits and hyphens"))
+		return validationError(
+			p.ID,
+			"id",
+			errors.New("must be a non-empty lowercase identifier using letters, digits and hyphens"),
+		)
 	}
 	if !validText(p.Name, 256) {
 		return validationError(p.ID, "name", errors.New("must be non-empty valid UTF-8 text"))
@@ -306,12 +344,20 @@ func validatePreset(p Preset) error {
 	}
 	for index, note := range p.Notes {
 		if !validText(note, 4096) {
-			return validationError(p.ID, fmt.Sprintf("notes[%d]", index), errors.New("must be non-empty valid UTF-8 text"))
+			return validationError(
+				p.ID,
+				fmt.Sprintf("notes[%d]", index),
+				errors.New("must be non-empty valid UTF-8 text"),
+			)
 		}
 	}
 	for index, category := range p.Categories {
 		if !validText(category, 256) {
-			return validationError(p.ID, fmt.Sprintf("categories[%d]", index), errors.New("must be non-empty valid UTF-8 text"))
+			return validationError(
+				p.ID,
+				fmt.Sprintf("categories[%d]", index),
+				errors.New("must be non-empty valid UTF-8 text"),
+			)
 		}
 	}
 	switch p.Source {
@@ -361,10 +407,10 @@ func validationError(id, key string, err error) error {
 
 func tomlErrorKey(err error) string {
 	message := err.Error()
-	if index := strings.Index(message, " (last key "); index >= 0 {
-		remainder := message[index+len(" (last key "):]
-		if end := strings.IndexByte(remainder, ')'); end >= 0 {
-			return strings.Trim(remainder[:end], "\"")
+	if _, after, ok := strings.Cut(message, " (last key "); ok {
+		remainder := after
+		if before, _, ok := strings.Cut(remainder, ")"); ok {
+			return strings.Trim(before, "\"")
 		}
 	}
 	return "document"
@@ -420,7 +466,9 @@ func cloneTarget(target config.Target) config.Target {
 
 func matchingRoot(c config.Config, root Root) (config.Target, bool) {
 	for _, target := range c.Targets {
-		if target.Source == model.SourceFiles && target.Root != nil && target.Root.Base == root.Base && target.Root.Path == root.Path && target.Root.Kind == root.Kind {
+		if target.Source == model.SourceFiles && target.Root != nil && target.Root.Base == root.Base &&
+			target.Root.Path == root.Path &&
+			target.Root.Kind == root.Kind {
 			return target, true
 		}
 	}

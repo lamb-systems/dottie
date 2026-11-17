@@ -85,7 +85,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runTargets(args[1:], stdout, stderr, os.Getenv)
 	}
 	if args[0] == "position" {
-		return runPosition(args[1:], stdout, stderr, os.Getenv, func() (accountKeyring, error) { return platform.NewKeyring() })
+		return runPosition(
+			args[1:],
+			stdout,
+			stderr,
+			os.Getenv,
+			func() (accountKeyring, error) { return platform.NewKeyring() },
+		)
 	}
 	switch args[0] {
 	case "status":

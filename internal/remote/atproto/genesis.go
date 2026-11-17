@@ -11,7 +11,9 @@ import (
 )
 
 var (
-	ErrDottiePublicationPresent    = errors.New("genesis refused: the account repository already contains a Dottie publication")
+	ErrDottiePublicationPresent = errors.New(
+		"genesis refused: the account repository already contains a Dottie publication",
+	)
 	ErrGenesisPreflightUnavailable = errors.New("genesis preflight could not verify the repository")
 )
 
@@ -34,7 +36,11 @@ func CheckNoDottiePublication(ctx context.Context, reader RevisionReader, transp
 	reader.Transport = transport
 	revision, err := reader.Read(ctx, did)
 	if err != nil {
-		return fmt.Errorf("%w: cannot verify whether the repository holds a Dottie publication: %w", ErrGenesisPreflightUnavailable, err)
+		return fmt.Errorf(
+			"%w: cannot verify whether the repository holds a Dottie publication: %w",
+			ErrGenesisPreflightUnavailable,
+			err,
+		)
 	}
 	collections := make([]string, 0, 2)
 	for key := range revision.Membership() {

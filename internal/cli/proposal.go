@@ -178,7 +178,8 @@ func (store publicationProposalStore) List(ctx context.Context) ([]service.Publi
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), publicationProposalFilePrefix) && strings.HasSuffix(entry.Name(), publicationProposalFileSuffix) {
+		if strings.HasPrefix(entry.Name(), publicationProposalFilePrefix) &&
+			strings.HasSuffix(entry.Name(), publicationProposalFileSuffix) {
 			names = append(names, entry.Name())
 		}
 	}

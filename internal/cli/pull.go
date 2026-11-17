@@ -13,6 +13,7 @@ import (
 	urfave "github.com/urfave/cli/v3"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -100,7 +101,16 @@ func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) *urfave.Command {
+func newPullCommand(
+	stdout, stderr io.Writer,
+	exitCode *int,
+	sessions pushSessionFactory,
+	remotes pullRemoteFactory,
+	vaults pullVaultFactory,
+	applySources pullApplySourcesFactory,
+	dids sessionDIDSource,
+	env func(string) string,
+) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -124,11 +134,12 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			return runPullCommand(ctx, command, sessions, remotes, vaults, applySources, dids, env)
 		},
 	})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{pull}, Writer: stdout, ErrWriter: stderr})
+	root := configure(
+		&urfave.Command{Name: "dottie", Commands: []*urfave.Command{pull}, Writer: stdout, ErrWriter: stderr},
+	)
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code != 2 && code != 3 && code != 4 {
@@ -142,7 +153,16 @@ func newPullCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, dids sessionDIDSource, env func(string) string) error {
+func runPullCommand(
+	ctx context.Context,
+	command *urfave.Command,
+	sessions pushSessionFactory,
+	remotes pullRemoteFactory,
+	vaults pullVaultFactory,
+	applySources pullApplySourcesFactory,
+	dids sessionDIDSource,
+	env func(string) string,
+) error {
 	if command.NArg() != 0 {
 		return usageExit("pull takes no positional arguments")
 	}
@@ -188,7 +208,12 @@ func runPullCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return urfave.Exit(pullScopeRefusal(err, did.String()), 3)
 	}
 	if session.Session.DID != did.String() {
-		return urfave.Exit("pull refused: the authorized account differs from the --did publication binding; account "+escapeField(did.String())+" is unchanged", 3)
+		return urfave.Exit(
+			"pull refused: the authorized account differs from the --did publication binding; account "+escapeField(
+				did.String(),
+			)+" is unchanged",
+			3,
+		)
 	}
 	vault, err := resolvePublicationVault(ctx, command, "pull", vaults, session, override, paths.PublicationStateDir())
 	if err != nil {
@@ -300,10 +325,16 @@ func pullProvisionRefusal(command *urfave.Command, err error) error {
 			reason = string(storeFailure.Reason())
 		}
 	}
-	if writeErr := writeCommandOutput(command, renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason})); writeErr != nil {
+	if writeErr := writeCommandOutput(
+		command,
+		renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason}),
+	); writeErr != nil {
 		return writeErr
 	}
-	return urfave.Exit("pull refused: the local position store is unusable and was neither created nor repaired; nothing was changed", 3)
+	return urfave.Exit(
+		"pull refused: the local position store is unusable and was neither created nor repaired; nothing was changed",
+		3,
+	)
 }
 
 func pullViewFailure(command *urfave.Command, err error) error {
@@ -369,21 +400,34 @@ func (preparation pullApplyPreparation) applies() bool {
 	return preparation.Staged.StateToken != ([32]byte{})
 }
 
-func preparePullApply(ctx context.Context, input pullApplyPlanRequest, applySources pullApplySourcesFactory) (pullApplyPreparation, error) {
+func preparePullApply(
+	ctx context.Context,
+	input pullApplyPlanRequest,
+	applySources pullApplySourcesFactory,
+) (pullApplyPreparation, error) {
 	sources, err := applySources(ctx, input.Command, input.Binding)
 	if err != nil {
-		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: the local configuration cannot be opened for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: the local configuration cannot be opened for apply; nothing was changed",
+			3,
+		)
 	}
 	preparation := pullApplyPreparation{Sources: sources}
 	if len(sources.Configuration.Targets) == 0 {
 		return preparation, nil
 	}
 	if sources.Local == nil {
-		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: the local publication context is not available for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: the local publication context is not available for apply; nothing was changed",
+			3,
+		)
 	}
 	roots, err := pullApplyRoots(sources.Configuration, sources.Paths)
 	if err != nil {
-		return pullApplyPreparation{}, urfave.Exit(input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed", 3)
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed",
+			3,
+		)
 	}
 	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor, input.Present)
 	if err != nil {
@@ -414,18 +458,36 @@ func preparePullApply(ctx context.Context, input pullApplyPlanRequest, applySour
 	}
 	preparation.Observation = observation
 	preparation.Staged = staged
-	preparation.Token = pullApplyConfirmationToken(input.Binding, plan.Digest, staged.StateToken, staged.ObservationDigest)
+	preparation.Token = pullApplyConfirmationToken(
+		input.Binding,
+		plan.Digest,
+		staged.StateToken,
+		staged.ObservationDigest,
+	)
 	return preparation, nil
 }
 
-func applyPullPreparation(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation, output string) (publicationstate.Floor, string, error) {
+func applyPullPreparation(
+	ctx context.Context,
+	input pullApplyPlanRequest,
+	preparation pullApplyPreparation,
+	output string,
+) (publicationstate.Floor, string, error) {
 	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
 	if err != nil || current.Present != input.Present || current.Floor.Revision != input.Floor.Revision {
-		return publicationstate.Floor{}, output, urfave.Exit(input.label()+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+input.label(), 3)
+		return publicationstate.Floor{}, output, urfave.Exit(
+			input.label()+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+input.label(),
+			3,
+		)
 	}
 	journal, err := publicationstate.OpenJournal(preparation.Sources.Paths.PublicationStateDir())
 	if err != nil {
-		return publicationstate.Floor{}, output, urfave.Exit(input.label()+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed", 3)
+		return publicationstate.Floor{}, output, urfave.Exit(
+			input.label()+" refused: the apply journal cannot be opened ("+escapeField(
+				pullStoreReason(err),
+			)+"); nothing was changed",
+			3,
+		)
 	}
 	defer func() { _ = journal.Close() }()
 	request := preparation.Request
@@ -445,7 +507,12 @@ func applyPullPreparation(ctx context.Context, input pullApplyPlanRequest, prepa
 	if acceptErr != nil {
 		return publicationstate.Floor{}, output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
 	}
-	output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", accepted.Revision, accepted.Generation, accepted.Sequence)
+	output += fmt.Sprintf(
+		"floor: revision=%d generation=%d sequence=%d\n",
+		accepted.Revision,
+		accepted.Generation,
+		accepted.Sequence,
+	)
 	return accepted, output, nil
 }
 
@@ -470,7 +537,10 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		if writeErr := writeCommandOutput(input.Command, output); writeErr != nil {
 			return writeErr
 		}
-		return urfave.Exit(input.label()+" refused: the reviewed apply plan is stale or bound to a different vault; nothing was changed", 3)
+		return urfave.Exit(
+			input.label()+" refused: the reviewed apply plan is stale or bound to a different vault; nothing was changed",
+			3,
+		)
 	}
 	_, output, err = applyPullPreparation(ctx, input, preparation, output)
 	if err != nil {
@@ -492,16 +562,22 @@ func pullApplyRoots(configuration config.Config, paths platform.Paths) (map[stri
 		if err != nil {
 			return nil, err
 		}
-		real, err := platform.RealPath(resolved)
+		canonical, err := platform.RealPath(resolved)
 		if err != nil {
 			return nil, err
 		}
-		roots[target.ID] = real
+		roots[target.ID] = canonical
 	}
 	return roots, nil
 }
 
-func pullApplySnapshots(ctx context.Context, remote pullRemote, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor, present bool) (pullApplyMaterial, error) {
+func pullApplySnapshots(
+	ctx context.Context,
+	remote pullRemote,
+	view publicationstate.SuppliedRepositoryView,
+	floor publicationstate.Floor,
+	present bool,
+) (pullApplyMaterial, error) {
 	if len(view.Snapshots) == 0 || remote.Blob == nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
@@ -518,7 +594,11 @@ func pullApplySnapshots(ctx context.Context, remote pullRemote, view publication
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	if !present {
-		return pullApplyMaterial{Base: model.Snapshot{Version: model.SnapshotVersion}, Remote: remoteSnapshot, Payload: payload}, nil
+		return pullApplyMaterial{
+			Base:    model.Snapshot{Version: model.SnapshotVersion},
+			Remote:  remoteSnapshot,
+			Payload: payload,
+		}, nil
 	}
 	if floor.Sequence >= uint64(len(view.Snapshots)) {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved
@@ -529,7 +609,9 @@ func pullApplySnapshots(ctx context.Context, remote pullRemote, view publication
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	baseCID, err := publication.RecordCID(block.Raw)
-	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) || !bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) || baseRecord.Blob.Size != floor.BlobSize {
+	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) ||
+		!bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) ||
+		baseRecord.Blob.Size != floor.BlobSize {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved
 	}
 	basePayload, err := remote.Blob(ctx, baseRecord)
@@ -550,19 +632,35 @@ func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicat
 }
 
 func pullApplyRemoteFailure(label string, err error) error {
-	if errors.Is(err, errPullApplySnapshotMoved) || errors.Is(err, errPullApplySnapshotUnavailable) || errors.Is(err, atproto.ErrAmbiguousTransport) || errors.Is(err, atproto.ErrRevisionMoving) {
-		return urfave.Exit(label+" is indeterminate: the provider position changed or was unavailable while the apply plan was composed; re-run dottie "+label, 4)
+	if errors.Is(err, errPullApplySnapshotMoved) || errors.Is(err, errPullApplySnapshotUnavailable) ||
+		errors.Is(err, atproto.ErrAmbiguousTransport) ||
+		errors.Is(err, atproto.ErrRevisionMoving) {
+		return urfave.Exit(
+			label+" is indeterminate: the provider position changed or was unavailable while the apply plan was composed; re-run dottie "+label,
+			4,
+		)
 	}
-	return urfave.Exit(label+" refused: the provider payload for the validated position cannot be read; nothing was changed", 3)
+	return urfave.Exit(
+		label+" refused: the provider payload for the validated position cannot be read; nothing was changed",
+		3,
+	)
 }
 
 func pullApplyRefusal(label string, err error) error {
 	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "backup_only" {
-			return urfave.Exit(label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
+			return urfave.Exit(
+				label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed",
+				3,
+			)
 		}
-		return urfave.Exit(label+" refused: the apply plan is unusable ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the apply plan is unusable ("+escapeField(
+				refusal.Stage()+"/"+refusal.Reason(),
+			)+"); nothing was changed",
+			3,
+		)
 	}
 	return urfave.Exit(label+" refused: the apply plan is unusable; nothing was changed", 3)
 }
@@ -571,9 +669,17 @@ func pullAcceptStagingFailure(label string, err error) error {
 	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "revision_moved" {
-			return urfave.Exit(label+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+label, 3)
+			return urfave.Exit(
+				label+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+label,
+				3,
+			)
 		}
-		return urfave.Exit(label+" refused: the applied material cannot be staged for accept ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the applied material cannot be staged for accept ("+escapeField(
+				refusal.Stage()+"/"+refusal.Reason(),
+			)+"); nothing was changed",
+			3,
+		)
 	}
 	return urfave.Exit(label+" refused: the applied material cannot be staged for accept; nothing was changed", 3)
 }
@@ -594,9 +700,19 @@ func pullAcceptFailure(command *urfave.Command, label, output string, err error)
 		unproven = true
 	}
 	if unproven {
-		return urfave.Exit(label+" did not complete: the apply finished but the accepted floor is not confirmed ("+escapeField(detail)+"); re-run dottie "+label, 4)
+		return urfave.Exit(
+			label+" did not complete: the apply finished but the accepted floor is not confirmed ("+escapeField(
+				detail,
+			)+"); re-run dottie "+label,
+			4,
+		)
 	}
-	return urfave.Exit(label+" did not complete: the apply finished but the accepted floor is unchanged ("+escapeField(detail)+"); re-run dottie "+label, 3)
+	return urfave.Exit(
+		label+" did not complete: the apply finished but the accepted floor is unchanged ("+escapeField(
+			detail,
+		)+"); re-run dottie "+label,
+		3,
+	)
 }
 
 func pullApplyFailure(command *urfave.Command, label, output string, err error) error {
@@ -607,17 +723,38 @@ func pullApplyFailure(command *urfave.Command, label, output string, err error) 
 	var blocked *publicationstate.JournalBlockedError
 	switch {
 	case errors.As(err, &refusal) && refusal.Reason() == "backup_only":
-		return urfave.Exit(label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the effective selection is backup-only; apply never writes or deletes local files for that selection; nothing was changed",
+			3,
+		)
 	case errors.As(err, &refusal) && (refusal.Stage() == "apply-mutate" || refusal.Stage() == "apply-observation"):
-		return urfave.Exit(label+" did not complete: the apply is indeterminate ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); re-run dottie "+label+" to resolve the journal", 4)
+		return urfave.Exit(
+			label+" did not complete: the apply is indeterminate ("+escapeField(
+				refusal.Stage()+"/"+refusal.Reason(),
+			)+"); re-run dottie "+label+" to resolve the journal",
+			4,
+		)
 	case errors.As(err, &refusal):
-		return urfave.Exit(label+" refused: the apply was refused ("+escapeField(refusal.Stage()+"/"+refusal.Reason())+"); nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the apply was refused ("+escapeField(
+				refusal.Stage()+"/"+refusal.Reason(),
+			)+"); nothing was changed",
+			3,
+		)
 	case errors.As(err, &blocked):
-		return urfave.Exit(label+" refused: an earlier apply journal entry still blocks this apply; nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: an earlier apply journal entry still blocks this apply; nothing was changed",
+			3,
+		)
 	}
 	var storeFailure publicationStoreFailure
 	if errors.As(err, &storeFailure) {
-		return urfave.Exit(label+" refused: the apply journal cannot be used ("+escapeField(string(storeFailure.Reason()))+"); nothing was changed", 3)
+		return urfave.Exit(
+			label+" refused: the apply journal cannot be used ("+escapeField(
+				string(storeFailure.Reason()),
+			)+"); nothing was changed",
+			3,
+		)
 	}
 	if errors.Is(err, service.ErrPublicationApply) {
 		return urfave.Exit(label+" refused: the apply was refused; nothing was changed", 3)
@@ -640,10 +777,20 @@ func renderPullApplyPlan(plan service.PublicationApplyPlan) string {
 }
 
 func renderPullApplyReport(report service.PublicationApplyReport) string {
-	return fmt.Sprintf("pull: applied changes=%d unchanged=%d bytes=%d\n", report.Applied, report.Unchanged, report.BytesWritten)
+	return fmt.Sprintf(
+		"pull: applied changes=%d unchanged=%d bytes=%d\n",
+		report.Applied,
+		report.Unchanged,
+		report.BytesWritten,
+	)
 }
 
-func pullApplyConfirmationToken(binding publicationstate.Binding, plan [32]byte, stateToken [32]byte, observationDigest [32]byte) [32]byte {
+func pullApplyConfirmationToken(
+	binding publicationstate.Binding,
+	plan [32]byte,
+	stateToken [32]byte,
+	observationDigest [32]byte,
+) [32]byte {
 	digest := sha256.New()
 	var length [4]byte
 	writeField := func(value string) {
@@ -691,11 +838,14 @@ func productionPullApplySourcesFactory(env func(string) string) pullApplySources
 }
 
 func pullScopeRefusal(err error, did string) string {
-	var scopeError *atproto.PublicationScopeError
-	if errors.As(err, &scopeError) {
-		return "pull refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it; account " + escapeField(did) + " is unchanged"
+	if _, ok := errors.AsType[*atproto.PublicationScopeError](err); ok {
+		return "pull refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it; account " + escapeField(
+			did,
+		) + " is unchanged"
 	}
-	return "pull refused: the account session cannot prove the v2 publication scope; account " + escapeField(did) + " is unchanged"
+	return "pull refused: the account session cannot prove the v2 publication scope; account " + escapeField(
+		did,
+	) + " is unchanged"
 }
 
 func pullRemoteFailure(err error) string {
@@ -707,7 +857,12 @@ func pullRemoteFailure(err error) string {
 
 func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(string) string) pullRemoteFactory {
 	return func(ctx context.Context, _ *urfave.Command, session pushSession, binding publicationstate.Binding) (pullRemote, error) {
-		identity, transport, reader, closeResources, err := openAuthorizedPublicationReader(ctx, openKeyring, env, session)
+		identity, transport, reader, closeResources, err := openAuthorizedPublicationReader(
+			ctx,
+			openKeyring,
+			env,
+			session,
+		)
 		if err != nil {
 			return pullRemote{}, err
 		}
@@ -737,7 +892,12 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 	}
 }
 
-func openAuthorizedPublicationReader(ctx context.Context, openKeyring accountKeyringFactory, env func(string) string, session pushSession) (atproto.Identity, atproto.Transport, atproto.RevisionReader, func(), error) {
+func openAuthorizedPublicationReader(
+	ctx context.Context,
+	openKeyring accountKeyringFactory,
+	env func(string) string,
+	session pushSession,
+) (atproto.Identity, atproto.Transport, atproto.RevisionReader, func(), error) {
 	keyring, err := openKeyring()
 	if err != nil {
 		return atproto.Identity{}, nil, atproto.RevisionReader{}, func() {}, err
@@ -751,7 +911,8 @@ func openAuthorizedPublicationReader(ctx context.Context, openKeyring accountKey
 		return fail(err)
 	}
 	identity, err := client.Discover(ctx, session.Session.Handle)
-	if err != nil || identity.DID != session.Session.DID || identity.DIDDocumentID == "" || len(identity.VerificationMethods) == 0 {
+	if err != nil || identity.DID != session.Session.DID || identity.DIDDocumentID == "" ||
+		len(identity.VerificationMethods) == 0 {
 		return fail(errors.New("account identity is unavailable"))
 	}
 	api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session.Session)

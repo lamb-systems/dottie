@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	sqliteDriver "modernc.org/sqlite"
 	sqliteLib "modernc.org/sqlite/lib"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 type publicationOpenEvent struct {
@@ -51,7 +52,14 @@ func newPublicationOpenRecorder() *publicationOpenRecorder {
 
 func (r *publicationOpenRecorder) openFault(point int, holder *Store) error {
 	r.events = append(r.events, publicationOpenEvent{stream: "open", point: point})
-	r.states[point] = publicationOpenHolderState{holder: holder, rootFD: holder.rootFD, payloadFD: holder.payloadFD, lock: holder.lock, db: holder.db, conn: holder.conn}
+	r.states[point] = publicationOpenHolderState{
+		holder:    holder,
+		rootFD:    holder.rootFD,
+		payloadFD: holder.payloadFD,
+		lock:      holder.lock,
+		db:        holder.db,
+		conn:      holder.conn,
+	}
 	if r.mutate != nil {
 		r.mutate(point)
 	}
@@ -109,14 +117,26 @@ func publicationOpenInputFor(t *testing.T, shape string) publicationOpenInput {
 		f := newFixture(t, BackendPublicRepo)
 		directory := t.TempDir()
 		require.NoError(t, os.Chmod(directory, 0o700))
-		return publicationOpenInput{shape: shape, directory: directory, database: filepath.Join(directory, "publication.db"), binding: f.binding, options: DefaultOpenOptions()}
+		return publicationOpenInput{
+			shape:     shape,
+			directory: directory,
+			database:  filepath.Join(directory, "publication.db"),
+			binding:   f.binding,
+			options:   DefaultOpenOptions(),
+		}
 	case "empty":
 		f := newFixture(t, BackendPublicRepo)
 		directory := t.TempDir()
 		require.NoError(t, os.Chmod(directory, 0o700))
 		database := filepath.Join(directory, "publication.db")
 		require.NoError(t, os.WriteFile(database, nil, 0o600))
-		return publicationOpenInput{shape: shape, directory: directory, database: database, binding: f.binding, options: DefaultOpenOptions()}
+		return publicationOpenInput{
+			shape:     shape,
+			directory: directory,
+			database:  database,
+			binding:   f.binding,
+			options:   DefaultOpenOptions(),
+		}
 	case "pending-genesis":
 		assets := incomingMaterialUpgradeFixtureCopy(t)
 		image := assets.manifest.requireImage(t, "pending-genesis")
@@ -126,7 +146,15 @@ func publicationOpenInputFor(t *testing.T, shape string) publicationOpenInput {
 		options.AttemptLimits = attemptLimits
 		directory := filepath.Join(assets.root, "pending-genesis")
 		payloadName := "f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea.payload"
-		return publicationOpenInput{shape: shape, directory: directory, database: filepath.Join(directory, "publication.db"), binding: binding, options: options, payloadPath: filepath.Join(directory, "payloads", payloadName), payloadHash: "f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea"}
+		return publicationOpenInput{
+			shape:       shape,
+			directory:   directory,
+			database:    filepath.Join(directory, "publication.db"),
+			binding:     binding,
+			options:     options,
+			payloadPath: filepath.Join(directory, "payloads", payloadName),
+			payloadHash: "f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea",
+		}
 	case "positions-v1":
 		f, database, _ := incomingMaterialUpgradeCopyV1(t)
 		options := DefaultOpenOptions()
@@ -134,7 +162,15 @@ func publicationOpenInputFor(t *testing.T, shape string) publicationOpenInput {
 		options.UpgradeFromAttempts = true
 		directory := filepath.Dir(database)
 		payloadName := "schema1-baseline-payload.bin"
-		return publicationOpenInput{shape: shape, directory: directory, database: database, binding: f.binding, options: options, payloadPath: filepath.Join(directory, payloadName), payloadHash: incomingMaterialUpgradeFixtureHashes[payloadName]}
+		return publicationOpenInput{
+			shape:       shape,
+			directory:   directory,
+			database:    database,
+			binding:     f.binding,
+			options:     options,
+			payloadPath: filepath.Join(directory, payloadName),
+			payloadHash: incomingMaterialUpgradeFixtureHashes[payloadName],
+		}
 	default:
 		require.FailNowf(t, "unsupported open shape", "%q", shape)
 		return publicationOpenInput{}
@@ -149,7 +185,12 @@ type publicationOpenSourceSnapshot struct {
 	incomingRefCount   int64
 }
 
-func publicationOpenSnapshotSource(t *testing.T, ctx context.Context, databasePath string, version int) publicationOpenSourceSnapshot {
+func publicationOpenSnapshotSource(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+	version int,
+) publicationOpenSourceSnapshot {
 	t.Helper()
 	conn, closeConn := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, databasePath)
 	require.Equal(t, version, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -173,10 +214,21 @@ func publicationOpenSnapshotSource(t *testing.T, ctx context.Context, databasePa
 		require.Zero(t, incomingTableCount)
 	}
 	closeConn(t)
-	return publicationOpenSourceSnapshot{version: version, typed: typed, metadata: metadata, incomingTableCount: incomingTableCount, incomingRefCount: incomingRefCount}
+	return publicationOpenSourceSnapshot{
+		version:            version,
+		typed:              typed,
+		metadata:           metadata,
+		incomingTableCount: incomingTableCount,
+		incomingRefCount:   incomingRefCount,
+	}
 }
 
-func publicationOpenRequireSourcePreserved(t *testing.T, ctx context.Context, databasePath string, before publicationOpenSourceSnapshot) {
+func publicationOpenRequireSourcePreserved(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+	before publicationOpenSourceSnapshot,
+) {
 	t.Helper()
 	after := publicationOpenSnapshotSource(t, ctx, databasePath, before.version)
 	require.Equal(t, before, after)
@@ -198,7 +250,12 @@ func publicationOpenRequireFD0(t *testing.T, before unix.Stat_t) {
 	require.Equal(t, before.Mode, after.Mode)
 }
 
-func publicationOpenRequireSchema3(t *testing.T, ctx context.Context, store *Store, input publicationOpenInput) map[string][]byte {
+func publicationOpenRequireSchema3(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	input publicationOpenInput,
+) map[string][]byte {
 	t.Helper()
 	require.NotNil(t, store)
 	require.False(t, store.closed)
@@ -244,7 +301,12 @@ func publicationOpenRequireEmptyState(t *testing.T, ctx context.Context, store *
 	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 }
 
-func publicationOpenRequirePendingState(t *testing.T, ctx context.Context, store *Store, before publicationOpenSourceSnapshot) {
+func publicationOpenRequirePendingState(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	before publicationOpenSourceSnapshot,
+) {
 	t.Helper()
 	rows := incomingMaterialUpgradeFixtureTypedRows(t, ctx, store.conn)
 	require.Equal(t, before.typed, rows)
@@ -258,11 +320,20 @@ func publicationOpenRequirePendingState(t *testing.T, ctx context.Context, store
 	require.Len(t, attempts.Attempts, 1)
 	require.Equal(t, AttemptGenesis, attempts.Attempts[0].Kind)
 	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM pending_genesis"))
-	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"))
+	require.Equal(
+		t,
+		int64(1),
+		incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"),
+	)
 	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 }
 
-func publicationOpenRequireV1Upgraded(t *testing.T, ctx context.Context, store *Store, before publicationOpenSourceSnapshot) {
+func publicationOpenRequireV1Upgraded(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	before publicationOpenSourceSnapshot,
+) {
 	t.Helper()
 	metadata := incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn)
 	require.Len(t, metadata, 7)
@@ -356,10 +427,21 @@ func publicationOpenCurrent3PendingInput(t *testing.T) publicationOpenInput {
 	require.Len(t, setup.commitResults, 1)
 	require.NoError(t, setup.commitResults[0])
 	require.Equal(t, []publicationOpenEvent{
-		{stream: "open", point: 101}, {stream: "open", point: 102}, {stream: "open", point: 103},
-		{stream: "migrate", point: 13}, {stream: "migrate", point: 14}, {stream: "migrate", point: 15}, {stream: "migrate", point: 16},
+		{stream: "open", point: 101},
+		{stream: "open", point: 102},
+		{stream: "open", point: 103},
+		{
+			stream: "migrate",
+			point:  13,
+		},
+		{stream: "migrate", point: 14},
+		{stream: "migrate", point: 15},
+		{stream: "migrate", point: 16},
 		{stream: "commit", point: 0},
-		{stream: "open", point: 1}, {stream: "open", point: 2}, {stream: "open", point: 3}, {stream: "open", point: 4},
+		{stream: "open", point: 1},
+		{stream: "open", point: 2},
+		{stream: "open", point: 3},
+		{stream: "open", point: 4},
 	}, setup.events)
 	publicationOpenRequireAcquisitionIdentities(t, setup, migrated)
 	publicationOpenRequireFD0(t, fd0)
@@ -383,7 +465,15 @@ func publicationOpenCurrent3PendingInput(t *testing.T) publicationOpenInput {
 	return input
 }
 
-func publicationOpenRequireRefused(t *testing.T, store *Store, err error, recorder *publicationOpenRecorder, expected []int, class error, reason Reason) publicationOpenHolderState {
+func publicationOpenRequireRefused(
+	t *testing.T,
+	store *Store,
+	err error,
+	recorder *publicationOpenRecorder,
+	expected []int,
+	class error,
+	reason Reason,
+) publicationOpenHolderState {
 	t.Helper()
 	require.Nil(t, store)
 	requireErrorMetadata(t, err, class, StageOpen, reason)
@@ -408,7 +498,12 @@ func publicationOpenRequireRefused(t *testing.T, store *Store, err error, record
 	return state
 }
 
-func publicationOpenRequireStageResources(t *testing.T, ctx context.Context, state publicationOpenHolderState, point int) {
+func publicationOpenRequireStageResources(
+	t *testing.T,
+	ctx context.Context,
+	state publicationOpenHolderState,
+	point int,
+) {
 	t.Helper()
 	switch point {
 	case openRootAcquiredFault:
@@ -494,7 +589,11 @@ func publicationOpenCapturePayload(t *testing.T, input publicationOpenInput) inc
 	return state
 }
 
-func publicationOpenRequirePayloadPreserved(t *testing.T, input publicationOpenInput, before incomingMaterialUpgradeFixturePayload) {
+func publicationOpenRequirePayloadPreserved(
+	t *testing.T,
+	input publicationOpenInput,
+	before incomingMaterialUpgradeFixturePayload,
+) {
 	t.Helper()
 	require.NotEmpty(t, input.payloadPath)
 	after := incomingMaterialUpgradeFixturePayloadState(t, input.payloadPath)
@@ -552,7 +651,7 @@ func TestPublicationOpenResourceAcquisition(t *testing.T) {
 		for _, event := range recorder.events {
 			require.Equal(t, "open", event.stream)
 		}
-		require.Equal(t, 8, len(recorder.states))
+		require.Len(t, recorder.states, 8)
 		publicationOpenRequireAcquisitionIdentities(t, recorder, store)
 		publicationOpenRequireSchema3(t, ctx, store, input)
 		publicationOpenRequireEmptyState(t, ctx, store)
@@ -879,7 +978,11 @@ type publicationOpenForeignSnapshot struct {
 	value         string
 }
 
-func publicationOpenSnapshotForeign(t *testing.T, ctx context.Context, databasePath string) publicationOpenForeignSnapshot {
+func publicationOpenSnapshotForeign(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+) publicationOpenForeignSnapshot {
 	t.Helper()
 	conn, closeConn := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, databasePath)
 	var applicationID, userVersion int
@@ -910,10 +1013,23 @@ func publicationOpenSnapshotForeign(t *testing.T, ctx context.Context, databaseP
 	var value string
 	require.NoError(t, conn.QueryRowContext(ctx, "SELECT value FROM foreign_state").Scan(&value))
 	closeConn(t)
-	return publicationOpenForeignSnapshot{applicationID: applicationID, userVersion: userVersion, journalMode: journalMode, objects: objects, definitions: definitions, rows: count, value: value}
+	return publicationOpenForeignSnapshot{
+		applicationID: applicationID,
+		userVersion:   userVersion,
+		journalMode:   journalMode,
+		objects:       objects,
+		definitions:   definitions,
+		rows:          count,
+		value:         value,
+	}
 }
 
-func publicationOpenCreateForeignDatabase(t *testing.T, ctx context.Context, databasePath string, applicationIDValue, userVersionValue int) {
+func publicationOpenCreateForeignDatabase(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+	applicationIDValue, userVersionValue int,
+) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(databasePath, nil, 0o600))
 	conn, closeStore := incomingMaterialUpgradeFixtureOpenStore(t, ctx, databasePath)
@@ -931,7 +1047,12 @@ func publicationOpenCreateForeignDatabase(t *testing.T, ctx context.Context, dat
 	closeStore(t)
 }
 
-func publicationOpenRequireRefusalIdentities(t *testing.T, recorder *publicationOpenRecorder, terminal publicationOpenHolderState, acquiredConn bool) {
+func publicationOpenRequireRefusalIdentities(
+	t *testing.T,
+	recorder *publicationOpenRecorder,
+	terminal publicationOpenHolderState,
+	acquiredConn bool,
+) {
 	t.Helper()
 	first, present := recorder.states[openRootAcquiredFault]
 	require.True(t, present)
@@ -994,7 +1115,13 @@ func publicationOpenRequireHealthyCurrent3Probe(t *testing.T, input publicationO
 	require.Equal(t, 3, probe.version)
 }
 
-func publicationOpenRequireHealthyReopen(t *testing.T, ctx context.Context, input publicationOpenInput, before publicationOpenSourceSnapshot, payload incomingMaterialUpgradeFixturePayload) {
+func publicationOpenRequireHealthyReopen(
+	t *testing.T,
+	ctx context.Context,
+	input publicationOpenInput,
+	before publicationOpenSourceSnapshot,
+	payload incomingMaterialUpgradeFixturePayload,
+) {
 	t.Helper()
 	reopened, err := Open(input.directory, input.binding)
 	if reopened != nil {
@@ -1102,7 +1229,15 @@ func TestIncomingMaterialPublicOpenNaturalRefusalOwnership(t *testing.T) {
 		if store != nil {
 			t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		}
-		state := publicationOpenRequireRefused(t, store, err, recorder, []int{101, 102}, ErrSchema, ReasonUpgradeRequired)
+		state := publicationOpenRequireRefused(
+			t,
+			store,
+			err,
+			recorder,
+			[]int{101, 102},
+			ErrSchema,
+			ReasonUpgradeRequired,
+		)
 		publicationOpenRequireRefusalIdentities(t, recorder, state, false)
 		publicationOpenRequireFD0(t, fd0)
 		publicationOpenRequireLockWitness(t, input.directory, true)
@@ -1319,7 +1454,13 @@ func publicationOpenCaptureDestination(t *testing.T, ctx context.Context, store 
 	require.Equal(t, int64(1), incomingTableCount)
 	incomingRefCount := incomingMaterialUpgradeCount(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs")
 	require.Zero(t, incomingRefCount)
-	return publicationOpenSourceSnapshot{version: 3, typed: incomingMaterialUpgradeFixtureTypedRows(t, ctx, store.conn), metadata: incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn), incomingTableCount: incomingTableCount, incomingRefCount: incomingRefCount}
+	return publicationOpenSourceSnapshot{
+		version:            3,
+		typed:              incomingMaterialUpgradeFixtureTypedRows(t, ctx, store.conn),
+		metadata:           incomingMaterialUpgradeStoredMetadata(t, ctx, store.conn),
+		incomingTableCount: incomingTableCount,
+		incomingRefCount:   incomingRefCount,
+	}
 }
 
 func publicationOpenRequireEmptyDestination(t *testing.T, destination publicationOpenSourceSnapshot) {
@@ -1344,7 +1485,12 @@ func publicationOpenRequireEmptyDestination(t *testing.T, destination publicatio
 	}
 }
 
-func publicationOpenRequireDestinationPreserved(t *testing.T, ctx context.Context, input publicationOpenInput, destination publicationOpenSourceSnapshot) {
+func publicationOpenRequireDestinationPreserved(
+	t *testing.T,
+	ctx context.Context,
+	input publicationOpenInput,
+	destination publicationOpenSourceSnapshot,
+) {
 	t.Helper()
 	after := publicationOpenSnapshotSource(t, ctx, input.database, 3)
 	require.Equal(t, destination, after)
@@ -1471,7 +1617,15 @@ func TestPublicationNewStoreCreationSecurity(t *testing.T) {
 		if store != nil {
 			t.Cleanup(func() { assert.NoError(t, store.Close()) })
 		}
-		state := publicationOpenRequireRefused(t, store, err, recorder, []int{101, 102, 103, 1, 104}, ErrStorage, ReasonIO)
+		state := publicationOpenRequireRefused(
+			t,
+			store,
+			err,
+			recorder,
+			[]int{101, 102, 103, 1, 104},
+			ErrStorage,
+			ReasonIO,
+		)
 		require.Equal(t, 1, calls)
 		require.Equal(t, input.database, callPath)
 		require.Equal(t, os.FileMode(0o600), callMode)
@@ -1824,7 +1978,12 @@ func TestIncomingMaterialPublicUpgradeCommitOutcomes(t *testing.T) {
 				base.UpgradeFromAttempts = true
 				require.Equal(t, image == "positions-v1", base.UpgradeFromPositions)
 				require.True(t, base.UpgradeFromAttempts)
-				input := publicationOpenInput{directory: c.directory, database: c.databasePath, binding: c.binding, options: base}
+				input := publicationOpenInput{
+					directory: c.directory,
+					database:  c.databasePath,
+					binding:   c.binding,
+					options:   base,
+				}
 				recorder := newPublicationOpenRecorder()
 				canary := errors.New("actual public upgrade Commit succeeded before this selected canary")
 				recorder.canary = canary
@@ -1875,7 +2034,16 @@ func TestIncomingMaterialPublicUpgradeCommitOutcomes(t *testing.T) {
 					publicationOpenRequireClosedResources(t, store, c.directory)
 					publicationOpenRequireFD0(t, fd0)
 				} else {
-					incomingMaterialPublicCommitRequireFailed(t, store, err, recorder, migrationPoints, canary, c.directory, fd0)
+					incomingMaterialPublicCommitRequireFailed(
+						t,
+						store,
+						err,
+						recorder,
+						migrationPoints,
+						canary,
+						c.directory,
+						fd0,
+					)
 				}
 				require.Equal(t, 1, hookCalls)
 				require.Equal(t, 1, recorder.commits)
@@ -1929,7 +2097,16 @@ func TestIncomingMaterialPublicUpgradeCommitOutcomes(t *testing.T) {
 	}
 }
 
-func incomingMaterialPublicCommitRequireFailed(t *testing.T, store *Store, err error, recorder *publicationOpenRecorder, migrationPoints []int, canary error, directory string, fd0 unix.Stat_t) {
+func incomingMaterialPublicCommitRequireFailed(
+	t *testing.T,
+	store *Store,
+	err error,
+	recorder *publicationOpenRecorder,
+	migrationPoints []int,
+	canary error,
+	directory string,
+	fd0 unix.Stat_t,
+) {
 	t.Helper()
 	state, present := recorder.states[openConnectionAcquiredFault]
 	require.True(t, present)
@@ -1963,7 +2140,7 @@ func incomingMaterialPublicCommitRequireFailed(t *testing.T, store *Store, err e
 	require.Same(t, state.conn, state.holder.conn)
 	unwrapped := errors.Unwrap(err)
 	require.Same(t, ErrStorage, unwrapped)
-	require.Nil(t, errors.Unwrap(unwrapped))
+	require.NoError(t, errors.Unwrap(unwrapped))
 	for _, raw := range []error{canary, sql.ErrTxDone} {
 		require.NotErrorIs(t, err, raw)
 		require.NotErrorIs(t, unwrapped, raw)
@@ -1981,7 +2158,12 @@ func incomingMaterialPublicCommitRequireFailed(t *testing.T, store *Store, err e
 	publicationOpenRequireFD0(t, fd0)
 }
 
-func incomingMaterialPublicCommitReadback(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, committed bool) publicationOpenSourceSnapshot {
+func incomingMaterialPublicCommitReadback(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	committed bool,
+) publicationOpenSourceSnapshot {
 	t.Helper()
 	conn, closeConn := incomingMaterialUpgradeFixtureOpenReadOnly(t, ctx, c.databasePath)
 	version := c.version
@@ -1992,7 +2174,11 @@ func incomingMaterialPublicCommitReadback(t *testing.T, ctx context.Context, c *
 		incomingMaterialUpgradeOutcomeRequireRestored(t, ctx, conn, c)
 	}
 	require.NoError(t, checkSchemaVersion(ctx, conn, version))
-	snapshot := publicationOpenSourceSnapshot{version: incomingMaterialUpgradeUserVersion(t, ctx, conn), metadata: incomingMaterialUpgradeStoredMetadata(t, ctx, conn), incomingTableCount: incomingMaterialUpgradeIncomingTableRows(t, ctx, conn)}
+	snapshot := publicationOpenSourceSnapshot{
+		version:            incomingMaterialUpgradeUserVersion(t, ctx, conn),
+		metadata:           incomingMaterialUpgradeStoredMetadata(t, ctx, conn),
+		incomingTableCount: incomingMaterialUpgradeIncomingTableRows(t, ctx, conn),
+	}
 	if version == 1 {
 		snapshot.typed = incomingMaterialUpgradeV1Rows(t, ctx, conn)
 		require.Len(t, snapshot.typed, 6)
@@ -2002,7 +2188,12 @@ func incomingMaterialPublicCommitReadback(t *testing.T, ctx context.Context, c *
 	}
 	if committed {
 		require.Equal(t, int64(1), snapshot.incomingTableCount)
-		snapshot.incomingRefCount = incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM accepted_material_refs")
+		snapshot.incomingRefCount = incomingMaterialUpgradeCount(
+			t,
+			ctx,
+			conn,
+			"SELECT COUNT(*) FROM accepted_material_refs",
+		)
 		require.Zero(t, snapshot.incomingRefCount)
 	} else {
 		require.Zero(t, snapshot.incomingTableCount)
@@ -2096,8 +2287,17 @@ func TestIncomingMaterialPublicUpgradeSQLiteCommitFailure(t *testing.T) {
 			if store != nil {
 				t.Cleanup(func() { assert.NoError(t, store.Close()) })
 			}
-			require.NotNil(t, actualCommitErr)
-			incomingMaterialPublicCommitRequireFailed(t, store, err, recorder, migrationPoints, actualCommitErr, c.directory, fd0)
+			require.Error(t, actualCommitErr)
+			incomingMaterialPublicCommitRequireFailed(
+				t,
+				store,
+				err,
+				recorder,
+				migrationPoints,
+				actualCommitErr,
+				c.directory,
+				fd0,
+			)
 			require.Equal(t, 1, hookCalls)
 			require.Equal(t, 1, recorder.commits)
 			require.Len(t, recorder.commitResults, 1)
@@ -2124,7 +2324,12 @@ func TestIncomingMaterialPublicUpgradeSQLiteCommitFailure(t *testing.T) {
 	}
 }
 
-func incomingMaterialPublicSQLiteInsertDanglingRef(t *testing.T, ctx context.Context, tx *sql.Tx, binding Binding) int64 {
+func incomingMaterialPublicSQLiteInsertDanglingRef(
+	t *testing.T,
+	ctx context.Context,
+	tx *sql.Tx,
+	binding Binding,
+) int64 {
 	t.Helper()
 	var foreignKeys, deferred int64
 	require.NoError(t, tx.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys))
@@ -2137,7 +2342,10 @@ func incomingMaterialPublicSQLiteInsertDanglingRef(t *testing.T, ctx context.Con
 	require.Equal(t, int64(1), deferred)
 	revision := int64(publication.MaxSequence)
 	require.Equal(t, int64(9007199254740991), revision)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_events WHERE revision=?", revision))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_events WHERE revision=?", revision),
+	)
 	f := newFixture(t, BackendPublicRepo)
 	for _, sequence := range []uint64{0, 1, 2, 3} {
 		f.appendRecord(t, sequence)
@@ -2151,13 +2359,25 @@ func incomingMaterialPublicSQLiteInsertDanglingRef(t *testing.T, ctx context.Con
 	require.NoError(t, err)
 	require.NotEmpty(t, recordCID)
 	require.LessOrEqual(t, len(recordCID), publication.MaxCIDBytes)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_records WHERE cid=?", recordCID))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM accepted_records WHERE cid=?", recordCID),
+	)
 	blobCID, size := incomingMaterialSecondPayloadCID(t)
 	require.NotEmpty(t, blobCID)
 	require.LessOrEqual(t, len(blobCID), publication.MaxCIDBytes)
 	require.Positive(t, size)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blobCID))
-	result, err := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", revision, recordCID, blobCID)
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(t, ctx, tx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid=?", blobCID),
+	)
+	result, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+		revision,
+		recordCID,
+		blobCID,
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -2166,7 +2386,11 @@ func incomingMaterialPublicSQLiteInsertDanglingRef(t *testing.T, ctx context.Con
 	var revisionType, recordType, blobType string
 	var storedRevision int64
 	var storedRecord, storedBlob []byte
-	require.NoError(t, tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),accepted_revision,typeof(record_cid),record_cid,typeof(blob_cid),blob_cid FROM accepted_material_refs").Scan(&revisionType, &storedRevision, &recordType, &storedRecord, &blobType, &storedBlob))
+	require.NoError(
+		t,
+		tx.QueryRowContext(ctx, "SELECT typeof(accepted_revision),accepted_revision,typeof(record_cid),record_cid,typeof(blob_cid),blob_cid FROM accepted_material_refs").
+			Scan(&revisionType, &storedRevision, &recordType, &storedRecord, &blobType, &storedBlob),
+	)
 	require.Equal(t, "integer", revisionType)
 	require.Equal(t, revision, storedRevision)
 	require.Equal(t, "blob", recordType)
@@ -2272,7 +2496,16 @@ func TestIncomingMaterialPublicUpgradeRollbackOwnership(t *testing.T) {
 				if store != nil {
 					t.Cleanup(func() { assert.NoError(t, store.Close()) })
 				}
-				incomingMaterialPublicRollbackRequireFailed(t, store, err, recorder, expectedReached, canary, c.directory, fd0)
+				incomingMaterialPublicRollbackRequireFailed(
+					t,
+					store,
+					err,
+					recorder,
+					expectedReached,
+					canary,
+					c.directory,
+					fd0,
+				)
 				require.Equal(t, before, incomingMaterialPublicCommitReadback(t, ctx, c, false))
 				reopenFD0 := publicationOpenFD0(t)
 				refused, err := Open(c.directory, c.binding)
@@ -2291,7 +2524,16 @@ func TestIncomingMaterialPublicUpgradeRollbackOwnership(t *testing.T) {
 	}
 }
 
-func incomingMaterialPublicRollbackRequireFailed(t *testing.T, store *Store, err error, recorder *publicationOpenRecorder, expectedReached []int, canary error, directory string, fd0 unix.Stat_t) {
+func incomingMaterialPublicRollbackRequireFailed(
+	t *testing.T,
+	store *Store,
+	err error,
+	recorder *publicationOpenRecorder,
+	expectedReached []int,
+	canary error,
+	directory string,
+	fd0 unix.Stat_t,
+) {
 	t.Helper()
 	state, present := recorder.states[openConnectionAcquiredFault]
 	require.True(t, present)
@@ -2325,7 +2567,7 @@ func incomingMaterialPublicRollbackRequireFailed(t *testing.T, store *Store, err
 	require.Same(t, state.conn, state.holder.conn)
 	unwrapped := errors.Unwrap(err)
 	require.Same(t, ErrStorage, unwrapped)
-	require.Nil(t, errors.Unwrap(unwrapped))
+	require.NoError(t, errors.Unwrap(unwrapped))
 	require.NotErrorIs(t, err, canary)
 	require.NotErrorIs(t, unwrapped, canary)
 	require.NotContains(t, err.Error(), canary.Error())
@@ -2385,7 +2627,7 @@ func TestIncomingMaterialPublicUpgradeDestinationPostguards(t *testing.T) {
 				require.Empty(t, before.incoming)
 				expected = incomingMaterialPublicRefusalClone(before)
 				incomingMaterialPublicPostguardDamage(t, ctx, holder.conn, c, test.name, &expected)
-				require.NotEqual(t, before, expected)
+				require.NotEqual(t, expected, before)
 				require.Equal(t, expected, incomingMaterialPublicPostguardCapture(t, ctx, holder.conn))
 				require.Equal(t, before.metadata, c.source.metadata)
 			}
@@ -2398,7 +2640,7 @@ func TestIncomingMaterialPublicUpgradeDestinationPostguards(t *testing.T) {
 			publicationOpenRequireLockWitness(t, c.directory, true)
 			requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonCommitUnknown)
 			require.Same(t, ErrStorage, errors.Unwrap(err))
-			require.Nil(t, errors.Unwrap(errors.Unwrap(err)))
+			require.NoError(t, errors.Unwrap(errors.Unwrap(err)))
 			require.Equal(t, 1, mutations)
 			require.Equal(t, expected, incomingMaterialPublicRefusalCapture(t, ctx, c.databasePath, "publication"))
 			incomingMaterialUpgradeOutcomeRequirePayloads(t, c)
@@ -2408,7 +2650,15 @@ func TestIncomingMaterialPublicUpgradeDestinationPostguards(t *testing.T) {
 			if refused != nil {
 				t.Cleanup(func() { assert.NoError(t, refused.Close()) })
 			}
-			state := publicationOpenRequireRefused(t, refused, reopenErr, ordinary, []int{101, 102}, test.class, test.reason)
+			state := publicationOpenRequireRefused(
+				t,
+				refused,
+				reopenErr,
+				ordinary,
+				[]int{101, 102},
+				test.class,
+				test.reason,
+			)
 			publicationOpenRequireRefusalIdentities(t, ordinary, state, false)
 			publicationOpenRequireFD0(t, fd0)
 			publicationOpenRequireLockWitness(t, c.directory, true)
@@ -2419,7 +2669,11 @@ func TestIncomingMaterialPublicUpgradeDestinationPostguards(t *testing.T) {
 	}
 }
 
-func incomingMaterialPublicPostguardCapture(t *testing.T, ctx context.Context, q queryer) incomingMaterialPublicRefusalSnapshot {
+func incomingMaterialPublicPostguardCapture(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+) incomingMaterialPublicRefusalSnapshot {
 	t.Helper()
 	var snapshot incomingMaterialPublicRefusalSnapshot
 	require.NoError(t, q.QueryRowContext(ctx, "PRAGMA application_id").Scan(&snapshot.applicationID))
@@ -2435,7 +2689,14 @@ func incomingMaterialPublicPostguardCapture(t *testing.T, ctx context.Context, q
 	return snapshot
 }
 
-func incomingMaterialPublicPostguardDamage(t *testing.T, ctx context.Context, conn *sql.Conn, c *incomingMaterialUpgradeOutcomeCase, name string, expected *incomingMaterialPublicRefusalSnapshot) {
+func incomingMaterialPublicPostguardDamage(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	c *incomingMaterialUpgradeOutcomeCase,
+	name string,
+	expected *incomingMaterialPublicRefusalSnapshot,
+) {
 	t.Helper()
 	var key string
 	var value []byte
@@ -2445,7 +2706,10 @@ func incomingMaterialPublicPostguardDamage(t *testing.T, ctx context.Context, co
 		require.NotContains(t, expected.objects, "incoming_postguard_extra")
 		_, err := conn.ExecContext(ctx, statement)
 		require.NoError(t, err)
-		expected.objects["incoming_postguard_extra"] = incomingMaterialUpgradeFixtureObject{kind: "index", sql: statement}
+		expected.objects["incoming_postguard_extra"] = incomingMaterialUpgradeFixtureObject{
+			kind: "index",
+			sql:  statement,
+		}
 		return
 	case "altered canonical binding":
 		binding := c.binding
@@ -2524,7 +2788,11 @@ func incomingMaterialPublicPostguardDamage(t *testing.T, ctx context.Context, co
 	expected.metadata[key] = append([]byte(nil), value...)
 }
 
-func incomingMaterialPublicCompletionPrepare(t *testing.T, ctx context.Context, image string) *incomingMaterialUpgradeOutcomeCase {
+func incomingMaterialPublicCompletionPrepare(
+	t *testing.T,
+	ctx context.Context,
+	image string,
+) *incomingMaterialUpgradeOutcomeCase {
 	t.Helper()
 	c := incomingMaterialUpgradeOutcomePrepare(t, ctx, image)
 	require.NotNil(t, c)
@@ -2560,7 +2828,12 @@ func incomingMaterialPublicCompletionPrepare(t *testing.T, ctx context.Context, 
 	return c
 }
 
-func incomingMaterialPublicCompletionOptions(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, recorder *publicationOpenRecorder) OpenOptions {
+func incomingMaterialPublicCompletionOptions(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	recorder *publicationOpenRecorder,
+) OpenOptions {
 	t.Helper()
 	base := DefaultOpenOptions()
 	base.PositionLimits, base.AttemptLimits = c.limits, c.attemptLimits
@@ -2579,7 +2852,11 @@ func incomingMaterialPublicCompletionOptions(t *testing.T, ctx context.Context, 
 			start = 1
 		}
 		points := make([]int, 0, 17-start)
-		events := []publicationOpenEvent{{stream: "open", point: 101}, {stream: "open", point: 102}, {stream: "open", point: 103}}
+		events := []publicationOpenEvent{
+			{stream: "open", point: 101},
+			{stream: "open", point: 102},
+			{stream: "open", point: 103},
+		}
 		for point := start; point <= 16; point++ {
 			points = append(points, point)
 			events = append(events, publicationOpenEvent{stream: "migrate", point: point})
@@ -2608,7 +2885,11 @@ func incomingMaterialPublicCompletionTrace(t *testing.T, recorder *publicationOp
 		start = 1
 	}
 	points := make([]int, 0, 17-start)
-	events := []publicationOpenEvent{{stream: "open", point: 101}, {stream: "open", point: 102}, {stream: "open", point: 103}}
+	events := []publicationOpenEvent{
+		{stream: "open", point: 101},
+		{stream: "open", point: 102},
+		{stream: "open", point: 103},
+	}
 	for point := start; point <= 16; point++ {
 		points = append(points, point)
 		events = append(events, publicationOpenEvent{stream: "migrate", point: point})
@@ -2628,7 +2909,15 @@ func incomingMaterialPublicCompletionTrace(t *testing.T, recorder *publicationOp
 	require.NoError(t, recorder.commitResults[0])
 }
 
-func incomingMaterialPublicCompletionRequireResources(t *testing.T, store *Store, recorder *publicationOpenRecorder, c *incomingMaterialUpgradeOutcomeCase, point int, lockMode os.FileMode, fd0 unix.Stat_t) {
+func incomingMaterialPublicCompletionRequireResources(
+	t *testing.T,
+	store *Store,
+	recorder *publicationOpenRecorder,
+	c *incomingMaterialUpgradeOutcomeCase,
+	point int,
+	lockMode os.FileMode,
+	fd0 unix.Stat_t,
+) {
 	t.Helper()
 	state, present := recorder.states[openConnectionAcquiredFault]
 	require.True(t, present)
@@ -2659,7 +2948,12 @@ func incomingMaterialPublicCompletionRequireResources(t *testing.T, store *Store
 	require.Equal(t, lockMode, info.Mode().Perm())
 }
 
-func incomingMaterialPublicCompletionReadback(t *testing.T, ctx context.Context, c *incomingMaterialUpgradeOutcomeCase, fd0 unix.Stat_t) {
+func incomingMaterialPublicCompletionReadback(
+	t *testing.T,
+	ctx context.Context,
+	c *incomingMaterialUpgradeOutcomeCase,
+	fd0 unix.Stat_t,
+) {
 	t.Helper()
 	durable := incomingMaterialPublicCommitReadback(t, ctx, c, true)
 	reopened, err := Open(c.directory, c.binding)
@@ -2707,7 +3001,7 @@ func TestIncomingMaterialPublicUpgradeCompletionIntervals(t *testing.T) {
 				publicationOpenRequireLockWitness(t, c.directory, true)
 				requireErrorMetadata(t, err, ErrStorage, StageOpen, ReasonCommitUnknown)
 				require.Same(t, ErrStorage, errors.Unwrap(err))
-				require.Nil(t, errors.Unwrap(errors.Unwrap(err)))
+				require.NoError(t, errors.Unwrap(errors.Unwrap(err)))
 				require.NotErrorIs(t, err, recorder.canary)
 				require.NotContains(t, err.Error(), recorder.canary.Error())
 				require.NotContains(t, fmt.Sprintf("%+v", err), recorder.canary.Error())
@@ -2773,7 +3067,7 @@ func TestIncomingMaterialPublicUpgradeFinalPreflight(t *testing.T) {
 			publicationOpenRequireFD0(t, fd0)
 			requireErrorMetadata(t, upgradeErr, ErrStorage, StageOpen, ReasonCommitUnknown)
 			require.Same(t, ErrStorage, errors.Unwrap(upgradeErr))
-			require.Nil(t, errors.Unwrap(errors.Unwrap(upgradeErr)))
+			require.NoError(t, errors.Unwrap(errors.Unwrap(upgradeErr)))
 			incomingMaterialPublicCompletionReadback(t, ctx, c, fd0)
 		})
 	}

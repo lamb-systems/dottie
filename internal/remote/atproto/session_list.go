@@ -50,7 +50,8 @@ func (c *Client) ListSessionDIDs(ctx context.Context) ([]string, error) {
 			Version int    `json:"version"`
 			DID     string `json:"did"`
 		}
-		if json.Unmarshal(encoded, &header) != nil || header.Version != sessionEnvelopeVersion || !validDID(header.DID) {
+		if json.Unmarshal(encoded, &header) != nil || header.Version != sessionEnvelopeVersion ||
+			!validDID(header.DID) {
 			return nil, ErrSessionUnavailable
 		}
 		if sessionItemName(c.ClientID, header.DID) != name {

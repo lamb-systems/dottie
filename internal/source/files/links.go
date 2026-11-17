@@ -39,7 +39,10 @@ func (s *captureState) captureLink(name, relative, linkDir string, inspected os.
 }
 
 func (s *captureState) skipLink(relative, target string) error {
-	s.result.Skipped = append(s.result.Skipped, Skip{Path: relative, Reason: SkipExternalLink, Detail: safeDetail(target)})
+	s.result.Skipped = append(
+		s.result.Skipped,
+		Skip{Path: relative, Reason: SkipExternalLink, Detail: safeDetail(target)},
+	)
 	return nil
 }
 

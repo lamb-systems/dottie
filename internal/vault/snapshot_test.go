@@ -16,8 +16,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestRoundTripAcrossTargetsSettingsAndTombstones(t *testing.T) {
@@ -31,8 +32,25 @@ func TestRoundTripAcrossTargetsSettingsAndTombstones(t *testing.T) {
 			fileEntry("first", "init.lua", model.FileRegular, model.FilePresent, []byte("one")),
 			fileEntry("second", "init.lua", model.FileRegular, model.FilePresent, []byte("two")),
 			fileEntry("first", "empty", model.FileRegular, model.FilePresent, []byte{}),
-			{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "theme", State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "'dark'"}}},
-			{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "enabled", State: model.SettingReset}},
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Desktop",
+					Path:     "/org/example/",
+					Key:      "theme",
+					State:    model.SettingPresent,
+					Value:    &model.VariantValue{Type: "s", Text: "'dark'"},
+				},
+			},
+			{
+				TargetID: "settings",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.example.Desktop",
+					Path:     "/org/example/",
+					Key:      "enabled",
+					State:    model.SettingReset,
+				},
+			},
 			fileEntry("first", "old.lua", "", model.FileDeleted, nil),
 		},
 	}
@@ -47,7 +65,11 @@ func TestRoundTripAcrossTargetsSettingsAndTombstones(t *testing.T) {
 	}
 	for _, entry := range got.Entries {
 		if entry.File != nil && entry.File.Path == "empty" && entry.File.Content == nil {
-			require.False(t, entry.File != nil && entry.File.Path == "empty" && entry.File.Content == nil, "present empty regular file lost its non-nil content")
+			require.False(
+				t,
+				entry.File != nil && entry.File.Path == "empty" && entry.File.Content == nil,
+				"present empty regular file lost its non-nil content",
+			)
 		}
 	}
 }
@@ -55,24 +77,39 @@ func TestRoundTripAcrossTargetsSettingsAndTombstones(t *testing.T) {
 func TestSingleFileTargetsBothUseDot(t *testing.T) {
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{fileTarget("one", "one.txt", model.SelectionFile), fileTarget("two", "two.txt", model.SelectionFile)},
-		Entries: []model.Entry{fileEntry("one", ".", model.FileRegular, model.FilePresent, []byte("1")), fileEntry("two", ".", model.FileRegular, model.FilePresent, []byte("2"))},
+		Targets: []model.Target{
+			fileTarget("one", "one.txt", model.SelectionFile),
+			fileTarget("two", "two.txt", model.SelectionFile),
+		},
+		Entries: []model.Entry{
+			fileEntry("one", ".", model.FileRegular, model.FilePresent, []byte("1")),
+			fileEntry("two", ".", model.FileRegular, model.FilePresent, []byte("2")),
+		},
 	}
 	got := mustRoundTrip(t, snapshot)
 	if len(got.Entries) != 2 || got.Entries[0].Identity() == got.Entries[1].Identity() {
 		require.Len(t, got.Entries, 2, "single-file identities were not distinct: %#v", got.Entries)
-		require.NotEqual(t, got.Entries[1].Identity(), got.Entries[0].Identity(), "single-file identities were not distinct: %#v", got.Entries)
+		require.NotEqual(
+			t,
+			got.Entries[1].Identity(),
+			got.Entries[0].Identity(),
+			"single-file identities were not distinct: %#v",
+			got.Entries,
+		)
 	}
 }
 
 func TestPackDoesNotInventTombstonesAndOrdersThem(t *testing.T) {
-	empty := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}}
+	empty := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+	}
 	blob, err := Pack(empty)
 	requireNoError(t, err)
 	unpacked, err := Unpack(blob)
 	requireNoError(t, err)
 	if len(unpacked.Entries) != 0 {
-		require.Len(t, unpacked.Entries, 0, "empty snapshot acquired entries: %#v", unpacked.Entries)
+		require.Empty(t, unpacked.Entries, "empty snapshot acquired entries: %#v", unpacked.Entries)
 	}
 	empty.Entries = []model.Entry{
 		fileEntry("files", "z", "", model.FileDeleted, nil),
@@ -94,7 +131,11 @@ func TestPackDoesNotInventTombstonesAndOrdersThem(t *testing.T) {
 
 func TestDuplicateIdentitiesRejectedByPackAndUnpack(t *testing.T) {
 	duplicate := fileEntry("files", "same", model.FileRegular, model.FilePresent, []byte("x"))
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: []model.Entry{duplicate, duplicate}}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: []model.Entry{duplicate, duplicate},
+	}
 	if _, err := Pack(snapshot); err == nil {
 		require.Error(t, err, "Pack accepted duplicate identities")
 	}
@@ -103,7 +144,13 @@ func TestDuplicateIdentitiesRejectedByPackAndUnpack(t *testing.T) {
 	requireNoError(t, err)
 	second := first
 	second.Member = ordinal(2)
-	manifest := wireManifest{Version: Version, Codec: CodecNone, SnapshotVersion: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: []wireEntry{first, second}}
+	manifest := wireManifest{
+		Version:         Version,
+		Codec:           CodecNone,
+		SnapshotVersion: model.SnapshotVersion,
+		Targets:         []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries:         []wireEntry{first, second},
+	}
 	blob := blobFromManifest(t, manifest, [][]byte{nil, nil}, 0)
 	if _, err := Unpack(blob); err == nil || !strings.Contains(err.Error(), "duplicate entry identity") {
 		require.ErrorContains(t, err, "duplicate entry identity", "Unpack did not reject duplicate identities: %v", err)
@@ -124,8 +171,22 @@ func TestPortablePathsUseOpaqueOrdinals(t *testing.T) {
 	}
 	fourThousandNinetySix := strings.Join(longParts, "/")
 	if len(threeHundred) != 300 || len(fourThousandNinetySix) != 4096 {
-		require.Len(t, threeHundred, 300, "bad test paths: nested=%d maximum=%d", len(threeHundred), len(fourThousandNinetySix))
-		require.Len(t, fourThousandNinetySix, 4096, "bad test paths: nested=%d maximum=%d", len(threeHundred), len(fourThousandNinetySix))
+		require.Len(
+			t,
+			threeHundred,
+			300,
+			"bad test paths: nested=%d maximum=%d",
+			len(threeHundred),
+			len(fourThousandNinetySix),
+		)
+		require.Len(
+			t,
+			fourThousandNinetySix,
+			4096,
+			"bad test paths: nested=%d maximum=%d",
+			len(threeHundred),
+			len(fourThousandNinetySix),
+		)
 	}
 	entries := []model.Entry{
 		fileEntry("files", "配置/主题.lua", model.FileRegular, model.FilePresent, []byte("unicode")),
@@ -136,13 +197,21 @@ func TestPortablePathsUseOpaqueOrdinals(t *testing.T) {
 	for _, path := range []string{"配置/主题.lua", threeHundred, fourThousandNinetySix} {
 		entries = appendParentDirectories(entries, "files", path)
 	}
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: entries}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: entries,
+	}
 	if len(longComponent) != 101 {
 		require.Len(t, longComponent, 101, "test component is not 101 bytes")
 	}
 	got := mustRoundTrip(t, snapshot)
 	if !equalSnapshots(got, canonicalSnapshot(snapshot)) {
-		require.True(t, equalSnapshots(got, canonicalSnapshot(snapshot)), "opaque ordinal archive did not preserve long and Unicode paths")
+		require.True(
+			t,
+			equalSnapshots(got, canonicalSnapshot(snapshot)),
+			"opaque ordinal archive did not preserve long and Unicode paths",
+		)
 	}
 	limits := DefaultLimits()
 	limits.MaxPathBytes = 100
@@ -157,7 +226,11 @@ func TestPortablePathsUseOpaqueOrdinals(t *testing.T) {
 func TestDepth32AcceptedAndDepth33Rejected(t *testing.T) {
 	path32 := strings.Join(repeatParts(32, "d"), "/")
 	entries32 := nestedEntries("files", path32)
-	snapshot32 := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: entries32}
+	snapshot32 := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: entries32,
+	}
 	blob32, err := Pack(snapshot32)
 	if err != nil {
 		require.NoError(t, err, "depth 32 rejected: %v", err)
@@ -167,7 +240,11 @@ func TestDepth32AcceptedAndDepth33Rejected(t *testing.T) {
 	}
 	path33 := strings.Join(repeatParts(33, "e"), "/")
 	entries33 := nestedEntries("files", path33)
-	snapshot33 := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: entries33}
+	snapshot33 := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: entries33,
+	}
 	_, err = Pack(snapshot33)
 	requireBound(t, err, "MaxDepth", 32, 33)
 	_, err = Estimate(snapshot33)
@@ -183,25 +260,51 @@ func TestDepth32AcceptedAndDepth33Rejected(t *testing.T) {
 func TestBoundsOnPackEstimateAndUnpack(t *testing.T) {
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{fileTarget("z", "z-config", model.SelectionDirectory), fileTarget("a", "a-config", model.SelectionDirectory)},
-		Entries: []model.Entry{fileEntry("z", "z.txt", model.FileRegular, model.FilePresent, []byte("123")), fileEntry("a", "a.txt", model.FileRegular, model.FilePresent, []byte("4567"))},
+		Targets: []model.Target{
+			fileTarget("z", "z-config", model.SelectionDirectory),
+			fileTarget("a", "a-config", model.SelectionDirectory),
+		},
+		Entries: []model.Entry{
+			fileEntry("z", "z.txt", model.FileRegular, model.FilePresent, []byte("123")),
+			fileEntry("a", "a.txt", model.FileRegular, model.FilePresent, []byte("4567")),
+		},
 	}
 	limits := DefaultLimits()
 	limits.MaxTotalBytes = 7
 	limits.MaxEntryBytes = 4
 	estimate, err := EstimateWithLimits(snapshot, limits)
 	requireNoError(t, err)
-	if estimate.Entries != 2 || estimate.PlaintextBytes != 7 || len(estimate.TargetSizes) != 2 || estimate.TargetSizes[0] != (TargetSize{TargetID: "a", Bytes: 4}) || estimate.TargetSizes[1] != (TargetSize{TargetID: "z", Bytes: 3}) {
+	if estimate.Entries != 2 || estimate.PlaintextBytes != 7 || len(estimate.TargetSizes) != 2 ||
+		estimate.TargetSizes[0] != (TargetSize{TargetID: "a", Bytes: 4}) ||
+		estimate.TargetSizes[1] != (TargetSize{TargetID: "z", Bytes: 3}) {
 		require.Equal(t, 2, estimate.Entries, "unexpected independently computed estimate: %#v", estimate)
 		require.Equal(t, int64(7), estimate.PlaintextBytes, "unexpected independently computed estimate: %#v", estimate)
 		require.Len(t, estimate.TargetSizes, 2, "unexpected independently computed estimate: %#v", estimate)
-		require.Equal(t, (TargetSize{TargetID: "a", Bytes: 4}), estimate.TargetSizes[0], "unexpected independently computed estimate: %#v", estimate)
-		require.Equal(t, (TargetSize{TargetID: "z", Bytes: 3}), estimate.TargetSizes[1], "unexpected independently computed estimate: %#v", estimate)
+		require.Equal(
+			t,
+			(TargetSize{TargetID: "a", Bytes: 4}),
+			estimate.TargetSizes[0],
+			"unexpected independently computed estimate: %#v",
+			estimate,
+		)
+		require.Equal(
+			t,
+			(TargetSize{TargetID: "z", Bytes: 3}),
+			estimate.TargetSizes[1],
+			"unexpected independently computed estimate: %#v",
+			estimate,
+		)
 	}
 	blob, err := PackWithLimits(snapshot, limits)
 	requireNoError(t, err)
 	if blob.PlaintextBytes != 7 {
-		require.Equal(t, int64(7), blob.PlaintextBytes, "pack total disagrees with independent expectation: %d", blob.PlaintextBytes)
+		require.Equal(
+			t,
+			int64(7),
+			blob.PlaintextBytes,
+			"pack total disagrees with independent expectation: %d",
+			blob.PlaintextBytes,
+		)
 	}
 	if _, err := UnpackWithLimits(blob, limits); err != nil {
 		require.NoError(t, err, "unpack rejected exact-boundary payload: %v", err)
@@ -219,12 +322,26 @@ func TestBoundsOnPackEstimateAndUnpack(t *testing.T) {
 	_, packErr := PackWithLimits(snapshot, limits)
 	packBound := requireBound(t, packErr, "MaxTotalBytes", 6, 7)
 	if *estimateBound != *packBound {
-		require.Equal(t, *packBound, *estimateBound, "Estimate and Pack bounds differ: %#v %#v", estimateBound, packBound)
+		require.Equal(
+			t,
+			*packBound,
+			*estimateBound,
+			"Estimate and Pack bounds differ: %#v %#v",
+			estimateBound,
+			packBound,
+		)
 	}
 }
 
 func TestEntryManifestAndCountBounds(t *testing.T) {
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: []model.Entry{fileEntry("files", "a", model.FileRegular, model.FilePresent, []byte("1234")), fileEntry("files", "b", model.FileRegular, model.FilePresent, []byte("5"))}}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: []model.Entry{
+			fileEntry("files", "a", model.FileRegular, model.FilePresent, []byte("1234")),
+			fileEntry("files", "b", model.FileRegular, model.FilePresent, []byte("5")),
+		},
+	}
 	limits := DefaultLimits()
 	limits.MaxEntryBytes = 3
 	_, err := EstimateWithLimits(snapshot, limits)
@@ -252,18 +369,44 @@ func TestDeclaredSizeBombRejectedBeforeBodyRead(t *testing.T) {
 	entry := fileEntry("files", "bomb", model.FileRegular, model.FilePresent, []byte{})
 	wire, _, err := wireFromEntry(entry, ordinal(1))
 	requireNoError(t, err)
-	manifest := wireManifest{Version: Version, Codec: CodecNone, SnapshotVersion: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: []wireEntry{wire}}
+	manifest := wireManifest{
+		Version:         Version,
+		Codec:           CodecNone,
+		SnapshotVersion: model.SnapshotVersion,
+		Targets:         []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries:         []wireEntry{wire},
+	}
 	manifestData, err := encodeManifest(manifest)
 	requireNoError(t, err)
 	var payload bytes.Buffer
 	writer := tar.NewWriter(&payload)
 	requireNoError(t, writeMember(writer, manifestMember, manifestData))
-	requireNoError(t, writer.WriteHeader(&tar.Header{Name: ordinal(1), Mode: 0o600, Uid: 0, Gid: 0, Size: 128, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}))
+	requireNoError(
+		t,
+		writer.WriteHeader(
+			&tar.Header{
+				Name:     ordinal(1),
+				Mode:     0o600,
+				Uid:      0,
+				Gid:      0,
+				Size:     128,
+				Typeflag: tar.TypeReg,
+				Format:   tar.FormatUSTAR,
+			},
+		),
+	)
 	payload.Write(bytes.Repeat([]byte{0}, 17))
 	bytesValue := bytes.Clone(payload.Bytes())
 	limits := DefaultLimits()
 	limits.MaxEntryBytes = 32
-	blob := Blob{Version: Version, Codec: CodecNone, Payload: bytesValue, Digest: sha256.Sum256(bytesValue), PlaintextBytes: 0, EntryCount: 1}
+	blob := Blob{
+		Version:        Version,
+		Codec:          CodecNone,
+		Payload:        bytesValue,
+		Digest:         sha256.Sum256(bytesValue),
+		PlaintextBytes: 0,
+		EntryCount:     1,
+	}
 	_, err = UnpackWithLimits(blob, limits)
 	requireBound(t, err, "MaxEntryBytes", 32, 128)
 }
@@ -281,7 +424,13 @@ func TestCorruptionAndArchiveRecordsRejected(t *testing.T) {
 		}
 		changed.Payload = encodeMembers(t, members)
 		if _, err := Unpack(changed); err == nil || !strings.Contains(err.Error(), "entry digest mismatch") {
-			require.ErrorContains(t, err, "entry digest mismatch", "payload corruption was not caught by entry digest: %v", err)
+			require.ErrorContains(
+				t,
+				err,
+				"entry digest mismatch",
+				"payload corruption was not caught by entry digest: %v",
+				err,
+			)
 		}
 	})
 	t.Run("flipped entry digest", func(t *testing.T) {
@@ -364,8 +513,20 @@ func TestEstimateSurfacesEscapingLinksWithoutContainment(t *testing.T) {
 	estimate, err := Estimate(snapshot)
 	requireNoError(t, err)
 	if len(estimate.EscapingLinks) != 1 || estimate.EscapingLinks[0] != snapshot.Entries[2].Identity() {
-		require.Len(t, estimate.EscapingLinks, 1, "estimate did not surface exactly the escaping link: %#v", estimate.EscapingLinks)
-		require.Equal(t, snapshot.Entries[2].Identity(), estimate.EscapingLinks[0], "estimate did not surface exactly the escaping link: %#v", estimate.EscapingLinks)
+		require.Len(
+			t,
+			estimate.EscapingLinks,
+			1,
+			"estimate did not surface exactly the escaping link: %#v",
+			estimate.EscapingLinks,
+		)
+		require.Equal(
+			t,
+			snapshot.Entries[2].Identity(),
+			estimate.EscapingLinks[0],
+			"estimate did not surface exactly the escaping link: %#v",
+			estimate.EscapingLinks,
+		)
 	}
 	got := mustRoundTrip(t, snapshot)
 	if got.Entries[1].File.LinkTarget != "../.." && got.Entries[0].File.LinkTarget != "../.." {
@@ -417,19 +578,61 @@ func TestNeovimFixtureRoundTripAndSizeMeasurement(t *testing.T) {
 			require.NoError(t, err)
 		}
 		requireNoError(t, compressor.Close())
-		t.Logf("%s: entries=%d plaintext_bytes=%d blob_bytes=%d gzip_reference_bytes=%d", item.name, packed.EntryCount, packed.PlaintextBytes, len(packed.Payload), compressed.Len())
+		t.Logf(
+			"%s: entries=%d plaintext_bytes=%d blob_bytes=%d gzip_reference_bytes=%d",
+			item.name,
+			packed.EntryCount,
+			packed.PlaintextBytes,
+			len(packed.Payload),
+			compressed.Len(),
+		)
 		if expected, ok := publishedSizes[item.name]; ok {
-			if packed.EntryCount != expected.entries || packed.PlaintextBytes != expected.plaintext || int64(len(packed.Payload)) != expected.blob {
-				require.Equal(t, expected.entries, packed.EntryCount, "%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v", item.name, packed.EntryCount, packed.PlaintextBytes, len(packed.Payload), expected)
-				require.Equal(t, expected.plaintext, packed.PlaintextBytes, "%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v", item.name, packed.EntryCount, packed.PlaintextBytes, len(packed.Payload), expected)
-				require.Equal(t, expected.blob, int64(len(packed.Payload)), "%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v", item.name, packed.EntryCount, packed.PlaintextBytes, len(packed.Payload), expected)
+			if packed.EntryCount != expected.entries || packed.PlaintextBytes != expected.plaintext ||
+				int64(len(packed.Payload)) != expected.blob {
+				require.Equal(
+					t,
+					expected.entries,
+					packed.EntryCount,
+					"%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v",
+					item.name,
+					packed.EntryCount,
+					packed.PlaintextBytes,
+					len(packed.Payload),
+					expected,
+				)
+				require.Equal(
+					t,
+					expected.plaintext,
+					packed.PlaintextBytes,
+					"%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v",
+					item.name,
+					packed.EntryCount,
+					packed.PlaintextBytes,
+					len(packed.Payload),
+					expected,
+				)
+				require.Equal(
+					t,
+					expected.blob,
+					int64(len(packed.Payload)),
+					"%s: measured entries=%d plaintext=%d blob=%d does not match the published table %+v",
+					item.name,
+					packed.EntryCount,
+					packed.PlaintextBytes,
+					len(packed.Payload),
+					expected,
+				)
 			}
 		}
 	}
 }
 
 func TestGoldenBytes(t *testing.T) {
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", ".", model.SelectionDirectory)}, Entries: []model.Entry{fileEntry("files", "a.txt", model.FileRegular, model.FilePresent, []byte("golden\n"))}}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", ".", model.SelectionDirectory)},
+		Entries: []model.Entry{fileEntry("files", "a.txt", model.FileRegular, model.FilePresent, []byte("golden\n"))},
+	}
 	blob, err := Pack(snapshot)
 	requireNoError(t, err)
 	path := filepath.Join("testdata", "minimal.golden.hex")
@@ -456,15 +659,37 @@ func TestGoldenBytes(t *testing.T) {
 }
 
 func TestUnpackRejectsUnrepresentableEntryPayload(t *testing.T) {
-	setting := model.Entry{TargetID: "settings", Setting: &model.SettingEntry{SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "theme", State: model.SettingReset}}
+	setting := model.Entry{
+		TargetID: "settings",
+		Setting: &model.SettingEntry{
+			SchemaID: "org.example.Desktop",
+			Path:     "/org/example/",
+			Key:      "theme",
+			State:    model.SettingReset,
+		},
+	}
 	wire, _, err := wireFromEntry(setting, ordinal(1))
 	requireNoError(t, err)
 	wire.Size = 1
 	wire.SHA256 = digestHex([]byte("x"))
-	manifest := wireManifest{Version: Version, Codec: CodecNone, SnapshotVersion: model.SnapshotVersion, Targets: []model.Target{{ID: "settings", Source: model.SourceGNOME, SourceVersion: model.SourceVersion}}, Entries: []wireEntry{wire}}
+	manifest := wireManifest{
+		Version:         Version,
+		Codec:           CodecNone,
+		SnapshotVersion: model.SnapshotVersion,
+		Targets: []model.Target{
+			{ID: "settings", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+		},
+		Entries: []wireEntry{wire},
+	}
 	blob := blobFromManifest(t, manifest, [][]byte{[]byte("x")}, 0)
 	if _, err := Unpack(blob); err == nil || !strings.Contains(err.Error(), "settings manifest entry has a payload") {
-		require.ErrorContains(t, err, "settings manifest entry has a payload", "unrepresentable settings payload was silently discarded: %v", err)
+		require.ErrorContains(
+			t,
+			err,
+			"settings manifest entry has a payload",
+			"unrepresentable settings payload was silently discarded: %v",
+			err,
+		)
 	}
 }
 
@@ -476,7 +701,13 @@ func TestUnpackRejectsNoncanonicalManifestAndInvalidTarget(t *testing.T) {
 	}
 	invalidTarget := rewriteManifest(t, blob, func(manifest *wireManifest) { manifest.Targets[0].SourceVersion++ })
 	if _, err := Unpack(invalidTarget); err == nil || !strings.Contains(err.Error(), "invalid unpacked snapshot") {
-		require.ErrorContains(t, err, "invalid unpacked snapshot", "invalid target was not rejected after digest verification: %v", err)
+		require.ErrorContains(
+			t,
+			err,
+			"invalid unpacked snapshot",
+			"invalid target was not rejected after digest verification: %v",
+			err,
+		)
 	}
 	members := readMembers(t, blob.Payload)
 	members[0].data = append(members[0].data, ' ')
@@ -490,7 +721,12 @@ func TestUnpackRejectsNoncanonicalManifestAndInvalidTarget(t *testing.T) {
 }
 
 func fileTarget(id, root string, kind model.SelectionKind) model.Target {
-	return model.Target{ID: id, Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: root, Kind: kind}}
+	return model.Target{
+		ID:            id,
+		Source:        model.SourceFiles,
+		SourceVersion: model.SourceVersion,
+		Root:          &model.FileRoot{Base: model.RootHome, Path: root, Kind: kind},
+	}
 }
 
 func fileEntry(targetID, path string, kind model.FileKind, state model.FileState, content []byte) model.Entry {
@@ -511,7 +747,11 @@ func mustRoundTrip(t *testing.T, snapshot model.Snapshot) model.Snapshot {
 }
 
 func canonicalSnapshot(snapshot model.Snapshot) model.Snapshot {
-	result := model.Snapshot{Version: snapshot.Version, Targets: append([]model.Target(nil), snapshot.Targets...), Entries: append([]model.Entry(nil), snapshot.Entries...)}
+	result := model.Snapshot{
+		Version: snapshot.Version,
+		Targets: append([]model.Target(nil), snapshot.Targets...),
+		Entries: append([]model.Entry(nil), snapshot.Entries...),
+	}
 	sort.Slice(result.Targets, func(i, j int) bool { return result.Targets[i].ID < result.Targets[j].ID })
 	sortEntries(result.Entries)
 	return result
@@ -521,11 +761,14 @@ func equalSnapshots(left, right model.Snapshot) bool {
 	if reflect.DeepEqual(left, right) {
 		return true
 	}
-	if left.Version != right.Version || len(left.Targets) != len(right.Targets) || len(left.Entries) != len(right.Entries) {
+	if left.Version != right.Version || len(left.Targets) != len(right.Targets) ||
+		len(left.Entries) != len(right.Entries) {
 		return false
 	}
 	for index := range left.Targets {
-		if left.Targets[index].ID != right.Targets[index].ID || left.Targets[index].Source != right.Targets[index].Source || left.Targets[index].SourceVersion != right.Targets[index].SourceVersion {
+		if left.Targets[index].ID != right.Targets[index].ID ||
+			left.Targets[index].Source != right.Targets[index].Source ||
+			left.Targets[index].SourceVersion != right.Targets[index].SourceVersion {
 			return false
 		}
 		if (left.Targets[index].Root == nil) != (right.Targets[index].Root == nil) {
@@ -541,7 +784,12 @@ func equalSnapshots(left, right model.Snapshot) bool {
 		}
 		if left.Entries[index].File != nil && right.Entries[index].File != nil {
 			leftFile, rightFile := left.Entries[index].File, right.Entries[index].File
-			if leftFile.Path != rightFile.Path || leftFile.State != rightFile.State || leftFile.Kind != rightFile.Kind || leftFile.Mode != rightFile.Mode || leftFile.LinkTarget != rightFile.LinkTarget || !bytes.Equal(leftFile.Content, rightFile.Content) || (leftFile.Content == nil) != (rightFile.Content == nil) {
+			if leftFile.Path != rightFile.Path || leftFile.State != rightFile.State ||
+				leftFile.Kind != rightFile.Kind ||
+				leftFile.Mode != rightFile.Mode ||
+				leftFile.LinkTarget != rightFile.LinkTarget ||
+				!bytes.Equal(leftFile.Content, rightFile.Content) ||
+				(leftFile.Content == nil) != (rightFile.Content == nil) {
 				return false
 			}
 		} else if left.Entries[index].Setting != nil && right.Entries[index].Setting != nil {
@@ -558,7 +806,10 @@ func equalSnapshots(left, right model.Snapshot) bool {
 func appendParentDirectories(entries []model.Entry, targetID, path string) []model.Entry {
 	parts := strings.Split(path, "/")
 	for index := 1; index < len(parts); index++ {
-		entries = append(entries, fileEntry(targetID, strings.Join(parts[:index], "/"), model.FileDirectory, model.FilePresent, nil))
+		entries = append(
+			entries,
+			fileEntry(targetID, strings.Join(parts[:index], "/"), model.FileDirectory, model.FilePresent, nil),
+		)
 	}
 	return entries
 }
@@ -575,7 +826,10 @@ func nestedEntries(targetID, path string) []model.Entry {
 	parts := strings.Split(path, "/")
 	entries := make([]model.Entry, 0, len(parts))
 	for index := 1; index < len(parts); index++ {
-		entries = append(entries, fileEntry(targetID, strings.Join(parts[:index], "/"), model.FileDirectory, model.FilePresent, nil))
+		entries = append(
+			entries,
+			fileEntry(targetID, strings.Join(parts[:index], "/"), model.FileDirectory, model.FilePresent, nil),
+		)
 	}
 	entries = append(entries, fileEntry(targetID, path, model.FileRegular, model.FilePresent, []byte("leaf")))
 	return entries
@@ -595,16 +849,50 @@ func requireBound(t *testing.T, err error, kind string, limit, observed int64) *
 		require.ErrorAs(t, err, &bound, "expected BoundError %s, got %T %v", kind, err, err)
 	}
 	if bound.Kind != kind || bound.Limit != limit || bound.Observed != observed {
-		require.Equal(t, kind, bound.Kind, "unexpected BoundError: %#v, want kind=%s limit=%d observed=%d", bound, kind, limit, observed)
-		require.Equal(t, limit, bound.Limit, "unexpected BoundError: %#v, want kind=%s limit=%d observed=%d", bound, kind, limit, observed)
-		require.Equal(t, observed, bound.Observed, "unexpected BoundError: %#v, want kind=%s limit=%d observed=%d", bound, kind, limit, observed)
+		require.Equal(
+			t,
+			kind,
+			bound.Kind,
+			"unexpected BoundError: %#v, want kind=%s limit=%d observed=%d",
+			bound,
+			kind,
+			limit,
+			observed,
+		)
+		require.Equal(
+			t,
+			limit,
+			bound.Limit,
+			"unexpected BoundError: %#v, want kind=%s limit=%d observed=%d",
+			bound,
+			kind,
+			limit,
+			observed,
+		)
+		require.Equal(
+			t,
+			observed,
+			bound.Observed,
+			"unexpected BoundError: %#v, want kind=%s limit=%d observed=%d",
+			bound,
+			kind,
+			limit,
+			observed,
+		)
 	}
 	return bound
 }
 
 func simpleBlob(t *testing.T) Blob {
 	t.Helper()
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)}, Entries: []model.Entry{fileEntry("files", "a", model.FileRegular, model.FilePresent, []byte("alpha")), fileEntry("files", "b", model.FileRegular, model.FilePresent, []byte("bravo"))}}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("files", "config", model.SelectionDirectory)},
+		Entries: []model.Entry{
+			fileEntry("files", "a", model.FileRegular, model.FilePresent, []byte("alpha")),
+			fileEntry("files", "b", model.FileRegular, model.FilePresent, []byte("bravo")),
+		},
+	}
 	blob, err := Pack(snapshot)
 	requireNoError(t, err)
 	return blob
@@ -672,12 +960,35 @@ func blobFromManifest(t *testing.T, manifest wireManifest, payloads [][]byte, pl
 	t.Helper()
 	encoded, err := encodeManifest(manifest)
 	requireNoError(t, err)
-	members := []testMember{{header: tar.Header{Name: manifestMember, Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}, data: encoded}}
+	members := []testMember{
+		{
+			header: tar.Header{Name: manifestMember, Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR},
+			data:   encoded,
+		},
+	}
 	for index, payload := range payloads {
-		members = append(members, testMember{header: tar.Header{Name: ordinal(index + 1), Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}, data: payload})
+		members = append(
+			members,
+			testMember{
+				header: tar.Header{
+					Name:     ordinal(index + 1),
+					Mode:     0o600,
+					Typeflag: tar.TypeReg,
+					Format:   tar.FormatUSTAR,
+				},
+				data: payload,
+			},
+		)
 	}
 	archive := encodeMembers(t, members)
-	return Blob{Version: Version, Codec: CodecNone, Payload: archive, Digest: sha256.Sum256(archive), PlaintextBytes: plaintext, EntryCount: len(payloads)}
+	return Blob{
+		Version:        Version,
+		Codec:          CodecNone,
+		Payload:        archive,
+		Digest:         sha256.Sum256(archive),
+		PlaintextBytes: plaintext,
+		EntryCount:     len(payloads),
+	}
 }
 
 func prependPAX(t *testing.T, blob Blob) Blob {
@@ -711,7 +1022,9 @@ func prependPAX(t *testing.T, blob Blob) Blob {
 func prependDevice(t *testing.T, blob Blob) Blob {
 	t.Helper()
 	members := readMembers(t, blob.Payload)
-	device := testMember{header: tar.Header{Name: "000000", Mode: 0o600, Typeflag: tar.TypeChar, Format: tar.FormatUSTAR}}
+	device := testMember{
+		header: tar.Header{Name: "000000", Mode: 0o600, Typeflag: tar.TypeChar, Format: tar.FormatUSTAR},
+	}
 	members = append([]testMember{device}, members...)
 	changed := cloneBlob(blob)
 	changed.Payload = encodeMembers(t, members)
@@ -768,16 +1081,33 @@ func snapshotFromTree(t *testing.T, targetID, root string) model.Snapshot {
 		return nil
 	})
 	requireNoError(t, err)
-	return model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget(targetID, "nvim", model.SelectionDirectory)}, Entries: entries}
+	return model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget(targetID, "nvim", model.SelectionDirectory)},
+		Entries: entries,
+	}
 }
 
 func snapshotWithFiles(targetID string, count, bytesPerFile int) model.Snapshot {
 	entries := make([]model.Entry, 0, count+1)
 	entries = append(entries, fileEntry(targetID, "config", model.FileDirectory, model.FilePresent, nil))
 	entries[0].File.Mode = 0o755
-	for index := 0; index < count; index++ {
+	for index := range count {
 		content := []byte(strings.Repeat(string(rune('a'+index%26)), bytesPerFile))
-		entries = append(entries, fileEntry(targetID, fmt.Sprintf("config/file-%04d.conf", index), model.FileRegular, model.FilePresent, content))
+		entries = append(
+			entries,
+			fileEntry(
+				targetID,
+				fmt.Sprintf("config/file-%04d.conf", index),
+				model.FileRegular,
+				model.FilePresent,
+				content,
+			),
+		)
 	}
-	return model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget(targetID, "synthetic", model.SelectionDirectory)}, Entries: entries}
+	return model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget(targetID, "synthetic", model.SelectionDirectory)},
+		Entries: entries,
+	}
 }

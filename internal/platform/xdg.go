@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 type Paths struct {
@@ -67,8 +68,8 @@ func RealPath(path string) (string, error) {
 			if len(remainder) == 0 {
 				return resolved, nil
 			}
-			for i := len(remainder) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, remainder[i])
+			for _, r := range slices.Backward(remainder) {
+				resolved = filepath.Join(resolved, r)
 			}
 			return filepath.Clean(resolved), nil
 		}

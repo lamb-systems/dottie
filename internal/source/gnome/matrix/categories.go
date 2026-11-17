@@ -49,30 +49,30 @@ var categoryMatrix = []Category{
 	{
 		ID: "appearance",
 		Keys: []CategoryKey{
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "gtk-theme"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "icon-theme"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "cursor-theme"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "color-scheme"}, Type: "s", Since: 42},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "accent-color"}, Type: "s", Since: 47},
+			{SchemaID: interfaceSchema, Key: "gtk-theme", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "icon-theme", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "cursor-theme", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "color-scheme", Type: "s", Since: 42},
+			{SchemaID: interfaceSchema, Key: "accent-color", Type: "s", Since: 47},
 		},
 	},
 	{
 		ID: "fonts",
 		Keys: []CategoryKey{
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "font-name"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "document-font-name"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "monospace-font-name"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "text-scaling-factor"}, Type: "d"},
+			{SchemaID: interfaceSchema, Key: "font-name", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "document-font-name", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "monospace-font-name", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "text-scaling-factor", Type: "d"},
 		},
 	},
 	{
 		ID: "clock",
 		Keys: []CategoryKey{
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "clock-format"}, Type: "s"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "clock-show-date"}, Type: "b"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "clock-show-seconds"}, Type: "b"},
-			{KeyRef: KeyRef{SchemaID: interfaceSchema, Key: "clock-show-weekday"}, Type: "b"},
-			{KeyRef: KeyRef{SchemaID: calendarSchema, Key: "show-weekdate"}, Type: "b"},
+			{SchemaID: interfaceSchema, Key: "clock-format", Type: "s"},
+			{SchemaID: interfaceSchema, Key: "clock-show-date", Type: "b"},
+			{SchemaID: interfaceSchema, Key: "clock-show-seconds", Type: "b"},
+			{SchemaID: interfaceSchema, Key: "clock-show-weekday", Type: "b"},
+			{SchemaID: calendarSchema, Key: "show-weekdate", Type: "b"},
 		},
 	},
 }
@@ -134,7 +134,13 @@ func SelectCategories(ids []string) ([]KeyRef, error) {
 		}
 		category, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("%w: category %q at index %d (known categories: %s)", ErrUnknownCategory, id, index, strings.Join(known, ", "))
+			return nil, fmt.Errorf(
+				"%w: category %q at index %d (known categories: %s)",
+				ErrUnknownCategory,
+				id,
+				index,
+				strings.Join(known, ", "),
+			)
 		}
 		seen[id] = struct{}{}
 		for _, key := range category.Keys {
@@ -181,7 +187,14 @@ func validateCategoryMatrix(categories []Category) error {
 				return fmt.Errorf("category %q keys[%d]: unsupported variant type %q", category.ID, keyIndex, key.Type)
 			}
 			if key.Since != 0 && (key.Since < ReviewedMin || key.Since > ReviewedMax) {
-				return fmt.Errorf("category %q keys[%d]: introduction %d is outside the reviewed range %d-%d", category.ID, keyIndex, key.Since, ReviewedMin, ReviewedMax)
+				return fmt.Errorf(
+					"category %q keys[%d]: introduction %d is outside the reviewed range %d-%d",
+					category.ID,
+					keyIndex,
+					key.Since,
+					ReviewedMin,
+					ReviewedMax,
+				)
 			}
 			if _, duplicate := keys[key.KeyRef]; duplicate {
 				return fmt.Errorf("category %q keys[%d]: duplicate setting reference", category.ID, keyIndex)

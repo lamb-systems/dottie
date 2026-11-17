@@ -68,21 +68,49 @@ func TestSchemaInventoryCollectionsAreDetached(t *testing.T) {
 	v1.metadataKeys[0] = "mutated v1 key"
 	v1.objects["store_meta"] = "index"
 	delete(v1.objects, "cache_records")
-	assertSchemaInventoryGolden(t, v2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		v2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 
 	freshV1, err := schemaInventoryForVersion(1)
 	require.NoError(t, err)
-	assertSchemaInventoryGolden(t, freshV1, 6, expectedSchemaV1Objects(), expectedSchemaV1MetadataKeys(), "7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89")
+	assertSchemaInventoryGolden(
+		t,
+		freshV1,
+		6,
+		expectedSchemaV1Objects(),
+		expectedSchemaV1MetadataKeys(),
+		"7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89",
+	)
 
 	v2.statements[0] = "mutated v2 statement"
 	v2.metadataKeys[0] = "mutated v2 key"
 	v2.objects["publication_attempts_order"] = "table"
 	delete(v2.objects, "payload_objects_basename")
-	assertSchemaInventoryGolden(t, freshV1, 6, expectedSchemaV1Objects(), expectedSchemaV1MetadataKeys(), "7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89")
+	assertSchemaInventoryGolden(
+		t,
+		freshV1,
+		6,
+		expectedSchemaV1Objects(),
+		expectedSchemaV1MetadataKeys(),
+		"7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89",
+	)
 
 	freshV2, err := schemaInventoryForVersion(2)
 	require.NoError(t, err)
-	assertSchemaInventoryGolden(t, freshV2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		freshV2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 }
 
 func TestSchemaInventoryRejectsUnsupportedVersions(t *testing.T) {
@@ -166,7 +194,7 @@ func TestOpenRefusesUnsupportedSchemaVersion(t *testing.T) {
 
 	opened, err := Open(directory, f.binding)
 	if opened != nil {
-		assert.NoError(t, opened.Close())
+		require.NoError(t, opened.Close())
 	}
 	require.Nil(t, opened)
 	requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonSchema)
@@ -191,7 +219,14 @@ func TestOpenRefusesUnsupportedSchemaVersion(t *testing.T) {
 	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, readOnlyConn, "SELECT COUNT(*) FROM accepted_material_refs"))
 }
 
-func assertSchemaInventoryGolden(t *testing.T, inventory schemaInventory, statementCount int, expectedObjects map[string]string, expectedMetadataKeys []string, expectedStatementDigest string) {
+func assertSchemaInventoryGolden(
+	t *testing.T,
+	inventory schemaInventory,
+	statementCount int,
+	expectedObjects map[string]string,
+	expectedMetadataKeys []string,
+	expectedStatementDigest string,
+) {
 	t.Helper()
 	require.Len(t, inventory.statements, statementCount)
 	require.Len(t, inventory.objects, len(expectedObjects))
@@ -240,7 +275,15 @@ func expectedSchemaV2Objects() map[string]string {
 }
 
 func expectedSchemaV2MetadataKeys() []string {
-	return []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}
+	return []string{
+		"attempt_limits",
+		"attempt_mutation_revision",
+		"binding",
+		"database_id",
+		"generation",
+		"limits",
+		"revision",
+	}
 }
 
 func expectedSchemaV3Objects() map[string]string {
@@ -261,7 +304,14 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	require.Len(t, freshV2.statements, 17)
 	require.Len(t, freshV2.objects, 17)
 	require.Len(t, freshV2.metadataKeys, 7)
-	assertSchemaInventoryGolden(t, freshV2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		freshV2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 	expectedV2Statements := append([]string(nil), freshV2.statements...)
 	require.Equal(t, freshV2.statements, v3.statements[:17])
 	require.Equal(t, incomingMaterialSchemaStatement, v3.statements[17])
@@ -274,7 +324,14 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	v3.metadataKeys[0] = "mutated v3 key"
 	v3.objects["accepted_material_refs"] = "index"
 	delete(v3.objects, "store_meta")
-	assertSchemaInventoryGolden(t, freshV2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		freshV2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 	require.Equal(t, expectedV2Statements, freshV2.statements)
 	require.Equal(t, expectedSchemaV2Objects(), freshV2.objects)
 	require.Equal(t, expectedSchemaV2MetadataKeys(), freshV2.metadataKeys)
@@ -290,10 +347,24 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	require.Equal(t, expectedSchemaV2MetadataKeys(), isolated.metadataKeys)
 	freshV1, err := schemaInventoryForVersion(1)
 	require.NoError(t, err)
-	assertSchemaInventoryGolden(t, freshV1, 6, expectedSchemaV1Objects(), expectedSchemaV1MetadataKeys(), "7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89")
+	assertSchemaInventoryGolden(
+		t,
+		freshV1,
+		6,
+		expectedSchemaV1Objects(),
+		expectedSchemaV1MetadataKeys(),
+		"7d3cb30f9344c9e994a6ba4f9f92cd4a58ca75ab5f6c9ecbf7c9a976caf38b89",
+	)
 	restoredV2, err := schemaInventoryForVersion(2)
 	require.NoError(t, err)
-	assertSchemaInventoryGolden(t, restoredV2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		restoredV2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 	require.Equal(t, expectedV2Statements, restoredV2.statements)
 
 	restoredV2.statements[0] = "mutated independent v2 statement"
@@ -313,7 +384,14 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	require.Len(t, composed.metadataKeys, 7)
 	againV2, err := schemaInventoryForVersion(2)
 	require.NoError(t, err)
-	assertSchemaInventoryGolden(t, againV2, 17, expectedSchemaV2Objects(), expectedSchemaV2MetadataKeys(), "32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3")
+	assertSchemaInventoryGolden(
+		t,
+		againV2,
+		17,
+		expectedSchemaV2Objects(),
+		expectedSchemaV2MetadataKeys(),
+		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
+	)
 	require.Equal(t, expectedV2Statements, againV2.statements)
 	require.Equal(t, againV2.statements, composed.statements[:17])
 	require.Equal(t, expectedV2Statements, composed.statements[:17])

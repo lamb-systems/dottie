@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -50,7 +49,8 @@ func newPDSAPIClient(pds string, auth atclient.AuthMethod, base http.RoundTrippe
 
 func pdsOrigin(pds string) (string, error) {
 	parsed, err := url.Parse(pds)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return "", errors.New("PDS origin must be an absolute HTTPS URL")
 	}
 	return "https://" + strings.ToLower(parsed.Host), nil
@@ -63,8 +63,9 @@ type pdsPolicyTransport struct {
 }
 
 func (t *pdsPolicyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.URL == nil || request.URL.Scheme != "https" || request.URL.User != nil || "https://"+strings.ToLower(request.URL.Host) != t.origin {
-		return nil, fmt.Errorf("request is outside the discovered TLS-only PDS origin")
+	if request.URL == nil || request.URL.Scheme != "https" || request.URL.User != nil ||
+		"https://"+strings.ToLower(request.URL.Host) != t.origin {
+		return nil, errors.New("request is outside the discovered TLS-only PDS origin")
 	}
 	response, err := t.base.RoundTrip(request)
 	if err != nil {
@@ -103,7 +104,12 @@ func (b *boundedPDSBody) Close() error {
 	return b.body.Close()
 }
 
-func pdsRequest(method, endpoint string, query url.Values, body []byte, contentType string) (*atclient.APIRequest, error) {
+func pdsRequest(
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (*atclient.APIRequest, error) {
 	var reader io.Reader
 	var getBody func() (io.ReadCloser, error)
 	if body != nil {
@@ -113,7 +119,13 @@ func pdsRequest(method, endpoint string, query url.Values, body []byte, contentT
 	return pdsRequestStream(method, endpoint, query, reader, getBody, contentType)
 }
 
-func pdsRequestStream(method, endpoint string, query url.Values, body io.Reader, getBody func() (io.ReadCloser, error), contentType string) (*atclient.APIRequest, error) {
+func pdsRequestStream(
+	method, endpoint string,
+	query url.Values,
+	body io.Reader,
+	getBody func() (io.ReadCloser, error),
+	contentType string,
+) (*atclient.APIRequest, error) {
 	nsid, err := syntax.ParseNSID(endpoint)
 	if err != nil {
 		return nil, err
@@ -127,7 +139,14 @@ func pdsRequestStream(method, endpoint string, query url.Values, body io.Reader,
 	return request, nil
 }
 
-func pdsDo(ctx context.Context, api *atclient.APIClient, method, endpoint string, query url.Values, body []byte, contentType string) (*http.Response, []byte, time.Duration, error) {
+func pdsDo(
+	ctx context.Context,
+	api *atclient.APIClient,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (*http.Response, []byte, time.Duration, error) {
 	request, err := pdsRequest(method, endpoint, query, body, contentType)
 	if err != nil {
 		return nil, nil, 0, err
@@ -135,7 +154,15 @@ func pdsDo(ctx context.Context, api *atclient.APIClient, method, endpoint string
 	return pdsDoRequest(ctx, api, request)
 }
 
-func pdsDoStream(ctx context.Context, api *atclient.APIClient, method, endpoint string, query url.Values, body io.Reader, getBody func() (io.ReadCloser, error), contentType string) (*http.Response, []byte, time.Duration, error) {
+func pdsDoStream(
+	ctx context.Context,
+	api *atclient.APIClient,
+	method, endpoint string,
+	query url.Values,
+	body io.Reader,
+	getBody func() (io.ReadCloser, error),
+	contentType string,
+) (*http.Response, []byte, time.Duration, error) {
 	request, err := pdsRequestStream(method, endpoint, query, body, getBody, contentType)
 	if err != nil {
 		return nil, nil, 0, err
@@ -143,7 +170,11 @@ func pdsDoStream(ctx context.Context, api *atclient.APIClient, method, endpoint 
 	return pdsDoRequest(ctx, api, request)
 }
 
-func pdsDoRequest(ctx context.Context, api *atclient.APIClient, request *atclient.APIRequest) (*http.Response, []byte, time.Duration, error) {
+func pdsDoRequest(
+	ctx context.Context,
+	api *atclient.APIClient,
+	request *atclient.APIRequest,
+) (*http.Response, []byte, time.Duration, error) {
 	started := time.Now()
 	response, err := api.Do(ctx, request)
 	duration := time.Since(started)
@@ -176,12 +207,27 @@ func TestPDSAPIClientDoesNotFollowRedirect(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err)
 	}
-	response, _, _, err := pdsDo(context.Background(), api, http.MethodGet, "com.atproto.server.describeServer", nil, nil, "")
+	response, _, _, err := pdsDo(
+		context.Background(),
+		api,
+		http.MethodGet,
+		"com.atproto.server.describeServer",
+		nil,
+		nil,
+		"",
+	)
 	if err != nil {
 		require.NoError(t, err)
 	}
 	if response.StatusCode != http.StatusFound || followed != 0 {
-		require.Equal(t, http.StatusFound, response.StatusCode, "redirect response status=%d followed=%d", response.StatusCode, followed)
+		require.Equal(
+			t,
+			http.StatusFound,
+			response.StatusCode,
+			"redirect response status=%d followed=%d",
+			response.StatusCode,
+			followed,
+		)
 		require.Equal(t, 0, followed, "redirect response status=%d followed=%d", response.StatusCode, followed)
 	}
 }

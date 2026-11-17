@@ -11,11 +11,12 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestPublicationAttemptCreatePersistsExactCandidateWithAnonymousCustody(t *testing.T) {
@@ -31,7 +32,7 @@ func TestPublicationAttemptCreatePersistsExactCandidateWithAnonymousCustody(t *t
 	proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 	require.NoError(t, err)
 	_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName))
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
 	require.NoError(t, err)
 	assert.Equal(t, proposal.AttemptID, attempt.ID)
@@ -79,7 +80,14 @@ func TestPublicationAttemptRestartRetainsExactCandidate(t *testing.T) {
 				floorObservation := f.observation(1)
 				first, err := store.Prepare(ctx, ModeFirstUse, floorObservation, f.payload)
 				require.NoError(t, err)
-				_, err = store.Accept(ctx, ModeFirstUse, first.StateToken, floorObservation, f.payload, first.Confirmation)
+				_, err = store.Accept(
+					ctx,
+					ModeFirstUse,
+					first.StateToken,
+					floorObservation,
+					f.payload,
+					first.Confirmation,
+				)
 				require.NoError(t, err)
 				view = attemptView(f, floorObservation, false)
 				sequence = 1
@@ -90,12 +98,24 @@ func TestPublicationAttemptRestartRetainsExactCandidate(t *testing.T) {
 			review := attemptReview()
 			proposal, err := store.PrepareAttempt(ctx, candidateA, view, review)
 			require.NoError(t, err)
-			attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidateA, view, review, proposal.Confirmation)
+			attempt, err := store.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidateA,
+				view,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			require.NoError(t, store.Close())
 
 			require.NoError(t, os.WriteFile(sourcePath, sourceB, 0o600))
-			candidateB := candidateWithPayload(t, candidateA, f.binding, packFixtureSource(t, candidateA.Payload, sourcePath))
+			candidateB := candidateWithPayload(
+				t,
+				candidateA,
+				f.binding,
+				packFixtureSource(t, candidateA.Payload, sourcePath),
+			)
 			assert.NotEqual(t, candidateA.Payload, candidateB.Payload)
 			require.NoError(t, publication.VerifyPayload(candidateB.Payload, blobForCandidate(t, candidateB)))
 			_, err = publication.DecodePayload(candidateB.Payload, blobForCandidate(t, candidateB))
@@ -119,12 +139,26 @@ func TestPublicationAttemptRestartRetainsExactCandidate(t *testing.T) {
 
 			uploadProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
 			require.NoError(t, err)
-			upload, err := reopened.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, view, review, uploadProposal.Confirmation)
+			upload, err := reopened.BeginUpload(
+				ctx,
+				attempt.ID,
+				uploadProposal.StateToken,
+				view,
+				review,
+				uploadProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, candidateA.Payload, upload.Payload)
 			submissionProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 			require.NoError(t, err)
-			submission, err := reopened.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+			submission, err := reopened.BeginSubmission(
+				ctx,
+				attempt.ID,
+				submissionProposal.StateToken,
+				view,
+				review,
+				submissionProposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, candidateA.SnapshotRecord, submission.SnapshotRecord)
 			assert.Equal(t, candidateA.HeadRecord, submission.HeadRecord)
@@ -148,7 +182,14 @@ func TestPublicationAttemptReuseSyncPrecedesReferenceCommit(t *testing.T) {
 				require.NoError(t, os.Chmod(directory, 0o700))
 				payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 				require.NoError(t, os.Mkdir(payloadDirectory, 0o700))
-				require.NoError(t, os.WriteFile(filepath.Join(payloadDirectory, payloadBasename(candidate.Payload)), candidate.Payload, 0o600))
+				require.NoError(
+					t,
+					os.WriteFile(
+						filepath.Join(payloadDirectory, payloadBasename(candidate.Payload)),
+						candidate.Payload,
+						0o600,
+					),
+				)
 				var err error
 				store, err = Open(directory, f.binding)
 				require.NoError(t, err)
@@ -156,7 +197,14 @@ func TestPublicationAttemptReuseSyncPrecedesReferenceCommit(t *testing.T) {
 				store, directory = newStore(t, f)
 				firstProposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 				require.NoError(t, err)
-				first, err := store.CreateAttempt(ctx, firstProposal.StateToken, candidate, view, review, firstProposal.Confirmation)
+				first, err := store.CreateAttempt(
+					ctx,
+					firstProposal.StateToken,
+					candidate,
+					view,
+					review,
+					firstProposal.Confirmation,
+				)
 				require.NoError(t, err)
 				abandon, err := store.PrepareAbandon(ctx, first.ID, nil)
 				require.NoError(t, err)
@@ -178,7 +226,7 @@ func TestPublicationAttemptReuseSyncPrecedesReferenceCommit(t *testing.T) {
 				if err := unix.Fstat(fd, &stat); err != nil {
 					return err
 				}
-				kind := ""
+				var kind string
 				switch stat.Mode & unix.S_IFMT {
 				case unix.S_IFREG:
 					kind = "file"
@@ -209,28 +257,49 @@ func TestPublicationAttemptReuseSyncPrecedesReferenceCommit(t *testing.T) {
 			}
 			commitSeen := false
 			store.commitTransaction = func(tx *sql.Tx) error {
-				orderOK := assert.GreaterOrEqual(t, len(syncOrder), 3, "file, payload-directory, and root fsyncs must precede reference commit")
+				orderOK := assert.GreaterOrEqual(
+					t,
+					len(syncOrder),
+					3,
+					"file, payload-directory, and root fsyncs must precede reference commit",
+				)
 				if orderOK {
-					orderOK = assert.Equal(t, []string{"file", "payload-directory", "root"}, syncOrder[:3], "custody fsync order must precede reference commit")
+					orderOK = assert.Equal(
+						t,
+						[]string{"file", "payload-directory", "root"},
+						syncOrder[:3],
+						"custody fsync order must precede reference commit",
+					)
 				}
 				var refs int
-				refErr := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", proposal.AttemptID[:]).Scan(&refs)
-				refsOK := assert.NoError(t, refErr) && assert.Equal(t, 1, refs, "attempt reference must be in the transaction before commit")
+				refErr := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", proposal.AttemptID[:]).
+					Scan(&refs)
+				refsOK := assert.NoError(t, refErr) &&
+					assert.Equal(t, 1, refs, "attempt reference must be in the transaction before commit")
 				if !orderOK || !refsOK {
 					rollbackErr := tx.Rollback()
-					assert.NoError(t, rollbackErr)
+					require.NoError(t, rollbackErr)
 					return errors.New("custody sync ordering assertion failed")
 				}
 				commitSeen = true
 				return tx.Commit()
 			}
-			attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+			attempt, err := store.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidate,
+				view,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.True(t, commitSeen)
 			require.GreaterOrEqual(t, len(syncOrder), 4)
 			assert.Equal(t, []string{"file", "payload-directory", "root"}, syncOrder[:3])
 			assert.Equal(t, proposal.AttemptID, attempt.ID)
-			payload, err := os.ReadFile(filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload)))
+			payload, err := os.ReadFile(
+				filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload)),
+			)
 			require.NoError(t, err)
 			assert.Equal(t, candidate.Payload, payload)
 			afterSentinel, err := os.ReadFile(sentinel)
@@ -291,7 +360,8 @@ func TestPublicationAttemptAnonymousCustodyFaultPlacement(t *testing.T) {
 					switch stat.Mode & unix.S_IFMT {
 					case unix.S_IFREG:
 						regularSyncs++
-						if fault.name == "file-sync" && regularSyncs == 1 || fault.name == "linked-file-sync" && regularSyncs == 2 {
+						if fault.name == "file-sync" && regularSyncs == 1 ||
+							fault.name == "linked-file-sync" && regularSyncs == 2 {
 							return unix.EIO
 						}
 					case unix.S_IFDIR:
@@ -345,13 +415,16 @@ func TestPublicationAttemptAnonymousCustodyFaultPlacement(t *testing.T) {
 			} else {
 				assert.Empty(t, entries)
 				_, statErr := os.Lstat(payloadPath)
-				assert.ErrorIs(t, statErr, os.ErrNotExist)
+				require.ErrorIs(t, statErr, os.ErrNotExist)
 			}
 			afterSentinel, err := os.ReadFile(sentinel)
 			require.NoError(t, err)
 			assert.Equal(t, sentinelBytes, afterSentinel)
 			var attempts, objects, refs int
-			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+			)
 			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&objects))
 			require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&refs))
 			assert.Zero(t, attempts)
@@ -429,7 +502,14 @@ func TestPublicationAttemptReuseSyncsFilePayloadDirectoryAndRootBeforeReference(
 	sharedProposal, err := store.PrepareAttempt(ctx, shared, sharedView, review)
 	require.NoError(t, err)
 	syncOrder = nil
-	sharedAttempt, err := store.CreateAttempt(ctx, sharedProposal.StateToken, shared, sharedView, review, sharedProposal.Confirmation)
+	sharedAttempt, err := store.CreateAttempt(
+		ctx,
+		sharedProposal.StateToken,
+		shared,
+		sharedView,
+		review,
+		sharedProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotKey, sharedAttempt.SnapshotKey)
 	require.GreaterOrEqual(t, len(syncOrder), 4)
@@ -447,7 +527,10 @@ func TestPublicationAttemptPostlinkDatabaseAbortLeavesReusableCompleteOrphan(t *
 	review := attemptReview()
 	proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 	require.NoError(t, err)
-	_, err = store.conn.ExecContext(ctx, "CREATE TEMP TRIGGER abort_attempt_insert BEFORE INSERT ON main.publication_attempts BEGIN SELECT RAISE(ABORT,'attempt-row-canary'); END")
+	_, err = store.conn.ExecContext(
+		ctx,
+		"CREATE TEMP TRIGGER abort_attempt_insert BEFORE INSERT ON main.publication_attempts BEGIN SELECT RAISE(ABORT,'attempt-row-canary'); END",
+	)
 	require.NoError(t, err)
 	_, err = store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
 	requireErrorMetadata(t, err, ErrStorage, StageAttempt, ReasonIO)
@@ -529,7 +612,11 @@ func TestPublicationAttemptPrelinkFaultsLeaveNoNamedPartialFile(t *testing.T) {
 			require.NoError(t, readErr)
 			assert.Empty(t, entries)
 			var rows int
-			require.NoError(t, store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&rows))
+			require.NoError(
+				t,
+				store.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").
+					Scan(&rows),
+			)
 			assert.Equal(t, 0, rows)
 		})
 	}
@@ -553,8 +640,14 @@ func TestPublicationAttemptProcessExitBeforeLinkLeavesNoNamedCandidate(t *testin
 	require.NoError(t, err)
 	defer check.Close()
 	var attempts, objects int
-	require.NoError(t, check.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts))
-	require.NoError(t, check.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects))
+	require.NoError(
+		t,
+		check.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM publication_attempts").Scan(&attempts),
+	)
+	require.NoError(
+		t,
+		check.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM payload_objects").Scan(&objects),
+	)
 	assert.Equal(t, 0, attempts)
 	assert.Equal(t, 0, objects)
 }
@@ -585,7 +678,14 @@ func TestPublicationAttemptExitBeforeLinkHelper(t *testing.T) {
 		}
 		return normalSync(fd)
 	}
-	_, err = store.CreateAttempt(context.Background(), proposal.StateToken, candidate, view, review, proposal.Confirmation)
+	_, err = store.CreateAttempt(
+		context.Background(),
+		proposal.StateToken,
+		candidate,
+		view,
+		review,
+		proposal.Confirmation,
+	)
 	require.Error(t, err)
 }
 
@@ -616,7 +716,14 @@ func TestPublicationAttemptUmaskHelper(t *testing.T) {
 	review := attemptReview()
 	proposal, err := store.PrepareAttempt(context.Background(), candidate, view, review)
 	require.NoError(t, err)
-	_, err = store.CreateAttempt(context.Background(), proposal.StateToken, candidate, view, review, proposal.Confirmation)
+	_, err = store.CreateAttempt(
+		context.Background(),
+		proposal.StateToken,
+		candidate,
+		view,
+		review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	for _, path := range []string{filepath.Join(directory, "publication.db"), filepath.Join(directory, payloadDirectoryName), filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))} {
 		info, err := os.Lstat(path)
@@ -641,7 +748,14 @@ func TestPublicationAttemptRejectsUnsafePayloadObjectsWithoutRepair(t *testing.T
 			review := attemptReview()
 			proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
 			require.NoError(t, err)
-			attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+			attempt, err := store.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidate,
+				view,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			require.NoError(t, store.Close())
 			path := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
@@ -703,14 +817,31 @@ func candidateWithPayload(t *testing.T, candidate CandidateInput, binding Bindin
 	require.NoError(t, err)
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
-	record.Blob = publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType}
+	record.Blob = publication.BlobReference{
+		CID:      blobCID,
+		Size:     uint64(len(payload)),
+		MIMEType: publication.SnapshotBlobMIMEType,
+	}
 	snapshotRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRaw)
 	require.NoError(t, err)
-	headRaw, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: record.PublicationSeq, SnapshotCID: snapshotCID, BlobCID: blobCID})
+	headRaw, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          binding.Vault,
+			PublicationSeq: record.PublicationSeq,
+			SnapshotCID:    snapshotCID,
+			BlobCID:        blobCID,
+		},
+	)
 	require.NoError(t, err)
-	return CandidateInput{SnapshotKey: candidate.SnapshotKey, SnapshotRecord: snapshotRaw, HeadRecord: headRaw, Payload: bytes.Clone(payload)}
+	return CandidateInput{
+		SnapshotKey:    candidate.SnapshotKey,
+		SnapshotRecord: snapshotRaw,
+		HeadRecord:     headRaw,
+		Payload:        bytes.Clone(payload),
+	}
 }
 
 func candidateWithPublicationID(t *testing.T, candidate CandidateInput, id [16]byte) CandidateInput {
@@ -722,9 +853,22 @@ func candidateWithPublicationID(t *testing.T, candidate CandidateInput, id [16]b
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRaw)
 	require.NoError(t, err)
-	headRaw, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: record.Vault, PublicationSeq: record.PublicationSeq, SnapshotCID: snapshotCID, BlobCID: record.Blob.CID})
+	headRaw, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          record.Vault,
+			PublicationSeq: record.PublicationSeq,
+			SnapshotCID:    snapshotCID,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
-	return CandidateInput{SnapshotKey: candidate.SnapshotKey, SnapshotRecord: snapshotRaw, HeadRecord: headRaw, Payload: bytes.Clone(candidate.Payload)}
+	return CandidateInput{
+		SnapshotKey:    candidate.SnapshotKey,
+		SnapshotRecord: snapshotRaw,
+		HeadRecord:     headRaw,
+		Payload:        bytes.Clone(candidate.Payload),
+	}
 }
 
 func blobForCandidate(t *testing.T, candidate CandidateInput) publication.BlobReference {

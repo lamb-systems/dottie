@@ -14,7 +14,16 @@ import (
 func TestLocalLogoutDeletesEnvelopesWithoutParsingOrNetwork(t *testing.T) {
 	fake, client, store := newFakeOAuth(t)
 	name := sessionItemName(client.ClientID, testDID)
-	pendingBytes, err := json.Marshal(sessionEnvelope{Version: sessionEnvelopeVersion, DID: testDID, Issuer: "https://bsky.social", TokenEndpoint: "https://bsky.social/token", Scopes: VaultScopes(), State: SessionStateRefreshPending})
+	pendingBytes, err := json.Marshal(
+		sessionEnvelope{
+			Version:       sessionEnvelopeVersion,
+			DID:           testDID,
+			Issuer:        "https://bsky.social",
+			TokenEndpoint: "https://bsky.social/token",
+			Scopes:        VaultScopes(),
+			State:         SessionStateRefreshPending,
+		},
+	)
 	require.NoError(t, err)
 	for _, encoded := range [][]byte{
 		[]byte("not-json"),
@@ -78,7 +87,15 @@ func TestRemoteLogoutPendingFailureAndRelocationKeepLocalSession(t *testing.T) {
 	fake, client, store := newFakeOAuth(t)
 	session := storedRefreshSession(t, client)
 	name := sessionItemName(client.ClientID, testDID)
-	pending := sessionEnvelope{Version: sessionEnvelopeVersion, DID: testDID, Handle: testHandle, Issuer: session.Issuer, TokenEndpoint: session.TokenEndpoint, Scopes: session.Scopes, State: SessionStateRefreshPending}
+	pending := sessionEnvelope{
+		Version:       sessionEnvelopeVersion,
+		DID:           testDID,
+		Handle:        testHandle,
+		Issuer:        session.Issuer,
+		TokenEndpoint: session.TokenEndpoint,
+		Scopes:        session.Scopes,
+		State:         SessionStateRefreshPending,
+	}
 	pendingBytes, err := json.Marshal(pending)
 	require.NoError(t, err)
 	require.NoError(t, store.Save(context.Background(), name, pendingBytes))
@@ -87,7 +104,9 @@ func TestRemoteLogoutPendingFailureAndRelocationKeepLocalSession(t *testing.T) {
 	assert.Empty(t, fake.revocationRequests)
 
 	require.NoError(t, client.saveSession(context.Background(), session))
-	fake.revocationResponses = []fakeResourceResponse{{status: http.StatusBadRequest, body: `{"error":"invalid_grant","error_description":"private detail"}`}}
+	fake.revocationResponses = []fakeResourceResponse{
+		{status: http.StatusBadRequest, body: `{"error":"invalid_grant","error_description":"private detail"}`},
+	}
 	_, err = client.Logout(context.Background(), testDID, testHandle, session, true)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "private detail")
@@ -117,7 +136,11 @@ func TestRevocationDPoPNonceRetryAcceptsEmptySuccess(t *testing.T) {
 	fake, client, store := newFakeOAuth(t)
 	session := storedRefreshSession(t, client)
 	fake.revocationResponses = []fakeResourceResponse{
-		{status: http.StatusBadRequest, header: http.Header{"Dpop-Nonce": {"revocation-nonce"}}, body: `{"error":"use_dpop_nonce"}`},
+		{
+			status: http.StatusBadRequest,
+			header: http.Header{"Dpop-Nonce": {"revocation-nonce"}},
+			body:   `{"error":"use_dpop_nonce"}`,
+		},
 		{status: http.StatusNoContent},
 	}
 	result, err := client.Logout(context.Background(), testDID, testHandle, session, true)
@@ -143,7 +166,9 @@ func TestRevocationErrorOnlyContainsStatusAndSafeCode(t *testing.T) {
 	secret := "refresh-token-that-must-not-leak"
 	session.RefreshToken = NewSecret(secret)
 	require.NoError(t, client.saveSession(context.Background(), session))
-	fake.revocationResponses = []fakeResourceResponse{{status: http.StatusBadRequest, body: `{"error":"provider-echo","error_description":"` + secret + `"}`}}
+	fake.revocationResponses = []fakeResourceResponse{
+		{status: http.StatusBadRequest, body: `{"error":"provider-echo","error_description":"` + secret + `"}`},
+	}
 	_, err := client.Logout(context.Background(), testDID, testHandle, session, true)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), secret)

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
@@ -13,17 +16,21 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	target := config.Target{
-		ID: publicationReconcileTargetID, Source: model.SourceFiles,
-		Mode: config.Review,
-		Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory, Exclude: []string{"machine-only"}},
+		ID:     publicationReconcileTargetID,
+		Source: model.SourceFiles,
+		Mode:   config.Review,
+		Root: &config.Root{
+			Base:    model.RootHome,
+			Path:    "synthetic",
+			Kind:    model.SelectionDirectory,
+			Exclude: []string{"machine-only"},
+		},
 	}
 	portable, err := target.Model()
 	require.NoError(t, err)
@@ -35,13 +42,26 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	selectedPath := filepath.Join(home.selected, "settings.ini")
 	writePublicationReconcileFile(t, selectedPath, publicationReconcileInitial, 0o600)
 	initialEntries := capturePublicationReconcileSource(t, home, target, publicationReconcileInitial)
-	initialSnapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: initialEntries}
+	initialSnapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{portable},
+		Entries: initialEntries,
+	}
 	require.NoError(t, initialSnapshot.Validate())
 	binding := publicationReconcileBinding()
-	suppliedContext := publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}}
+	suppliedContext := publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-revision",
+		RepositoryDigest:   []byte{1, 2, 3},
+	}
 	initial := encodePublicationReconcileMaterial(t, binding, initialSnapshot, 0, nil, [16]byte{0x25, 0xa1})
 	initialObservation := publicationReconcileObservation(binding, suppliedContext, initial)
-	home.floor = acceptPublicationReconcilePosition(t, home.pubStore, publicationstate.ModeFirstUse, initialObservation, initial.payload)
+	home.floor = acceptPublicationReconcilePosition(
+		t,
+		home.pubStore,
+		publicationstate.ModeFirstUse,
+		initialObservation,
+		initial.payload,
+	)
 	originalFloor := clonePublicationReconcileFloor(home.floor)
 	originalRecord := bytes.Clone(initial.record)
 	originalPayload := bytes.Clone(initial.payload)
@@ -69,7 +89,11 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	require.Len(t, control.Targets, 1)
 	assert.Equal(t, publicationReconcileTargetID, control.Targets[0].ID)
 	require.Len(t, control.Targets[0].Entries, 1)
-	assert.Equal(t, model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}, control.Targets[0].Entries[0].Key)
+	assert.Equal(
+		t,
+		model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"},
+		control.Targets[0].Entries[0].Key,
+	)
 	assert.Equal(t, syncengine.ActionUnchanged, control.Targets[0].Entries[0].DecisionAction)
 	assert.Equal(t, syncengine.PreviewReasonEqual, control.Targets[0].Entries[0].Reason)
 	assert.Equal(t, 0, capture.acceptanceCount)
@@ -116,7 +140,11 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	require.Len(t, capture.captured.Observations, 1)
 	captured := capture.captured.Observations[0]
 	assert.Equal(t, model.ObservationPresent, captured.State)
-	assert.Equal(t, model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}, captured.Identity)
+	assert.Equal(
+		t,
+		model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"},
+		captured.Identity,
+	)
 	require.NotNil(t, captured.Entry)
 	require.NotNil(t, captured.Entry.File)
 	assert.Equal(t, publicationReconcileInitial, captured.Entry.File.Content)
@@ -200,7 +228,11 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	require.Len(t, refreshed.Targets, 1)
 	assert.Equal(t, publicationReconcileTargetID, refreshed.Targets[0].ID)
 	require.Len(t, refreshed.Targets[0].Entries, 1)
-	assert.Equal(t, model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}, refreshed.Targets[0].Entries[0].Key)
+	assert.Equal(
+		t,
+		model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"},
+		refreshed.Targets[0].Entries[0].Key,
+	)
 	assert.Equal(t, syncengine.ActionUnchanged, refreshed.Targets[0].Entries[0].DecisionAction)
 	assert.Equal(t, syncengine.PreviewReasonEqual, refreshed.Targets[0].Entries[0].Reason)
 	assert.Equal(t, 1, capture.acceptanceCount)
@@ -226,7 +258,11 @@ type publicationReconcileInterleavingCapture struct {
 	callbackErr       error
 }
 
-func (capture *publicationReconcileInterleavingCapture) Capture(ctx context.Context, target config.Target, path string) (files.Result, error) {
+func (capture *publicationReconcileInterleavingCapture) Capture(
+	ctx context.Context,
+	target config.Target,
+	path string,
+) (files.Result, error) {
 	result, err := (service.LocalFilesCapture{}).Capture(ctx, target, path)
 	if err != nil {
 		return files.Result{}, err
@@ -247,7 +283,14 @@ func (capture *publicationReconcileInterleavingCapture) Capture(ctx context.Cont
 	}
 	capture.prepareCount++
 	capture.armedEvents = append(capture.armedEvents, "prepared")
-	floor, err := capture.store.Accept(ctx, publicationstate.ModeAdvance, proposal.StateToken, capture.observation, capture.payload, proposal.Confirmation)
+	floor, err := capture.store.Accept(
+		ctx,
+		publicationstate.ModeAdvance,
+		proposal.StateToken,
+		capture.observation,
+		capture.payload,
+		proposal.Confirmation,
+	)
 	if err != nil {
 		capture.callbackErr = err
 		return files.Result{}, err
@@ -258,26 +301,36 @@ func (capture *publicationReconcileInterleavingCapture) Capture(ctx context.Cont
 	return result, nil
 }
 
-func assertPublicationReconcileInterleavingTraceHas(t *testing.T, trace []publicationstate.RecordReference, material publicationReconcileMaterial) {
+func assertPublicationReconcileInterleavingTraceHas(
+	t *testing.T,
+	trace []publicationstate.RecordReference,
+	material publicationReconcileMaterial,
+) {
 	t.Helper()
 	sequence, err := publication.ParseSequenceKey(material.key)
 	require.NoError(t, err)
 	matches := 0
 	for _, reference := range trace {
-		if reference.Key == material.key && reference.Sequence == sequence && bytes.Equal(reference.CID, material.recordCID) {
+		if reference.Key == material.key && reference.Sequence == sequence &&
+			bytes.Equal(reference.CID, material.recordCID) {
 			matches++
 		}
 	}
 	assert.Equal(t, 1, matches)
 }
 
-func assertPublicationReconcileInterleavingEvidenceHas(t *testing.T, evidence []publicationstate.RecordEvidence, material publicationReconcileMaterial) {
+func assertPublicationReconcileInterleavingEvidenceHas(
+	t *testing.T,
+	evidence []publicationstate.RecordEvidence,
+	material publicationReconcileMaterial,
+) {
 	t.Helper()
 	sequence, err := publication.ParseSequenceKey(material.key)
 	require.NoError(t, err)
 	matches := 0
 	for _, record := range evidence {
-		if record.Reference.Key == material.key && record.Reference.Sequence == sequence && bytes.Equal(record.Reference.CID, material.recordCID) {
+		if record.Reference.Key == material.key && record.Reference.Sequence == sequence &&
+			bytes.Equal(record.Reference.CID, material.recordCID) {
 			matches++
 			assert.Equal(t, material.record, record.Raw)
 		}

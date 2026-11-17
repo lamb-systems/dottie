@@ -10,20 +10,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const positionTestDID = "did:plc:abcdefghijklmnopqrstuvwx"
 
 func positionTestBinding() publicationstate.Binding {
-	binding := publicationstate.Binding{AccountDID: positionTestDID, Backend: publicationstate.BackendPublicRepo, Repository: "at://" + positionTestDID}
+	binding := publicationstate.Binding{
+		AccountDID: positionTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Repository: "at://" + positionTestDID,
+	}
 	binding.Vault = [32]byte{0x09, 0x11, 0x23}
 	return binding
 }
@@ -39,12 +44,34 @@ func positionTestDirectory(t *testing.T) string {
 	return directory
 }
 
-func newPositionFloorStore(t *testing.T, directory string, binding publicationstate.Binding) (*publicationstate.Store, publicationstate.Floor) {
+func newPositionFloorStore(
+	t *testing.T,
+	directory string,
+	binding publicationstate.Binding,
+) (*publicationstate.Store, publicationstate.Floor) {
 	t.Helper()
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "settings.ini", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic position status"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "settings.ini",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("synthetic position status"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -55,25 +82,47 @@ func newPositionFloorStore(t *testing.T, directory string, binding publicationst
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob:          publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordRaw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: 0, SnapshotCID: recordCID, BlobCID: blobCID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          binding.Vault,
+			PublicationSeq: 0,
+			SnapshotCID:    recordCID,
+			BlobCID:        blobCID,
+		},
+	)
 	require.NoError(t, err)
 	observation := publicationstate.Observation{
-		Origin:          binding,
-		SuppliedContext: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}},
-		Head:            head,
-		Snapshots:       []publicationstate.SnapshotBlock{{Key: "0000000000000000", Raw: recordRaw}},
+		Origin: binding,
+		SuppliedContext: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-revision",
+			RepositoryDigest:   []byte{1, 2, 3},
+		},
+		Head:      head,
+		Snapshots: []publicationstate.SnapshotBlock{{Key: "0000000000000000", Raw: recordRaw}},
 	}
 	store, err := publicationstate.Open(directory, binding)
 	require.NoError(t, err)
 	proposal, err := store.Prepare(context.Background(), publicationstate.ModeFirstUse, observation, packed.Payload)
 	require.NoError(t, err)
-	floor, err := store.Accept(context.Background(), publicationstate.ModeFirstUse, proposal.StateToken, observation, packed.Payload, proposal.Confirmation)
+	floor, err := store.Accept(
+		context.Background(),
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		packed.Payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return store, floor
 }
@@ -102,7 +151,18 @@ func TestPositionStatusRefusesWithTypedTripleOnly(t *testing.T) {
 			test.build(t, directory)
 			binding := positionTestBinding()
 			var stdout, stderr bytes.Buffer
-			code := Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])}, &stdout, &stderr)
+			code := Run(
+				[]string{
+					"position",
+					"status",
+					"--did",
+					binding.AccountDID,
+					"--vault",
+					hex.EncodeToString(binding.Vault[:]),
+				},
+				&stdout,
+				&stderr,
+			)
 			require.Equal(t, 3, code, "exit code")
 			assert.Empty(t, stdout.String(), "unexpected stdout")
 			assert.Equal(t, "dottie: publication state: "+test.reason+"\n", stderr.String(), "stderr")
@@ -124,7 +184,11 @@ func TestPositionStatusReportsEmptyFloor(t *testing.T) {
 	before, err := os.ReadDir(directory)
 	require.NoError(t, err)
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])}, &stdout, &stderr)
+	code := Run(
+		[]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])},
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 0, code, "exit code")
 	assert.Equal(t, "position: empty\n", stdout.String(), "stdout")
 	assert.Empty(t, stderr.String(), "stderr")
@@ -146,7 +210,11 @@ func TestPositionStatusReportsAcceptedFloorWithoutLeakingIdentifiers(t *testing.
 	before, err := os.ReadDir(directory)
 	require.NoError(t, err)
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])}, &stdout, &stderr)
+	code := Run(
+		[]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])},
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 0, code, "exit code")
 	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", stdout.String(), "stdout")
 	assert.Empty(t, stderr.String(), "stderr")
@@ -165,7 +233,13 @@ func TestPositionStatusRefusesFreshInstallAsAbsent(t *testing.T) {
 	require.NoError(t, err)
 	directory := paths.PublicationStateDir()
 	var stdout, stderr strings.Builder
-	code := runPosition([]string{"status", "--did", positionTestDID, "--vault", "091123" + strings.Repeat("00", 29)}, &stdout, &stderr, os.Getenv, unusedPositionKeyring(t))
+	code := runPosition(
+		[]string{"status", "--did", positionTestDID, "--vault", "091123" + strings.Repeat("00", 29)},
+		&stdout,
+		&stderr,
+		os.Getenv,
+		unusedPositionKeyring(t),
+	)
 	assert.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "schema/inspect/position_absent")
@@ -191,13 +265,32 @@ func TestPositionStatusRefusesUsageFaults(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "handle instead of did", args: []string{"position", "status", "--handle", "example.test", "--vault", vaultHex}},
+		{
+			name: "handle instead of did",
+			args: []string{"position", "status", "--handle", "example.test", "--vault", vaultHex},
+		},
 		{name: "unknown flag", args: []string{"position", "status", "--device-id", "laptop", "--vault", vaultHex}},
 		{name: "malformed did", args: []string{"position", "status", "--did", "not-a-did", "--vault", vaultHex}},
 		{name: "malformed vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", "abc"}},
-		{name: "short vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", vaultHex[:62]}},
-		{name: "zero vault", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(make([]byte, 32))}},
-		{name: "positional argument", args: []string{"position", "status", "--did", binding.AccountDID, "--vault", vaultHex, "extra"}},
+		{
+			name: "short vault",
+			args: []string{"position", "status", "--did", binding.AccountDID, "--vault", vaultHex[:62]},
+		},
+		{
+			name: "zero vault",
+			args: []string{
+				"position",
+				"status",
+				"--did",
+				binding.AccountDID,
+				"--vault",
+				hex.EncodeToString(make([]byte, 32)),
+			},
+		},
+		{
+			name: "positional argument",
+			args: []string{"position", "status", "--did", binding.AccountDID, "--vault", vaultHex, "extra"},
+		},
 		{name: "missing subcommand", args: []string{"position"}},
 	}
 	for _, test := range tests {
@@ -243,9 +336,18 @@ func TestPositionStatusResolvesVaultFromRecordedBinding(t *testing.T) {
 	code := Run([]string{"position", "status", "--did", binding.AccountDID}, &resolved, &resolvedErr)
 	require.Equal(t, 0, code, "exit code without --vault")
 	assert.Empty(t, resolvedErr.String(), "stderr without --vault")
-	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", resolved.String(), "stdout without --vault")
+	assert.Equal(
+		t,
+		"position: revision=1 generation=1 provenance=first sequence=0\n",
+		resolved.String(),
+		"stdout without --vault",
+	)
 	var explicit, explicitErr bytes.Buffer
-	code = Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])}, &explicit, &explicitErr)
+	code = Run(
+		[]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(binding.Vault[:])},
+		&explicit,
+		&explicitErr,
+	)
 	require.Equal(t, 0, code, "exit code with --vault")
 	assert.Empty(t, explicitErr.String(), "stderr with --vault")
 	assert.Equal(t, explicit.String(), resolved.String(), "resolved output differs from the explicit vault output")
@@ -260,7 +362,11 @@ func TestPositionStatusUsesExplicitVaultOverride(t *testing.T) {
 	other := binding
 	other.Vault = [32]byte{0x0a, 0x22, 0x34}
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(other.Vault[:])}, &stdout, &stderr)
+	code := Run(
+		[]string{"position", "status", "--did", binding.AccountDID, "--vault", hex.EncodeToString(other.Vault[:])},
+		&stdout,
+		&stderr,
+	)
 	require.Equal(t, 3, code, "exit code for an override that differs from the binding")
 	assert.Empty(t, stdout.String(), "unexpected stdout")
 	assert.Equal(t, "dottie: publication state: invalid/inspect/binding\n", stderr.String(), "stderr")
@@ -273,7 +379,13 @@ func TestPositionStatusRefusesAbsentBindingWithoutVault(t *testing.T) {
 	paths, err := platform.Resolve(os.Getenv)
 	require.NoError(t, err)
 	var stdout, stderr strings.Builder
-	code := runPosition([]string{"status", "--did", positionTestDID}, &stdout, &stderr, os.Getenv, unusedPositionKeyring(t))
+	code := runPosition(
+		[]string{"status", "--did", positionTestDID},
+		&stdout,
+		&stderr,
+		os.Getenv,
+		unusedPositionKeyring(t),
+	)
 	require.Equal(t, 3, code, "exit code")
 	assert.Empty(t, stdout.String(), "unexpected stdout")
 	assert.Equal(t, "dottie: publication state: schema/inspect/position_absent\n", stderr.String(), "stderr")
@@ -318,7 +430,13 @@ func runPositionForTest(t *testing.T, openKeyring accountKeyringFactory, args ..
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	exitCode := 0
-	command := newPositionCommand(&stdout, &stderr, &exitCode, os.Getenv, productionSessionDIDSource(openKeyring, os.Getenv))
+	command := newPositionCommand(
+		&stdout,
+		&stderr,
+		&exitCode,
+		os.Getenv,
+		productionSessionDIDSource(openKeyring, os.Getenv),
+	)
 	ctx := context.Background()
 	if err := command.Run(ctx, append([]string{"dottie"}, args...)); err != nil && exitCode == 0 {
 		command.ExitErrHandler(ctx, command, err)
@@ -334,7 +452,11 @@ func TestPositionStatusResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testi
 	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, binding.AccountDID), "status")
 	require.Equal(t, 0, code, stderr)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "account: "+binding.AccountDID+" (resolved from the only authorised session; --did was omitted)\nposition: revision=1 generation=1 provenance=first sequence=0\n", stdout)
+	assert.Equal(
+		t,
+		"account: "+binding.AccountDID+" (resolved from the only authorised session; --did was omitted)\nposition: revision=1 generation=1 provenance=first sequence=0\n",
+		stdout,
+	)
 }
 
 func TestPositionStatusRefusesWhenNoAccountIsAuthorisedAndDIDIsOmitted(t *testing.T) {
@@ -345,7 +467,11 @@ func TestPositionStatusRefusesWhenNoAccountIsAuthorisedAndDIDIsOmitted(t *testin
 	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t), "status")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout)
-	assert.Equal(t, "dottie: position status refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr)
+	assert.Equal(
+		t,
+		"dottie: position status refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n",
+		stderr,
+	)
 	_, statErr := os.Lstat(paths.PublicationStateDir())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the store directory")
 }
@@ -359,7 +485,11 @@ func TestPositionStatusRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
 	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, positionTestDID, other), "status")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout)
-	assert.Equal(t, "dottie: position status refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr)
+	assert.Equal(
+		t,
+		"dottie: position status refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n",
+		stderr,
+	)
 	_, statErr := os.Lstat(paths.PublicationStateDir())
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "the refusal created the store directory")
 }
@@ -369,7 +499,13 @@ func TestPositionStatusInspectsTheExplicitDIDWithoutConsultingSessions(t *testin
 	binding := positionTestBinding()
 	store, _ := newPositionFloorStore(t, directory, binding)
 	require.NoError(t, store.Close())
-	code, stdout, stderr := runPositionForTest(t, positionSessionKeyring(t, "did:plc:zyxwvutsrqponmlkjihgfedc"), "status", "--did", binding.AccountDID)
+	code, stdout, stderr := runPositionForTest(
+		t,
+		positionSessionKeyring(t, "did:plc:zyxwvutsrqponmlkjihgfedc"),
+		"status",
+		"--did",
+		binding.AccountDID,
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Empty(t, stderr)
 	assert.Equal(t, "position: revision=1 generation=1 provenance=first sequence=0\n", stdout)
@@ -383,5 +519,9 @@ func TestPositionStatusRefusesWhenTheStoredSessionsCannotBeListed(t *testing.T) 
 	code, stdout, stderr := runPositionForTest(t, func() (accountKeyring, error) { return keyring, nil }, "status")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout)
-	assert.Equal(t, "dottie: position status refused: the stored account sessions cannot be listed; pass --did DID\n", stderr)
+	assert.Equal(
+		t,
+		"dottie: position status refused: the stored account sessions cannot be listed; pass --did DID\n",
+		stderr,
+	)
 }

@@ -115,9 +115,13 @@ func refuseUncheckpointedWAL(databasePath string) error {
 }
 
 func inspectionProbeError(err error) error {
-	var stateError *Error
-	if errors.As(err, &stateError) {
-		return &Error{class: stateError.Class(), stage: StageInspect, reason: stateError.Reason(), cancellation: stateError.cancellation}
+	if stateError, ok := errors.AsType[*Error](err); ok {
+		return &Error{
+			class:        stateError.Class(),
+			stage:        StageInspect,
+			reason:       stateError.Reason(),
+			cancellation: stateError.cancellation,
+		}
 	}
 	return classified(ErrStorage, StageInspect, ReasonIO)
 }
@@ -174,7 +178,8 @@ func readInspection(ctx context.Context, databasePath string, binding Binding) (
 	}
 	var id [32]byte
 	copy(id[:], databaseID)
-	if validatePersistedFloor(floor, binding, id, DefaultLimits()) != nil || floor.Revision != revision || floor.Generation != generation {
+	if validatePersistedFloor(floor, binding, id, DefaultLimits()) != nil || floor.Revision != revision ||
+		floor.Generation != generation {
 		return Inspection{}, classified(ErrSchema, StageInspect, ReasonCorrupt)
 	}
 	return Inspection{Floor: cloneFloor(floor), Present: true}, nil

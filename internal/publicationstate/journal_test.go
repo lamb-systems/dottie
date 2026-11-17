@@ -68,7 +68,11 @@ func journalTestDeleteIntent(preimage []byte, seenFloorRevision uint64) JournalI
 func journalStoredPostimage(t *testing.T, journal *Journal, entry int64) (any, any) {
 	t.Helper()
 	var digestValue, sizeValue any
-	require.NoError(t, journal.conn.QueryRowContext(context.Background(), "SELECT postimage_digest,postimage_size FROM journal WHERE entry=?", entry).Scan(&digestValue, &sizeValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(context.Background(), "SELECT postimage_digest,postimage_size FROM journal WHERE entry=?", entry).
+			Scan(&digestValue, &sizeValue),
+	)
 	return digestValue, sizeValue
 }
 
@@ -85,7 +89,11 @@ func requireJournalError(t *testing.T, err error, class error, stage Stage, reas
 func journalStoredState(t *testing.T, journal *Journal, entry int64) (JournalState, JournalStage) {
 	t.Helper()
 	var stateValue, stageValue any
-	require.NoError(t, journal.conn.QueryRowContext(context.Background(), "SELECT state,stage FROM journal WHERE entry=?", entry).Scan(&stateValue, &stageValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(context.Background(), "SELECT state,stage FROM journal WHERE entry=?", entry).
+			Scan(&stateValue, &stageValue),
+	)
 	state, stateOK := rawText(stateValue)
 	require.True(t, stateOK)
 	stage, stageOK := rawText(stageValue)
@@ -255,7 +263,11 @@ func TestJournalBackupRoundTripAndBounds(t *testing.T) {
 	assert.Nil(t, absent.Preimage)
 	assert.Nil(t, absent.BackupDigest)
 	var digestValue, sizeValue any
-	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT preimage_digest,preimage_size FROM journal WHERE entry=?", absent.Entry).Scan(&digestValue, &sizeValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(ctx, "SELECT preimage_digest,preimage_size FROM journal WHERE entry=?", absent.Entry).
+			Scan(&digestValue, &sizeValue),
+	)
 	assert.Nil(t, digestValue)
 	assert.Nil(t, sizeValue)
 
@@ -286,7 +298,13 @@ func TestJournalBackupRoundTripAndBounds(t *testing.T) {
 	assert.Equal(t, int64(3), journalStoredCount(t, journal, "journal"))
 	assert.Equal(t, int64(1), journalStoredCount(t, journal, "backups"))
 
-	_, err = journal.conn.ExecContext(ctx, "INSERT INTO backups(digest,size,data) VALUES (?,?,?)", []byte("01234567890123456789012345678901"), journalMaxTotalBytes+1, []byte{0})
+	_, err = journal.conn.ExecContext(
+		ctx,
+		"INSERT INTO backups(digest,size,data) VALUES (?,?,?)",
+		[]byte("01234567890123456789012345678901"),
+		journalMaxTotalBytes+1,
+		[]byte{0},
+	)
 	require.NoError(t, err)
 	small := []byte("abc")
 	_, err = journal.BeginJournal(ctx, journalTestIntent(small, []byte("replacement"), 6))
@@ -294,7 +312,13 @@ func TestJournalBackupRoundTripAndBounds(t *testing.T) {
 	assert.Equal(t, int64(3), journalStoredCount(t, journal, "journal"))
 
 	corruptDigest := sha256.Sum256([]byte("expected bytes"))
-	_, err = journal.conn.ExecContext(ctx, "INSERT INTO backups(digest,size,data) VALUES (?,?,?)", corruptDigest[:], len("other bytes"), []byte("other bytes"))
+	_, err = journal.conn.ExecContext(
+		ctx,
+		"INSERT INTO backups(digest,size,data) VALUES (?,?,?)",
+		corruptDigest[:],
+		len("other bytes"),
+		[]byte("other bytes"),
+	)
 	require.NoError(t, err)
 	corrupt, err := journal.BackupBytes(ctx, corruptDigest)
 	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
@@ -329,12 +353,24 @@ func TestJournalTransitionsAcceptOnlyExactEdges(t *testing.T) {
 	assert.Equal(t, JournalStatePending, state)
 	assert.Equal(t, JournalStageApplyPending, stage)
 
-	requireJournalError(t, journal.CompleteJournal(ctx, entry, ObservedJournalFile([]byte("neither"))), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, entry, ObservedJournalFile([]byte("neither"))),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 	state, stage = journalStoredState(t, journal, entry.Entry)
 	assert.Equal(t, JournalStatePending, state)
 	assert.Equal(t, JournalStageApplyPending, stage)
 
-	requireJournalError(t, journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 	requireJournalError(t, journal.BeginRollback(ctx, entry), ErrInvalid, StageJournal, ReasonTransition)
 	_, err = journal.ResolveIndeterminate(ctx, entry, ObservedJournalFile(postimage))
 	requireJournalError(t, err, ErrInvalid, StageJournal, ReasonTransition)
@@ -344,9 +380,21 @@ func TestJournalTransitionsAcceptOnlyExactEdges(t *testing.T) {
 	assert.Equal(t, JournalStateApplied, state)
 	assert.Equal(t, JournalStageApplyComplete, stage)
 
-	requireJournalError(t, journal.CompleteJournal(ctx, entry, ObservedJournalFile(postimage)), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, entry, ObservedJournalFile(postimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 	requireJournalError(t, journal.MarkIndeterminate(ctx, entry), ErrInvalid, StageJournal, ReasonTransition)
-	requireJournalError(t, journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 
 	require.NoError(t, journal.BeginRollback(ctx, entry))
 	state, stage = journalStoredState(t, journal, entry.Entry)
@@ -354,8 +402,20 @@ func TestJournalTransitionsAcceptOnlyExactEdges(t *testing.T) {
 	assert.Equal(t, JournalStageRollbackPending, stage)
 
 	requireJournalError(t, journal.BeginRollback(ctx, entry), ErrInvalid, StageJournal, ReasonTransition)
-	requireJournalError(t, journal.CompleteJournal(ctx, entry, ObservedJournalFile(postimage)), ErrInvalid, StageJournal, ReasonTransition)
-	requireJournalError(t, journal.CompleteRollback(ctx, entry, ObservedJournalFile(postimage)), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, entry, ObservedJournalFile(postimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, entry, ObservedJournalFile(postimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 	state, stage = journalStoredState(t, journal, entry.Entry)
 	assert.Equal(t, JournalStateApplied, state)
 	assert.Equal(t, JournalStageRollbackPending, stage)
@@ -364,24 +424,60 @@ func TestJournalTransitionsAcceptOnlyExactEdges(t *testing.T) {
 	state, stage = journalStoredState(t, journal, entry.Entry)
 	assert.Equal(t, JournalStateRolledBack, state)
 	assert.Equal(t, JournalStageRollbackComplete, stage)
-	requireJournalError(t, journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, entry, ObservedJournalFile(preimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 	requireJournalError(t, journal.BeginRollback(ctx, entry), ErrInvalid, StageJournal, ReasonTransition)
 
 	missing := entry
 	missing.Entry = 4242
-	requireJournalError(t, journal.CompleteJournal(ctx, missing, ObservedJournalFile(postimage)), ErrInvalid, StageJournal, ReasonJournalEntry)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, missing, ObservedJournalFile(postimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalEntry,
+	)
 	requireJournalError(t, journal.MarkIndeterminate(ctx, missing), ErrInvalid, StageJournal, ReasonTransition)
 	requireJournalError(t, journal.BeginRollback(ctx, missing), ErrInvalid, StageJournal, ReasonTransition)
 
-	requireJournalError(t, journal.CompleteJournal(ctx, entry, ObservedFile{Digest: sha256.Sum256(postimage)}), ErrInvalid, StageJournal, ReasonJournalObservation)
-	requireJournalError(t, journal.CompleteJournal(ctx, entry, ObservedFile{Present: true}), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, entry, ObservedFile{Digest: sha256.Sum256(postimage)}),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, entry, ObservedFile{Present: true}),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 
 	absent, err := journal.BeginJournal(ctx, journalTestIntent(nil, postimage, 2))
 	require.NoError(t, err)
-	requireJournalError(t, journal.CompleteRollback(ctx, absent, ObservedFile{}), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, absent, ObservedFile{}),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 	require.NoError(t, journal.CompleteJournal(ctx, absent, ObservedJournalFile(postimage)))
 	require.NoError(t, journal.BeginRollback(ctx, absent))
-	requireJournalError(t, journal.CompleteRollback(ctx, absent, ObservedJournalFile(postimage)), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, absent, ObservedJournalFile(postimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 	require.NoError(t, journal.CompleteRollback(ctx, absent, ObservedFile{}))
 	state, stage = journalStoredState(t, journal, absent.Entry)
 	assert.Equal(t, JournalStateRolledBack, state)
@@ -389,10 +485,22 @@ func TestJournalTransitionsAcceptOnlyExactEdges(t *testing.T) {
 
 	restored, err := journal.BeginJournal(ctx, journalTestIntent(preimage, postimage, 2))
 	require.NoError(t, err)
-	requireJournalError(t, journal.CompleteRollback(ctx, restored, ObservedFile{}), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, restored, ObservedFile{}),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 	require.NoError(t, journal.CompleteJournal(ctx, restored, ObservedJournalFile(postimage)))
 	require.NoError(t, journal.BeginRollback(ctx, restored))
-	requireJournalError(t, journal.CompleteRollback(ctx, restored, ObservedFile{}), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteRollback(ctx, restored, ObservedFile{}),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 	state, stage = journalStoredState(t, journal, restored.Entry)
 	assert.Equal(t, JournalStateApplied, state)
 	assert.Equal(t, JournalStageRollbackPending, stage)
@@ -663,7 +771,13 @@ func TestJournalDeleteCompletionRequiresObservedAbsence(t *testing.T) {
 
 	applied, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
 	require.NoError(t, err)
-	requireJournalError(t, journal.CompleteJournal(ctx, applied, ObservedJournalFile(preimage)), ErrInvalid, StageJournal, ReasonJournalObservation)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, applied, ObservedJournalFile(preimage)),
+		ErrInvalid,
+		StageJournal,
+		ReasonJournalObservation,
+	)
 	state, stage := journalStoredState(t, journal, applied.Entry)
 	assert.Equal(t, JournalStatePending, state)
 	assert.Equal(t, JournalStageApplyPending, stage)
@@ -672,11 +786,20 @@ func TestJournalDeleteCompletionRequiresObservedAbsence(t *testing.T) {
 	state, stage = journalStoredState(t, journal, applied.Entry)
 	assert.Equal(t, JournalStateApplied, state)
 	assert.Equal(t, JournalStageApplyComplete, stage)
-	requireJournalError(t, journal.CompleteJournal(ctx, applied, ObservedFile{}), ErrInvalid, StageJournal, ReasonTransition)
+	requireJournalError(
+		t,
+		journal.CompleteJournal(ctx, applied, ObservedFile{}),
+		ErrInvalid,
+		StageJournal,
+		ReasonTransition,
+	)
 
 	resolved, err := journal.BeginJournal(ctx, journalTestDeleteIntent(preimage, 4))
 	require.NoError(t, err)
-	resolutions, err := journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil })
+	resolutions, err := journal.ResolveInterrupted(
+		ctx,
+		func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil },
+	)
 	require.NoError(t, err)
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, JournalResolution{Entry: resolved.Entry, Outcome: JournalOutcomeApplied}, resolutions[0])
@@ -708,7 +831,10 @@ func TestJournalDeleteResolutionLeavesUndecidableRowsIndeterminate(t *testing.T)
 	assert.Equal(t, entry.Entry, blocked.Entry)
 	assert.Equal(t, JournalStateIndeterminate, blocked.State)
 
-	resolutions, err = journal.ResolveInterrupted(ctx, func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil })
+	resolutions, err = journal.ResolveInterrupted(
+		ctx,
+		func(JournalEntry) (ObservedFile, error) { return ObservedFile{}, nil },
+	)
 	require.NoError(t, err)
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, JournalOutcomeApplied, resolutions[0].Outcome)
@@ -722,12 +848,34 @@ func TestJournalEntryBoundRefusesBeforeWriting(t *testing.T) {
 	journal, _ := newJournal(t)
 	tx, err := journal.conn.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	statement, err := tx.PrepareContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	statement, err := tx.PrepareContext(
+		ctx,
+		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+	)
 	require.NoError(t, err)
 	vault := journalTestVault()
 	digest := sha256.Sum256([]byte("postimage"))
-	for index := 0; index < journalMaxEntries; index++ {
-		_, err = statement.ExecContext(ctx, vault[:], "apply", string(JournalStageApplyPending), string(JournalStatePending), []byte(journalTestDirectory), "file.lua", []byte(journalTestDirectory), 42, 7, nil, nil, digest[:], 8, nil, 0, 1, 1)
+	for range journalMaxEntries {
+		_, err = statement.ExecContext(
+			ctx,
+			vault[:],
+			"apply",
+			string(JournalStageApplyPending),
+			string(JournalStatePending),
+			[]byte(journalTestDirectory),
+			"file.lua",
+			[]byte(journalTestDirectory),
+			42,
+			7,
+			nil,
+			nil,
+			digest[:],
+			8,
+			nil,
+			0,
+			1,
+			1,
+		)
 		require.NoError(t, err)
 	}
 	require.NoError(t, statement.Close())
@@ -813,7 +961,8 @@ func journalPositionStoreBytes(t *testing.T, directory string) map[string]string
 }
 
 func journalFile(name string) bool {
-	return name == journalDatabaseName || name == journalLockName || name == journalWalName || name == journalShmName || name == journalLeaseName
+	return name == journalDatabaseName || name == journalLockName || name == journalWalName || name == journalShmName ||
+		name == journalLeaseName
 }
 
 func TestJournalBeginRefusesReusingCorruptBackup(t *testing.T) {
@@ -833,7 +982,11 @@ func TestJournalBeginRefusesReusingCorruptBackup(t *testing.T) {
 	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
 	assert.Equal(t, int64(1), journalStoredCount(t, journal, "journal"))
 	assert.Equal(t, int64(1), journalStoredCount(t, journal, "backups"))
-	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).Scan(&sizeValue, &dataValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).
+			Scan(&sizeValue, &dataValue),
+	)
 	assert.Equal(t, int64(len(preimage)), sizeValue)
 	assert.Equal(t, truncated, dataValue)
 
@@ -844,7 +997,11 @@ func TestJournalBeginRefusesReusingCorruptBackup(t *testing.T) {
 	_, err = journal.BeginJournal(ctx, journalTestIntent(preimage, []byte("third replacement"), 4))
 	requireJournalError(t, err, ErrSchema, StageJournal, ReasonCorrupt)
 	assert.Equal(t, int64(1), journalStoredCount(t, journal, "journal"))
-	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).Scan(&sizeValue, &dataValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(ctx, "SELECT size,data FROM backups WHERE digest=?", digest[:]).
+			Scan(&sizeValue, &dataValue),
+	)
 	assert.Equal(t, int64(len(preimage)), sizeValue)
 	assert.Equal(t, corrupt, dataValue)
 }
@@ -865,13 +1022,35 @@ func TestJournalBackupReuseAcceptsVerifiedBytes(t *testing.T) {
 	assert.Equal(t, preimage, retained)
 }
 
-func journalInsertRawEntry(t *testing.T, ctx context.Context, journal *Journal, postimageDigest, postimageSize any) int64 {
+func journalInsertRawEntry(
+	t *testing.T,
+	ctx context.Context,
+	journal *Journal,
+	postimageDigest, postimageSize any,
+) int64 {
 	t.Helper()
 	vault := journalTestVault()
-	result, err := journal.conn.ExecContext(ctx, "INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-		vault[:], "apply", string(JournalStageApplyPending), string(JournalStatePending),
-		[]byte(journalTestDirectory), "init.lua", []byte(journalTestDirectory), 42, 7,
-		nil, nil, postimageDigest, postimageSize, nil, 0, 1, 1)
+	result, err := journal.conn.ExecContext(
+		ctx,
+		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		vault[:],
+		"apply",
+		string(JournalStageApplyPending),
+		string(JournalStatePending),
+		[]byte(journalTestDirectory),
+		"init.lua",
+		[]byte(journalTestDirectory),
+		42,
+		7,
+		nil,
+		nil,
+		postimageDigest,
+		postimageSize,
+		nil,
+		0,
+		1,
+		1,
+	)
 	require.NoError(t, err)
 	id, err := result.LastInsertId()
 	require.NoError(t, err)
@@ -922,7 +1101,11 @@ func TestJournalPersistsAnchorIdentity(t *testing.T) {
 	assert.Equal(t, journalTestAnchor(), entry.Anchor)
 
 	var pathValue, deviceValue, inodeValue any
-	require.NoError(t, journal.conn.QueryRowContext(ctx, "SELECT anchor_path,anchor_device,anchor_inode FROM journal WHERE entry=?", entry.Entry).Scan(&pathValue, &deviceValue, &inodeValue))
+	require.NoError(
+		t,
+		journal.conn.QueryRowContext(ctx, "SELECT anchor_path,anchor_device,anchor_inode FROM journal WHERE entry=?", entry.Entry).
+			Scan(&pathValue, &deviceValue, &inodeValue),
+	)
 	assert.Equal(t, []byte(journalTestDirectory), pathValue)
 	assert.Equal(t, int64(42), deviceValue)
 	assert.Equal(t, int64(7), inodeValue)

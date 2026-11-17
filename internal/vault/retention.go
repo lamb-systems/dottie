@@ -34,12 +34,13 @@ func retentionRecoveryPointLess(left, right RetentionRecoveryPoint) bool {
 
 func normalizeRetentionRecoveryPoints(points []RetentionRecoveryPoint) ([]RetentionRecoveryPoint, error) {
 	if len(points) > int(^uint16(0)) {
-		return nil, fmt.Errorf("invalid retention recovery point count")
+		return nil, errors.New("invalid retention recovery point count")
 	}
 	result := make([]RetentionRecoveryPoint, len(points))
 	for index, point := range points {
-		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > MaxParentBytes {
-			return nil, fmt.Errorf("invalid retention recovery point")
+		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 ||
+			len(point.SnapshotCID) > MaxParentBytes {
+			return nil, errors.New("invalid retention recovery point")
 		}
 		result[index] = RetentionRecoveryPoint{
 			Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID),
@@ -49,7 +50,7 @@ func normalizeRetentionRecoveryPoints(points []RetentionRecoveryPoint) ([]Retent
 	sort.Slice(result, func(i, j int) bool { return retentionRecoveryPointLess(result[i], result[j]) })
 	for index := 1; index < len(result); index++ {
 		if !retentionRecoveryPointLess(result[index-1], result[index]) {
-			return nil, fmt.Errorf("duplicate retention recovery point")
+			return nil, errors.New("duplicate retention recovery point")
 		}
 	}
 	return result, nil
@@ -81,8 +82,12 @@ type RetentionDeclarationJudgement struct {
 }
 
 func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (RetentionDeclarationJudgement, error) {
-	if request.DeviceID == "" || len(request.DeviceID) > MaxDeviceIDBytes || strings.IndexByte(request.DeviceID, 0) >= 0 ||
-		request.RetentionFloor > MaxAttestationInteger || len(request.RecoveryPoints) == 0 || len(request.RecoveryPoints) > int(^uint16(0)) || len(request.PointEvidence) != len(request.RecoveryPoints) {
+	if request.DeviceID == "" || len(request.DeviceID) > MaxDeviceIDBytes ||
+		strings.IndexByte(request.DeviceID, 0) >= 0 ||
+		request.RetentionFloor > MaxAttestationInteger ||
+		len(request.RecoveryPoints) == 0 ||
+		len(request.RecoveryPoints) > int(^uint16(0)) ||
+		len(request.PointEvidence) != len(request.RecoveryPoints) {
 		return RetentionDeclarationJudgement{}, errors.New("invalid retention declaration")
 	}
 	held, heldControlCID, err := verifyControlPositionEvidence(request.VaultID, request.TrustAnchor, request.State)
@@ -117,11 +122,15 @@ func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (Retentio
 		}
 	}
 	if !boundaryFound {
-		return RetentionDeclarationJudgement{}, errors.New("retention boundary does not match the held checkpoint position")
+		return RetentionDeclarationJudgement{}, errors.New(
+			"retention boundary does not match the held checkpoint position",
+		)
 	}
 	for _, point := range declaration.RecoveryPoints {
 		if point.PolicyDigest == ([32]byte{}) || len(point.ControlCID) == 0 || len(point.ControlCID) > MaxParentBytes {
-			return RetentionDeclarationJudgement{}, errors.New("retention recovery point has incomplete or future position binding")
+			return RetentionDeclarationJudgement{}, errors.New(
+				"retention recovery point has incomplete or future position binding",
+			)
 		}
 	}
 	byIdentity := make(map[string]RetentionRecoveryPointEvidence, len(request.PointEvidence))
@@ -135,7 +144,9 @@ func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (Retentio
 	for _, point := range declaration.RecoveryPoints {
 		evidence, exists := byIdentity[retentionPointEvidenceIdentity(point)]
 		if !exists || !sameRetentionPoint(point, evidence.Point) {
-			return RetentionDeclarationJudgement{}, errors.New("retention recovery point evidence does not match its declaration")
+			return RetentionDeclarationJudgement{}, errors.New(
+				"retention recovery point evidence does not match its declaration",
+			)
 		}
 		if err := verifyRetentionPointEvidence(trusted, point, evidence); err != nil {
 			return RetentionDeclarationJudgement{}, err
@@ -149,26 +160,44 @@ func EvaluateRetentionDeclaration(request RetentionDeclarationRequest) (Retentio
 	return judgement, nil
 }
 
-func verifyRetentionPointEvidence(trusted *TrustedContext, point RetentionRecoveryPoint, evidence RetentionRecoveryPointEvidence) error {
+func verifyRetentionPointEvidence(
+	trusted *TrustedContext,
+	point RetentionRecoveryPoint,
+	evidence RetentionRecoveryPointEvidence,
+) error {
 	position, controlCID, err := verifyControlPositionEvidence(trusted.vault, trusted.anchor, evidence.Position)
 	if err != nil {
 		return err
 	}
-	if position.policyDigest != point.PolicyDigest || !bytes.Equal(controlCID, point.ControlCID) || position.control.EpochSeq != point.Epoch {
+	if position.policyDigest != point.PolicyDigest || !bytes.Equal(controlCID, point.ControlCID) ||
+		position.control.EpochSeq != point.Epoch {
 		return errors.New("retention recovery point does not match its authenticated control position")
 	}
-	result, err := VerifyControlState(trusted, VerificationRequest{Supplied: evidence.Position, Intermediates: evidence.Intermediates})
+	result, err := VerifyControlState(
+		trusted,
+		VerificationRequest{Supplied: evidence.Position, Intermediates: evidence.Intermediates},
+	)
 	if err != nil {
 		return err
 	}
 	if result.Outcome != CheckpointCurrent && result.Outcome != CheckpointDescendant {
 		return fmt.Errorf("retention point control outcome %q is not current or descendant", result.Outcome)
 	}
-	startHead, startEnvelope, startSigner, err := verifyRetentionSnapshotPosition(position, trusted.anchor, evidence.Position.Certificates, evidence.EpochStartHead, evidence.EpochStartSnapshot, true)
+	startHead, startEnvelope, startSigner, err := verifyRetentionSnapshotPosition(
+		position,
+		trusted.anchor,
+		evidence.Position.Certificates,
+		evidence.EpochStartHead,
+		evidence.EpochStartSnapshot,
+		true,
+	)
 	if err != nil {
 		return fmt.Errorf("authenticate epoch-start snapshot for retention control: %w", err)
 	}
-	if !bytes.Equal(startHead.SnapshotCID, position.control.HeadSnapshotCID) || !bytes.Equal(startHead.SnapshotCID, startHead.BlobCID) || !bytes.Equal(startEnvelope.Parent, startHead.PrevHeadCID) || startSigner.DeviceID != startHead.Signer.DeviceID {
+	if !bytes.Equal(startHead.SnapshotCID, position.control.HeadSnapshotCID) ||
+		!bytes.Equal(startHead.SnapshotCID, startHead.BlobCID) ||
+		!bytes.Equal(startEnvelope.Parent, startHead.PrevHeadCID) ||
+		startSigner.DeviceID != startHead.Signer.DeviceID {
 		return errors.New("retention epoch-start snapshot does not match its control")
 	}
 	if bytes.Equal(point.SnapshotCID, position.control.HeadSnapshotCID) {
@@ -180,7 +209,14 @@ func verifyRetentionPointEvidence(trusted *TrustedContext, point RetentionRecove
 	if len(evidence.Head) == 0 || len(evidence.Ciphertext) == 0 {
 		return errors.New("ordinary-publication recovery point requires its signed head and exact envelope")
 	}
-	head, envelope, _, err := verifyRetentionSnapshotPosition(position, trusted.anchor, evidence.Position.Certificates, evidence.Head, evidence.Ciphertext, false)
+	head, envelope, _, err := verifyRetentionSnapshotPosition(
+		position,
+		trusted.anchor,
+		evidence.Position.Certificates,
+		evidence.Head,
+		evidence.Ciphertext,
+		false,
+	)
 	if err != nil {
 		return err
 	}
@@ -192,7 +228,13 @@ func verifyRetentionPointEvidence(trusted *TrustedContext, point RetentionRecove
 	return nil
 }
 
-func verifyRetentionSnapshotPosition(position authenticatedControlPosition, trustAnchor [32]byte, certificates [][]byte, headBytes, envelopeBytes []byte, epochStart bool) (Head, Envelope, Certificate, error) {
+func verifyRetentionSnapshotPosition(
+	position authenticatedControlPosition,
+	trustAnchor [32]byte,
+	certificates [][]byte,
+	headBytes, envelopeBytes []byte,
+	epochStart bool,
+) (Head, Envelope, Certificate, error) {
 	var emptyHead Head
 	var emptyEnvelope Envelope
 	var emptyCertificate Certificate
@@ -204,39 +246,80 @@ func verifyRetentionSnapshotPosition(position authenticatedControlPosition, trus
 	if err != nil {
 		return emptyHead, emptyEnvelope, emptyCertificate, err
 	}
-	if head.Vault != position.policy.Vault || head.EpochSeq != position.control.EpochSeq || head.PolicyDigest != position.policyDigest ||
-		envelope.Vault != position.policy.Vault || envelope.EpochSeq != position.control.EpochSeq || envelope.PolicyDigest != position.policyDigest || envelope.Purpose != PurposeSnapshot ||
-		!bytes.Equal(head.SnapshotCID, rawCIDBytes(envelopeBytes)) || !bytes.Equal(head.BlobCID, head.SnapshotCID) {
-		return emptyHead, emptyEnvelope, emptyCertificate, errors.New("retention head and envelope context does not match its control position")
+	if head.Vault != position.policy.Vault || head.EpochSeq != position.control.EpochSeq ||
+		head.PolicyDigest != position.policyDigest ||
+		envelope.Vault != position.policy.Vault ||
+		envelope.EpochSeq != position.control.EpochSeq ||
+		envelope.PolicyDigest != position.policyDigest ||
+		envelope.Purpose != PurposeSnapshot ||
+		!bytes.Equal(head.SnapshotCID, rawCIDBytes(envelopeBytes)) ||
+		!bytes.Equal(head.BlobCID, head.SnapshotCID) {
+		return emptyHead, emptyEnvelope, emptyCertificate, errors.New(
+			"retention head and envelope context does not match its control position",
+		)
 	}
 	if epochStart && head.PublicationCount != 0 || !epochStart && head.PublicationCount == 0 {
-		return emptyHead, emptyEnvelope, emptyCertificate, errors.New("retention head publication count has the wrong position kind")
+		return emptyHead, emptyEnvelope, emptyCertificate, errors.New(
+			"retention head publication count has the wrong position kind",
+		)
 	}
 	if !epochStart && head.PublicationCount > uint64(position.policy.MaxPublications) {
-		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("%w: retention publication count exceeds policy maximum", ErrAuthorization)
+		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf(
+			"%w: retention publication count exceeds policy maximum",
+			ErrAuthorization,
+		)
 	}
 	if head.Signer.DeviceID != envelope.DeviceID || !bytes.Equal(head.Signer.KeyID, envelope.KeyID) {
-		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("%w: retention head and envelope signer mismatch", ErrAuthorization)
+		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf(
+			"%w: retention head and envelope signer mismatch",
+			ErrAuthorization,
+		)
 	}
 	if !envelopeRecipientKeyIDsMatchPolicy(envelope.Recipients, position.policy) {
-		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("%w: retention envelope recipient set", ErrRecipient)
+		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf(
+			"%w: retention envelope recipient set",
+			ErrRecipient,
+		)
 	}
-	request := OpenRequest{Vault: position.policy.Vault, EpochSeq: position.control.EpochSeq, PolicyDigest: position.policyDigest, TrustAnchor: trustAnchor, Certificates: certificates}
+	request := OpenRequest{
+		Vault:        position.policy.Vault,
+		EpochSeq:     position.control.EpochSeq,
+		PolicyDigest: position.policyDigest,
+		TrustAnchor:  trustAnchor,
+		Certificates: certificates,
+	}
 	envelopeSigner, err := authorizedSigner(envelope, request, position.policy)
 	if err != nil || signerRevoked(envelopeSigner, position.control) {
-		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("retention snapshot signer is not authorized: %w", ErrAuthorization)
+		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf(
+			"retention snapshot signer is not authorized: %w",
+			ErrAuthorization,
+		)
 	}
-	if len(headBytes) < len(head.Signature) || Verify("dottie/v1/sig-head", objectSignaturePreimage(headBytes[:len(headBytes)-len(head.Signature)]), head.Signature[:], envelopeSigner.SigningPublicKey[:]) != nil {
+	if len(headBytes) < len(head.Signature) ||
+		Verify(
+			"dottie/v1/sig-head",
+			objectSignaturePreimage(headBytes[:len(headBytes)-len(head.Signature)]),
+			head.Signature[:],
+			envelopeSigner.SigningPublicKey[:],
+		) != nil {
 		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("retention head signature: %w", ErrSignature)
 	}
-	if len(envelopeBytes) < len(envelope.Signature) || Verify("dottie/v1/sig-snapshot", objectSignaturePreimage(envelopeBytes[:len(envelopeBytes)-len(envelope.Signature)]), envelope.Signature[:], envelopeSigner.SigningPublicKey[:]) != nil {
+	if len(envelopeBytes) < len(envelope.Signature) ||
+		Verify(
+			"dottie/v1/sig-snapshot",
+			objectSignaturePreimage(envelopeBytes[:len(envelopeBytes)-len(envelope.Signature)]),
+			envelope.Signature[:],
+			envelopeSigner.SigningPublicKey[:],
+		) != nil {
 		return emptyHead, emptyEnvelope, emptyCertificate, fmt.Errorf("retention envelope signature: %w", ErrSignature)
 	}
 	return head, envelope, envelopeSigner, nil
 }
 
 func sameRetentionPoint(left, right RetentionRecoveryPoint) bool {
-	return left.Epoch == right.Epoch && left.PolicyDigest == right.PolicyDigest && bytes.Equal(left.SnapshotCID, right.SnapshotCID) && bytes.Equal(left.ControlCID, right.ControlCID)
+	return left.Epoch == right.Epoch && left.PolicyDigest == right.PolicyDigest &&
+		bytes.Equal(left.SnapshotCID, right.SnapshotCID) &&
+		bytes.Equal(left.ControlCID, right.ControlCID)
 }
 
 func retentionPointEvidenceIdentity(point RetentionRecoveryPoint) string {

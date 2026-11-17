@@ -21,18 +21,39 @@ func TestNeverSubmittedAbandonmentDoesNotRequireCurrentPublicationPolicy(t *test
 			review := attemptReview()
 			proposal, err := store.PrepareAttempt(ctx, candidate, empty, review)
 			require.NoError(t, err)
-			attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, empty, review, proposal.Confirmation)
+			attempt, err := store.CreateAttempt(
+				ctx,
+				proposal.StateToken,
+				candidate,
+				empty,
+				review,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			if lifecycle != "prepared" {
 				uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, empty, review)
 				require.NoError(t, err)
-				_, err = store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, empty, review, uploadProposal.Confirmation)
+				_, err = store.BeginUpload(
+					ctx,
+					attempt.ID,
+					uploadProposal.StateToken,
+					empty,
+					review,
+					uploadProposal.Confirmation,
+				)
 				require.NoError(t, err)
 			}
 			if lifecycle == "may-have-submitted" {
 				submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 				require.NoError(t, err)
-				_, err = store.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, empty, review, submissionProposal.Confirmation)
+				_, err = store.BeginSubmission(
+					ctx,
+					attempt.ID,
+					submissionProposal.StateToken,
+					empty,
+					review,
+					submissionProposal.Confirmation,
+				)
 				require.NoError(t, err)
 			}
 			broadened := cloneSuppliedView(empty)

@@ -26,7 +26,11 @@ func capturePublicationGNOME(ctx context.Context, selection publicationSelection
 	expectedRefs := append([]SettingRef(nil), selectedRefs...)
 	matched, cancellation := publicationGNOMERefsMatch(ctx, selection, expectedRefs)
 	if !matched {
-		return publicationCapture{}, publicationCaptureFailure(ctx, publicationCaptureGNOMESettingsChanged, cancellation)
+		return publicationCapture{}, publicationCaptureFailure(
+			ctx,
+			publicationCaptureGNOMESettingsChanged,
+			cancellation,
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return publicationCapture{}, publicationCaptureFailure(ctx, publicationCaptureReasonCanceled, err)
@@ -42,7 +46,11 @@ func capturePublicationGNOME(ctx context.Context, selection publicationSelection
 	}
 	matched, cancellation = publicationGNOMERefsMatch(ctx, selection, expectedRefs)
 	if !matched {
-		return publicationCapture{}, publicationCaptureFailure(ctx, publicationCaptureGNOMESettingsChanged, cancellation)
+		return publicationCapture{}, publicationCaptureFailure(
+			ctx,
+			publicationCaptureGNOMESettingsChanged,
+			cancellation,
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return publicationCapture{}, publicationCaptureFailure(ctx, publicationCaptureReasonCanceled, err)
@@ -59,14 +67,20 @@ func capturePublicationGNOME(ctx context.Context, selection publicationSelection
 }
 
 func validPublicationGNOMESelection(selection publicationSelection) bool {
-	if selection.context == nil || selection.context.affinity == nil || selection.context.affinity.identity == 0 || nilPublicationDependency(selection.context.settings) || !validPublicationContextPaths(selection.context.paths) {
+	if selection.context == nil || selection.context.affinity == nil || selection.context.affinity.identity == 0 ||
+		nilPublicationDependency(selection.context.settings) ||
+		!validPublicationContextPaths(selection.context.paths) {
 		return false
 	}
-	if selection.target.Source != model.SourceGNOME || selection.target.Root != nil || selection.target.GNOMEPolicy == nil || len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys {
+	if selection.target.Source != model.SourceGNOME || selection.target.Root != nil ||
+		selection.target.GNOMEPolicy == nil ||
+		len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys {
 		return false
 	}
 	portable, err := selection.target.Model()
-	if err != nil || !reflect.DeepEqual(portable, selection.portable) || portable.Validate() != nil || portable.Source != model.SourceGNOME || portable.Root != nil {
+	if err != nil || !reflect.DeepEqual(portable, selection.portable) || portable.Validate() != nil ||
+		portable.Source != model.SourceGNOME ||
+		portable.Root != nil {
 		return false
 	}
 	_, ok := publicationGNOMESelectedRefs(selection)
@@ -74,11 +88,14 @@ func validPublicationGNOMESelection(selection publicationSelection) bool {
 }
 
 func publicationGNOMESelectedRefs(selection publicationSelection) ([]SettingRef, bool) {
-	if selection.target.GNOMEPolicy == nil || len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys || len(selection.settingRefs) == 0 || len(selection.settingRefs) > matrix.MaxKeys {
+	if selection.target.GNOMEPolicy == nil || len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys ||
+		len(selection.settingRefs) == 0 ||
+		len(selection.settingRefs) > matrix.MaxKeys {
 		return nil, false
 	}
 	budget := publicationStringBudget{}
-	if !budget.add(selection.target.ID) || !budget.add(string(selection.target.GNOMEPolicy.Approval)) || !budget.add(selection.target.GNOMEPolicy.KeyDigest) {
+	if !budget.add(selection.target.ID) || !budget.add(string(selection.target.GNOMEPolicy.Approval)) ||
+		!budget.add(selection.target.GNOMEPolicy.KeyDigest) {
 		return nil, false
 	}
 	for _, category := range selection.target.GNOMEPolicy.Categories {
@@ -113,7 +130,11 @@ func (port *publicationGNOMEResolvePort) Resolve(ctx context.Context, targetID, 
 	return resolved, err
 }
 
-func publicationGNOMERefsMatch(ctx context.Context, selection publicationSelection, expected []SettingRef) (bool, error) {
+func publicationGNOMERefsMatch(
+	ctx context.Context,
+	selection publicationSelection,
+	expected []SettingRef,
+) (bool, error) {
 	if ctx == nil || ctx.Err() != nil || !validPublicationGNOMESelectionWithoutRefs(selection) {
 		return false, nil
 	}
@@ -127,11 +148,17 @@ func publicationGNOMERefsMatch(ctx context.Context, selection publicationSelecti
 }
 
 func validPublicationGNOMESelectionWithoutRefs(selection publicationSelection) bool {
-	if selection.context == nil || selection.context.affinity == nil || selection.context.affinity.identity == 0 || nilPublicationDependency(selection.context.settings) || selection.target.Source != model.SourceGNOME || selection.target.Root != nil || selection.target.GNOMEPolicy == nil {
+	if selection.context == nil || selection.context.affinity == nil || selection.context.affinity.identity == 0 ||
+		nilPublicationDependency(selection.context.settings) ||
+		selection.target.Source != model.SourceGNOME ||
+		selection.target.Root != nil ||
+		selection.target.GNOMEPolicy == nil {
 		return false
 	}
 	portable, err := selection.target.Model()
-	return err == nil && reflect.DeepEqual(portable, selection.portable) && portable.Validate() == nil && portable.Source == model.SourceGNOME && portable.Root == nil
+	return err == nil && reflect.DeepEqual(portable, selection.portable) && portable.Validate() == nil &&
+		portable.Source == model.SourceGNOME &&
+		portable.Root == nil
 }
 
 func sameSettingRefs(left, right []SettingRef) bool {
@@ -146,7 +173,11 @@ func sameSettingRefs(left, right []SettingRef) bool {
 	return true
 }
 
-func adaptPublicationGNOMECapture(selection publicationSelection, refs []SettingRef, captured SettingsCapture) (publicationCapture, publicationReconciliationReason) {
+func adaptPublicationGNOMECapture(
+	selection publicationSelection,
+	refs []SettingRef,
+	captured SettingsCapture,
+) (publicationCapture, publicationReconciliationReason) {
 	if len(captured.Entries) > len(refs) || len(captured.Unknown) > len(refs)-len(captured.Entries) {
 		return publicationCapture{}, publicationCaptureReasonBounds
 	}
@@ -159,7 +190,9 @@ func adaptPublicationGNOMECapture(selection publicationSelection, refs []Setting
 		}
 		typeBytes := len(entry.Setting.Value.Type)
 		textBytes := len(entry.Setting.Value.Text)
-		if typeBytes > model.MaxVariantTypeBytes || textBytes > model.MaxVariantTextBytes || typeBytes > aggregateLimit-aggregateBytes || textBytes > aggregateLimit-aggregateBytes-typeBytes {
+		if typeBytes > model.MaxVariantTypeBytes || textBytes > model.MaxVariantTextBytes ||
+			typeBytes > aggregateLimit-aggregateBytes ||
+			textBytes > aggregateLimit-aggregateBytes-typeBytes {
 			return publicationCapture{}, publicationCaptureReasonBounds
 		}
 		aggregateBytes += typeBytes + textBytes
@@ -167,12 +200,19 @@ func adaptPublicationGNOMECapture(selection publicationSelection, refs []Setting
 
 	selected := make(map[model.EntryKey]struct{}, len(refs))
 	for _, ref := range refs {
-		key := model.EntryKey{TargetID: selection.target.ID, Source: model.SourceGNOME, SchemaID: ref.SchemaID, SettingsPath: ref.Path, SettingKey: ref.Key}
+		key := model.EntryKey{
+			TargetID:     selection.target.ID,
+			Source:       model.SourceGNOME,
+			SchemaID:     ref.SchemaID,
+			SettingsPath: ref.Path,
+			SettingKey:   ref.Key,
+		}
 		selected[key] = struct{}{}
 	}
 	seen := make(map[model.EntryKey]struct{}, len(captured.Entries)+len(captured.Unknown))
 	for _, entry := range captured.Entries {
-		if entry.TargetID != selection.target.ID || entry.File != nil || entry.Setting == nil || entry.Validate() != nil {
+		if entry.TargetID != selection.target.ID || entry.File != nil || entry.Setting == nil ||
+			entry.Validate() != nil {
 			return publicationCapture{}, publicationCaptureReasonProvider
 		}
 		key := entry.Identity()
@@ -192,7 +232,8 @@ func adaptPublicationGNOMECapture(selection publicationSelection, refs []Setting
 		seen[key] = struct{}{}
 	}
 	for _, key := range captured.Unknown {
-		if key.TargetID != selection.target.ID || key.Source != model.SourceGNOME || key.Validate() != nil || (matrix.KeyRef{SchemaID: key.SchemaID, Path: key.SettingsPath, Key: key.SettingKey}).Validate() != nil {
+		if key.TargetID != selection.target.ID || key.Source != model.SourceGNOME || key.Validate() != nil ||
+			(matrix.KeyRef{SchemaID: key.SchemaID, Path: key.SettingsPath, Key: key.SettingKey}).Validate() != nil {
 			return publicationCapture{}, publicationCaptureReasonProvider
 		}
 		if _, ok := selected[key]; !ok {
@@ -211,9 +252,22 @@ func adaptPublicationGNOMECapture(selection publicationSelection, refs []Setting
 	observations := make([]model.Observation, 0, len(refs))
 	complete := true
 	for _, ref := range refs {
-		key := model.EntryKey{TargetID: selection.target.ID, Source: model.SourceGNOME, SchemaID: ref.SchemaID, SettingsPath: ref.Path, SettingKey: ref.Key}
+		key := model.EntryKey{
+			TargetID:     selection.target.ID,
+			Source:       model.SourceGNOME,
+			SchemaID:     ref.SchemaID,
+			SettingsPath: ref.Path,
+			SettingKey:   ref.Key,
+		}
 		if index, ok := entries[key]; ok {
-			observations = append(observations, model.Observation{State: model.ObservationPresent, Identity: key, Entry: clonePublicationGNOMEEntry(captured.Entries[index])})
+			observations = append(
+				observations,
+				model.Observation{
+					State:    model.ObservationPresent,
+					Identity: key,
+					Entry:    clonePublicationGNOMEEntry(captured.Entries[index]),
+				},
+			)
 			continue
 		}
 		observations = append(observations, model.Observation{State: model.ObservationUnknown, Identity: key})

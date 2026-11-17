@@ -124,7 +124,7 @@ func TestListSessionDIDsRefusesAnUndecodableStoredItem(t *testing.T) {
 	store.items[sessionItemPrefix+"broken"] = []byte("not-json")
 	client := newSessionListTestClient(t, store)
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, ErrSessionUnavailable)
+	require.ErrorIs(t, err, ErrSessionUnavailable)
 	assert.Empty(t, dids, "a partially readable store was read as an account count")
 }
 
@@ -133,23 +133,25 @@ func TestListSessionDIDsRefusesAnItemWithoutADID(t *testing.T) {
 	store.items[sessionItemPrefix+"unsigned"] = []byte(`{"version":1}`)
 	client := newSessionListTestClient(t, store)
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, ErrSessionUnavailable)
+	require.ErrorIs(t, err, ErrSessionUnavailable)
 	assert.Empty(t, dids)
 }
 
 func TestListSessionDIDsRefusesAnItemNamedForAnotherDID(t *testing.T) {
 	store := newSessionListTestStore()
-	store.items[sessionItemName(sessionListTestClientID, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa")] = []byte(`{"version":1,"did":"did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"}`)
+	store.items[sessionItemName(sessionListTestClientID, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa")] = []byte(
+		`{"version":1,"did":"did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"}`,
+	)
 	client := newSessionListTestClient(t, store)
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, ErrSessionUnavailable)
+	require.ErrorIs(t, err, ErrSessionUnavailable)
 	assert.Empty(t, dids)
 }
 
 func TestListSessionDIDsRefusesAStoreThatCannotList(t *testing.T) {
 	client := newSessionListTestClient(t, plainSessionStore{})
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, ErrSessionListingUnavailable)
+	require.ErrorIs(t, err, ErrSessionListingUnavailable)
 	assert.Empty(t, dids)
 }
 
@@ -158,7 +160,7 @@ func TestListSessionDIDsReportsTheKeyringFailureThatPreventedListing(t *testing.
 	store.listErr = platform.ErrKeyringLocked
 	client := newSessionListTestClient(t, store)
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, platform.ErrKeyringLocked)
+	require.ErrorIs(t, err, platform.ErrKeyringLocked)
 	assert.Empty(t, dids)
 }
 
@@ -168,6 +170,6 @@ func TestListSessionDIDsReportsAnUnreadableStoredItem(t *testing.T) {
 	store.loadsErr = platform.ErrKeyringUnavailable
 	client := newSessionListTestClient(t, store)
 	dids, err := client.ListSessionDIDs(context.Background())
-	assert.ErrorIs(t, err, platform.ErrKeyringUnavailable)
+	require.ErrorIs(t, err, platform.ErrKeyringUnavailable)
 	assert.Empty(t, dids)
 }

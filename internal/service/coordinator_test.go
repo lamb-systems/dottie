@@ -6,12 +6,13 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type memoryConfig struct {
@@ -25,7 +26,11 @@ func (store *memoryConfig) Snapshot(context.Context) (config.Snapshot, error) {
 	return config.Snapshot{Config: store.value, Token: store.token}, nil
 }
 
-func (store *memoryConfig) Update(_ context.Context, expected config.Token, mutate func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+func (store *memoryConfig) Update(
+	_ context.Context,
+	expected config.Token,
+	mutate func(config.Config) (config.Config, error),
+) (config.Snapshot, error) {
 	if store.token != expected {
 		return config.Snapshot{}, config.ErrConfigStale
 	}
@@ -60,7 +65,20 @@ func TestRecordBaseGNOMEStoresFingerprintPayloadAndRejectsMismatch(t *testing.T)
 	store := openCoordinatorState(t)
 	coordinator, err := NewCoordinator(Dependencies{Config: &memoryConfig{value: config.Default()}, State: store})
 	require.NoError(t, err)
-	require.NoError(t, store.PutTarget(context.Background(), state.TargetDescriptor{ID: "desktop", Version: 1, Source: model.SourceGNOME, SourceVersion: model.SourceVersion, Mode: string(config.Review), CreatedAt: 1}))
+	require.NoError(
+		t,
+		store.PutTarget(
+			context.Background(),
+			state.TargetDescriptor{
+				ID:            "desktop",
+				Version:       1,
+				Source:        model.SourceGNOME,
+				SourceVersion: model.SourceVersion,
+				Mode:          string(config.Review),
+				CreatedAt:     1,
+			},
+		),
+	)
 	present := model.Entry{TargetID: "desktop", Setting: &model.SettingEntry{
 		SchemaID: "org.example.Desktop", Path: "/org/example/", Key: "theme", State: model.SettingPresent,
 		Value: &model.VariantValue{Type: "s", Text: "'synthetic'"},
@@ -94,10 +112,22 @@ func TestRecordBaseGNOMEStoresFingerprintPayloadAndRejectsMismatch(t *testing.T)
 		assert.Equal(t, test.payload, stored)
 		digest := sha256.Sum256(stored)
 		assert.Equal(t, hex.EncodeToString(digest[:]), record.Fingerprint.Digest)
-		assert.Equal(t, state.NewSettingFingerprint(test.entry.Setting.State, record.Fingerprint.ValueType, record.Fingerprint.ValueText), record.Fingerprint)
+		assert.Equal(
+			t,
+			state.NewSettingFingerprint(
+				test.entry.Setting.State,
+				record.Fingerprint.ValueType,
+				record.Fingerprint.ValueText,
+			),
+			record.Fingerprint,
+		)
 	}
 	presentFingerprint := state.NewSettingFingerprint(model.SettingPresent, "s", "'synthetic'")
-	_, err = store.PutAppliedBase(context.Background(), state.BaseRecord{Identity: present.Identity(), Fingerprint: presentFingerprint, RecordedAt: 1}, []byte("mismatch"))
+	_, err = store.PutAppliedBase(
+		context.Background(),
+		state.BaseRecord{Identity: present.Identity(), Fingerprint: presentFingerprint, RecordedAt: 1},
+		[]byte("mismatch"),
+	)
 	require.ErrorContains(t, err, "base fingerprint does not match payload")
 }
 
@@ -105,8 +135,16 @@ func TestStatusReturnsSortedTargetsWithoutRemoteAccess(t *testing.T) {
 	store := openCoordinatorState(t)
 	configuration := config.Default()
 	configuration.Targets = []config.Target{
-		{ID: "z-target", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "z", Kind: model.SelectionDirectory}},
-		{ID: "a-target", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "a", Kind: model.SelectionDirectory}},
+		{
+			ID:     "z-target",
+			Source: model.SourceFiles,
+			Root:   &config.Root{Base: model.RootHome, Path: "z", Kind: model.SelectionDirectory},
+		},
+		{
+			ID:     "a-target",
+			Source: model.SourceFiles,
+			Root:   &config.Root{Base: model.RootHome, Path: "a", Kind: model.SelectionDirectory},
+		},
 	}
 	coordinator, err := NewCoordinator(Dependencies{Config: &memoryConfig{value: configuration}, State: store})
 	require.NoError(t, err)
@@ -123,10 +161,22 @@ func TestVaultSelectionRequiresExplicitChoiceWhenAmbiguous(t *testing.T) {
 	store := openCoordinatorState(t)
 	coordinator, err := NewCoordinator(Dependencies{Config: &memoryConfig{value: config.Default()}, State: store})
 	require.NoError(t, err)
-	require.NoError(t, store.PutVaultSelection(context.Background(), state.VaultSelection{Vault: [32]byte{1}, DeviceID: "device-a", RecordedAt: 1}))
-	require.NoError(t, store.PutVaultSelection(context.Background(), state.VaultSelection{Vault: [32]byte{2}, DeviceID: "device-b", RecordedAt: 2}))
+	require.NoError(
+		t,
+		store.PutVaultSelection(
+			context.Background(),
+			state.VaultSelection{Vault: [32]byte{1}, DeviceID: "device-a", RecordedAt: 1},
+		),
+	)
+	require.NoError(
+		t,
+		store.PutVaultSelection(
+			context.Background(),
+			state.VaultSelection{Vault: [32]byte{2}, DeviceID: "device-b", RecordedAt: 2},
+		),
+	)
 	_, err = coordinator.selectVault(context.Background(), VaultSelection{})
-	assert.ErrorIs(t, err, ErrAmbiguousVaultSelection)
+	require.ErrorIs(t, err, ErrAmbiguousVaultSelection)
 	selected, err := coordinator.selectVault(context.Background(), VaultSelection{Vault: [32]byte{2}})
 	require.NoError(t, err)
 	assert.Equal(t, VaultSelection{Vault: [32]byte{2}, DeviceID: "device-b"}, selected)

@@ -17,7 +17,12 @@ import (
 func TestBeginDerivesPKCEAndPinsActualLoopbackRedirect(t *testing.T) {
 	fake, client, _ := newFakeOAuth(t)
 	fake.checkVerifier = true
-	flow, err := client.Begin(context.Background(), testHandle, []string{"atproto", "repo:com.example.settings"}, []string{"atproto"})
+	flow, err := client.Begin(
+		context.Background(),
+		testHandle,
+		[]string{"atproto", "repo:com.example.settings"},
+		[]string{"atproto"},
+	)
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -26,29 +31,70 @@ func TestBeginDerivesPKCEAndPinsActualLoopbackRedirect(t *testing.T) {
 	digest := sha256.Sum256([]byte(verifier))
 	wantChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
 	if fake.parValues.Get("code_challenge") != wantChallenge || fake.parValues.Get("code_challenge_method") != "S256" {
-		require.False(t, fake.parValues.Get("code_challenge") != wantChallenge || fake.parValues.Get("code_challenge_method") != "S256", "PAR challenge does not derive from the retained verifier: %#v", fake.parValues)
+		require.False(
+			t,
+			fake.parValues.Get("code_challenge") != wantChallenge ||
+				fake.parValues.Get("code_challenge_method") != "S256",
+			"PAR challenge does not derive from the retained verifier: %#v",
+			fake.parValues,
+		)
 	}
 	if fake.parValues.Get("redirect_uri") != flow.RedirectURI() {
-		require.Equal(t, flow.RedirectURI(), fake.parValues.Get("redirect_uri"), "PAR redirect URI %q differs from bound URI %q", fake.parValues.Get("redirect_uri"), flow.RedirectURI())
+		require.Equal(
+			t,
+			flow.RedirectURI(),
+			fake.parValues.Get("redirect_uri"),
+			"PAR redirect URI %q differs from bound URI %q",
+			fake.parValues.Get("redirect_uri"),
+			flow.RedirectURI(),
+		)
 	}
 	parsed, err := url.Parse(flow.RedirectURI())
-	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback" {
-		require.False(t, err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.Path != "/callback", "redirect URI is not the concrete loopback listener: %q, %v", flow.RedirectURI(), err)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" ||
+		parsed.Path != "/callback" {
+		require.False(
+			t,
+			err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" ||
+				parsed.Path != "/callback",
+			"redirect URI is not the concrete loopback listener: %q, %v",
+			flow.RedirectURI(),
+			err,
+		)
 	}
 	authorization, err := url.Parse(flow.AuthorizationURL())
 	if err != nil || authorization.Query().Get("request_uri") != "urn:example:request:123" {
-		require.False(t, err != nil || authorization.Query().Get("request_uri") != "urn:example:request:123", "invalid PAR authorization URL: %q", flow.AuthorizationURL())
+		require.False(
+			t,
+			err != nil || authorization.Query().Get("request_uri") != "urn:example:request:123",
+			"invalid PAR authorization URL: %q",
+			flow.AuthorizationURL(),
+		)
 	}
-	callbackFlow(t, flow, url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}})
+	callbackFlow(
+		t,
+		flow,
+		url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}},
+	)
 	session, err := flow.Wait(context.Background())
 	if err != nil {
 		require.NoError(t, err)
 	}
 	if session.DID != testDID || fake.tokenValues.Get("redirect_uri") != flow.RedirectURI() {
-		require.False(t, session.DID != testDID || fake.tokenValues.Get("redirect_uri") != flow.RedirectURI(), "token exchange changed the redirect or identity: session=%+v token=%#v", session, fake.tokenValues)
+		require.False(
+			t,
+			session.DID != testDID || fake.tokenValues.Get("redirect_uri") != flow.RedirectURI(),
+			"token exchange changed the redirect or identity: session=%+v token=%#v",
+			session,
+			fake.tokenValues,
+		)
 	}
 	if fake.tokenValues.Get("code_verifier") != verifier {
-		require.Equal(t, verifier, fake.tokenValues.Get("code_verifier"), "token exchange did not use the retained verifier")
+		require.Equal(
+			t,
+			verifier,
+			fake.tokenValues.Get("code_verifier"),
+			"token exchange did not use the retained verifier",
+		)
 	}
 }
 
@@ -60,12 +106,16 @@ func TestWrongPKCEVerifierFailsAtTokenExchange(t *testing.T) {
 		require.NoError(t, err)
 	}
 	flow.verifier = NewSecret("deliberately-wrong-verifier")
-	callbackFlow(t, flow, url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}})
+	callbackFlow(
+		t,
+		flow,
+		url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}},
+	)
 	if _, err := flow.Wait(context.Background()); err == nil {
 		require.Error(t, err, "wrong verifier was accepted")
 	}
 	if len(store.items) != 0 {
-		require.Len(t, store.items, 0, "wrong verifier created a stored session")
+		require.Empty(t, store.items, "wrong verifier created a stored session")
 	}
 	if fake.tokenRequests != 1 {
 		require.Equal(t, 1, fake.tokenRequests, "token requests = %d, want one", fake.tokenRequests)
@@ -82,7 +132,11 @@ func TestCallbackFailuresAreRejectedBeforeExchange(t *testing.T) {
 		{name: "wrong state", path: "/callback", query: func(flow *Flow) url.Values {
 			return url.Values{"state": {"wrong"}, "iss": {flow.identity.Issuer}, "code": {"code"}}
 		}, cancel: true},
-		{name: "missing code", path: "/callback", query: func(flow *Flow) url.Values { return url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}} }},
+		{
+			name:  "missing code",
+			path:  "/callback",
+			query: func(flow *Flow) url.Values { return url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}} },
+		},
 		{name: "access denied", path: "/callback", query: func(flow *Flow) url.Values {
 			return url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "error": {"access_denied"}}
 		}},
@@ -116,7 +170,13 @@ func TestCallbackFailuresAreRejectedBeforeExchange(t *testing.T) {
 				require.Error(t, err, "invalid callback was accepted")
 			}
 			if fake.tokenRequests != 0 {
-				require.Equal(t, 0, fake.tokenRequests, "callback failure reached the token endpoint %d times", fake.tokenRequests)
+				require.Equal(
+					t,
+					0,
+					fake.tokenRequests,
+					"callback failure reached the token endpoint %d times",
+					fake.tokenRequests,
+				)
 			}
 		})
 	}
@@ -148,18 +208,26 @@ func TestTokenSubjectMismatchRejectedBeforeStorage(t *testing.T) {
 		require.NoError(t, err)
 	}
 	defer flow.Close()
-	callbackFlow(t, flow, url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}})
+	callbackFlow(
+		t,
+		flow,
+		url.Values{"state": {flow.state}, "iss": {flow.identity.Issuer}, "code": {"authorization-code-secret"}},
+	)
 	if _, err := flow.Wait(context.Background()); err == nil || !strings.Contains(err.Error(), "subject") {
 		require.ErrorContains(t, err, "subject", "subject mismatch error = %v", err)
 	}
 	if len(store.items) != 0 {
-		require.Len(t, store.items, 0, "subject mismatch stored a session")
+		require.Empty(t, store.items, "subject mismatch stored a session")
 	}
 }
 
 func TestCallbackStateComparisonAndSingleUse(t *testing.T) {
 	if constantStateEqual("a", "b") || !constantStateEqual("same-state", "same-state") {
-		require.False(t, constantStateEqual("a", "b") || !constantStateEqual("same-state", "same-state"), "state comparison returned an incorrect result")
+		require.False(
+			t,
+			constantStateEqual("a", "b") || !constantStateEqual("same-state", "same-state"),
+			"state comparison returned an incorrect result",
+		)
 	}
 	_, client, _ := newFakeOAuth(t)
 	flow, err := client.Begin(context.Background(), testHandle, []string{"atproto"}, []string{"atproto"})

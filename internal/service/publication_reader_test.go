@@ -10,13 +10,14 @@ import (
 	"testing"
 
 	"github.com/ipfs/go-cid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const publicationReaderBlobEndpoint = "com.atproto.sync.getBlob"
@@ -32,12 +33,22 @@ func newPublicationReaderTransport(repository *atprotoMaterialRepository) *publi
 	return &publicationReaderTransport{atprotoMaterialRepository: repository}
 }
 
-func (transport *publicationReaderTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (transport *publicationReaderTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	transport.doCalls++
 	return transport.atprotoMaterialRepository.Do(ctx, method, endpoint, query, body, contentType)
 }
 
-func (transport *publicationReaderTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (transport *publicationReaderTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	transport.streams++
 	if endpoint != publicationReaderBlobEndpoint {
 		return transport.atprotoMaterialRepository.OpenStream(ctx, endpoint, query)
@@ -90,7 +101,13 @@ func newPublicationReaderFixture(t *testing.T, repository *atprotoMaterialReposi
 	return fixture
 }
 
-func (fixture *publicationReaderFixture) readerWith(t *testing.T, binding publicationstate.Binding, did string, session *atproto.Session, adapter *ATProtoMaterialTransport) *PublicationReader {
+func (fixture *publicationReaderFixture) readerWith(
+	t *testing.T,
+	binding publicationstate.Binding,
+	did string,
+	session *atproto.Session,
+	adapter *ATProtoMaterialTransport,
+) *PublicationReader {
 	t.Helper()
 	reader, err := NewPublicationReader(PublicationReaderConfig{
 		Binding: binding, DID: did, Session: session, Adapter: adapter,
@@ -118,15 +135,26 @@ func (fixture *publicationReaderFixture) requireNoTransportUse(t *testing.T) {
 	assert.Equal(t, 0, fixture.transport.blobStreams)
 }
 
-func (fixture *publicationReaderFixture) records(t *testing.T, payload []byte, declaredSize uint64) map[atproto.RecordKey][]byte {
+func (fixture *publicationReaderFixture) records(
+	t *testing.T,
+	payload []byte,
+	declaredSize uint64,
+) map[atproto.RecordKey][]byte {
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(0)
 	require.NoError(t, err)
 	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault, PublicationID: [16]byte{0x62, 0x01},
-		PublicationSeq: 0, Blob: publication.BlobReference{CID: blobCID, Size: declaredSize, MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          fixture.binding.Vault,
+		PublicationID:  [16]byte{0x62, 0x01},
+		PublicationSeq: 0,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     declaredSize,
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)
@@ -176,9 +204,24 @@ func TestPublicationReaderRefusesForeignIdentityBeforeAnyRead(t *testing.T) {
 		did     string
 		session *atproto.Session
 	}{
-		{name: "configured-did-foreign", binding: foreignBinding, did: atprotoMaterialOtherDID, session: &atproto.Session{DID: atprotoMaterialOtherDID, Scopes: atproto.VaultScopes()}},
-		{name: "configured-vault-foreign", binding: foreignVault, did: atprotoMaterialDID, session: &atproto.Session{DID: atprotoMaterialDID, Scopes: atproto.VaultScopes()}},
-		{name: "session-for-foreign-did", binding: atprotoMaterialBinding(atprotoMaterialDID), did: atprotoMaterialDID, session: &atproto.Session{DID: atprotoMaterialOtherDID, Scopes: atproto.VaultScopes()}},
+		{
+			name:    "configured-did-foreign",
+			binding: foreignBinding,
+			did:     atprotoMaterialOtherDID,
+			session: &atproto.Session{DID: atprotoMaterialOtherDID, Scopes: atproto.VaultScopes()},
+		},
+		{
+			name:    "configured-vault-foreign",
+			binding: foreignVault,
+			did:     atprotoMaterialDID,
+			session: &atproto.Session{DID: atprotoMaterialDID, Scopes: atproto.VaultScopes()},
+		},
+		{
+			name:    "session-for-foreign-did",
+			binding: atprotoMaterialBinding(atprotoMaterialDID),
+			did:     atprotoMaterialDID,
+			session: &atproto.Session{DID: atprotoMaterialOtherDID, Scopes: atproto.VaultScopes()},
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -195,7 +238,9 @@ func TestPublicationReaderRefusesForeignIdentityBeforeAnyRead(t *testing.T) {
 	}
 
 	t.Run("nil-adapter", func(t *testing.T) {
-		_, err := NewPublicationReader(PublicationReaderConfig{DID: atprotoMaterialDID, Session: &atproto.Session{DID: atprotoMaterialDID}})
+		_, err := NewPublicationReader(
+			PublicationReaderConfig{DID: atprotoMaterialDID, Session: &atproto.Session{DID: atprotoMaterialDID}},
+		)
 		require.ErrorIs(t, err, ErrPublicationReaderInput)
 	})
 }
@@ -258,7 +303,14 @@ func TestPublicationReaderPropagatesAdapterViewRefusals(t *testing.T) {
 				require.NoError(t, err)
 				identifier, err := cid.Cast(committed)
 				require.NoError(t, err)
-				substitute := materialTestCandidate(t, binding, [16]byte{0x62, 0x11}, 0, nil, []byte("synthetic substitute payload"))
+				substitute := materialTestCandidate(
+					t,
+					binding,
+					[16]byte{0x62, 0x11},
+					0,
+					nil,
+					[]byte("synthetic substitute payload"),
+				)
 				return atprotoMaterialTamperSnapshot(t, repository.car(), identifier, substitute.SnapshotRecord)
 			},
 		},
@@ -269,7 +321,11 @@ func TestPublicationReaderPropagatesAdapterViewRefusals(t *testing.T) {
 				firstCID, err := publication.RecordCID(first)
 				require.NoError(t, err)
 				third, head := atprotoMaterialRecords(t, binding, [16]byte{0x62, 0x13}, 2, firstCID)
-				return map[atproto.RecordKey][]byte{snapshotKey(t, 0): first, snapshotKey(t, 2): third, {Collection: publication.HeadNSID, RKey: materialHeadKey}: head}
+				return map[atproto.RecordKey][]byte{
+					snapshotKey(t, 0): first,
+					snapshotKey(t, 2): third,
+					{Collection: publication.HeadNSID, RKey: materialHeadKey}: head,
+				}
 			},
 		},
 		{
@@ -284,7 +340,11 @@ func TestPublicationReaderPropagatesAdapterViewRefusals(t *testing.T) {
 			name: "legacy-record", reason: "legacy_profile",
 			records: func(t *testing.T) map[atproto.RecordKey][]byte {
 				records := atprotoMaterialGenesisRecords(t, binding)
-				legacy, err := atprototest.BuildRecord(atproto.VaultSnapshotNSID, "self", map[string]any{"schemaVersion": int64(1)})
+				legacy, err := atprototest.BuildRecord(
+					atproto.VaultSnapshotNSID,
+					"self",
+					map[string]any{"schemaVersion": int64(1)},
+				)
 				require.NoError(t, err)
 				records[atproto.RecordKey{Collection: atproto.VaultSnapshotNSID, RKey: "self"}] = legacy.Data
 				return records
@@ -317,7 +377,11 @@ func TestPublicationReaderPropagatesAdapterViewRefusals(t *testing.T) {
 	}
 }
 
-func newATProtoMaterialAdapter(t *testing.T, fixture *publicationReaderFixture, reader atproto.RevisionReader) *ATProtoMaterialTransport {
+func newATProtoMaterialAdapter(
+	t *testing.T,
+	fixture *publicationReaderFixture,
+	reader atproto.RevisionReader,
+) *ATProtoMaterialTransport {
 	t.Helper()
 	adapter, err := NewATProtoMaterialTransport(ATProtoMaterialConfig{
 		Binding: fixture.binding, DID: atprotoMaterialDID, Reader: reader,
@@ -367,8 +431,8 @@ func TestPublicationReaderRefusesPayloadAtTheRejectingLayer(t *testing.T) {
 		_, err := fixture.reader.ReadAcceptedPayload(ctx)
 		require.ErrorIs(t, err, ErrPublicationReaderAccepted)
 		require.ErrorIs(t, err, vault.ErrInvalidPayload)
-		assert.NotErrorIs(t, err, publication.ErrPayload)
-		assert.NotErrorIs(t, err, atproto.ErrReadBlobCIDMismatch)
+		require.NotErrorIs(t, err, publication.ErrPayload)
+		require.NotErrorIs(t, err, atproto.ErrReadBlobCIDMismatch)
 		var payloadError *vault.PayloadError
 		require.ErrorAs(t, err, &payloadError)
 		assert.Equal(t, "validate", payloadError.Stage)

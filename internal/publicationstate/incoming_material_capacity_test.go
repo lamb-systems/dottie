@@ -8,10 +8,11 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func incomingCapacityAppendDistinctRecord(t *testing.T, f *fixture, sequence uint64, content []byte) []byte {
@@ -26,7 +27,17 @@ func incomingCapacityAppendDistinctRecord(t *testing.T, f *fixture, sequence uin
 	payload := packFixtureContent(t, f.payload, content)
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType}}
+	record := publication.SnapshotRecord{
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          f.binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
+	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -60,7 +71,14 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		firstProposal.StateToken,
+		firstObservation,
+		payloadA,
+		firstProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 	inventory, total, err := store.inventoryPayloads()
@@ -72,7 +90,14 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 	require.NoError(t, err)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	second, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+	second, err := store.AcceptMaterial(
+		ctx,
+		ModeAdvance,
+		advanceProposal.StateToken,
+		advanceObservation,
+		payloadB,
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, first.Revision+1, second.Revision)
 	assert.Equal(t, first.Generation, second.Generation)
@@ -88,7 +113,10 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 	sort.Strings(wantNames)
 	assert.Equal(t, wantNames, names)
 	for _, payload := range [][]byte{payloadA, payloadB} {
-		file, err := observeAcceptedMaterialPayloadFile(filepath.Join(payloadDirectory, payloadBasename(payload)), len(payload))
+		file, err := observeAcceptedMaterialPayloadFile(
+			filepath.Join(payloadDirectory, payloadBasename(payload)),
+			len(payload),
+		)
 		require.NoError(t, err)
 		require.True(t, file.Exists)
 		assert.Equal(t, payload, file.Bytes)
@@ -100,7 +128,11 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 	assert.Equal(t, int64(len(inventory)), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	assert.Equal(t, int64(total), b8Count(t, ctx, store.conn, "SELECT COALESCE(SUM(size),0) FROM payload_objects"))
 	for name, size := range inventory {
-		assert.Equal(t, int64(size), b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", name))
+		assert.Equal(
+			t,
+			int64(size),
+			b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", name),
+		)
 	}
 
 	references := b8IncomingRows(t, ctx, store.conn)
@@ -143,7 +175,14 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		firstProposal.StateToken,
+		firstObservation,
+		payloadA,
+		firstProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 
@@ -168,7 +207,14 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 	require.NoError(t, err)
 	require.Equal(t, "joined", advanceProposal.Stop)
-	floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+	floor, err := store.AcceptMaterial(
+		ctx,
+		ModeAdvance,
+		advanceProposal.StateToken,
+		advanceObservation,
+		payloadB,
+		[32]byte{},
+	)
 	assert.Equal(t, Floor{}, floor)
 	requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
@@ -178,7 +224,11 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 	absentB, err := observeAcceptedMaterialPayloadFile(filepath.Join(payloadDirectory, nameB), len(payloadB))
 	require.NoError(t, err)
 	assert.False(t, absentB.Exists)
-	assert.Equal(t, []string{nameA}, readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects))
+	assert.Equal(
+		t,
+		[]string{nameA},
+		readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects),
+	)
 
 	assert.Equal(t, beforeRows, readLogicalRows(t, store.conn))
 	assert.Equal(t, beforeReferences, b8IncomingRows(t, ctx, store.conn))
@@ -188,7 +238,11 @@ func TestAcceptMaterialObjectCapacityRefusalPreservesState(t *testing.T) {
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects WHERE basename=?", nameB))
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	require.Equal(t, int64(sizeA), b8Count(t, ctx, store.conn, "SELECT COALESCE(SUM(size),0) FROM payload_objects"))
-	require.Equal(t, int64(sizeA), b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", nameA))
+	require.Equal(
+		t,
+		int64(sizeA),
+		b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", nameA),
+	)
 	afterInventory, afterTotal, err := store.inventoryPayloads()
 	require.NoError(t, err)
 	assert.Equal(t, beforeInventory, afterInventory)
@@ -230,7 +284,14 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 
 		firstObservation := f.observation(1)
 		firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-		first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+		first, err := store.AcceptMaterial(
+			ctx,
+			ModeFirstUse,
+			firstProposal.StateToken,
+			firstObservation,
+			payloadA,
+			firstProposal.Confirmation,
+		)
 		require.NoError(t, err)
 		inventory, total, err := store.inventoryPayloads()
 		require.NoError(t, err)
@@ -241,7 +302,14 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		second, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+		second, err := store.AcceptMaterial(
+			ctx,
+			ModeAdvance,
+			advanceProposal.StateToken,
+			advanceObservation,
+			payloadB,
+			[32]byte{},
+		)
 		require.NoError(t, err)
 		assert.Equal(t, first.Revision+1, second.Revision)
 		assert.Equal(t, first.Generation, second.Generation)
@@ -254,7 +322,11 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		assert.Equal(t, int64(len(inventory)), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 		assert.Equal(t, int64(total), b8Count(t, ctx, store.conn, "SELECT COALESCE(SUM(size),0) FROM payload_objects"))
 		for name, size := range inventory {
-			assert.Equal(t, int64(size), b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", name))
+			assert.Equal(
+				t,
+				int64(size),
+				b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", name),
+			)
 		}
 
 		names := readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects)
@@ -285,7 +357,14 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 
 		firstObservation := f.observation(1)
 		firstProposal := prepareFirstUse(t, store, firstObservation, payloadA)
-		first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payloadA, firstProposal.Confirmation)
+		first, err := store.AcceptMaterial(
+			ctx,
+			ModeFirstUse,
+			firstProposal.StateToken,
+			firstObservation,
+			payloadA,
+			firstProposal.Confirmation,
+		)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), first.Revision)
 		inventory, total, err := store.inventoryPayloads()
@@ -297,7 +376,14 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payloadB)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payloadB, [32]byte{})
+		floor, err := store.AcceptMaterial(
+			ctx,
+			ModeAdvance,
+			advanceProposal.StateToken,
+			advanceObservation,
+			payloadB,
+			[32]byte{},
+		)
 		assert.Equal(t, Floor{}, floor)
 		requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
 
@@ -308,7 +394,11 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 		assert.Equal(t, int64(sizeA), b8Count(t, ctx, store.conn, "SELECT COALESCE(SUM(size),0) FROM payload_objects"))
 		assert.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects WHERE basename=?", nameB))
-		assert.Equal(t, []string{nameA}, readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects))
+		assert.Equal(
+			t,
+			[]string{nameA},
+			readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects),
+		)
 		absentB, err := observeAcceptedMaterialPayloadFile(filepath.Join(payloadDirectory, nameB), len(payloadB))
 		require.NoError(t, err)
 		assert.False(t, absentB.Exists)
@@ -328,7 +418,7 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 3; sequence++ {
+	for sequence := range uint64(3) {
 		f.appendRecord(t, sequence)
 	}
 	require.Len(t, f.blocks, 3)
@@ -348,7 +438,14 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 
 	firstObservation := f.observation(1)
 	firstProposal := prepareFirstUse(t, store, firstObservation, payload)
-	first, err := store.AcceptMaterial(ctx, ModeFirstUse, firstProposal.StateToken, firstObservation, payload, firstProposal.Confirmation)
+	first, err := store.AcceptMaterial(
+		ctx,
+		ModeFirstUse,
+		firstProposal.StateToken,
+		firstObservation,
+		payload,
+		firstProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.Revision)
 	previous := first
@@ -358,7 +455,14 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 		advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, payload)
 		require.NoError(t, err)
 		require.Equal(t, "joined", advanceProposal.Stop)
-		floor, err := store.AcceptMaterial(ctx, ModeAdvance, advanceProposal.StateToken, advanceObservation, payload, [32]byte{})
+		floor, err := store.AcceptMaterial(
+			ctx,
+			ModeAdvance,
+			advanceProposal.StateToken,
+			advanceObservation,
+			payload,
+			[32]byte{},
+		)
 		require.NoError(t, err)
 		assert.Equal(t, previous.Revision+1, floor.Revision)
 		assert.Equal(t, previous.Generation, floor.Generation)
@@ -374,7 +478,11 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 	assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	assert.Equal(t, int64(size), b8Count(t, ctx, store.conn, "SELECT COALESCE(SUM(size),0) FROM payload_objects"))
 	assert.Equal(t, int64(size), b8Count(t, ctx, store.conn, "SELECT size FROM payload_objects WHERE basename=?", name))
-	assert.Equal(t, []string{name}, readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects))
+	assert.Equal(
+		t,
+		[]string{name},
+		readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, attemptLimits.ManagedObjects),
+	)
 	file, err := observeAcceptedMaterialPayloadFile(filepath.Join(payloadDirectory, name), len(payload))
 	require.NoError(t, err)
 	require.True(t, file.Exists)

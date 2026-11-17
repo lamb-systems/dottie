@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -15,8 +18,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const publicationReconcileTargetID = "synthetic-files"
@@ -68,7 +69,13 @@ func newPublicationReconcileHome(t *testing.T, sentinel []byte) *publicationReco
 	store, err := publicationstate.Open(publicationDirectory, publicationReconcileBinding())
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	return &publicationReconcileHome{paths: paths, root: selected, selected: selected, sentinel: sentinelPath, pubStore: store}
+	return &publicationReconcileHome{
+		paths:    paths,
+		root:     selected,
+		selected: selected,
+		sentinel: sentinelPath,
+		pubStore: store,
+	}
 }
 
 func canonicalPublicationReconcileTempDir(t *testing.T) string {
@@ -95,7 +102,12 @@ func publicationReconcileBinding() publicationstate.Binding {
 	return binding
 }
 
-func capturePublicationReconcileSource(t *testing.T, home *publicationReconcileHome, target config.Target, expected []byte) []model.Entry {
+func capturePublicationReconcileSource(
+	t *testing.T,
+	home *publicationReconcileHome,
+	target config.Target,
+	expected []byte,
+) []model.Entry {
 	t.Helper()
 	captured, err := (service.LocalFilesCapture{}).Capture(context.Background(), target, home.selected)
 	require.NoError(t, err)
@@ -116,16 +128,30 @@ func capturePublicationReconcileSource(t *testing.T, home *publicationReconcileH
 	return []model.Entry{entry}
 }
 
-func encodePublicationReconcileMaterial(t *testing.T, binding publicationstate.Binding, snapshot model.Snapshot, sequence uint64, parent []byte, publicationID [16]byte) publicationReconcileMaterial {
+func encodePublicationReconcileMaterial(
+	t *testing.T,
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	sequence uint64,
+	parent []byte,
+	publicationID [16]byte,
+) publicationReconcileMaterial {
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
 	blobCID, err := publication.RawPayloadCID(packed.Payload)
 	require.NoError(t, err)
 	recordRaw, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		PublicationSeq: sequence, Parent: bytes.Clone(parent),
-		Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          binding.Vault,
+		PublicationID:  publicationID,
+		PublicationSeq: sequence,
+		Parent:         bytes.Clone(parent),
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordRaw)
@@ -137,16 +163,32 @@ func encodePublicationReconcileMaterial(t *testing.T, binding publicationstate.B
 		SnapshotCID: recordCID, BlobCID: blobCID,
 	})
 	require.NoError(t, err)
-	return publicationReconcileMaterial{payload: bytes.Clone(packed.Payload), key: key, record: recordRaw, recordCID: recordCID, head: head}
+	return publicationReconcileMaterial{
+		payload:   bytes.Clone(packed.Payload),
+		key:       key,
+		record:    recordRaw,
+		recordCID: recordCID,
+		head:      head,
+	}
 }
 
-func publicationReconcileObservation(binding publicationstate.Binding, supplied publicationstate.SuppliedContext, current publicationReconcileMaterial, previous ...publicationReconcileMaterial) publicationstate.Observation {
+func publicationReconcileObservation(
+	binding publicationstate.Binding,
+	supplied publicationstate.SuppliedContext,
+	current publicationReconcileMaterial,
+	previous ...publicationReconcileMaterial,
+) publicationstate.Observation {
 	blocks := make([]publicationstate.SnapshotBlock, 0, len(previous)+1)
 	for _, item := range previous {
 		blocks = append(blocks, publicationstate.SnapshotBlock{Key: item.key, Raw: bytes.Clone(item.record)})
 	}
 	blocks = append(blocks, publicationstate.SnapshotBlock{Key: current.key, Raw: bytes.Clone(current.record)})
-	return publicationstate.Observation{Origin: binding, SuppliedContext: supplied, Head: bytes.Clone(current.head), Snapshots: blocks}
+	return publicationstate.Observation{
+		Origin:          binding,
+		SuppliedContext: supplied,
+		Head:            bytes.Clone(current.head),
+		Snapshots:       blocks,
+	}
 }
 
 func clonePublicationReconcileFloor(floor publicationstate.Floor) publicationstate.Floor {
@@ -168,16 +210,35 @@ func clonePublicationReconcileContext(supplied publicationstate.SuppliedContext)
 	return supplied
 }
 
-func acceptPublicationReconcilePosition(t *testing.T, store *publicationstate.Store, mode publicationstate.Mode, observation publicationstate.Observation, payload []byte) publicationstate.Floor {
+func acceptPublicationReconcilePosition(
+	t *testing.T,
+	store *publicationstate.Store,
+	mode publicationstate.Mode,
+	observation publicationstate.Observation,
+	payload []byte,
+) publicationstate.Floor {
 	t.Helper()
 	proposal, err := store.Prepare(context.Background(), mode, observation, payload)
 	require.NoError(t, err)
-	floor, err := store.Accept(context.Background(), mode, proposal.StateToken, observation, payload, proposal.Confirmation)
+	floor, err := store.Accept(
+		context.Background(),
+		mode,
+		proposal.StateToken,
+		observation,
+		payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return floor
 }
 
-func publicationReconcileRequest(home *publicationReconcileHome, binding publicationstate.Binding, material publicationReconcileMaterial, configuration config.Config, local *service.PublicationLocalContext) service.PublicationReconciliationRequest {
+func publicationReconcileRequest(
+	home *publicationReconcileHome,
+	binding publicationstate.Binding,
+	material publicationReconcileMaterial,
+	configuration config.Config,
+	local *service.PublicationLocalContext,
+) service.PublicationReconciliationRequest {
 	return service.PublicationReconciliationRequest{
 		Store: home.pubStore, Binding: binding, ExpectedFloor: home.floor,
 		SnapshotRecord: bytes.Clone(material.record), Payload: bytes.Clone(material.payload),

@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"math/rand"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -21,7 +23,12 @@ type RetryPolicy struct {
 }
 
 func DefaultRetryPolicy() RetryPolicy {
-	return RetryPolicy{MaxAttempts: 3, BaseDelay: 250 * time.Millisecond, MaxDelay: 5 * time.Second, MaxElapsed: 10 * time.Second}
+	return RetryPolicy{
+		MaxAttempts: 3,
+		BaseDelay:   250 * time.Millisecond,
+		MaxDelay:    5 * time.Second,
+		MaxElapsed:  10 * time.Second,
+	}
 }
 
 type PublicationRetryStatus string
@@ -50,7 +57,7 @@ type PublicationRetryResult struct {
 }
 
 type PublicationRetryOptions struct {
-	IO     ATProtoPublicationIO
+	IO     PublicationIO
 	Store  TransitionAttemptStore
 	Policy RetryPolicy
 	Sleep  func(context.Context, time.Duration) error
@@ -100,13 +107,28 @@ func releasePublicationMarkerRef(marker RecordKey, lock *publicationMarkerLock) 
 	publicationMarkerLocks.Unlock()
 }
 
-func PublishWithRetry(ctx context.Context, publication vault.Publication, signer ed25519.PrivateKey, options PublicationRetryOptions) (PublicationRetryResult, error) {
+func PublishWithRetry(
+	ctx context.Context,
+	publication vault.Publication,
+	signer ed25519.PrivateKey,
+	options PublicationRetryOptions,
+) (PublicationRetryResult, error) {
 	return publishWithRetry(ctx, publication, signer, options.IO, options.Store, options)
 }
 
-func publishWithRetry(ctx context.Context, publication vault.Publication, signer ed25519.PrivateKey, io publicationIO, store TransitionAttemptStore, options PublicationRetryOptions) (PublicationRetryResult, error) {
+func publishWithRetry(
+	ctx context.Context,
+	publication vault.Publication,
+	signer ed25519.PrivateKey,
+	io publicationIO,
+	store TransitionAttemptStore,
+	options PublicationRetryOptions,
+) (PublicationRetryResult, error) {
 	if ctx == nil || io == nil || store == nil {
-		return PublicationRetryResult{}, publicationRetryError(PublicationUnavailable, errors.New("publication retry context, I/O and store are required"))
+		return PublicationRetryResult{}, publicationRetryError(
+			PublicationUnavailable,
+			errors.New("publication retry context, I/O and store are required"),
+		)
 	}
 	marker, recordCID, err := publicationMarker(publication, signer)
 	if err != nil {
@@ -117,7 +139,11 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 		policy = DefaultRetryPolicy()
 	}
 	if policy.MaxAttempts < 1 || policy.BaseDelay < 0 || policy.MaxDelay < 0 || policy.MaxElapsed <= 0 {
-		return retryResult(PublicationRetryResult{Marker: marker, RecordCID: recordCID}, PublicationRejected, errors.New("invalid publication retry policy"))
+		return retryResult(
+			PublicationRetryResult{Marker: marker, RecordCID: recordCID},
+			PublicationRejected,
+			errors.New("invalid publication retry policy"),
+		)
 	}
 	clock := options.Clock
 	if clock == nil {
@@ -167,7 +193,15 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 				if result.Attempts >= policy.MaxAttempts {
 					return retryResult(result, PublicationUnavailable, readErr)
 				}
-				if err := retryWait(operationCtx, policy, result.Attempts, startedAt, clock, jitter, sleep); err != nil {
+				if err := retryWait(
+					operationCtx,
+					policy,
+					result.Attempts,
+					startedAt,
+					clock,
+					jitter,
+					sleep,
+				); err != nil {
 					return retryResult(result, PublicationUnavailable, errors.Join(readErr, err))
 				}
 				continue
@@ -199,7 +233,13 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 		if err != nil {
 			return retryResult(result, PublicationUnavailable, err)
 		}
-		eligible, stopStatus, stopErr, err := authorizePublicationRetry(operationCtx, store, attempts, revision, recordCID)
+		eligible, stopStatus, stopErr, err := authorizePublicationRetry(
+			operationCtx,
+			store,
+			attempts,
+			revision,
+			recordCID,
+		)
 		if err != nil {
 			return retryResult(result, PublicationUnavailable, err)
 		}
@@ -236,7 +276,15 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 				return retryResult(result, PublicationQueued, errors.Join(commitErr, observeErr))
 			}
 			if isTransientPublicationReadError(observeErr) && result.Attempts < policy.MaxAttempts {
-				if err := retryWait(operationCtx, policy, result.Attempts, startedAt, clock, jitter, sleep); err != nil {
+				if err := retryWait(
+					operationCtx,
+					policy,
+					result.Attempts,
+					startedAt,
+					clock,
+					jitter,
+					sleep,
+				); err != nil {
 					return retryResult(result, PublicationUnavailable, errors.Join(commitErr, observeErr, err))
 				}
 				continue
@@ -269,7 +317,13 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 		if err != nil {
 			return retryResult(result, PublicationUnavailable, errors.Join(commitErr, err))
 		}
-		eligible, stopStatus, stopErr, err = authorizePublicationRetry(operationCtx, store, latestAttempts, observed, recordCID)
+		eligible, stopStatus, stopErr, err = authorizePublicationRetry(
+			operationCtx,
+			store,
+			latestAttempts,
+			observed,
+			recordCID,
+		)
 		if err != nil {
 			return retryResult(result, PublicationUnavailable, errors.Join(commitErr, err))
 		}
@@ -279,7 +333,11 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 		ambiguousNotLanded = true
 		lastErr = commitErr
 		if result.Attempts >= policy.MaxAttempts {
-			return retryResult(result, PublicationStarved, errors.Join(ErrPublicationStarved, commitErr, ErrTransitionNotLanded))
+			return retryResult(
+				result,
+				PublicationStarved,
+				errors.Join(ErrPublicationStarved, commitErr, ErrTransitionNotLanded),
+			)
 		}
 		if err := retryWait(operationCtx, policy, result.Attempts, startedAt, clock, jitter, sleep); err != nil {
 			return retryResult(result, PublicationStarved, errors.Join(ErrPublicationStarved, commitErr, err))
@@ -291,11 +349,20 @@ func publishWithRetry(ctx context.Context, publication vault.Publication, signer
 	return retryResult(result, PublicationUnavailable, lastErr)
 }
 
-func publicationObservationEvidence(existing string, revision *Revision, marker RecordKey, outcome publicationCurrentState) string {
+func publicationObservationEvidence(
+	existing string,
+	revision *Revision,
+	marker RecordKey,
+	outcome publicationCurrentState,
+) string {
 	evidence := evidenceWith(existing, "currentRevision", revisionCommit(revision))
 	evidence = evidenceWith(evidence, "currentOutcome", string(outcome))
 	evidence = evidenceWith(evidence, "markerRecordCID", revision.membership[marker])
-	evidence = evidenceWith(evidence, "currentHeadRecordCID", revision.membership[RecordKey{Collection: VaultHeadNSID, RKey: "self"}])
+	evidence = evidenceWith(
+		evidence,
+		"currentHeadRecordCID",
+		revision.membership[RecordKey{Collection: VaultHeadNSID, RKey: "self"}],
+	)
 	return evidence
 }
 
@@ -304,7 +371,10 @@ func retryBaseResult(marker RecordKey, recordCID string, publication vault.Publi
 	return PublicationRetryResult{Marker: marker, RecordCID: recordCID, BlobCID: blobCID}
 }
 
-func mergePublicationCommitResult(result PublicationRetryResult, committed PublicationCommitResult) PublicationRetryResult {
+func mergePublicationCommitResult(
+	result PublicationRetryResult,
+	committed PublicationCommitResult,
+) PublicationRetryResult {
 	if committed.AttemptID != "" {
 		result.Evidence = committed.Evidence
 	}
@@ -326,7 +396,13 @@ func mergePublicationCommitResult(result PublicationRetryResult, committed Publi
 	return result
 }
 
-func authorizePublicationRetry(ctx context.Context, store TransitionAttemptStore, attempts []state.TransitionAttempt, current *Revision, expectedRecordCID string) (bool, PublicationRetryStatus, error, error) {
+func authorizePublicationRetry(
+	ctx context.Context,
+	store TransitionAttemptStore,
+	attempts []state.TransitionAttempt,
+	current *Revision,
+	expectedRecordCID string,
+) (bool, PublicationRetryStatus, error, error) {
 	if len(attempts) == 0 {
 		return true, "", nil, nil
 	}
@@ -394,7 +470,12 @@ func authorizePublicationRetry(ctx context.Context, store TransitionAttemptStore
 				return false, PublicationUnavailable, ErrPublicationUnavailable, nil
 			}
 			updatedEvidence := evidenceWith(attempt.Evidence, "retryObservationRevision", current.CommitCID())
-			if err := store.UpdateTransitionAttempt(ctx, attempt.ID, TransitionOutcomeNotLanded, updatedEvidence); err != nil {
+			if err := store.UpdateTransitionAttempt(
+				ctx,
+				attempt.ID,
+				TransitionOutcomeNotLanded,
+				updatedEvidence,
+			); err != nil {
 				return false, PublicationUnavailable, nil, publicationStateError(err)
 			}
 		case TransitionOutcomeNotLanded, TransitionOutcomeUnavailable:
@@ -405,7 +486,15 @@ func authorizePublicationRetry(ctx context.Context, store TransitionAttemptStore
 	return true, "", nil, nil
 }
 
-func retryWait(ctx context.Context, policy RetryPolicy, completedCycles int, startedAt time.Time, clock func() time.Time, jitter func(time.Duration) time.Duration, sleep func(context.Context, time.Duration) error) error {
+func retryWait(
+	ctx context.Context,
+	policy RetryPolicy,
+	completedCycles int,
+	startedAt time.Time,
+	clock func() time.Time,
+	jitter func(time.Duration) time.Duration,
+	sleep func(context.Context, time.Duration) error,
+) error {
 	if completedCycles >= policy.MaxAttempts {
 		return nil
 	}
@@ -420,10 +509,7 @@ func retryWait(ctx context.Context, policy RetryPolicy, completedCycles int, sta
 	if delay > policy.MaxDelay {
 		delay = policy.MaxDelay
 	}
-	actual := jitter(delay)
-	if actual < 0 {
-		actual = 0
-	}
+	actual := max(jitter(delay), 0)
 	if actual > delay {
 		actual = delay
 	}
@@ -455,18 +541,27 @@ func isPublicationQueuedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrPublicationQueued) || errors.Is(err, ErrPublicationQuota) || errors.Is(err, ErrPublicationRateLimited) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, ErrPublicationQueued) || errors.Is(err, ErrPublicationQuota) ||
+		errors.Is(err, ErrPublicationRateLimited) ||
+		errors.Is(err, context.Canceled) {
 		return true
 	}
-	if errors.Is(err, ErrAuthMethodSession) || errors.Is(err, ErrAuthMethodNonce) || errors.Is(err, ErrAuthMethodToken) || errors.Is(err, ErrAuthMethodRelocated) || errors.Is(err, ErrAuthMethodTransport) || errors.Is(err, ErrSessionUnavailable) || errors.Is(err, ErrSessionRefreshPending) {
+	if errors.Is(err, ErrAuthMethodSession) || errors.Is(err, ErrAuthMethodNonce) ||
+		errors.Is(err, ErrAuthMethodToken) ||
+		errors.Is(err, ErrAuthMethodRelocated) ||
+		errors.Is(err, ErrAuthMethodTransport) ||
+		errors.Is(err, ErrSessionUnavailable) ||
+		errors.Is(err, ErrSessionRefreshPending) {
 		return true
 	}
 	var readStatus *ReadStatusError
-	if errors.As(err, &readStatus) && (readStatus.StatusCode == 401 || readStatus.StatusCode == 403 || readStatus.StatusCode == 429 || readStatus.Code == "RateLimitExceeded") {
+	if errors.As(err, &readStatus) &&
+		(readStatus.StatusCode == http.StatusUnauthorized || readStatus.StatusCode == http.StatusForbidden || readStatus.StatusCode == http.StatusTooManyRequests || readStatus.Code == "RateLimitExceeded") {
 		return true
 	}
 	var providerStatus *ProviderStatusError
-	if errors.As(err, &providerStatus) && (providerStatus.StatusCode == 401 || providerStatus.StatusCode == 403 || providerStatus.StatusCode == 429 || providerStatus.Code == "RateLimitExceeded") {
+	if errors.As(err, &providerStatus) &&
+		(providerStatus.StatusCode == http.StatusUnauthorized || providerStatus.StatusCode == http.StatusForbidden || providerStatus.StatusCode == http.StatusTooManyRequests || providerStatus.Code == "RateLimitExceeded") {
 		return true
 	}
 	return false
@@ -474,11 +569,13 @@ func isPublicationQueuedError(err error) bool {
 
 func isRateLimitedStatusError(err error) bool {
 	var readStatus *ReadStatusError
-	if errors.As(err, &readStatus) && (readStatus.StatusCode == 429 || readStatus.Code == "RateLimitExceeded") {
+	if errors.As(err, &readStatus) &&
+		(readStatus.StatusCode == http.StatusTooManyRequests || readStatus.Code == "RateLimitExceeded") {
 		return true
 	}
 	var providerStatus *ProviderStatusError
-	return errors.As(err, &providerStatus) && (providerStatus.StatusCode == 429 || providerStatus.Code == "RateLimitExceeded")
+	return errors.As(err, &providerStatus) &&
+		(providerStatus.StatusCode == http.StatusTooManyRequests || providerStatus.Code == "RateLimitExceeded")
 }
 
 func isTransientPublicationReadError(err error) bool {
@@ -490,10 +587,21 @@ func isTransientPublicationReadError(err error) bool {
 }
 
 func isDefinitivePublicationRejection(err error) bool {
-	return errors.Is(err, ErrBatchRejected) || errors.Is(err, ErrPublicationBatchTooLarge) || errors.Is(err, ErrCandidateExceedsBlobUploadLimit) || errors.Is(err, ErrPreparedPolicyMismatch) || errors.Is(err, vault.ErrAuthorization) || errors.Is(err, vault.ErrSignature) || errors.Is(err, ErrCandidateUnauthenticated) || errors.Is(err, ErrCandidateContextMismatch) || errors.Is(err, ErrPublicationIDReuse)
+	return errors.Is(err, ErrBatchRejected) || errors.Is(err, ErrPublicationBatchTooLarge) ||
+		errors.Is(err, ErrCandidateExceedsBlobUploadLimit) ||
+		errors.Is(err, ErrPreparedPolicyMismatch) ||
+		errors.Is(err, vault.ErrAuthorization) ||
+		errors.Is(err, vault.ErrSignature) ||
+		errors.Is(err, ErrCandidateUnauthenticated) ||
+		errors.Is(err, ErrCandidateContextMismatch) ||
+		errors.Is(err, ErrPublicationIDReuse)
 }
 
-func retryResult(result PublicationRetryResult, status PublicationRetryStatus, err error) (PublicationRetryResult, error) {
+func retryResult(
+	result PublicationRetryResult,
+	status PublicationRetryStatus,
+	err error,
+) (PublicationRetryResult, error) {
 	result.Status = status
 	if err == nil && status == PublicationCommitted {
 		result.LastError = ""
@@ -564,12 +672,10 @@ func sanitizedPublicationError(err error) string {
 	if errors.Is(err, ErrBatchRejected) || errors.Is(err, ErrPublicationRejected) {
 		return ErrPublicationRejected.Error()
 	}
-	var readStatus *ReadStatusError
-	if errors.As(err, &readStatus) {
+	if readStatus, ok := errors.AsType[*ReadStatusError](err); ok {
 		return readStatus.Error()
 	}
-	var providerStatus *ProviderStatusError
-	if errors.As(err, &providerStatus) {
+	if providerStatus, ok := errors.AsType[*ProviderStatusError](err); ok {
 		return providerStatus.Error()
 	}
 	if errors.Is(err, ErrAmbiguousTransport) {

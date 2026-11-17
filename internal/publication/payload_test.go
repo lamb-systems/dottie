@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestDecodePayloadVerifiesReferenceBeforeInspectingBody(t *testing.T) {
@@ -38,7 +39,7 @@ func TestDecodePayloadVerifiesReferenceBeforeInspectingBody(t *testing.T) {
 			assert.Equal(t, model.Snapshot{}, got)
 			requireViolation(t, err, ErrPayload, test.field, test.reason)
 			var payloadErr *vault.PayloadError
-			assert.False(t, errors.As(err, &payloadErr))
+			assert.NotErrorAs(t, err, &payloadErr)
 		})
 	}
 
@@ -58,8 +59,25 @@ func TestDecodePayloadValidWholeCIDStillChecksMemberDigestAndRedactsPath(t *test
 	content := []byte("private member body")
 	blob, err := vault.Pack(model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: ".", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: model.FileRegular, Content: content}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: ".", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    path,
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: content,
+				},
+			},
+		},
 	})
 	require.NoError(t, err)
 	memberHash := sha256.Sum256(content)
@@ -76,21 +94,39 @@ func TestDecodePayloadValidWholeCIDStillChecksMemberDigestAndRedactsPath(t *test
 	assert.Equal(t, "validate", payloadErr.Stage)
 	assert.Equal(t, "malformed", payloadErr.Reason)
 	assert.Empty(t, payloadErr.Kind)
-	assert.ErrorIs(t, err, vault.ErrInvalidPayload)
+	require.ErrorIs(t, err, vault.ErrInvalidPayload)
 	assert.NotContains(t, fmt.Sprint(err), path)
 	assert.NotContains(t, fmt.Sprint(err), string(digest))
-	assert.Nil(t, errors.Unwrap(errors.Unwrap(err)))
+	assert.NoError(t, errors.Unwrap(errors.Unwrap(err)))
 }
 
 func TestPublicationAndVaultPackedPayloadCapsMatch(t *testing.T) {
-	assert.Equal(t, uint64(vault.DefaultPayloadLimits().MaxPackedBytes), MaxBlobBytes)
+	assert.Equal(t, MaxBlobBytes, uint64(vault.DefaultPayloadLimits().MaxPackedBytes))
 }
 
 func TestDecodePayloadUsesVerifiedRawSnapshotBytes(t *testing.T) {
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("payload"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("payload"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	blob, err := vault.Pack(snapshot)
 	require.NoError(t, err)

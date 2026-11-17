@@ -26,7 +26,11 @@ const (
 	publicationPreviewReasonPlan      publicationReconciliationReason = "plan_invalid"
 )
 
-func PreviewPublicationTarget(ctx context.Context, request PublicationReconciliationRequest, base *PublicationReconciliationBase) (syncengine.Preview, PublicationPreviewBaseDisposition, error) {
+func PreviewPublicationTarget(
+	ctx context.Context,
+	request PublicationReconciliationRequest,
+	base *PublicationReconciliationBase,
+) (syncengine.Preview, PublicationPreviewBaseDisposition, error) {
 	owned, err := snapshotPublicationPreviewInputs(ctx, request, base)
 	if err != nil {
 		return syncengine.Preview{}, "", err
@@ -60,7 +64,14 @@ func PreviewPublicationTarget(ctx context.Context, request PublicationReconcilia
 	disposition := PublicationPreviewBaseUnestablished
 	var baseEntries []model.Entry
 	if owned.base != nil {
-		if err := checkBaseEligibility(ctx, owned.store, owned.base.position, owned.base.selection, material.floor, selection); err != nil {
+		if err := checkBaseEligibility(
+			ctx,
+			owned.store,
+			owned.base.position,
+			owned.base.selection,
+			material.floor,
+			selection,
+		); err != nil {
 			return syncengine.Preview{}, "", err
 		}
 		projectedBase, err := projectPublicationSnapshot(selection, model.Snapshot{
@@ -100,7 +111,12 @@ func PreviewPublicationTarget(ctx context.Context, request PublicationReconcilia
 	if err != nil {
 		return syncengine.Preview{}, "", publicationPreviewFailure(ctx, publicationPreviewReasonPlan, err)
 	}
-	plan, err := syncengine.Reconcile(baseView, localView, current.entries, syncengine.Options{Bindings: []syncengine.TargetBinding{binding}})
+	plan, err := syncengine.Reconcile(
+		baseView,
+		localView,
+		current.entries,
+		syncengine.Options{Bindings: []syncengine.TargetBinding{binding}},
+	)
 	if err != nil {
 		return syncengine.Preview{}, "", publicationPreviewFailure(ctx, publicationPreviewReasonPlan, err)
 	}
@@ -132,21 +148,29 @@ type publicationPreviewInputs struct {
 	base           *PublicationReconciliationBase
 }
 
-func snapshotPublicationPreviewInputs(ctx context.Context, request PublicationReconciliationRequest, base *PublicationReconciliationBase) (publicationPreviewInputs, error) {
+func snapshotPublicationPreviewInputs(
+	ctx context.Context,
+	request PublicationReconciliationRequest,
+	base *PublicationReconciliationBase,
+) (publicationPreviewInputs, error) {
 	if ctx == nil || request.Store == nil || request.Local == nil || request.TargetID == "" {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonInput, nil)
 	}
 	if err := ctx.Err(); err != nil {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonInput, err)
 	}
-	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxRecordBytes || len(request.Payload) == 0 || uint64(len(request.Payload)) > publication.MaxBlobBytes || !validPublicationFloorInput(request.ExpectedFloor) {
+	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxRecordBytes ||
+		len(request.Payload) == 0 ||
+		uint64(len(request.Payload)) > publication.MaxBlobBytes ||
+		!validPublicationFloorInput(request.ExpectedFloor) {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonInput, nil)
 	}
 	if len(request.Configuration.Targets) > publicationSelectionMaxTargets {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonBounds, nil)
 	}
 	for _, target := range request.Configuration.Targets {
-		if target.Root != nil && len(target.Root.Exclude) > publicationSelectionMaxExcludes || target.GNOMEPolicy != nil && len(target.GNOMEPolicy.Categories) > matrix.MaxKeys {
+		if target.Root != nil && len(target.Root.Exclude) > publicationSelectionMaxExcludes ||
+			target.GNOMEPolicy != nil && len(target.GNOMEPolicy.Categories) > matrix.MaxKeys {
 			return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonBounds, nil)
 		}
 	}
@@ -194,18 +218,28 @@ func clonePublicationPreviewConfig(configuration config.Config) config.Config {
 	return out
 }
 
-func snapshotPublicationPreviewBase(base *PublicationReconciliationBase) (*PublicationReconciliationBase, publicationReconciliationReason) {
-	if !validPublicationFloorInput(base.position.floor) || len(base.position.snapshotRecord) == 0 || len(base.position.snapshotRecord) > publication.MaxRecordBytes {
+func snapshotPublicationPreviewBase(
+	base *PublicationReconciliationBase,
+) (*PublicationReconciliationBase, publicationReconciliationReason) {
+	if !validPublicationFloorInput(base.position.floor) || len(base.position.snapshotRecord) == 0 ||
+		len(base.position.snapshotRecord) > publication.MaxRecordBytes {
 		return nil, publicationPreviewReasonInput
 	}
 	if !publicationPreviewBaseSelectionWithinBounds(base.selection) {
 		return nil, publicationPreviewReasonBounds
 	}
-	retained := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{base.selection.portable}, Entries: base.entries}
+	retained := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{base.selection.portable},
+		Entries: base.entries,
+	}
 	if !publicationProjectionWithinBounds(retained) {
 		return nil, publicationPreviewReasonBounds
 	}
-	position := publicationBasePosition{floor: clonePublicationFloor(base.position.floor), snapshotRecord: bytes.Clone(base.position.snapshotRecord)}
+	position := publicationBasePosition{
+		floor:          clonePublicationFloor(base.position.floor),
+		snapshotRecord: bytes.Clone(base.position.snapshotRecord),
+	}
 	selection := clonePublicationPreviewBaseSelection(base.selection)
 	entries := make([]model.Entry, len(base.entries))
 	for index, entry := range base.entries {
@@ -218,14 +252,26 @@ func publicationPreviewBaseSelectionWithinBounds(selection publicationBaseSelect
 	if selection.target.Root != nil && len(selection.target.Root.Exclude) > publicationSelectionMaxExcludes {
 		return false
 	}
-	if selection.target.GNOMEPolicy != nil && len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys || len(selection.excludes) > publicationSelectionMaxExcludes || len(selection.settingRefs) > matrix.MaxKeys {
+	if selection.target.GNOMEPolicy != nil && len(selection.target.GNOMEPolicy.Categories) > matrix.MaxKeys ||
+		len(selection.excludes) > publicationSelectionMaxExcludes ||
+		len(selection.settingRefs) > matrix.MaxKeys {
 		return false
 	}
 	budget := publicationStringBudget{}
 	values := []string{
-		selection.paths.Home, selection.paths.ConfigHome, selection.paths.StateHome, selection.paths.CacheHome, selection.paths.DataHome,
-		selection.target.ID, string(selection.target.Source), string(selection.mode), selection.portable.ID, string(selection.portable.Source),
-		selection.resolvedPath, selection.anchorPath, selection.anchorName,
+		selection.paths.Home,
+		selection.paths.ConfigHome,
+		selection.paths.StateHome,
+		selection.paths.CacheHome,
+		selection.paths.DataHome,
+		selection.target.ID,
+		string(selection.target.Source),
+		string(selection.mode),
+		selection.portable.ID,
+		string(selection.portable.Source),
+		selection.resolvedPath,
+		selection.anchorPath,
+		selection.anchorName,
 	}
 	for _, value := range values {
 		if !budget.add(value) {
@@ -233,7 +279,8 @@ func publicationPreviewBaseSelectionWithinBounds(selection publicationBaseSelect
 		}
 	}
 	if selection.target.Root != nil {
-		if !budget.add(string(selection.target.Root.Base)) || !budget.add(selection.target.Root.Path) || !budget.add(string(selection.target.Root.Kind)) {
+		if !budget.add(string(selection.target.Root.Base)) || !budget.add(selection.target.Root.Path) ||
+			!budget.add(string(selection.target.Root.Kind)) {
 			return false
 		}
 		for _, value := range selection.target.Root.Exclude {
@@ -243,7 +290,8 @@ func publicationPreviewBaseSelectionWithinBounds(selection publicationBaseSelect
 		}
 	}
 	if selection.target.GNOMEPolicy != nil {
-		if !budget.add(string(selection.target.GNOMEPolicy.Approval)) || !budget.add(selection.target.GNOMEPolicy.KeyDigest) {
+		if !budget.add(string(selection.target.GNOMEPolicy.Approval)) ||
+			!budget.add(selection.target.GNOMEPolicy.KeyDigest) {
 			return false
 		}
 		for _, value := range selection.target.GNOMEPolicy.Categories {

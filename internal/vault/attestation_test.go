@@ -20,10 +20,17 @@ func newAttestationFixture(t *testing.T) attestationFixture {
 	base := newEnvelopeFixture(t)
 	key := fixedSigningKey(77)
 	certificate := Certificate{
-		Vault: base.policy.Vault, DeviceID: "device-restore", KeyID: []byte("signer-restore"),
-		SigningPublicKey:    [ed25519.PublicKeySize]byte(key.Public().(ed25519.PublicKey)),
-		EncryptionPublicKey: [32]byte(fixedX25519Key(78).PublicKey().Bytes()), Role: RoleRestoreOnly, CertEpoch: base.policy.EpochSeq,
-		Issuer: base.rootCertificate.DeviceID, Signer: Signer{DeviceID: base.rootCertificate.DeviceID, KeyID: bytes.Clone(base.rootCertificate.KeyID)},
+		Vault:            base.policy.Vault,
+		DeviceID:         "device-restore",
+		KeyID:            []byte("signer-restore"),
+		SigningPublicKey: [ed25519.PublicKeySize]byte(key.Public().(ed25519.PublicKey)),
+		EncryptionPublicKey: [32]byte(
+			fixedX25519Key(78).PublicKey().Bytes(),
+		),
+		Role:      RoleRestoreOnly,
+		CertEpoch: base.policy.EpochSeq,
+		Issuer:    base.rootCertificate.DeviceID,
+		Signer:    Signer{DeviceID: base.rootCertificate.DeviceID, KeyID: bytes.Clone(base.rootCertificate.KeyID)},
 	}
 	certificateBytes := signCertificateValue(t, certificate, base.signingKey)
 	policy := base.policy
@@ -70,7 +77,15 @@ func TestBuildAndVerifyAttestationForRestoreOnlyDevice(t *testing.T) {
 	require.NoError(t, err)
 	prefix, err := encodeAttestationPrefix(attestation)
 	require.NoError(t, err)
-	require.NoError(t, Verify(contextForPurpose(PurposeAttestation), objectSignaturePreimage(prefix), attestation.Signature[:], certificate.SigningPublicKey[:]))
+	require.NoError(
+		t,
+		Verify(
+			contextForPurpose(PurposeAttestation),
+			objectSignaturePreimage(prefix),
+			attestation.Signature[:],
+			certificate.SigningPublicKey[:],
+		),
+	)
 
 	judgement, err := VerifyAttestation(encoded, fixture.verify)
 	require.NoError(t, err)

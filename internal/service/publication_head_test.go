@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
-	"errors"
+	"maps"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func publicationHeadConfig(repository *atprotoMaterialRepository, session *atproto.Session) PublicationHeadConfig {
@@ -68,9 +69,7 @@ func TestReadPublishedHeadValidatesTheRecordItAdopts(t *testing.T) {
 	misplacedRepository := newATProtoMaterialRepository(t, atprotoMaterialDID)
 	genesis := atprotoMaterialGenesisRecords(t, binding)
 	misplaced := make(map[atproto.RecordKey][]byte, len(genesis))
-	for key, data := range genesis {
-		misplaced[key] = data
-	}
+	maps.Copy(misplaced, genesis)
 	misplaced[atproto.RecordKey{Collection: publication.HeadNSID, RKey: "current"}] = genesis[atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}]
 	misplacedRepository.setRecords(t, misplaced)
 	_, misplacedErr := ReadPublishedHead(ctx, publicationHeadConfig(misplacedRepository, session))
@@ -116,9 +115,11 @@ func TestReadPublishedHeadRefusesAnUnboundIdentityOrScopeSet(t *testing.T) {
 		scopeless = append(scopeless, scope)
 	}
 	head, err := ReadPublishedHead(ctx, PublicationHeadConfig{
-		DID: atprotoMaterialDID, Session: &atproto.Session{DID: atprotoMaterialDID, Scopes: scopeless}, Reader: repository.reader(),
+		DID:     atprotoMaterialDID,
+		Session: &atproto.Session{DID: atprotoMaterialDID, Scopes: scopeless},
+		Reader:  repository.reader(),
 	})
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, ErrPublicationHeadAbsent))
+	require.NotErrorIs(t, err, ErrPublicationHeadAbsent)
 	assert.Equal(t, publication.HeadRecord{}, head)
 }

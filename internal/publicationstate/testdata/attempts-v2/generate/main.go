@@ -5480,7 +5480,7 @@ func validateMixedPhysicalPayloads(imageDirectory string, inventory rowInventory
 		if err := unix.Fstatat(imageFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o7777 != 0o600 || stat.Nlink != 1 || stat.Size < 0 || stat.Size > maxOutputBytes || (lock && stat.Size != 0) || (!lock && stat.Size == 0) {
 			return rootFileState{}, errors.New("mixed image root file shape differs")
 		}
-		return rootFileState{name: name, dev: uint64(stat.Dev), ino: stat.Ino, size: stat.Size, mtim: stat.Mtim, ctim: stat.Ctim}, nil
+		return rootFileState{name: name, dev: stat.Dev, ino: stat.Ino, size: stat.Size, mtim: stat.Mtim, ctim: stat.Ctim}, nil
 	}
 	checkSidecars := func() error {
 		for _, name := range []string{"publication.db-wal", "publication.db-shm"} {

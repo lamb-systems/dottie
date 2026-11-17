@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -14,7 +16,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/require"
 )
 
 func testPaths(t *testing.T) platform.Paths {
@@ -63,7 +64,7 @@ func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 	}
 	target := proposed.Targets[0]
 	if target.Mode != "" {
-		require.Equal(t, "", target.Mode, "materialization must not set a consent override, got %q", target.Mode)
+		require.Empty(t, target.Mode, "materialization must not set a consent override, got %q", target.Mode)
 	}
 
 	root, err := target.ResolvedPath(paths)
@@ -76,7 +77,11 @@ func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "init.lua"), []byte("vim.o.number = true\n"), 0o600); err != nil {
 		require.NoError(t, err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "lua", "plugin", "example.lua"), []byte("return {}\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(root, "lua", "plugin", "example.lua"),
+		[]byte("return {}\n"),
+		0o600,
+	); err != nil {
 		require.NoError(t, err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o700); err != nil {
@@ -138,17 +143,47 @@ func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 	if err != nil {
 		require.NoError(t, err, "unpack: %v", err)
 	}
-	if len(restored.Entries) != len(snapshot.Entries) || len(restored.Targets) != 1 || restored.Targets[0].ID != target.ID {
-		require.Len(t, restored.Entries, len(snapshot.Entries), "unpack lost fidelity: %d/%d entries, %d targets", len(restored.Entries), len(snapshot.Entries), len(restored.Targets))
-		require.Len(t, restored.Targets, 1, "unpack lost fidelity: %d/%d entries, %d targets", len(restored.Entries), len(snapshot.Entries), len(restored.Targets))
-		require.Equal(t, target.ID, restored.Targets[0].ID, "unpack lost fidelity: %d/%d entries, %d targets", len(restored.Entries), len(snapshot.Entries), len(restored.Targets))
+	if len(restored.Entries) != len(snapshot.Entries) || len(restored.Targets) != 1 ||
+		restored.Targets[0].ID != target.ID {
+		require.Len(
+			t,
+			restored.Entries,
+			len(snapshot.Entries),
+			"unpack lost fidelity: %d/%d entries, %d targets",
+			len(restored.Entries),
+			len(snapshot.Entries),
+			len(restored.Targets),
+		)
+		require.Len(
+			t,
+			restored.Targets,
+			1,
+			"unpack lost fidelity: %d/%d entries, %d targets",
+			len(restored.Entries),
+			len(snapshot.Entries),
+			len(restored.Targets),
+		)
+		require.Equal(
+			t,
+			target.ID,
+			restored.Targets[0].ID,
+			"unpack lost fidelity: %d/%d entries, %d targets",
+			len(restored.Entries),
+			len(snapshot.Entries),
+			len(restored.Targets),
+		)
 	}
 	repacked, err := vault.Pack(restored)
 	if err != nil {
 		require.NoError(t, err, "repack restored snapshot: %v", err)
 	}
 	if !bytes.Equal(repacked.Payload, blob.Payload) {
-		require.Equal(t, blob.Payload, repacked.Payload, "repacking the restored snapshot produced different bytes, so unpack changed the content")
+		require.Equal(
+			t,
+			blob.Payload,
+			repacked.Payload,
+			"repacking the restored snapshot produced different bytes, so unpack changed the content",
+		)
 	}
 	var initContent string
 	for _, entry := range restored.Entries {
@@ -190,9 +225,17 @@ func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 		require.NotNil(t, baseEntry.File, "no regular file entry to use as an applied base")
 	}
 	base, err := store.PutAppliedBase(ctx, state.BaseRecord{
-		Identity:    baseEntry.Identity(),
-		Fingerprint: state.NewFingerprint("present", baseEntry.File.Kind, baseEntry.File.Mode, baseEntry.File.LinkTarget, "", "", baseEntry.File.Content),
-		RecordedAt:  2,
+		Identity: baseEntry.Identity(),
+		Fingerprint: state.NewFingerprint(
+			"present",
+			baseEntry.File.Kind,
+			baseEntry.File.Mode,
+			baseEntry.File.LinkTarget,
+			"",
+			"",
+			baseEntry.File.Content,
+		),
+		RecordedAt: 2,
 	}, baseEntry.File.Content)
 	if err != nil {
 		require.NoError(t, err, "put applied base: %v", err)
@@ -222,7 +265,13 @@ func TestPresetCaptureSnapshotStateRoundTrip(t *testing.T) {
 	}
 	if len(bases) != 1 || bases[0].Fingerprint.Digest != base.Fingerprint.Digest {
 		require.Len(t, bases, 1, "applied base did not survive restart: %+v", bases)
-		require.Equal(t, base.Fingerprint.Digest, bases[0].Fingerprint.Digest, "applied base did not survive restart: %+v", bases)
+		require.Equal(
+			t,
+			base.Fingerprint.Digest,
+			bases[0].Fingerprint.Digest,
+			"applied base did not survive restart: %+v",
+			bases,
+		)
 	}
 	basePayload, err := reopened.Payload(bases[0].PayloadRef)
 	if err != nil {

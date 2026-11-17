@@ -18,7 +18,11 @@ func LockFile(path string) (*Lock, error) {
 	if inspectErr != nil && !errors.Is(inspectErr, os.ErrNotExist) {
 		return nil, inspectErr
 	}
-	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	fd, err := syscall.Open(
+		path,
+		syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,
+		0o600,
+	)
 	if err != nil {
 		return nil, err
 	}

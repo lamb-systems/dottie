@@ -339,7 +339,10 @@ func DecodeAttestation(data []byte) (Attestation, error) {
 		count := int(cursor.u16())
 		value.RecoveryPoints = make([]RetentionRecoveryPoint, count)
 		for index := range value.RecoveryPoints {
-			value.RecoveryPoints[index] = RetentionRecoveryPoint{Epoch: cursor.u64(), SnapshotCID: cursor.bytes16(MaxParentBytes)}
+			value.RecoveryPoints[index] = RetentionRecoveryPoint{
+				Epoch:       cursor.u64(),
+				SnapshotCID: cursor.bytes16(MaxParentBytes),
+			}
 		}
 	}
 	value.ControlCID = cursor.bytes16(MaxParentBytes)
@@ -400,7 +403,8 @@ func encodePolicyPrefix(value Policy) ([]byte, error) {
 }
 
 func encodeControlPrefix(value Control) ([]byte, error) {
-	if len(value.HeadSnapshotCID) > MaxParentBytes || len(value.PrevControlCID) > MaxParentBytes || len(value.Revoked) > 65535 {
+	if len(value.HeadSnapshotCID) > MaxParentBytes || len(value.PrevControlCID) > MaxParentBytes ||
+		len(value.Revoked) > 65535 {
 		return nil, fmt.Errorf("%w: control fields", ErrLimit)
 	}
 	if err := validateSigner(value.Signer); err != nil {
@@ -505,7 +509,8 @@ func DecodeHead(data []byte) (Head, error) {
 }
 
 func encodeHeadPrefix(value Head) ([]byte, error) {
-	if len(value.SnapshotCID) > MaxParentBytes || len(value.BlobCID) > MaxParentBytes || len(value.PrevHeadCID) > MaxParentBytes {
+	if len(value.SnapshotCID) > MaxParentBytes || len(value.BlobCID) > MaxParentBytes ||
+		len(value.PrevHeadCID) > MaxParentBytes {
 		return nil, fmt.Errorf("%w: head CID", ErrLimit)
 	}
 	if err := validateSigner(value.Signer); err != nil {
@@ -603,7 +608,7 @@ func scanPolicy(data []byte) error {
 		return cursor.err
 	}
 	roleCount := int(cursor.u16())
-	for index := 0; index < roleCount; index++ {
+	for range roleCount {
 		if err := scanString16(&cursor, MaxDeviceIDBytes); err != nil {
 			return err
 		}
@@ -622,7 +627,7 @@ func scanPolicy(data []byte) error {
 	if recipientCount > MaxRecipients {
 		return fmt.Errorf("%w: recipients", ErrLimit)
 	}
-	for index := 0; index < recipientCount; index++ {
+	for range recipientCount {
 		if err := scanString16(&cursor, MaxDeviceIDBytes); err != nil {
 			return err
 		}
@@ -671,7 +676,7 @@ func scanControl(data []byte) error {
 	if cursor.err != nil {
 		return cursor.err
 	}
-	for index := 0; index < revokedCount; index++ {
+	for range revokedCount {
 		if err := scanString16(&cursor, MaxDeviceIDBytes); err != nil {
 			return err
 		}
@@ -794,7 +799,7 @@ func scanAttestationV2(data []byte) error {
 		return fmt.Errorf("%w: retained recovery point count mismatch", ErrFormat)
 	}
 	var previous RetentionRecoveryPoint
-	for index := 0; index < pointCount; index++ {
+	for index := range pointCount {
 		point := RetentionRecoveryPoint{Epoch: cursor.u64()}
 		if cursor.err != nil {
 			return cursor.err
@@ -836,7 +841,8 @@ func validateAttestationRecoveryPoints(points []RetentionRecoveryPoint) error {
 		return fmt.Errorf("%w: recovery points", ErrLimit)
 	}
 	for index, point := range points {
-		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 || len(point.SnapshotCID) > MaxParentBytes {
+		if point.Epoch > MaxAttestationInteger || len(point.SnapshotCID) == 0 ||
+			len(point.SnapshotCID) > MaxParentBytes {
 			return fmt.Errorf("%w: recovery point bounds", ErrLimit)
 		}
 		if index > 0 && !retentionRecoveryPointLess(points[index-1], point) {

@@ -7,10 +7,11 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
-	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
+	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 )
 
 func newGenesisPreflightRepository(t *testing.T) (*atprototest.MemoryPDS, RevisionReader) {
@@ -22,16 +23,30 @@ func newGenesisPreflightRepository(t *testing.T) (*atprototest.MemoryPDS, Revisi
 	method := pds.VerificationMethod()
 	return pds, RevisionReader{
 		Transport: pds, DIDDocumentID: testDID,
-		VerificationMethods: []VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 }
 
 func seedGenesisRecord(t *testing.T, pds *atprototest.MemoryPDS, collection, rkey string) {
 	t.Helper()
-	body := []byte(`{"repo":"` + testDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"genesis"}}]}`)
-	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+	body := []byte(
+		`{"repo":"` + testDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"genesis"}}]}`,
+	)
+	status, _, err := pds.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.applyWrites",
+		nil,
+		body,
+		"application/json",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 }
@@ -79,7 +94,14 @@ func TestGenesisPreflightRefusesRetiredV1Collections(t *testing.T) {
 
 type unavailableRevisionTransport struct{}
 
-func (unavailableRevisionTransport) Do(context.Context, string, string, url.Values, []byte, string) (int, []byte, error) {
+func (unavailableRevisionTransport) Do(
+	context.Context,
+	string,
+	string,
+	url.Values,
+	[]byte,
+	string,
+) (int, []byte, error) {
 	return 0, nil, errors.New("synthetic revision transport failure")
 }
 

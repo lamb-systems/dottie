@@ -27,11 +27,22 @@ type RecoveryReport struct {
 	Pruned  []string
 }
 
-func RecoverInterrupted(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, now func() time.Time) (RecoveryReport, error) {
+func RecoverInterrupted(
+	ctx context.Context,
+	store *state.Store,
+	filesystem files.ApplyFileSystem,
+	now func() time.Time,
+) (RecoveryReport, error) {
 	return RecoverInterruptedWithSettings(ctx, store, filesystem, nil, now)
 }
 
-func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, filesystem files.ApplyFileSystem, settings SettingsBackend, now func() time.Time) (RecoveryReport, error) {
+func RecoverInterruptedWithSettings(
+	ctx context.Context,
+	store *state.Store,
+	filesystem files.ApplyFileSystem,
+	settings SettingsBackend,
+	now func() time.Time,
+) (RecoveryReport, error) {
 	if store == nil {
 		return RecoveryReport{}, errors.New("recovery state store is required")
 	}
@@ -57,7 +68,13 @@ func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, fil
 			continue
 		}
 		if err := verifyJournalRoot(filesystem, entry); err != nil {
-			if transitionErr := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); transitionErr != nil {
+			if transitionErr := store.TransitionJournalEntry(
+				ctx,
+				entry.ID,
+				"pending",
+				"indeterminate",
+				state.JournalStageIndeterminate,
+			); transitionErr != nil {
 				return report, errors.Join(err, transitionErr)
 			}
 			result.Outcome = "indeterminate"
@@ -70,7 +87,13 @@ func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, fil
 			observeErr = verifyJournalRoot(filesystem, entry)
 		}
 		if observeErr != nil {
-			if transitionErr := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); transitionErr != nil {
+			if transitionErr := store.TransitionJournalEntry(
+				ctx,
+				entry.ID,
+				"pending",
+				"indeterminate",
+				state.JournalStageIndeterminate,
+			); transitionErr != nil {
 				return report, errors.Join(observeErr, transitionErr)
 			}
 			result.Outcome = "indeterminate"
@@ -80,19 +103,37 @@ func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, fil
 		}
 		switch {
 		case observationMatches(observed, entry.Postimage):
-			if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+			if err := store.TransitionJournalEntry(
+				ctx,
+				entry.ID,
+				"pending",
+				"indeterminate",
+				state.JournalStageIndeterminate,
+			); err != nil {
 				return report, err
 			}
 			result.Outcome = "indeterminate"
 			result.Reason = "destination matches the postimage but cannot be distinguished from an identical user edit"
 		case observationMatches(observed, entry.Preimage):
-			if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "failed", state.JournalStagePrecondition); err != nil {
+			if err := store.TransitionJournalEntry(
+				ctx,
+				entry.ID,
+				"pending",
+				"failed",
+				state.JournalStagePrecondition,
+			); err != nil {
 				return report, err
 			}
 			result.Outcome = "failed"
 			result.Reason = "destination still matches preimage"
 		default:
-			if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", "indeterminate", state.JournalStageIndeterminate); err != nil {
+			if err := store.TransitionJournalEntry(
+				ctx,
+				entry.ID,
+				"pending",
+				"indeterminate",
+				state.JournalStageIndeterminate,
+			); err != nil {
 				return report, err
 			}
 			result.Outcome = "indeterminate"
@@ -108,7 +149,13 @@ func RecoverInterruptedWithSettings(ctx context.Context, store *state.Store, fil
 	return report, nil
 }
 
-func recoverPendingSetting(ctx context.Context, store *state.Store, settings SettingsBackend, entry state.JournalEntry, result JournalResult) (JournalResult, error) {
+func recoverPendingSetting(
+	ctx context.Context,
+	store *state.Store,
+	settings SettingsBackend,
+	entry state.JournalEntry,
+	result JournalResult,
+) (JournalResult, error) {
 	resolve := func(outcome, reason, stage string) (JournalResult, error) {
 		if err := store.TransitionJournalEntry(ctx, entry.ID, "pending", outcome, stage); err != nil {
 			return result, err
@@ -126,27 +173,48 @@ func recoverPendingSetting(ctx context.Context, store *state.Store, settings Set
 	}
 	switch {
 	case settingValueMatchesFingerprint(observed, entry.Identity, entry.Postimage):
-		return resolve("indeterminate", "setting matches the postimage but cannot be distinguished from an identical user edit", state.JournalStageIndeterminate)
+		return resolve(
+			"indeterminate",
+			"setting matches the postimage but cannot be distinguished from an identical user edit",
+			state.JournalStageIndeterminate,
+		)
 	case settingValueMatchesFingerprint(observed, entry.Identity, entry.Preimage):
 		return resolve("failed", "setting still matches preimage", state.JournalStagePrecondition)
 	default:
-		return resolve("indeterminate", "setting matches neither preimage nor postimage", state.JournalStageIndeterminate)
+		return resolve(
+			"indeterminate",
+			"setting matches neither preimage nor postimage",
+			state.JournalStageIndeterminate,
+		)
 	}
 }
 
 func journalResult(entry state.JournalEntry) JournalResult {
-	return JournalResult{JournalID: entry.ID, Key: entry.Identity, TargetID: entry.Identity.TargetID, FilePath: entry.Identity.FilePath}
+	return JournalResult{
+		JournalID: entry.ID,
+		Key:       entry.Identity,
+		TargetID:  entry.Identity.TargetID,
+		FilePath:  entry.Identity.FilePath,
+	}
 }
 
 func verifyJournalRoot(filesystem files.ApplyFileSystem, entry state.JournalEntry) error {
-	if entry.RootPath == "" || !filepath.IsAbs(entry.RootPath) || filepath.Clean(entry.RootPath) != entry.RootPath || entry.RootDevice < 0 || entry.RootInode < 0 {
+	if entry.RootPath == "" || !filepath.IsAbs(entry.RootPath) || filepath.Clean(entry.RootPath) != entry.RootPath ||
+		entry.RootDevice < 0 ||
+		entry.RootInode < 0 {
 		return errors.New("journal destination root is missing or invalid")
 	}
 	if err := verifyRootIdentity(filesystem, entry.RootPath, entry.RootDevice, entry.RootInode); err != nil {
 		return err
 	}
-	destination := model.EntryKey{TargetID: entry.Identity.TargetID, Source: model.SourceFiles, FilePath: entry.DestinationPath}
-	if entry.DestinationPath == "" || filepath.IsAbs(entry.DestinationPath) || filepath.ToSlash(filepath.FromSlash(entry.DestinationPath)) != entry.DestinationPath || destination.Validate() != nil {
+	destination := model.EntryKey{
+		TargetID: entry.Identity.TargetID,
+		Source:   model.SourceFiles,
+		FilePath: entry.DestinationPath,
+	}
+	if entry.DestinationPath == "" || filepath.IsAbs(entry.DestinationPath) ||
+		filepath.ToSlash(filepath.FromSlash(entry.DestinationPath)) != entry.DestinationPath ||
+		destination.Validate() != nil {
 		return errors.New("journal destination path is invalid")
 	}
 	return nil
@@ -174,5 +242,7 @@ func observationMatches(observed files.ApplyObservation, fingerprint state.Finge
 	if fingerprint.State == string(model.FileDeleted) {
 		return !observed.Exists
 	}
-	return fingerprint.State == string(model.FilePresent) && fingerprint.Kind == model.FileRegular && observed.Exists && observed.Digest == fingerprint.Digest && observed.Mode == fingerprint.Mode
+	return fingerprint.State == string(model.FilePresent) && fingerprint.Kind == model.FileRegular && observed.Exists &&
+		observed.Digest == fingerprint.Digest &&
+		observed.Mode == fingerprint.Mode
 }

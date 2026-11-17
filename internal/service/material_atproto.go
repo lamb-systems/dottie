@@ -13,10 +13,11 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multihash"
+
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
-	"github.com/multiformats/go-multihash"
 )
 
 var _ MaterialTransport = (*ATProtoMaterialTransport)(nil)
@@ -28,7 +29,9 @@ var (
 	ErrATProtoMaterialPrepared    = errors.New("AT Protocol material holds no dispatchable write for that value")
 	ErrATProtoMaterialView        = errors.New("AT Protocol material refuses the repository view")
 	ErrATProtoMaterialProvider    = errors.New("AT Protocol material provider outcome was not a commit")
-	ErrMaterialSubmissionRejected = errors.New("the provider definitively refused the submission batch and committed no record")
+	ErrMaterialSubmissionRejected = errors.New(
+		"the provider definitively refused the submission batch and committed no record",
+	)
 )
 
 const (
@@ -131,7 +134,8 @@ func NewATProtoMaterialTransport(config ATProtoMaterialConfig) (*ATProtoMaterial
 }
 
 func (transport *ATProtoMaterialTransport) join() error {
-	if transport == nil || transport.prepared == nil || transport.transport == nil || transport.reader.Transport == nil {
+	if transport == nil || transport.prepared == nil || transport.transport == nil ||
+		transport.reader.Transport == nil {
 		return atprotoMaterialRefusal(ErrATProtoMaterialIdentity, "identity", nil)
 	}
 	if transport.did == "" || len(transport.did) > 2048 || transport.binding.AccountDID != transport.did {
@@ -153,7 +157,10 @@ func (transport *ATProtoMaterialTransport) join() error {
 	return nil
 }
 
-func (transport *ATProtoMaterialTransport) UploadPayload(ctx context.Context, payload []byte) (publication.BlobReference, error) {
+func (transport *ATProtoMaterialTransport) UploadPayload(
+	ctx context.Context,
+	payload []byte,
+) (publication.BlobReference, error) {
 	if err := transport.join(); err != nil {
 		return publication.BlobReference{}, err
 	}
@@ -167,15 +174,34 @@ func (transport *ATProtoMaterialTransport) UploadPayload(ctx context.Context, pa
 	if err != nil {
 		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialPayload, "payload_cid", err)
 	}
-	status, response, err := transport.transport.Do(ctx, "POST", atprotoMaterialUploadEndpoint, nil, payload, publication.BlobMIMEType)
+	status, response, err := transport.transport.Do(
+		ctx,
+		"POST",
+		atprotoMaterialUploadEndpoint,
+		nil,
+		payload,
+		publication.BlobMIMEType,
+	)
 	if err != nil {
 		if status >= 400 && status < 500 {
-			return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_rejected", atprotoMaterialUploadStatus(status, response))
+			return publication.BlobReference{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialProvider,
+				"upload_rejected",
+				atprotoMaterialUploadStatus(status, response),
+			)
 		}
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_ambiguous", atprotoMaterialAmbiguous(ctx))
+		return publication.BlobReference{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"upload_ambiguous",
+			atprotoMaterialAmbiguous(ctx),
+		)
 	}
 	if status < 200 || status >= 300 {
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_rejected", atprotoMaterialUploadStatus(status, response))
+		return publication.BlobReference{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"upload_rejected",
+			atprotoMaterialUploadStatus(status, response),
+		)
 	}
 	reference, err := atprotoMaterialUploadReference(response)
 	if err != nil {
@@ -183,21 +209,46 @@ func (transport *ATProtoMaterialTransport) UploadPayload(ctx context.Context, pa
 			errors.Join(atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed, err))
 	}
 	if reference.mimeType == "" {
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_mime:empty",
-			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference reports no media type")))
+		return publication.BlobReference{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"upload_reference_mime:empty",
+			errors.Join(
+				atproto.ErrCandidateMayBeDisclosed,
+				errors.New("provider blob reference reports no media type"),
+			),
+		)
 	}
 	if reference.size != uint64(len(payload)) {
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_size",
-			errors.Join(atproto.ErrCandidateMayBeDisclosed, fmt.Errorf("provider blob reference reports %d bytes for a %d byte payload", reference.size, len(payload))))
+		return publication.BlobReference{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"upload_reference_size",
+			errors.Join(
+				atproto.ErrCandidateMayBeDisclosed,
+				fmt.Errorf(
+					"provider blob reference reports %d bytes for a %d byte payload",
+					reference.size,
+					len(payload),
+				),
+			),
+		)
 	}
 	if !bytes.Equal(reference.cid, payloadCID) {
-		return publication.BlobReference{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "upload_reference_cid",
-			errors.Join(atproto.ErrCandidateMayBeDisclosed, errors.New("provider blob reference CID does not match the uploaded payload CID")))
+		return publication.BlobReference{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"upload_reference_cid",
+			errors.Join(
+				atproto.ErrCandidateMayBeDisclosed,
+				errors.New("provider blob reference CID does not match the uploaded payload CID"),
+			),
+		)
 	}
 	return publication.BlobReference{CID: reference.cid, Size: reference.size, MIMEType: reference.mimeType}, nil
 }
 
-func (transport *ATProtoMaterialTransport) PrepareWrites(ctx context.Context, batch MaterialWriteBatch) (MaterialPreparedWrites, error) {
+func (transport *ATProtoMaterialTransport) PrepareWrites(
+	ctx context.Context,
+	batch MaterialWriteBatch,
+) (MaterialPreparedWrites, error) {
 	if err := transport.join(); err != nil {
 		return MaterialPreparedWrites{}, err
 	}
@@ -215,7 +266,10 @@ func (transport *ATProtoMaterialTransport) PrepareWrites(ctx context.Context, ba
 	return MaterialPreparedWrites{Secret: secret, Dispatch: 1}, nil
 }
 
-func (transport *ATProtoMaterialTransport) SendWrites(ctx context.Context, prepared MaterialPreparedWrites) (MaterialWriteOutcome, error) {
+func (transport *ATProtoMaterialTransport) SendWrites(
+	ctx context.Context,
+	prepared MaterialPreparedWrites,
+) (MaterialWriteOutcome, error) {
 	if err := transport.join(); err != nil {
 		return MaterialWriteOutcome{}, err
 	}
@@ -229,15 +283,34 @@ func (transport *ATProtoMaterialTransport) SendWrites(ctx context.Context, prepa
 	if !retained {
 		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialPrepared, "consumed", nil)
 	}
-	status, response, err := transport.transport.Do(ctx, "POST", atprotoMaterialApplyEndpoint, nil, body, "application/json")
+	status, response, err := transport.transport.Do(
+		ctx,
+		"POST",
+		atprotoMaterialApplyEndpoint,
+		nil,
+		body,
+		"application/json",
+	)
 	if err != nil {
 		if status >= 400 && status < 500 {
-			return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, atprotoMaterialDispatchReason(status, response), atprotoMaterialApplyStatus(status, response))
+			return MaterialWriteOutcome{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialProvider,
+				atprotoMaterialDispatchReason(status, response),
+				atprotoMaterialApplyStatus(status, response),
+			)
 		}
-		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_ambiguous", atprotoMaterialAmbiguous(ctx))
+		return MaterialWriteOutcome{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			"dispatch_ambiguous",
+			atprotoMaterialAmbiguous(ctx),
+		)
 	}
 	if status < 200 || status >= 300 {
-		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, atprotoMaterialDispatchReason(status, response), atprotoMaterialApplyStatus(status, response))
+		return MaterialWriteOutcome{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialProvider,
+			atprotoMaterialDispatchReason(status, response),
+			atprotoMaterialApplyStatus(status, response),
+		)
 	}
 	if err := atprotoMaterialCommitReference(response); err != nil {
 		return MaterialWriteOutcome{}, atprotoMaterialRefusal(ErrATProtoMaterialProvider, "dispatch_ambiguous",
@@ -246,19 +319,33 @@ func (transport *ATProtoMaterialTransport) SendWrites(ctx context.Context, prepa
 	return MaterialWriteOutcome{Committed: true}, nil
 }
 
-func (transport *ATProtoMaterialTransport) ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error) {
+func (transport *ATProtoMaterialTransport) ReadView(
+	ctx context.Context,
+) (publicationstate.SuppliedRepositoryView, error) {
 	if err := transport.join(); err != nil {
 		return publicationstate.SuppliedRepositoryView{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "canceled", err)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"canceled",
+			err,
+		)
 	}
 	revision, err := transport.reader.Read(ctx, transport.did)
 	if err != nil {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "revision", err)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"revision",
+			err,
+		)
 	}
 	if revision.DID() != transport.did {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "identity", nil)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"identity",
+			nil,
+		)
 	}
 	return transport.view(revision)
 }
@@ -270,7 +357,11 @@ func atprotoMaterialHead(revision *atproto.Revision) (publication.HeadRecord, []
 	headPresent := false
 	for key := range membership {
 		if _, legacy := atprotoMaterialLegacyCollections[key.Collection]; legacy {
-			return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(ErrATProtoMaterialView, "legacy_profile", nil)
+			return publication.HeadRecord{}, nil, false, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"legacy_profile",
+				nil,
+			)
 		}
 		if key.Collection != publication.HeadNSID {
 			continue
@@ -297,7 +388,9 @@ func atprotoMaterialHead(revision *atproto.Revision) (publication.HeadRecord, []
 	return head, bytes.Clone(proven.Data), true, nil
 }
 
-func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (publicationstate.SuppliedRepositoryView, error) {
+func (transport *ATProtoMaterialTransport) view(
+	revision *atproto.Revision,
+) (publicationstate.SuppliedRepositoryView, error) {
 	membership := revision.Membership()
 	records := revision.Records()
 	head, headRaw, headPresent, err := atprotoMaterialHead(revision)
@@ -313,7 +406,11 @@ func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (pub
 			continue
 		}
 		if _, err := publication.ParseSequenceKey(key.RKey); err != nil {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "record_key", nil)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"record_key",
+				nil,
+			)
 		}
 		snapshotKeys = append(snapshotKeys, key.RKey)
 	}
@@ -328,7 +425,11 @@ func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (pub
 	}
 	if len(snapshotKeys) == 0 {
 		if headPresent {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "snapshot", nil)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"snapshot",
+				nil,
+			)
 		}
 		return view, nil
 	}
@@ -339,24 +440,51 @@ func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (pub
 	for index, key := range snapshotKeys {
 		proven, found := records[atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: key}]
 		if !found {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "snapshot", nil)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"snapshot",
+				nil,
+			)
 		}
-		if err := atprotoMaterialRoundTrip(proven, membership[atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: key}]); err != nil {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "round_trip", err)
+		if err := atprotoMaterialRoundTrip(
+			proven,
+			membership[atproto.RecordKey{Collection: publication.SnapshotNSID, RKey: key}],
+		); err != nil {
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"round_trip",
+				err,
+			)
 		}
 		record, err := publication.DecodeSnapshot(proven.Data)
 		if err != nil {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "snapshot", err)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"snapshot",
+				err,
+			)
 		}
 		if record.Vault != transport.binding.Vault {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "vault", nil)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"vault",
+				nil,
+			)
 		}
 		if record.PublicationSeq != uint64(index) {
-			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "chain", nil)
+			return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+				ErrATProtoMaterialView,
+				"chain",
+				nil,
+			)
 		}
 		if index > 0 {
 			if err := publication.VerifySuccessor(previous, proven.Data, key); err != nil {
-				return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "chain", err)
+				return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+					ErrATProtoMaterialView,
+					"chain",
+					err,
+				)
 			}
 		}
 		previous = proven.Data
@@ -365,13 +493,25 @@ func (transport *ATProtoMaterialTransport) view(revision *atproto.Revision) (pub
 	terminal := view.Snapshots[len(view.Snapshots)-1]
 	terminalCID, err := publication.RecordCID(terminal.Raw)
 	if err != nil {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head_join", err)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"head_join",
+			err,
+		)
 	}
 	if head.PublicationSeq != uint64(len(view.Snapshots)-1) || !bytes.Equal(head.SnapshotCID, terminalCID) {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head_join", nil)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"head_join",
+			nil,
+		)
 	}
 	if err := publication.VerifyHeadBinding(headRaw, terminal.Raw, terminal.Key); err != nil {
-		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(ErrATProtoMaterialView, "head_join", err)
+		return publicationstate.SuppliedRepositoryView{}, atprotoMaterialRefusal(
+			ErrATProtoMaterialView,
+			"head_join",
+			err,
+		)
 	}
 	view.Head = headRaw
 	return view, nil
@@ -397,7 +537,12 @@ func (transport *ATProtoMaterialTransport) encodeWriteBatch(batch MaterialWriteB
 	body, err := json.Marshal(atprotoMaterialApplyWrites{
 		Repo: transport.did, SwapCommit: swapCommit,
 		Writes: []atprotoMaterialWrite{
-			{Type: atprotoMaterialCreateAction, Collection: publication.SnapshotNSID, RKey: batch.SnapshotKey, Value: snapshotValue},
+			{
+				Type:       atprotoMaterialCreateAction,
+				Collection: publication.SnapshotNSID,
+				RKey:       batch.SnapshotKey,
+				Value:      snapshotValue,
+			},
 			{Type: headAction, Collection: publication.HeadNSID, RKey: materialHeadKey, Value: headValue},
 		},
 	})
@@ -408,7 +553,8 @@ func (transport *ATProtoMaterialTransport) encodeWriteBatch(batch MaterialWriteB
 }
 
 func (transport *ATProtoMaterialTransport) validateWriteBatch(batch MaterialWriteBatch) (string, error) {
-	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID || batch.HeadKey != materialHeadKey {
+	if batch.SnapshotCollection != publication.SnapshotNSID || batch.HeadCollection != publication.HeadNSID ||
+		batch.HeadKey != materialHeadKey {
 		return "", atprotoMaterialRefusal(ErrATProtoMaterialBatch, "collection", nil)
 	}
 	if !batch.SnapshotCreateOnly {
@@ -476,7 +622,9 @@ func (transport *ATProtoMaterialTransport) validateWriteBatch(batch MaterialWrit
 }
 
 func atprotoMaterialCommitDigest(context publicationstate.SuppliedContext) (string, error) {
-	if context.RepositoryRevision == "" || len(context.RepositoryRevision) > 1024 || len(context.RepositoryDigest) == 0 || len(context.RepositoryDigest) > 128 {
+	if context.RepositoryRevision == "" || len(context.RepositoryRevision) > 1024 ||
+		len(context.RepositoryDigest) == 0 ||
+		len(context.RepositoryDigest) > 128 {
 		return "", errors.New("expected repository context is incomplete")
 	}
 	encoded := string(context.RepositoryDigest)
@@ -492,7 +640,8 @@ func atprotoMaterialCommitDigest(context publicationstate.SuppliedContext) (stri
 
 func atprotoMaterialCommitCID(identifier cid.Cid) error {
 	prefix := identifier.Prefix()
-	if prefix.Version != 1 || prefix.Codec != cid.DagCBOR || prefix.MhType != multihash.SHA2_256 || prefix.MhLength != 32 {
+	if prefix.Version != 1 || prefix.Codec != cid.DagCBOR || prefix.MhType != multihash.SHA2_256 ||
+		prefix.MhLength != 32 {
 		return errors.New("repository commit CID has the wrong role")
 	}
 	return nil
@@ -525,10 +674,7 @@ func atprotoMaterialPayloadLimit(configured int64) uint64 {
 	if configured <= 0 {
 		return 0
 	}
-	limit := uint64(configured)
-	if limit > publication.MaxBlobBytes {
-		limit = publication.MaxBlobBytes
-	}
+	limit := min(uint64(configured), publication.MaxBlobBytes)
 	return limit
 }
 
@@ -580,7 +726,11 @@ func atprotoMaterialUploadReference(response []byte) (atprotoMaterialBlobReferen
 	if prefix.Version != 1 || prefix.Codec != cid.Raw || prefix.MhType != multihash.SHA2_256 || prefix.MhLength != 32 {
 		return atprotoMaterialBlobReference{}, errors.New("uploaded blob CID has the wrong role")
 	}
-	return atprotoMaterialBlobReference{cid: identifier.Bytes(), mimeType: parsed.Blob.MimeType, size: uint64(parsed.Blob.Size)}, nil
+	return atprotoMaterialBlobReference{
+		cid:      identifier.Bytes(),
+		mimeType: parsed.Blob.MimeType,
+		size:     uint64(parsed.Blob.Size),
+	}, nil
 }
 
 func atprotoMaterialCommitReference(response []byte) error {
@@ -655,7 +805,7 @@ func atprotoMaterialXRPCErrorName(body []byte) string {
 		return ""
 	}
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
 			return ""
 		}
 	}
@@ -675,7 +825,12 @@ func atprotoMaterialApplyRejection(status int, response []byte) error {
 	case status >= 400 && status < 500 && code == "RateLimitExceeded":
 		return errors.Join(atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed, statusError)
 	case status == 401 || status == 403:
-		return errors.Join(atproto.ErrPublicationQueued, atproto.ErrBatchRejected, atproto.ErrCandidateMayBeDisclosed, statusError)
+		return errors.Join(
+			atproto.ErrPublicationQueued,
+			atproto.ErrBatchRejected,
+			atproto.ErrCandidateMayBeDisclosed,
+			statusError,
+		)
 	case status >= 400 && status < 500 && (status == 413 || code == "RequestTooLarge" || code == "PayloadTooLarge"):
 		return errors.Join(atproto.ErrPublicationBatchTooLarge, atproto.ErrCandidateMayBeDisclosed, statusError)
 	case status >= 400 && status < 500:
@@ -696,7 +851,12 @@ func atprotoMaterialUploadStatus(status int, response []byte) error {
 	case status >= 400 && status < 500 && code == "RateLimitExceeded":
 		return errors.Join(atproto.ErrPublicationRateLimited, atproto.ErrCandidateMayBeDisclosed, statusError)
 	case status == 401 || status == 403:
-		return errors.Join(atproto.ErrPublicationQueued, atproto.ErrBatchRejected, atproto.ErrCandidateMayBeDisclosed, statusError)
+		return errors.Join(
+			atproto.ErrPublicationQueued,
+			atproto.ErrBatchRejected,
+			atproto.ErrCandidateMayBeDisclosed,
+			statusError,
+		)
 	case status >= 400 && status < 500 && (status == 413 || code == "BlobTooLarge"):
 		return errors.Join(atproto.ErrCandidateExceedsBlobUploadLimit, atproto.ErrCandidateMayBeDisclosed, statusError)
 	case status >= 400 && status < 500:
@@ -718,7 +878,14 @@ func atprotoMaterialSafeCode(body []byte) string {
 		return ""
 	}
 	switch response.Error {
-	case "InvalidSwap", "QuotaExceeded", "StorageQuotaExceeded", "RateLimitExceeded", "BlobTooLarge", "RequestTooLarge", "PayloadTooLarge", "AuthRequired":
+	case "InvalidSwap",
+		"QuotaExceeded",
+		"StorageQuotaExceeded",
+		"RateLimitExceeded",
+		"BlobTooLarge",
+		"RequestTooLarge",
+		"PayloadTooLarge",
+		"AuthRequired":
 		return response.Error
 	default:
 		return ""

@@ -18,7 +18,16 @@ func TestLogicalBudgetAccountingExactBoundaries(t *testing.T) {
 	observation := f.observation(1)
 	validated, err := validateObservation(observation, f.binding, DefaultLimits())
 	require.NoError(t, err)
-	cacheMetadata, err := canonicalJSON(cacheObservationWire{Version: 1, ObservationDigest: bytes.Clone(validated.observationDigest[:]), SuppliedSetDigest: bytes.Clone(validated.setDigest[:]), Context: contextToWire(validated.context), Head: bytes.Clone(validated.head), Candidate: referenceToWire(validated.candidate.ref)})
+	cacheMetadata, err := canonicalJSON(
+		cacheObservationWire{
+			Version:           1,
+			ObservationDigest: bytes.Clone(validated.observationDigest[:]),
+			SuppliedSetDigest: bytes.Clone(validated.setDigest[:]),
+			Context:           contextToWire(validated.context),
+			Head:              bytes.Clone(validated.head),
+			Candidate:         referenceToWire(validated.candidate.ref),
+		},
+	)
 	require.NoError(t, err)
 	cacheBytes := recordLogicalBytes(validated.candidate) + uint64(len(cacheMetadata)+32+8)
 	limits := DefaultLimits()
@@ -32,7 +41,11 @@ func TestLogicalBudgetAccountingExactBoundaries(t *testing.T) {
 	_, err = store.RecordObservation(ctx, observation)
 	require.NoError(t, err)
 	var actualCacheBytes int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT (SELECT COALESCE(SUM(logical_bytes),0) FROM cache_records)+(SELECT COALESCE(SUM(logical_bytes),0) FROM cache_observations)").Scan(&actualCacheBytes))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT (SELECT COALESCE(SUM(logical_bytes),0) FROM cache_records)+(SELECT COALESCE(SUM(logical_bytes),0) FROM cache_observations)").
+			Scan(&actualCacheBytes),
+	)
 	assert.Equal(t, int64(cacheBytes), actualCacheBytes)
 	require.NoError(t, store.Close())
 
@@ -49,9 +62,22 @@ func TestLogicalBudgetAccountingExactBoundaries(t *testing.T) {
 	var dbid [32]byte
 	dbid[0] = 1
 	state := stateSnapshot{}
-	trace := resolvedTrace{refs: []RecordReference{validated.candidate.ref}, records: []validatedRecord{validated.candidate}, stop: "first_use"}
+	trace := resolvedTrace{
+		refs:    []RecordReference{validated.candidate.ref},
+		records: []validatedRecord{validated.candidate},
+		stop:    "first_use",
+	}
 	next := buildFloor(dbid, f.binding, validated, state, trace, ModeFirstUse)
-	body, err := makeEventBody(ModeFirstUse, "", nil, next, trace.refs, trace.stop, validated.observationDigest, setDigest)
+	body, err := makeEventBody(
+		ModeFirstUse,
+		"",
+		nil,
+		next,
+		trace.refs,
+		trace.stop,
+		validated.observationDigest,
+		setDigest,
+	)
 	require.NoError(t, err)
 	eventDigest := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
 	next.AcceptedEventDigest = eventDigest
@@ -72,7 +98,11 @@ func TestLogicalBudgetAccountingExactBoundaries(t *testing.T) {
 	_, err = store.Accept(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
 	require.NoError(t, err)
 	var actualAcceptedBytes int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT (SELECT COALESCE(SUM(logical_bytes),0) FROM accepted_records)+(SELECT COALESCE(SUM(logical_bytes),0) FROM accepted_events)").Scan(&actualAcceptedBytes))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT (SELECT COALESCE(SUM(logical_bytes),0) FROM accepted_records)+(SELECT COALESCE(SUM(logical_bytes),0) FROM accepted_events)").
+			Scan(&actualAcceptedBytes),
+	)
 	assert.Equal(t, int64(acceptedBytes), actualAcceptedBytes)
 	require.NoError(t, store.Close())
 

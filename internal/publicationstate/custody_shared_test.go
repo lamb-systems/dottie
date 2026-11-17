@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestSharedPayloadCapacityPreflightUsesTransactionWithoutDirectory(t *testing.T) {
@@ -38,11 +39,11 @@ func TestSharedPayloadCapacityPreflightUsesTransactionWithoutDirectory(t *testin
 	require.Empty(t, before["active_floor"])
 	name := payloadBasename([]byte("small capacity probe"))
 	err = store.checkPayloadCapacityWithQueryer(ctx, tx, name, 1, false)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, -1, store.payloadFD)
 	assertSharedCustodyPayloadDirectoryAbsent(t, directory)
 	after, snapshotErr := sharedCustodyLogicalRows(ctx, tx)
-	assert.NoError(t, snapshotErr)
+	require.NoError(t, snapshotErr)
 	if snapshotErr == nil {
 		assert.True(t, reflect.DeepEqual(before, after))
 	}
@@ -79,21 +80,29 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.Empty(t, before["attempt_payload_refs"])
 	require.Empty(t, before["retained_publications"])
 	freshName, freshBytes, persistErr := store.persistPayload(ctx, tx, candidate.Payload, blob, name)
-	assert.NoError(t, persistErr)
+	require.NoError(t, persistErr)
 	assert.Equal(t, name, freshName)
 	assert.True(t, bytes.Equal(candidate.Payload, freshBytes))
 	assert.GreaterOrEqual(t, store.payloadFD, 0)
-	freshDevice, freshInode := assertSharedCustodyPayloadFile(t, filepath.Join(directory, payloadDirectoryName, name), candidate.Payload)
+	freshDevice, freshInode := assertSharedCustodyPayloadFile(
+		t,
+		filepath.Join(directory, payloadDirectoryName, name),
+		candidate.Payload,
+	)
 
 	orphanName, orphanBytes, orphanErr := store.persistPayload(ctx, tx, candidate.Payload, blob, name)
-	assert.NoError(t, orphanErr)
+	require.NoError(t, orphanErr)
 	assert.Equal(t, name, orphanName)
 	assert.Nil(t, orphanBytes)
-	orphanDevice, orphanInode := assertSharedCustodyPayloadFile(t, filepath.Join(directory, payloadDirectoryName, name), candidate.Payload)
+	orphanDevice, orphanInode := assertSharedCustodyPayloadFile(
+		t,
+		filepath.Join(directory, payloadDirectoryName, name),
+		candidate.Payload,
+	)
 	assert.Equal(t, freshDevice, orphanDevice)
 	assert.Equal(t, freshInode, orphanInode)
 	after, snapshotErr := sharedCustodyLogicalRows(ctx, tx)
-	assert.NoError(t, snapshotErr)
+	require.NoError(t, snapshotErr)
 	if snapshotErr == nil {
 		assert.True(t, reflect.DeepEqual(before, after))
 	}
@@ -118,16 +127,20 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.Len(t, catalogBefore["attempt_payload_refs"], 1)
 	require.GreaterOrEqual(t, store.payloadFD, 0)
 	capacityErr := store.checkPayloadCapacityWithQueryer(ctx, catalogTx, name, blob.Size, false)
-	assert.NoError(t, capacityErr)
+	require.NoError(t, capacityErr)
 	catalogName, catalogBytes, catalogErr := store.persistPayload(ctx, catalogTx, candidate.Payload, blob, name)
-	assert.NoError(t, catalogErr)
+	require.NoError(t, catalogErr)
 	assert.Equal(t, name, catalogName)
 	assert.Nil(t, catalogBytes)
-	catalogDevice, catalogInode := assertSharedCustodyPayloadFile(t, filepath.Join(directory, payloadDirectoryName, name), candidate.Payload)
+	catalogDevice, catalogInode := assertSharedCustodyPayloadFile(
+		t,
+		filepath.Join(directory, payloadDirectoryName, name),
+		candidate.Payload,
+	)
 	assert.Equal(t, freshDevice, catalogDevice)
 	assert.Equal(t, freshInode, catalogInode)
 	catalogAfter, catalogSnapshotErr := sharedCustodyLogicalRows(ctx, catalogTx)
-	assert.NoError(t, catalogSnapshotErr)
+	require.NoError(t, catalogSnapshotErr)
 	if catalogSnapshotErr == nil {
 		assert.True(t, reflect.DeepEqual(catalogBefore, catalogAfter))
 	}
@@ -214,12 +227,12 @@ func TestSharedPayloadPersistenceRejectsInvalidInputBeforeFilesystem(t *testing.
 			assertNoSharedCustodyPublicPosition(t, ctx, store)
 
 			gotName, gotBytes, persistErr := store.persistPayload(ctx, store.conn, payload, blob, name)
-			assert.Equal(t, "", gotName)
+			assert.Empty(t, gotName)
 			assert.Nil(t, gotBytes)
 			assert.Equal(t, -1, store.payloadFD)
 			assertSharedCustodyPayloadDirectoryAbsent(t, directory)
 			after, snapshotErr := sharedCustodyLogicalRows(ctx, store.conn)
-			assert.NoError(t, snapshotErr)
+			require.NoError(t, snapshotErr)
 			if snapshotErr == nil {
 				assert.True(t, reflect.DeepEqual(before, after))
 			}
@@ -346,11 +359,11 @@ func assertSharedCustodyPayloadFile(t *testing.T, path string, expected []byte) 
 func assertNoSharedCustodyPublicPosition(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 	floor, present, err := store.Load(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, Floor{}, floor)
 	assert.False(t, present)
 	history, err := store.History(ctx, 0, 10)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, history.Events)
 	assert.False(t, history.HasMore)
 }

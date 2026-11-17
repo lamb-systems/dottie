@@ -71,7 +71,7 @@ func validatePresentFileTrees(entries []Entry) error {
 				continue
 			}
 			ancestor := "."
-			for _, segment := range strings.Split(path, "/") {
+			for segment := range strings.SplitSeq(path, "/") {
 				if kind, exists := paths[ancestor]; exists && kind != FileDirectory {
 					return errors.New("present file has a non-directory ancestor")
 				}
@@ -116,7 +116,8 @@ func (o Observation) Validate() error {
 		if o.Entry.Identity() != o.Identity {
 			return errors.New("observation entry identity does not match")
 		}
-		if (o.Entry.File != nil && o.Entry.File.State != FilePresent) || (o.Entry.Setting != nil && o.Entry.Setting.State != SettingPresent && o.Entry.Setting.State != SettingReset) {
+		if (o.Entry.File != nil && o.Entry.File.State != FilePresent) ||
+			(o.Entry.Setting != nil && o.Entry.Setting.State != SettingPresent && o.Entry.Setting.State != SettingReset) {
 			return errors.New("present observation requires a present file or setting entry")
 		}
 	case ObservationMissing, ObservationUnknown, ObservationUntracked:

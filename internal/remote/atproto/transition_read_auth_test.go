@@ -7,14 +7,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/state"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
-func transitionReadIO(fixture *readFixture, store PublicationObservationStore, previousControls [][]byte) ATProtoTransitionIO {
-	return ATProtoTransitionIO{
+func transitionReadIO(
+	fixture *readFixture,
+	store PublicationObservationStore,
+	previousControls [][]byte,
+) TransitionIO {
+	return TransitionIO{
 		Reader: RevisionReader{
 			Transport: fixture.transport, DIDDocumentID: fixture.request.DIDDocumentID,
 			VerificationMethods: fixture.request.VerificationMethods,
@@ -56,13 +61,21 @@ func TestReadCurrentAuthenticatesControlPredecessorBeforeReturningPredecessor(t 
 
 	positive := newReadFixture(t)
 	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
-	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{bytes.Clone(positive.request.PreviousControl)})
+	positiveAdapter := transitionReadIO(
+		&positive,
+		positiveTracker,
+		[][]byte{bytes.Clone(positive.request.PreviousControl)},
+	)
 	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
 	require.NoError(t, err, "a genuine current state with its predecessor control reads")
 	assert.NotEmpty(t, genuine.Control)
 	assert.Equal(t, 1, positiveTracker.calls)
 	assert.Equal(t, 1, positiveTracker.firstSeenCalls)
-	firstSeenAt, found, err := positive.observationStore.VaultEpochFirstSeen(context.Background(), positive.request.Vault, genuine.EpochSeq)
+	firstSeenAt, found, err := positive.observationStore.VaultEpochFirstSeen(
+		context.Background(),
+		positive.request.Vault,
+		genuine.EpochSeq,
+	)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, int64(1_700_000_123), firstSeenAt)
@@ -70,8 +83,17 @@ func TestReadCurrentAuthenticatesControlPredecessorBeforeReturningPredecessor(t 
 	positiveAdapter.Clock = func() time.Time { return time.Unix(1_701_000_123, 0) }
 	_, _, err = positiveAdapter.ReadCurrent(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 1, positiveTracker.firstSeenCalls, "a repeated same-epoch read does not attempt to restamp first-seen time")
-	firstSeenAt, found, err = positive.observationStore.VaultEpochFirstSeen(context.Background(), positive.request.Vault, genuine.EpochSeq)
+	assert.Equal(
+		t,
+		1,
+		positiveTracker.firstSeenCalls,
+		"a repeated same-epoch read does not attempt to restamp first-seen time",
+	)
+	firstSeenAt, found, err = positive.observationStore.VaultEpochFirstSeen(
+		context.Background(),
+		positive.request.Vault,
+		genuine.EpochSeq,
+	)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, int64(1_700_000_123), firstSeenAt, "a repeated authenticated read cannot reset the epoch clock")
@@ -86,12 +108,21 @@ func TestReadCurrentRequiresPreviousControlEvidence(t *testing.T) {
 	assert.Equal(t, vault.Predecessor{}, predecessor)
 	assertNoTransitionReadPersistence(t, tracker)
 
-	publicationIO := ATProtoPublicationIO{
-		Reader: adapter.Reader, Transport: fixture.transport, DID: fixture.request.DID, TrustAnchor: fixture.request.TrustAnchor,
-		PreviousPolicies: adapter.PreviousPolicies, ObservationStore: tracker,
+	publicationIO := PublicationIO{
+		Reader:           adapter.Reader,
+		Transport:        fixture.transport,
+		DID:              fixture.request.DID,
+		TrustAnchor:      fixture.request.TrustAnchor,
+		PreviousPolicies: adapter.PreviousPolicies,
+		ObservationStore: tracker,
 	}
 	_, predecessor, err = publicationIO.ReadCurrent(context.Background())
-	require.ErrorIs(t, err, ErrReadControlRequired, "the shared publication adapter refuses non-genesis state without PreviousControls")
+	require.ErrorIs(
+		t,
+		err,
+		ErrReadControlRequired,
+		"the shared publication adapter refuses non-genesis state without PreviousControls",
+	)
 	assert.Equal(t, vault.Predecessor{}, predecessor)
 	assertNoTransitionReadPersistence(t, tracker)
 }
@@ -172,7 +203,11 @@ func TestReadCurrentAuthenticatesEnvelopeParentAgainstHeadPredecessor(t *testing
 
 	positive := newBuilderReadHistory(t).fixture
 	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
-	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{bytes.Clone(positive.request.PreviousControl)})
+	positiveAdapter := transitionReadIO(
+		&positive,
+		positiveTracker,
+		[][]byte{bytes.Clone(positive.request.PreviousControl)},
+	)
 	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
 	require.NoError(t, err, "the PrepareTransition/PreparePublication-built history is accepted")
 	genuineHead, err := vault.DecodeHead(genuine.Head)
@@ -190,7 +225,12 @@ func TestReadCurrentAuthenticatesHeadAndEnvelopeSignerJoin(t *testing.T) {
 	headBytes := signReadHead(t, head, fixtureSigningKey(11))
 	signedHead, err := vault.DecodeHead(headBytes)
 	require.NoError(t, err)
-	putReadRecord(t, fixture.records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(signedHead))
+	putReadRecord(
+		t,
+		fixture.records,
+		RecordKey{Collection: VaultHeadNSID, RKey: "self"},
+		headRecordFromObject(signedHead),
+	)
 	replaceReadCAR(t, &fixture, fixture.records)
 
 	tracker := &transitionObservationTracker{store: fixture.observationStore}
@@ -202,7 +242,11 @@ func TestReadCurrentAuthenticatesHeadAndEnvelopeSignerJoin(t *testing.T) {
 
 	positive := newBuilderReadHistory(t).fixture
 	positiveTracker := &transitionObservationTracker{store: positive.observationStore}
-	positiveAdapter := transitionReadIO(&positive, positiveTracker, [][]byte{bytes.Clone(positive.request.PreviousControl)})
+	positiveAdapter := transitionReadIO(
+		&positive,
+		positiveTracker,
+		[][]byte{bytes.Clone(positive.request.PreviousControl)},
+	)
 	_, genuine, err := positiveAdapter.ReadCurrent(context.Background())
 	require.NoError(t, err, "the PreparePublication-built head and envelope signer pair reads")
 	genuineHead, err := vault.DecodeHead(genuine.Head)
@@ -216,7 +260,7 @@ func TestReadCurrentAuthenticatesHeadAndEnvelopeSignerJoin(t *testing.T) {
 }
 
 func TestReadCurrentAuthenticatesControlPredecessorEpoch(t *testing.T) {
-	fixture, genuinePreviousControl, wrongPreviousControl := readCurrentEpochTwoBuilderFixture(t)
+	fixture, _, wrongPreviousControl := readCurrentEpochTwoBuilderFixture(t)
 	currentControlRecord, err := DecodeRecord(fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}])
 	require.NoError(t, err)
 	currentControl := controlFromRecord(currentControlRecord.(ControlRecord))

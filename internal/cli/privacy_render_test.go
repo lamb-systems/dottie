@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
@@ -32,10 +33,29 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 	sessionToken := "eyJ.synthetic.session-token-canary.credential"
 	forbiddenRepresentations := []string{fileContent, settingValue, homeRoot, configRoot, cacheRoot, dataRoot, tempRoot}
 	for _, raw := range [][]byte{signingPrivateBytes, recipientPrivateBytes, []byte(sessionToken), []byte(fileContent), []byte(settingValue)} {
-		forbiddenRepresentations = append(forbiddenRepresentations, string(raw), hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw), base64.URLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw))
+		forbiddenRepresentations = append(
+			forbiddenRepresentations,
+			string(raw),
+			hex.EncodeToString(raw),
+			base64.StdEncoding.EncodeToString(raw),
+			base64.RawStdEncoding.EncodeToString(raw),
+			base64.URLEncoding.EncodeToString(raw),
+			base64.RawURLEncoding.EncodeToString(raw),
+		)
 	}
 
-	manualStatus := service.Status{Targets: []service.TargetStatus{{ID: targetID, Source: string(model.SourceFiles), Mode: config.Review, State: service.StatusApplied, Reason: "journal-applied", Items: 1}}}
+	manualStatus := service.Status{
+		Targets: []service.TargetStatus{
+			{
+				ID:     targetID,
+				Source: string(model.SourceFiles),
+				Mode:   config.Review,
+				State:  service.StatusApplied,
+				Reason: "journal-applied",
+				Items:  1,
+			},
+		},
+	}
 	bootstrap := service.BootstrapResult{
 		Outcome:   service.BootstrapLocalIdentityRecorded,
 		Bootstrap: vault.BootstrapResult{Vault: [32]byte{0x01}, Anchor: [32]byte{0x02}},
@@ -48,17 +68,48 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 		requireItemStatus   []string
 		checkAbsoluteTokens bool
 	}{
-		{name: "push", output: renderPush(service.StatusCommitted), requireItemStatus: []string{"committed"}, checkAbsoluteTokens: true},
-		{name: "pull-apply-report", output: renderPullApplyReport(service.PublicationApplyReport{Applied: 1, Unchanged: 2, BytesWritten: 3}), checkAbsoluteTokens: true},
-		{name: "position-inspection", output: renderInspection(publicationstate.Inspection{Present: true, Floor: publicationstate.Floor{Revision: 1, Generation: 2, Sequence: 3}}), checkAbsoluteTokens: true},
-		{name: "manual-status", output: renderManualStatus(manualStatus), requireTargetID: true, checkAbsoluteTokens: true},
+		{
+			name:                "push",
+			output:              renderPush(service.StatusCommitted),
+			requireItemStatus:   []string{"committed"},
+			checkAbsoluteTokens: true,
+		},
+		{
+			name: "pull-apply-report",
+			output: renderPullApplyReport(
+				service.PublicationApplyReport{Applied: 1, Unchanged: 2, BytesWritten: 3},
+			),
+			checkAbsoluteTokens: true,
+		},
+		{
+			name: "position-inspection",
+			output: renderInspection(
+				publicationstate.Inspection{
+					Present: true,
+					Floor:   publicationstate.Floor{Revision: 1, Generation: 2, Sequence: 3},
+				},
+			),
+			checkAbsoluteTokens: true,
+		},
+		{
+			name:                "manual-status",
+			output:              renderManualStatus(manualStatus),
+			requireTargetID:     true,
+			checkAbsoluteTokens: true,
+		},
 		{name: "bootstrap", output: renderBootstrapOutcome(bootstrap), checkAbsoluteTokens: true},
 	}
 
 	for _, surface := range table {
 		t.Run(surface.name, func(t *testing.T) {
 			for _, forbidden := range forbiddenRepresentations {
-				assert.NotContains(t, surface.output, forbidden, "surface %s exposed a confidential value, credential, or forbidden root", surface.name)
+				assert.NotContains(
+					t,
+					surface.output,
+					forbidden,
+					"surface %s exposed a confidential value, credential, or forbidden root",
+					surface.name,
+				)
 			}
 			if surface.requireTargetID {
 				assert.Contains(t, surface.output, targetID)
@@ -66,11 +117,23 @@ func TestPrivacyRenderersRespectPerSurfaceDisclosure(t *testing.T) {
 			for _, status := range surface.requireItemStatus {
 				assert.Contains(t, surface.output, status)
 			}
-			assert.NotContains(t, surface.output, relativeFilePath, "renderer %s exposed a relative entry path", surface.name)
+			assert.NotContains(
+				t,
+				surface.output,
+				relativeFilePath,
+				"renderer %s exposed a relative entry path",
+				surface.name,
+			)
 			assert.NotContains(t, surface.output, settingLocator, "renderer %s exposed a setting locator", surface.name)
 			if surface.checkAbsoluteTokens {
-				for _, token := range strings.Fields(surface.output) {
-					assert.False(t, strings.HasPrefix(token, "/"), "surface %s emitted an absolute token %q", surface.name, token)
+				for token := range strings.FieldsSeq(surface.output) {
+					assert.False(
+						t,
+						strings.HasPrefix(token, "/"),
+						"surface %s emitted an absolute token %q",
+						surface.name,
+						token,
+					)
 				}
 			}
 		})

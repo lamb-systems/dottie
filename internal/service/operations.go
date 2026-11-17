@@ -25,11 +25,17 @@ func (port FileConfigPort) Snapshot(context.Context) (config.Snapshot, error) {
 	return config.OpenSnapshot(port.Paths)
 }
 
-func (port FileConfigPort) Update(_ context.Context, expected config.Token, mutate func(config.Config) (config.Config, error)) (config.Snapshot, error) {
+func (port FileConfigPort) Update(
+	_ context.Context,
+	expected config.Token,
+	mutate func(config.Config) (config.Config, error),
+) (config.Snapshot, error) {
 	return config.Update(port.Paths, expected, mutate)
 }
 
-func (port FileConfigPort) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
+func (port FileConfigPort) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, ConfigGuard, error) {
 	snapshot, guard, err := config.AcquireReader(port.Paths)
 	if err != nil {
 		return publicationstate.LocalReviewContext{}, config.Token{}, nil, err
@@ -41,7 +47,10 @@ func (port FileConfigPort) Acquire(context.Context) (publicationstate.LocalRevie
 	return review, snapshot.Token, guard, nil
 }
 
-func (coordinator *Coordinator) UpdateConfig(ctx context.Context, update func(config.Config) (config.Config, error)) (config.Config, error) {
+func (coordinator *Coordinator) UpdateConfig(
+	ctx context.Context,
+	update func(config.Config) (config.Config, error),
+) (config.Config, error) {
 	if update == nil || coordinator.deps.Config == nil {
 		return config.Config{}, errors.New("coordinator config update is unavailable")
 	}
@@ -91,9 +100,17 @@ func (coordinator *Coordinator) recordBaseLocked(ctx context.Context, targetID s
 			file := entry.File
 			payload = append([]byte(nil), file.Content...)
 			record = state.BaseRecord{
-				Identity:    entry.Identity(),
-				Fingerprint: state.NewFingerprint(string(file.State), file.Kind, file.Mode, file.LinkTarget, "", "", payload),
-				RecordedAt:  now.Unix(),
+				Identity: entry.Identity(),
+				Fingerprint: state.NewFingerprint(
+					string(file.State),
+					file.Kind,
+					file.Mode,
+					file.LinkTarget,
+					"",
+					"",
+					payload,
+				),
+				RecordedAt: now.Unix(),
 			}
 		} else {
 			setting := entry.Setting
@@ -128,7 +145,13 @@ func (coordinator *Coordinator) Recover(ctx context.Context) (syncengine.Recover
 	if closer, ok := settings.(interface{ Close() error }); ok {
 		defer closer.Close()
 	}
-	return syncengine.RecoverInterruptedWithSettings(ctx, coordinator.deps.State, filesystem, settings, coordinator.deps.Clock)
+	return syncengine.RecoverInterruptedWithSettings(
+		ctx,
+		coordinator.deps.State,
+		filesystem,
+		settings,
+		coordinator.deps.Clock,
+	)
 }
 
 func (coordinator *Coordinator) settingsBackend() syncengine.SettingsBackend {

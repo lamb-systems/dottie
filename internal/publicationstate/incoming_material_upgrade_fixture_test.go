@@ -9,17 +9,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 const (
@@ -37,14 +39,30 @@ var incomingMaterialUpgradeFixtureSpecs = []incomingMaterialUpgradeFixtureSpec{
 	{"manifest.json", 28705, "8a2691b039967fc2d980413bc7204b883199ac7853a5cfbb414bb6dd4a665103"},
 	{"mixed-inputs.json", 195211, "b71f799e7f61408aa189e9a230fa9e4809b10c1f692dd67d702e540cfcfc32a6"},
 	{"mixed-rows.json", 103211, "ed33147af1d8fec48d17e4006bb668fbd74d92698a605e974f21bf78e6367431"},
-	{"mixed/payloads/30f2aa3a007e288f7be544ec498a8af23c00da7b97222e550e3d18ee7cd105be.payload", 3072, "30f2aa3a007e288f7be544ec498a8af23c00da7b97222e550e3d18ee7cd105be"},
-	{"mixed/payloads/b18a43634e93d947bc5ac352d6332aca3036f921e21087a5ee1a4acdab9b72bb.payload", 3072, "b18a43634e93d947bc5ac352d6332aca3036f921e21087a5ee1a4acdab9b72bb"},
-	{"mixed/payloads/dfaa8ec95e4c6ac302aa5baa54ceadb96a5610a34b4d121d8ddc0fc976457fdc.payload", 3072, "dfaa8ec95e4c6ac302aa5baa54ceadb96a5610a34b4d121d8ddc0fc976457fdc"},
+	{
+		"mixed/payloads/30f2aa3a007e288f7be544ec498a8af23c00da7b97222e550e3d18ee7cd105be.payload",
+		3072,
+		"30f2aa3a007e288f7be544ec498a8af23c00da7b97222e550e3d18ee7cd105be",
+	},
+	{
+		"mixed/payloads/b18a43634e93d947bc5ac352d6332aca3036f921e21087a5ee1a4acdab9b72bb.payload",
+		3072,
+		"b18a43634e93d947bc5ac352d6332aca3036f921e21087a5ee1a4acdab9b72bb",
+	},
+	{
+		"mixed/payloads/dfaa8ec95e4c6ac302aa5baa54ceadb96a5610a34b4d121d8ddc0fc976457fdc.payload",
+		3072,
+		"dfaa8ec95e4c6ac302aa5baa54ceadb96a5610a34b4d121d8ddc0fc976457fdc",
+	},
 	{"mixed/publication.db", 200704, "e956014827b1ec6bcb3b43ed4f425a29383ad0f14f20352de05c5a4a054a0939"},
 	{"mixed/publication.db.lock", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 	{"pending-genesis-inputs.json", 8739, "0fcacb20644ac01b8232c6235dd8dc5c576ac5c3ca773e56b4edc120d575d4ed"},
 	{"pending-genesis-rows.json", 24589, "5061a24e521f27923557ada45ae7654919ee42c52ce6861581823c0f372dd857"},
-	{"pending-genesis/payloads/f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea.payload", 3072, "f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea"},
+	{
+		"pending-genesis/payloads/f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea.payload",
+		3072,
+		"f947699472cc0bb633cf07c9123d6e0c768d498a1853cf83afd43428803f3eea",
+	},
 	{"pending-genesis/publication.db", 139264, "d2e446ca0e728ac4af1835c2d4e65c4809fb17f19ef9729f0cc305b87b45f108"},
 	{"pending-genesis/publication.db.lock", 0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 }
@@ -320,7 +338,12 @@ func incomingMaterialUpgradeFixturePositionsV1(t *testing.T) {
 	require.Equal(t, uint64Bytes(1), beforeMetadata["generation"])
 	var databaseID [32]byte
 	copy(databaseID[:], expectedDatabaseID)
-	floorValue := incomingMaterialUpgradeFixtureScanValue(t, ctx, conn, "SELECT floor FROM active_floor WHERE singleton=1")
+	floorValue := incomingMaterialUpgradeFixtureScanValue(
+		t,
+		ctx,
+		conn,
+		"SELECT floor FROM active_floor WHERE singleton=1",
+	)
 	floorRaw, ok := floorValue.([]byte)
 	require.True(t, ok)
 	floor, err := decodeFloor(floorRaw)
@@ -383,10 +406,19 @@ func incomingMaterialUpgradeFixturePositionsV1(t *testing.T) {
 	require.Equal(t, 14, destinationCounts.autoIndexes)
 	require.Len(t, destinationObjects, 32)
 	for _, statement := range attemptSchemaStatements {
-		require.Equal(t, statement, destinationObjects[statementTableName(statement)].sql, statementTableName(statement))
+		require.Equal(
+			t,
+			statement,
+			destinationObjects[statementTableName(statement)].sql,
+			statementTableName(statement),
+		)
 	}
 	require.Equal(t, incomingMaterialSchemaStatement, destinationObjects["accepted_material_refs"].sql)
-	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(t, sourceObjects, destinationObjects)
+	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(
+		t,
+		sourceObjects,
+		destinationObjects,
+	)
 	expectedAdditions := append([]string{"accepted_material_refs"}, incomingMaterialUpgradeFixtureAttemptTables...)
 	expectedAdditions = append(expectedAdditions, incomingMaterialUpgradeFixtureAttemptIndexes...)
 	sort.Strings(expectedAdditions)
@@ -454,19 +486,30 @@ func incomingMaterialUpgradeFixturePendingGenesis(t *testing.T, fixture incoming
 	require.Equal(t, "genesis", image.Attempts[0].Kind)
 	var lifecycle, outcome, blocked string
 	var mutation int64
-	require.NoError(t, conn.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision FROM publication_attempts WHERE attempt_id=?", attemptID).Scan(&lifecycle, &outcome, &blocked, &mutation))
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision FROM publication_attempts WHERE attempt_id=?", attemptID).
+			Scan(&lifecycle, &outcome, &blocked, &mutation),
+	)
 	require.Equal(t, image.Attempts[0].Lifecycle, lifecycle)
 	require.Equal(t, image.Attempts[0].Outcome, outcome)
 	require.Equal(t, image.Attempts[0].Blocked, blocked)
 	require.Equal(t, image.Attempts[0].MutationRevision, mutation)
 	require.Equal(t, "prepared", lifecycle)
 	require.Equal(t, "not-submitted", outcome)
-	require.Equal(t, "", blocked)
+	require.Empty(t, blocked)
 	require.Equal(t, int64(1), mutation)
 	var activeID, pendingID []byte
-	require.NoError(t, conn.QueryRowContext(ctx, "SELECT attempt_id FROM active_publication_attempt WHERE singleton=1").Scan(&activeID))
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT attempt_id FROM active_publication_attempt WHERE singleton=1").
+			Scan(&activeID),
+	)
 	require.Equal(t, attemptID, activeID)
-	require.NoError(t, conn.QueryRowContext(ctx, "SELECT attempt_id FROM pending_genesis WHERE singleton=1").Scan(&pendingID))
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT attempt_id FROM pending_genesis WHERE singleton=1").Scan(&pendingID),
+	)
 	require.Equal(t, attemptID, pendingID)
 	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM attempt_events"))
 	require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM payload_objects"))
@@ -508,7 +551,11 @@ func incomingMaterialUpgradeFixturePendingGenesis(t *testing.T, fixture incoming
 	require.Equal(t, 2, destinationCounts.namedIndexes)
 	require.Equal(t, 14, destinationCounts.autoIndexes)
 	require.Len(t, destinationObjects, 32)
-	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(t, sourceObjects, destinationObjects)
+	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(
+		t,
+		sourceObjects,
+		destinationObjects,
+	)
 	require.Equal(t, []string{"accepted_material_refs"}, namedAdditions)
 	require.Zero(t, autoIndexAdditions)
 	require.Equal(t, incomingMaterialSchemaStatement, destinationObjects["accepted_material_refs"].sql)
@@ -578,7 +625,11 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 		require.NotEmpty(t, attemptID)
 		var lifecycle, outcome, blocked string
 		var mutation int64
-		require.NoError(t, conn.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision FROM publication_attempts WHERE attempt_id=?", attemptID).Scan(&lifecycle, &outcome, &blocked, &mutation))
+		require.NoError(
+			t,
+			conn.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision FROM publication_attempts WHERE attempt_id=?", attemptID).
+				Scan(&lifecycle, &outcome, &blocked, &mutation),
+		)
 		require.Equal(t, attempt.Lifecycle, lifecycle)
 		require.Equal(t, attempt.Outcome, outcome)
 		require.Equal(t, attempt.Blocked, blocked)
@@ -591,13 +642,17 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 	require.Equal(t, "blocked-floor-replaced", abandonedAttempt.Blocked)
 	require.Equal(t, "successor", activeAttempt.Kind)
 	require.Equal(t, "observed-absent-unresolved", activeAttempt.Outcome)
-	require.Equal(t, "", activeAttempt.Blocked)
+	require.Empty(t, activeAttempt.Blocked)
 	require.Equal(t, activeID, incomingMaterialUpgradeFixtureDigestBytes(t, activeAttempt.ID))
 	var activeAttemptID []byte
-	require.NoError(t, conn.QueryRowContext(ctx, "SELECT attempt_id FROM active_publication_attempt WHERE singleton=1").Scan(&activeAttemptID))
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT attempt_id FROM active_publication_attempt WHERE singleton=1").
+			Scan(&activeAttemptID),
+	)
 	require.Equal(t, activeID, activeAttemptID)
 	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM pending_genesis"))
-	require.Equal(t, "", image.PendingGenesisAttemptID)
+	require.Empty(t, image.PendingGenesisAttemptID)
 	require.Equal(t, int64(2), incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM accepted_events"))
 	require.Equal(t, int64(2), incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM accepted_records"))
 	require.Equal(t, int64(15), incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM attempt_events"))
@@ -611,7 +666,12 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 	require.True(t, image.AcceptedFloorPresent)
 	require.Equal(t, int64(2), image.AcceptedEventCount)
 
-	floorValue := incomingMaterialUpgradeFixtureScanValue(t, ctx, conn, "SELECT floor FROM active_floor WHERE singleton=1")
+	floorValue := incomingMaterialUpgradeFixtureScanValue(
+		t,
+		ctx,
+		conn,
+		"SELECT floor FROM active_floor WHERE singleton=1",
+	)
 	floorRaw, ok := floorValue.([]byte)
 	require.True(t, ok)
 	floor, err := decodeFloor(floorRaw)
@@ -625,13 +685,30 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 	require.Equal(t, databaseID, floor.DatabaseID)
 	require.NoError(t, validatePersistedFloor(floor, binding, databaseID, limits))
 
-	retainedRevisions := incomingMaterialUpgradeFixtureScanInt64s(t, ctx, conn, "SELECT accepted_revision FROM retained_publications")
+	retainedRevisions := incomingMaterialUpgradeFixtureScanInt64s(
+		t,
+		ctx,
+		conn,
+		"SELECT accepted_revision FROM retained_publications",
+	)
 	require.Equal(t, []int64{1}, retainedRevisions)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=2"))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(
+			t,
+			ctx,
+			conn,
+			"SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=2",
+		),
+	)
 
 	var retainedAttempt, retainedRecord, retainedBlob []byte
 	var retainedSequence, retainedSize, retainedRevision int64
-	require.NoError(t, conn.QueryRowContext(ctx, "SELECT attempt_id,record_cid,blob_cid,sequence,size,accepted_revision FROM retained_publications").Scan(&retainedAttempt, &retainedRecord, &retainedBlob, &retainedSequence, &retainedSize, &retainedRevision))
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT attempt_id,record_cid,blob_cid,sequence,size,accepted_revision FROM retained_publications").
+			Scan(&retainedAttempt, &retainedRecord, &retainedBlob, &retainedSequence, &retainedSize, &retainedRevision),
+	)
 	require.Equal(t, int64(1), retainedRevision)
 	require.Equal(t, int64(0), retainedSequence)
 	require.Equal(t, int64(3072), retainedSize)
@@ -642,8 +719,26 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 
 	abandonedAttemptID := incomingMaterialUpgradeFixtureDigestBytes(t, abandonedAttempt.ID)
 	require.NotEqual(t, abandonedAttemptID, activeID)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?", abandonedAttemptID))
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, conn, "SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?", abandonedAttemptID))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(
+			t,
+			ctx,
+			conn,
+			"SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?",
+			abandonedAttemptID,
+		),
+	)
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(
+			t,
+			ctx,
+			conn,
+			"SELECT COUNT(*) FROM attempt_reservations WHERE attempt_id=?",
+			abandonedAttemptID,
+		),
+	)
 
 	sourceObjects := incomingMaterialUpgradeFixtureObjects(t, ctx, conn)
 	sourceCounts := incomingMaterialUpgradeFixtureObjectCounts(t, sourceObjects)
@@ -677,7 +772,11 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 	require.Equal(t, 2, destinationCounts.namedIndexes)
 	require.Equal(t, 14, destinationCounts.autoIndexes)
 	require.Len(t, destinationObjects, 32)
-	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(t, sourceObjects, destinationObjects)
+	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(
+		t,
+		sourceObjects,
+		destinationObjects,
+	)
 	require.Equal(t, []string{"accepted_material_refs"}, namedAdditions)
 	require.Zero(t, autoIndexAdditions)
 	require.Equal(t, incomingMaterialSchemaStatement, destinationObjects["accepted_material_refs"].sql)
@@ -719,7 +818,11 @@ func incomingMaterialUpgradeFixtureCopy(t *testing.T) incomingMaterialUpgradeFix
 		}
 	})
 	for _, spec := range incomingMaterialUpgradeFixtureSpecs {
-		data := incomingMaterialUpgradeReadPinned(t, filepath.Join(incomingMaterialUpgradeFixtureRoot, spec.relative), spec.length)
+		data := incomingMaterialUpgradeReadPinned(
+			t,
+			filepath.Join(incomingMaterialUpgradeFixtureRoot, spec.relative),
+			spec.length,
+		)
 		require.Equal(t, spec.sha256, incomingMaterialUpgradeFixtureSHA256(data), spec.relative)
 		original[spec.relative] = data
 		available[spec.relative] = true
@@ -765,7 +868,10 @@ func incomingMaterialUpgradeFixtureCopy(t *testing.T) incomingMaterialUpgradeFix
 	}
 }
 
-func (m incomingMaterialUpgradeFixtureManifest) requireImage(t *testing.T, name string) incomingMaterialUpgradeFixtureManifestImage {
+func (m incomingMaterialUpgradeFixtureManifest) requireImage(
+	t *testing.T,
+	name string,
+) incomingMaterialUpgradeFixtureManifestImage {
 	t.Helper()
 	require.Equal(t, 1, m.FormatVersion)
 	require.Len(t, m.Images, 2)
@@ -802,9 +908,16 @@ func incomingMaterialUpgradeFixtureCompanionData(t *testing.T, data []byte) inco
 	return companion
 }
 
-func incomingMaterialUpgradeFixtureBindingOptions(t *testing.T, image incomingMaterialUpgradeFixtureManifestImage) (Binding, Limits, AttemptLimits) {
+func incomingMaterialUpgradeFixtureBindingOptions(
+	t *testing.T,
+	image incomingMaterialUpgradeFixtureManifestImage,
+) (Binding, Limits, AttemptLimits) {
 	t.Helper()
-	binding := Binding{AccountDID: incomingMaterialUpgradeFixtureDID, Backend: BackendPublicRepo, Repository: "at://" + incomingMaterialUpgradeFixtureDID}
+	binding := Binding{
+		AccountDID: incomingMaterialUpgradeFixtureDID,
+		Backend:    BackendPublicRepo,
+		Repository: "at://" + incomingMaterialUpgradeFixtureDID,
+	}
 	binding.Vault = [32]byte{9}
 	require.Equal(t, binding.AccountDID, image.Binding.AccountDID)
 	require.Equal(t, string(binding.Backend), image.Binding.Backend)
@@ -815,7 +928,12 @@ func incomingMaterialUpgradeFixtureBindingOptions(t *testing.T, image incomingMa
 	return binding, image.Options.PositionLimits, image.Options.AttemptLimits
 }
 
-func incomingMaterialUpgradeFixtureRequireCompanionHeader(t *testing.T, ctx context.Context, q queryer, companion incomingMaterialUpgradeFixtureCompanion) {
+func incomingMaterialUpgradeFixtureRequireCompanionHeader(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	companion incomingMaterialUpgradeFixtureCompanion,
+) {
 	t.Helper()
 	var applicationID, userVersion int
 	require.NoError(t, q.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID))
@@ -842,7 +960,12 @@ func incomingMaterialUpgradeFixtureRequireCompanionHeader(t *testing.T, ctx cont
 	}
 }
 
-func incomingMaterialUpgradeFixtureRequireCompanionTables(t *testing.T, ctx context.Context, q queryer, companion incomingMaterialUpgradeFixtureCompanion) map[string][][]any {
+func incomingMaterialUpgradeFixtureRequireCompanionTables(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	companion incomingMaterialUpgradeFixtureCompanion,
+) map[string][][]any {
 	t.Helper()
 	observed := incomingMaterialUpgradeFixtureTypedRows(t, ctx, q)
 	tables := make(map[string]incomingMaterialUpgradeFixtureCompanionTable, len(companion.Tables))
@@ -863,14 +986,22 @@ func incomingMaterialUpgradeFixtureRequireCompanionTables(t *testing.T, ctx cont
 			require.Equal(t, column.Name, columns[index], name)
 		}
 		expected := incomingMaterialUpgradeFixtureCompanionRows(t, table)
-		require.Equal(t, table.RowCount, len(expected), name)
-		require.Equal(t, table.RowCount, len(observedRows), name)
-		require.Equal(t, incomingMaterialUpgradeFixtureKeyedRows(t, name, columns, expected), incomingMaterialUpgradeFixtureKeyedRows(t, name, columns, observedRows), name)
+		require.Equal(t, len(expected), table.RowCount, name)
+		require.Len(t, observedRows, table.RowCount, name)
+		require.Equal(
+			t,
+			incomingMaterialUpgradeFixtureKeyedRows(t, name, columns, expected),
+			incomingMaterialUpgradeFixtureKeyedRows(t, name, columns, observedRows),
+			name,
+		)
 	}
 	return observed
 }
 
-func incomingMaterialUpgradeFixtureCompanionRows(t *testing.T, table incomingMaterialUpgradeFixtureCompanionTable) [][]any {
+func incomingMaterialUpgradeFixtureCompanionRows(
+	t *testing.T,
+	table incomingMaterialUpgradeFixtureCompanionTable,
+) [][]any {
 	t.Helper()
 	rows := make([][]any, 0, len(table.Rows))
 	for _, row := range table.Rows {
@@ -884,7 +1015,11 @@ func incomingMaterialUpgradeFixtureCompanionRows(t *testing.T, table incomingMat
 	return rows
 }
 
-func incomingMaterialUpgradeFixtureCellValue(t *testing.T, table, column string, cell incomingMaterialUpgradeFixtureCell) any {
+func incomingMaterialUpgradeFixtureCellValue(
+	t *testing.T,
+	table, column string,
+	cell incomingMaterialUpgradeFixtureCell,
+) any {
 	t.Helper()
 	switch cell.Type {
 	case "null":
@@ -911,7 +1046,12 @@ func incomingMaterialUpgradeFixtureCellValue(t *testing.T, table, column string,
 	}
 }
 
-func incomingMaterialUpgradeFixtureKeyedRows(t *testing.T, table string, columns []string, rows [][]any) map[string][]any {
+func incomingMaterialUpgradeFixtureKeyedRows(
+	t *testing.T,
+	table string,
+	columns []string,
+	rows [][]any,
+) map[string][]any {
 	t.Helper()
 	keyed := make(map[string][]any, len(rows))
 	for _, row := range rows {
@@ -986,7 +1126,11 @@ func incomingMaterialUpgradeFixtureRowTotal(rows map[string][][]any) int {
 	return total
 }
 
-func incomingMaterialUpgradeFixtureObjects(t *testing.T, ctx context.Context, q queryer) map[string]incomingMaterialUpgradeFixtureObject {
+func incomingMaterialUpgradeFixtureObjects(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+) map[string]incomingMaterialUpgradeFixtureObject {
 	t.Helper()
 	rows, err := q.QueryContext(ctx, "SELECT name,type,IFNULL(sql,'') FROM sqlite_master ORDER BY name")
 	require.NoError(t, err)
@@ -1018,7 +1162,10 @@ func incomingMaterialUpgradeFixtureObjects(t *testing.T, ctx context.Context, q 
 	return objects
 }
 
-func incomingMaterialUpgradeFixtureObjectCounts(t *testing.T, objects map[string]incomingMaterialUpgradeFixtureObject) incomingMaterialUpgradeFixtureSchemaCounts {
+func incomingMaterialUpgradeFixtureObjectCounts(
+	t *testing.T,
+	objects map[string]incomingMaterialUpgradeFixtureObject,
+) incomingMaterialUpgradeFixtureSchemaCounts {
 	t.Helper()
 	var counts incomingMaterialUpgradeFixtureSchemaCounts
 	for name, object := range objects {
@@ -1038,7 +1185,10 @@ func incomingMaterialUpgradeFixtureObjectCounts(t *testing.T, objects map[string
 	return counts
 }
 
-func incomingMaterialUpgradeFixtureObjectAdditions(t *testing.T, source, destination map[string]incomingMaterialUpgradeFixtureObject) ([]string, int) {
+func incomingMaterialUpgradeFixtureObjectAdditions(
+	t *testing.T,
+	source, destination map[string]incomingMaterialUpgradeFixtureObject,
+) ([]string, int) {
 	t.Helper()
 	for name, sourceObject := range source {
 		observed, present := destination[name]
@@ -1063,7 +1213,11 @@ func incomingMaterialUpgradeFixtureObjectAdditions(t *testing.T, source, destina
 	return named, autoIndexes
 }
 
-func incomingMaterialUpgradeFixtureOpenStore(t *testing.T, ctx context.Context, databasePath string) (*sql.Conn, func(*testing.T)) {
+func incomingMaterialUpgradeFixtureOpenStore(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+) (*sql.Conn, func(*testing.T)) {
 	t.Helper()
 	var lock *platform.Lock
 	var db *sql.DB
@@ -1114,7 +1268,11 @@ func incomingMaterialUpgradeFixtureOpenStore(t *testing.T, ctx context.Context, 
 	return conn, closeOwned
 }
 
-func incomingMaterialUpgradeFixtureOpenReadOnly(t *testing.T, ctx context.Context, databasePath string) (*sql.Conn, func(*testing.T)) {
+func incomingMaterialUpgradeFixtureOpenReadOnly(
+	t *testing.T,
+	ctx context.Context,
+	databasePath string,
+) (*sql.Conn, func(*testing.T)) {
 	t.Helper()
 	var db *sql.DB
 	var conn *sql.Conn
@@ -1155,7 +1313,10 @@ func incomingMaterialUpgradeFixtureOpenReadOnly(t *testing.T, ctx context.Contex
 	return conn, closeOwned
 }
 
-func incomingMaterialUpgradeFixturePayloadStates(t *testing.T, root string) map[string]incomingMaterialUpgradeFixturePayload {
+func incomingMaterialUpgradeFixturePayloadStates(
+	t *testing.T,
+	root string,
+) map[string]incomingMaterialUpgradeFixturePayload {
 	t.Helper()
 	states := make(map[string]incomingMaterialUpgradeFixturePayload, len(incomingMaterialUpgradeFixturePayloadPaths))
 	for _, relative := range incomingMaterialUpgradeFixturePayloadPaths {
@@ -1185,7 +1346,13 @@ func incomingMaterialUpgradeFixturePayloadState(t *testing.T, path string) incom
 	}
 }
 
-func incomingMaterialUpgradeFixtureRequireImagePayloads(t *testing.T, ctx context.Context, q queryer, image incomingMaterialUpgradeFixtureManifestImage, states map[string]incomingMaterialUpgradeFixturePayload) {
+func incomingMaterialUpgradeFixtureRequireImagePayloads(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	image incomingMaterialUpgradeFixtureManifestImage,
+	states map[string]incomingMaterialUpgradeFixturePayload,
+) {
 	t.Helper()
 	require.NotEmpty(t, image.Payloads)
 	for _, entry := range image.Payloads {
@@ -1195,7 +1362,11 @@ func incomingMaterialUpgradeFixtureRequireImagePayloads(t *testing.T, ctx contex
 		require.Equal(t, entry.SHA256, state.sha256, entry.Path)
 		var blobCID []byte
 		var size int64
-		require.NoError(t, q.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects WHERE basename=?", filepath.Base(entry.Path)).Scan(&blobCID, &size))
+		require.NoError(
+			t,
+			q.QueryRowContext(ctx, "SELECT blob_cid,size FROM payload_objects WHERE basename=?", filepath.Base(entry.Path)).
+				Scan(&blobCID, &size),
+		)
 		require.Equal(t, state.size, size, entry.Path)
 		require.Equal(t, entry.BlobCID.Base64, base64.StdEncoding.EncodeToString(blobCID), entry.Path)
 		require.Equal(t, entry.BlobCID.SHA256, incomingMaterialUpgradeFixtureSHA256(blobCID), entry.Path)
@@ -1206,14 +1377,51 @@ func incomingMaterialUpgradeFixtureRequireImagePayloads(t *testing.T, ctx contex
 		attemptID := incomingMaterialUpgradeFixtureHex(t, entry.AttemptID)
 		switch entry.Owner {
 		case "attempt":
-			require.Equal(t, int64(1), incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=? AND blob_cid=?", attemptID, blobCID), entry.Path)
+			require.Equal(
+				t,
+				int64(1),
+				incomingMaterialUpgradeCount(
+					t,
+					ctx,
+					q,
+					"SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=? AND blob_cid=?",
+					attemptID,
+					blobCID,
+				),
+				entry.Path,
+			)
 		case "none":
-			require.Zero(t, incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=? AND blob_cid=?", attemptID, blobCID), entry.Path)
-			require.Zero(t, incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM retained_publications WHERE blob_cid=?", blobCID), entry.Path)
+			require.Zero(
+				t,
+				incomingMaterialUpgradeCount(
+					t,
+					ctx,
+					q,
+					"SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=? AND blob_cid=?",
+					attemptID,
+					blobCID,
+				),
+				entry.Path,
+			)
+			require.Zero(
+				t,
+				incomingMaterialUpgradeCount(
+					t,
+					ctx,
+					q,
+					"SELECT COUNT(*) FROM retained_publications WHERE blob_cid=?",
+					blobCID,
+				),
+				entry.Path,
+			)
 		case "retained-publication":
 			require.NotNil(t, entry.AcceptedRevision, entry.Path)
 			var acceptedRevision int64
-			require.NoError(t, q.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE blob_cid=?", blobCID).Scan(&acceptedRevision))
+			require.NoError(
+				t,
+				q.QueryRowContext(ctx, "SELECT accepted_revision FROM retained_publications WHERE blob_cid=?", blobCID).
+					Scan(&acceptedRevision),
+			)
 			require.Equal(t, *entry.AcceptedRevision, acceptedRevision, entry.Path)
 		default:
 			require.FailNowf(t, "unsupported payload owner", "%s: %q", entry.Path, entry.Owner)
@@ -1221,7 +1429,13 @@ func incomingMaterialUpgradeFixtureRequireImagePayloads(t *testing.T, ctx contex
 	}
 }
 
-func incomingMaterialUpgradeFixtureRequireMixedProjections(t *testing.T, ctx context.Context, q queryer, inputs incomingMaterialUpgradeFixtureInputs, floor Floor) {
+func incomingMaterialUpgradeFixtureRequireMixedProjections(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	inputs incomingMaterialUpgradeFixtureInputs,
+	floor Floor,
+) {
 	t.Helper()
 	firstConflict := inputs.Results.FirstConflict
 	attemptID := incomingMaterialUpgradeFixtureDigestBytes(t, firstConflict.AttemptID)
@@ -1232,11 +1446,19 @@ func incomingMaterialUpgradeFixtureRequireMixedProjections(t *testing.T, ctx con
 	finalConflict := inputs.Results.FinalFirstConflict
 	require.Equal(t, attemptID, incomingMaterialUpgradeFixtureDigestBytes(t, finalConflict.AttemptID))
 	require.Equal(t, envelope, incomingMaterialUpgradeFixtureDigestBytes(t, finalConflict.Envelope))
-	require.Equal(t, incomingMaterialUpgradeFixtureDigestBytes(t, firstConflict.ID), incomingMaterialUpgradeFixtureDigestBytes(t, finalConflict.ID))
+	require.Equal(
+		t,
+		incomingMaterialUpgradeFixtureDigestBytes(t, firstConflict.ID),
+		incomingMaterialUpgradeFixtureDigestBytes(t, finalConflict.ID),
+	)
 	require.Equal(t, int64(1), finalConflict.HeadSequence)
 	priorLatestEvidence := incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.PriorLatestEvidence)
 	require.NotEmpty(t, priorLatestEvidence)
-	require.Equal(t, priorLatestEvidence, incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.PriorLatest.Evidence))
+	require.Equal(
+		t,
+		priorLatestEvidence,
+		incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.PriorLatest.Evidence),
+	)
 	require.Equal(t, attemptID, incomingMaterialUpgradeFixtureDigestBytes(t, inputs.Results.PriorLatest.Attempt.ID))
 	require.Equal(t, "may-have-submitted", inputs.Results.PriorLatest.Attempt.Lifecycle)
 	require.Equal(t, "lost-fence", inputs.Results.PriorLatest.Outcome)
@@ -1244,22 +1466,47 @@ func incomingMaterialUpgradeFixtureRequireMixedProjections(t *testing.T, ctx con
 	require.Len(t, priorViewDigest, 32)
 
 	var firstConflictBody, firstConflictDigest []byte
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT body,digest FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", attemptID).Scan(&firstConflictBody, &firstConflictDigest))
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT body,digest FROM attempt_evidence WHERE attempt_id=? AND role='first-conflict'", attemptID).
+			Scan(&firstConflictBody, &firstConflictDigest),
+	)
 	require.Equal(t, envelope, firstConflictBody)
 	require.Len(t, firstConflictDigest, 32)
 	require.NotEqual(t, make([]byte, 32), firstConflictDigest)
-	require.Zero(t, incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM attempt_evidence WHERE body=?", priorLatestEvidence))
+	require.Zero(
+		t,
+		incomingMaterialUpgradeCount(
+			t,
+			ctx,
+			q,
+			"SELECT COUNT(*) FROM attempt_evidence WHERE body=?",
+			priorLatestEvidence,
+		),
+	)
 
 	var outcomeBody, retirementBody []byte
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attemptID).Scan(&outcomeBody))
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='retirement'", attemptID).Scan(&retirementBody))
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='outcome'", attemptID).
+			Scan(&outcomeBody),
+	)
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT body FROM attempt_evidence WHERE attempt_id=? AND role='retirement'", attemptID).
+			Scan(&retirementBody),
+	)
 	require.NotEmpty(t, outcomeBody)
 	require.Equal(t, outcomeBody, retirementBody)
 	require.NotEqual(t, outcomeBody, firstConflictBody)
 	var lifecycle, outcome, blocked string
 	var mutation int64
 	var terminal, retirement []byte
-	require.NoError(t, q.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision,terminal_evidence,retirement_evidence FROM publication_attempts WHERE attempt_id=?", attemptID).Scan(&lifecycle, &outcome, &blocked, &mutation, &terminal, &retirement))
+	require.NoError(
+		t,
+		q.QueryRowContext(ctx, "SELECT lifecycle,outcome,blocked,mutation_revision,terminal_evidence,retirement_evidence FROM publication_attempts WHERE attempt_id=?", attemptID).
+			Scan(&lifecycle, &outcome, &blocked, &mutation, &terminal, &retirement),
+	)
 	require.Equal(t, inputs.Results.RetiredAttempt.Lifecycle, lifecycle)
 	require.Equal(t, inputs.Results.RetiredAttempt.Outcome, outcome)
 	require.Equal(t, inputs.Results.RetiredAttempt.Blocked, blocked)
@@ -1271,7 +1518,7 @@ func incomingMaterialUpgradeFixtureRequireMixedProjections(t *testing.T, ctx con
 	require.NoError(t, strictJSON(envelope, &conflict))
 	require.Equal(t, uint32(1), conflict.Version)
 	require.Equal(t, attemptID, conflict.AttemptID)
-	require.Equal(t, "", conflict.Blocked)
+	require.Empty(t, conflict.Blocked)
 	require.Len(t, conflict.Proof.Suffix, 1)
 	incomingMaterialUpgradeFixtureRequireProof(t, "first conflict", conflict.Proof, 1)
 	conflictHead := incomingMaterialUpgradeFixtureDigestBytes(t, firstConflict.Head)
@@ -1310,7 +1557,12 @@ func incomingMaterialUpgradeFixtureRequireMixedProjections(t *testing.T, ctx con
 	require.Equal(t, Provenance(inputs.Results.FinalFloor.Provenance), floor.Provenance)
 }
 
-func incomingMaterialUpgradeFixtureRequireProof(t *testing.T, name string, wire attemptEvidenceWire, expectedSequence uint64) {
+func incomingMaterialUpgradeFixtureRequireProof(
+	t *testing.T,
+	name string,
+	wire attemptEvidenceWire,
+	expectedSequence uint64,
+) {
 	t.Helper()
 	require.Equal(t, uint32(1), wire.Version, name)
 	require.Equal(t, "outcome", wire.Role, name)
@@ -1356,14 +1608,26 @@ func incomingMaterialUpgradeFixtureSHA256(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func incomingMaterialUpgradeFixtureScanValue(t *testing.T, ctx context.Context, q queryer, query string, args ...any) any {
+func incomingMaterialUpgradeFixtureScanValue(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	query string,
+	args ...any,
+) any {
 	t.Helper()
 	var value any
 	require.NoError(t, q.QueryRowContext(ctx, query, args...).Scan(&value))
 	return value
 }
 
-func incomingMaterialUpgradeFixtureScanInt64s(t *testing.T, ctx context.Context, q queryer, query string, args ...any) []int64 {
+func incomingMaterialUpgradeFixtureScanInt64s(
+	t *testing.T,
+	ctx context.Context,
+	q queryer,
+	query string,
+	args ...any,
+) []int64 {
 	t.Helper()
 	rows, err := q.QueryContext(ctx, query, args...)
 	require.NoError(t, err)
@@ -1381,6 +1645,6 @@ func incomingMaterialUpgradeFixtureScanInt64s(t *testing.T, ctx context.Context,
 	require.NoError(t, scanErr)
 	require.NoError(t, rowsErr)
 	require.NoError(t, closeErr)
-	sort.Slice(values, func(left, right int) bool { return values[left] < values[right] })
+	slices.Sort(values)
 	return values
 }

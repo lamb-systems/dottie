@@ -1,6 +1,7 @@
 package ignore
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -22,7 +23,12 @@ func Compile(patterns []string) (Matcher, error) {
 	compiled := make([]string, 0, min(len(patterns), maxPatterns))
 	for index, pattern := range patterns {
 		if index == maxPatterns {
-			return Matcher{}, fmt.Errorf("exclude pattern %d %q: pattern count exceeds maximum %d", index, pattern, maxPatterns)
+			return Matcher{}, fmt.Errorf(
+				"exclude pattern %d %q: pattern count exceeds maximum %d",
+				index,
+				pattern,
+				maxPatterns,
+			)
 		}
 		if err := validatePattern(pattern); err != nil {
 			return Matcher{}, fmt.Errorf("exclude pattern %d %q: %w", index, pattern, err)
@@ -45,35 +51,35 @@ func (m Matcher) Exclude(rel string) (string, bool) {
 func validatePattern(pattern string) error {
 	switch {
 	case pattern == "":
-		return fmt.Errorf("pattern is empty")
+		return errors.New("pattern is empty")
 	case len(pattern) > maxPatternBytes:
 		return fmt.Errorf("pattern exceeds %d bytes", maxPatternBytes)
 	case !utf8.ValidString(pattern):
-		return fmt.Errorf("pattern is not valid UTF-8")
+		return errors.New("pattern is not valid UTF-8")
 	case strings.IndexByte(pattern, 0) >= 0:
-		return fmt.Errorf("pattern contains NUL")
+		return errors.New("pattern contains NUL")
 	case strings.HasPrefix(pattern, "/"):
-		return fmt.Errorf("pattern must be root-relative")
+		return errors.New("pattern must be root-relative")
 	case strings.ContainsRune(pattern, '\\'):
-		return fmt.Errorf("backslashes are not permitted")
+		return errors.New("backslashes are not permitted")
 	case strings.ContainsAny(pattern, "{}!"):
-		return fmt.Errorf("braces and negation are not permitted")
+		return errors.New("braces and negation are not permitted")
 	case pattern == ".":
-		return fmt.Errorf("pattern cannot select the root")
+		return errors.New("pattern cannot select the root")
 	case strings.HasSuffix(pattern, "/"):
-		return fmt.Errorf("pattern cannot end with /")
+		return errors.New("pattern cannot end with /")
 	case strings.Contains(pattern, "//"):
-		return fmt.Errorf("pattern cannot contain //")
+		return errors.New("pattern cannot contain //")
 	}
 
 	recursive := 0
-	for _, segment := range strings.Split(pattern, "/") {
+	for segment := range strings.SplitSeq(pattern, "/") {
 		if segment == ".." {
-			return fmt.Errorf("parent path segments are not permitted")
+			return errors.New("parent path segments are not permitted")
 		}
 		if strings.Contains(segment, "**") {
 			if segment != "**" {
-				return fmt.Errorf("** must be a complete path segment")
+				return errors.New("** must be a complete path segment")
 			}
 			recursive++
 		}
@@ -82,7 +88,7 @@ func validatePattern(pattern string) error {
 		return fmt.Errorf("pattern contains more than %d ** segments", maxRecursiveParts)
 	}
 	if !doublestar.ValidatePattern(pattern) {
-		return fmt.Errorf("pattern is not valid doublestar syntax")
+		return errors.New("pattern is not valid doublestar syntax")
 	}
 	return nil
 }

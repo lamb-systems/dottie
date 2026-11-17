@@ -53,11 +53,18 @@ func BuildAttestation(request AttestationBuildRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	certificate, err = authorizeAttestationSigner(certificate.DeviceID, certificate.KeyID, position, request.TrustAnchor, state.Certificates)
+	certificate, err = authorizeAttestationSigner(
+		certificate.DeviceID,
+		certificate.KeyID,
+		position,
+		request.TrustAnchor,
+		state.Certificates,
+	)
 	if err != nil {
 		return nil, err
 	}
-	if len(request.SigningKey) != ed25519.PrivateKeySize || !bytes.Equal(request.SigningKey.Public().(ed25519.PublicKey), certificate.SigningPublicKey[:]) {
+	if len(request.SigningKey) != ed25519.PrivateKeySize ||
+		!bytes.Equal(request.SigningKey.Public().(ed25519.PublicKey), certificate.SigningPublicKey[:]) {
 		return nil, fmt.Errorf("%w: attestation signing key", ErrAuthorization)
 	}
 	if request.RetentionFloor > MaxAttestationInteger {
@@ -76,9 +83,17 @@ func BuildAttestation(request AttestationBuildRequest) ([]byte, error) {
 		}
 	}
 	attestation := Attestation{
-		SchemaVersion: AttestationVersion2, Vault: position.policy.Vault, DeviceID: certificate.DeviceID, PolicyDigest: position.policyDigest,
-		RetentionFloor: request.RetentionFloor, RetainedRecoveryPoints: request.RetainedRecoveryPoints, RecoveryPoints: recoveryPoints,
-		ControlCID: bytes.Clone(controlCID), Signer: Signer{DeviceID: certificate.DeviceID, KeyID: bytes.Clone(certificate.KeyID)},
+		SchemaVersion:          AttestationVersion2,
+		Vault:                  position.policy.Vault,
+		DeviceID:               certificate.DeviceID,
+		PolicyDigest:           position.policyDigest,
+		RetentionFloor:         request.RetentionFloor,
+		RetainedRecoveryPoints: request.RetainedRecoveryPoints,
+		RecoveryPoints:         recoveryPoints,
+		ControlCID: bytes.Clone(
+			controlCID,
+		),
+		Signer: Signer{DeviceID: certificate.DeviceID, KeyID: bytes.Clone(certificate.KeyID)},
 	}
 	prefix, err := encodeAttestationPrefix(attestation)
 	if err != nil {
@@ -108,10 +123,19 @@ func VerifyAttestation(encoded []byte, request AttestationVerificationRequest) (
 	}
 	for _, point := range attestation.RecoveryPoints {
 		if point.Epoch > position.control.EpochSeq {
-			return AttestationJudgement{}, fmt.Errorf("%w: recovery point epoch is newer than the attested control", ErrAuthorization)
+			return AttestationJudgement{}, fmt.Errorf(
+				"%w: recovery point epoch is newer than the attested control",
+				ErrAuthorization,
+			)
 		}
 	}
-	certificate, err := authorizeAttestationSigner(attestation.Signer.DeviceID, attestation.Signer.KeyID, position, request.TrustAnchor, request.State.Certificates)
+	certificate, err := authorizeAttestationSigner(
+		attestation.Signer.DeviceID,
+		attestation.Signer.KeyID,
+		position,
+		request.TrustAnchor,
+		request.State.Certificates,
+	)
 	if err != nil {
 		return AttestationJudgement{}, err
 	}
@@ -119,10 +143,19 @@ func VerifyAttestation(encoded []byte, request AttestationVerificationRequest) (
 	if err != nil {
 		return AttestationJudgement{}, err
 	}
-	if err := Verify(contextForPurpose(PurposeAttestation), objectSignaturePreimage(prefix), attestation.Signature[:], certificate.SigningPublicKey[:]); err != nil {
+	if err := Verify(
+		contextForPurpose(PurposeAttestation),
+		objectSignaturePreimage(prefix),
+		attestation.Signature[:],
+		certificate.SigningPublicKey[:],
+	); err != nil {
 		return AttestationJudgement{}, fmt.Errorf("%w: attestation", ErrSignature)
 	}
-	judgement := AttestationJudgement{Attestation: attestation, Status: AttestationStatusMeetsPolicy, UnknownEpochMaterial: request.UnknownEpochMaterial}
+	judgement := AttestationJudgement{
+		Attestation:          attestation,
+		Status:               AttestationStatusMeetsPolicy,
+		UnknownEpochMaterial: request.UnknownEpochMaterial,
+	}
 	if request.UnknownEpochMaterial || attestation.RetentionFloor < position.policy.PolicyRetentionFloor {
 		judgement.Status = AttestationStatusBelowPolicyFloor
 		judgement.CompromisedForConfidentiality = true
@@ -130,7 +163,13 @@ func VerifyAttestation(encoded []byte, request AttestationVerificationRequest) (
 	return judgement, nil
 }
 
-func authorizeAttestationSigner(deviceID string, keyID []byte, position authenticatedControlPosition, trustAnchor [32]byte, certificates [][]byte) (Certificate, error) {
+func authorizeAttestationSigner(
+	deviceID string,
+	keyID []byte,
+	position authenticatedControlPosition,
+	trustAnchor [32]byte,
+	certificates [][]byte,
+) (Certificate, error) {
 	request := OpenRequest{
 		Vault: position.policy.Vault, EpochSeq: position.control.EpochSeq, PolicyDigest: position.policyDigest,
 		TrustAnchor: trustAnchor, Certificates: certificates,
@@ -144,10 +183,10 @@ func authorizeAttestationSigner(deviceID string, keyID []byte, position authenti
 }
 
 func certificatesWithSigner(certificates [][]byte, signerCertificate []byte) [][]byte {
-	result := make([][]byte, len(certificates))
+	result := make([][]byte, 0, len(certificates)+1)
 	found := false
-	for index, certificate := range certificates {
-		result[index] = bytes.Clone(certificate)
+	for _, certificate := range certificates {
+		result = append(result, bytes.Clone(certificate))
 		if bytes.Equal(certificate, signerCertificate) {
 			found = true
 		}

@@ -47,14 +47,32 @@ func (backend *SettingsBackend) Observe(ctx context.Context, key model.EntryKey)
 	value, err := settings.ReadUser(key.SettingKey)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
-			return syncengine.SettingValue{}, fmt.Errorf("observe GNOME setting %q in schema %q: %w", key.SettingKey, key.SchemaID, ErrKeyNotFound)
+			return syncengine.SettingValue{}, fmt.Errorf(
+				"observe GNOME setting %q in schema %q: %w",
+				key.SettingKey,
+				key.SchemaID,
+				ErrKeyNotFound,
+			)
 		}
-		return syncengine.SettingValue{}, fmt.Errorf("observe GNOME setting %q in schema %q: user value read failed", key.SettingKey, key.SchemaID)
+		return syncengine.SettingValue{}, fmt.Errorf(
+			"observe GNOME setting %q in schema %q: user value read failed",
+			key.SettingKey,
+			key.SchemaID,
+		)
 	}
-	return syncengine.SettingValue{Present: value.Present, Type: value.Type, Text: value.Text, Writable: value.Writable}, nil
+	return syncengine.SettingValue{
+		Present:  value.Present,
+		Type:     value.Type,
+		Text:     value.Text,
+		Writable: value.Writable,
+	}, nil
 }
 
-func (backend *SettingsBackend) Canonicalize(ctx context.Context, key model.EntryKey, valueType, text string) (syncengine.SettingValue, error) {
+func (backend *SettingsBackend) Canonicalize(
+	ctx context.Context,
+	key model.EntryKey,
+	valueType, text string,
+) (syncengine.SettingValue, error) {
 	backend.opMu.RLock()
 	defer backend.opMu.RUnlock()
 	if err := validateSettingsRequest(ctx, key); err != nil {
@@ -66,7 +84,11 @@ func (backend *SettingsBackend) Canonicalize(ctx context.Context, key model.Entr
 	}
 	canonicalType, canonicalText, err := settings.Canonicalize(key.SettingKey, valueType, text)
 	if err != nil {
-		return syncengine.SettingValue{}, fmt.Errorf("canonicalize GNOME setting %q in schema %q: value rejected", key.SettingKey, key.SchemaID)
+		return syncengine.SettingValue{}, fmt.Errorf(
+			"canonicalize GNOME setting %q in schema %q: value rejected",
+			key.SettingKey,
+			key.SchemaID,
+		)
 	}
 	return syncengine.SettingValue{Present: true, Type: canonicalType, Text: canonicalText}, nil
 }
@@ -121,7 +143,10 @@ func (backend *SettingsBackend) Close() error {
 	var closeErrors []error
 	for key, settings := range backend.handles {
 		if err := settings.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close GNOME schema %q at %q: %w", key.schemaID, key.path, err))
+			closeErrors = append(
+				closeErrors,
+				fmt.Errorf("close GNOME schema %q at %q: %w", key.schemaID, key.path, err),
+			)
 		}
 		delete(backend.handles, key)
 	}

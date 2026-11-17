@@ -80,15 +80,40 @@ func TestCompileEnforcesPatternCaps(t *testing.T) {
 func TestCompileAdversarialMaximumPatternSet(t *testing.T) {
 	maximumLength := strings.Repeat("a", 4096)
 	patterns := []string{maximumLength}
-	for index := 0; index < 15; index++ {
-		patterns = append(patterns, strings.Join([]string{"**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**", "**"}, "/"))
+	for range 15 {
+		patterns = append(
+			patterns,
+			strings.Join(
+				[]string{
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+					"**",
+				},
+				"/",
+			),
+		)
 	}
 	matcher, err := Compile(patterns)
 	require.NoError(t, err)
 	matched, excluded := matcher.Exclude(maximumLength)
 	assert.True(t, excluded)
 	assert.Equal(t, maximumLength, matched)
-	matched, excluded = matcher.Exclude("one/two/three/four/five/six/seven/eight/nine/ten/eleven/twelve/thirteen/fourteen/fifteen/sixteen")
+	matched, excluded = matcher.Exclude(
+		"one/two/three/four/five/six/seven/eight/nine/ten/eleven/twelve/thirteen/fourteen/fifteen/sixteen",
+	)
 	assert.True(t, excluded)
 	assert.NotEmpty(t, matched)
 }

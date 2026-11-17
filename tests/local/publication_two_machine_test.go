@@ -18,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -27,8 +30,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -305,7 +306,7 @@ func TestTwoMachinePublicationConflictRefusesWithoutMutation(t *testing.T) {
 
 	preparation, err := fixture.preparePull(t, fixture.b)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrPublicationApply)
+	require.ErrorIs(t, err, service.ErrPublicationApply)
 	var refused interface {
 		Stage() string
 		Reason() string
@@ -344,9 +345,14 @@ func newPublicationTwoMachineFixture(t *testing.T) *publicationTwoMachineFixture
 	method := pds.VerificationMethod()
 	reader := atproto.RevisionReader{
 		Transport: pds, DIDDocumentID: publicationTwoMachineDID,
-		VerificationMethods: []atproto.VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 	binding := publicationstate.Binding{
 		AccountDID: publicationTwoMachineDID, Backend: publicationstate.BackendPublicRepo,
@@ -395,8 +401,15 @@ func newPublicationTwoMachine(t *testing.T, root, name string) *publicationTwoMa
 	selected := filepath.Join(home, "synthetic")
 	require.NoError(t, os.MkdirAll(selected, 0o700))
 	target := config.Target{
-		ID: publicationTwoMachineTargetID, Source: model.SourceFiles, Mode: config.Review,
-		Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory, Exclude: []string{publicationTwoMachineSentinel}},
+		ID:     publicationTwoMachineTargetID,
+		Source: model.SourceFiles,
+		Mode:   config.Review,
+		Root: &config.Root{
+			Base:    model.RootHome,
+			Path:    "synthetic",
+			Kind:    model.SelectionDirectory,
+			Exclude: []string{publicationTwoMachineSentinel},
+		},
 	}
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
@@ -419,7 +432,10 @@ func newPublicationTwoMachine(t *testing.T, root, name string) *publicationTwoMa
 	return machine
 }
 
-func (fixture *publicationTwoMachineFixture) push(t *testing.T, machine *publicationTwoMachine) service.MaterialPublishResult {
+func (fixture *publicationTwoMachineFixture) push(
+	t *testing.T,
+	machine *publicationTwoMachine,
+) service.MaterialPublishResult {
 	t.Helper()
 	ctx := context.Background()
 	store, err := publicationstate.Open(machine.storeDir, fixture.binding)
@@ -433,7 +449,13 @@ func (fixture *publicationTwoMachineFixture) push(t *testing.T, machine *publica
 		Binding: fixture.binding, Configuration: machine.configuration,
 		Reviews: publicationTwoMachineReviews{review: fixture.review}, PublicationID: publicationID,
 	}
-	coordinator, err := service.NewCoordinator(service.Dependencies{State: fixture.stateStore, Paths: machine.paths, Clock: func() time.Time { return fixture.clock }})
+	coordinator, err := service.NewCoordinator(
+		service.Dependencies{
+			State: fixture.stateStore,
+			Paths: machine.paths,
+			Clock: func() time.Time { return fixture.clock },
+		},
+	)
 	require.NoError(t, err)
 	preparation, err := coordinator.PreparePublicationPush(ctx, request)
 	require.NoError(t, err)
@@ -446,7 +468,10 @@ func (fixture *publicationTwoMachineFixture) push(t *testing.T, machine *publica
 	return result
 }
 
-func (fixture *publicationTwoMachineFixture) joinFirstUse(t *testing.T, machine *publicationTwoMachine) publicationstate.Floor {
+func (fixture *publicationTwoMachineFixture) joinFirstUse(
+	t *testing.T,
+	machine *publicationTwoMachine,
+) publicationstate.Floor {
 	t.Helper()
 	ctx := context.Background()
 	view, err := fixture.adapter.ReadView(ctx)
@@ -458,12 +483,22 @@ func (fixture *publicationTwoMachineFixture) joinFirstUse(t *testing.T, machine 
 	defer func() { require.NoError(t, store.Close()) }()
 	proposal, err := store.Prepare(ctx, publicationstate.ModeFirstUse, observation, payload)
 	require.NoError(t, err)
-	accepted, err := store.Accept(ctx, publicationstate.ModeFirstUse, proposal.StateToken, observation, payload, proposal.Confirmation)
+	accepted, err := store.Accept(
+		ctx,
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return accepted
 }
 
-func (fixture *publicationTwoMachineFixture) preparePull(t *testing.T, machine *publicationTwoMachine) (publicationTwoMachinePullPreparation, error) {
+func (fixture *publicationTwoMachineFixture) preparePull(
+	t *testing.T,
+	machine *publicationTwoMachine,
+) (publicationTwoMachinePullPreparation, error) {
 	t.Helper()
 	ctx := context.Background()
 	inspection, err := publicationstate.Inspect(ctx, machine.storeDir, fixture.binding)
@@ -507,7 +542,11 @@ func (fixture *publicationTwoMachineFixture) preparePull(t *testing.T, machine *
 	return preparation, nil
 }
 
-func (fixture *publicationTwoMachineFixture) applyPull(t *testing.T, machine *publicationTwoMachine, preparation publicationTwoMachinePullPreparation) (service.PublicationApplyReport, publicationstate.Floor) {
+func (fixture *publicationTwoMachineFixture) applyPull(
+	t *testing.T,
+	machine *publicationTwoMachine,
+	preparation publicationTwoMachinePullPreparation,
+) (service.PublicationApplyReport, publicationstate.Floor) {
 	t.Helper()
 	ctx := context.Background()
 	journal, err := publicationstate.OpenJournal(machine.storeDir)
@@ -531,7 +570,10 @@ func (fixture *publicationTwoMachineFixture) applyPull(t *testing.T, machine *pu
 	return report, accepted
 }
 
-func (fixture *publicationTwoMachineFixture) pull(t *testing.T, machine *publicationTwoMachine) publicationTwoMachinePullResult {
+func (fixture *publicationTwoMachineFixture) pull(
+	t *testing.T,
+	machine *publicationTwoMachine,
+) publicationTwoMachinePullResult {
 	t.Helper()
 	preparation, err := fixture.preparePull(t, machine)
 	require.NoError(t, err)
@@ -543,7 +585,11 @@ func (fixture *publicationTwoMachineFixture) pull(t *testing.T, machine *publica
 	return result
 }
 
-func (fixture *publicationTwoMachineFixture) pullMaterial(t *testing.T, view publicationstate.SuppliedRepositoryView, floor publicationstate.Floor) (model.Snapshot, model.Snapshot, []byte) {
+func (fixture *publicationTwoMachineFixture) pullMaterial(
+	t *testing.T,
+	view publicationstate.SuppliedRepositoryView,
+	floor publicationstate.Floor,
+) (model.Snapshot, model.Snapshot, []byte) {
 	t.Helper()
 	require.NotEmpty(t, view.Snapshots)
 	require.Less(t, floor.Sequence, uint64(len(view.Snapshots)))
@@ -568,7 +614,10 @@ func (fixture *publicationTwoMachineFixture) pullMaterial(t *testing.T, view pub
 	return base, remote, terminalPayload
 }
 
-func (fixture *publicationTwoMachineFixture) terminalPayload(t *testing.T, view publicationstate.SuppliedRepositoryView) []byte {
+func (fixture *publicationTwoMachineFixture) terminalPayload(
+	t *testing.T,
+	view publicationstate.SuppliedRepositoryView,
+) []byte {
 	t.Helper()
 	require.NotEmpty(t, view.Snapshots)
 	terminal, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
@@ -622,7 +671,12 @@ func writePublicationTwoMachineFileAt(t *testing.T, path string, content []byte)
 	require.NoError(t, os.WriteFile(path, content, 0o600))
 }
 
-func writePublicationTwoMachineFileMode(t *testing.T, machine *publicationTwoMachine, content []byte, mode os.FileMode) {
+func writePublicationTwoMachineFileMode(
+	t *testing.T,
+	machine *publicationTwoMachine,
+	content []byte,
+	mode os.FileMode,
+) {
 	t.Helper()
 	path := filepath.Join(machine.selected, publicationTwoMachineTrackedFile)
 	require.NoError(t, os.WriteFile(path, content, mode))
@@ -707,7 +761,13 @@ func runPublicationTwoMachineCrashHelper(t *testing.T, requestPath string) {
 	status, ok := exited.Sys().(syscall.WaitStatus)
 	require.True(t, ok, "publication gate crash helper reported no wait status: %s", output)
 	require.True(t, status.Signaled(), "publication gate crash helper exited instead of dying: %s", output)
-	assert.Equal(t, syscall.SIGKILL, status.Signal(), "publication gate crash helper was killed by another signal: %s", output)
+	assert.Equal(
+		t,
+		syscall.SIGKILL,
+		status.Signal(),
+		"publication gate crash helper was killed by another signal: %s",
+		output,
+	)
 }
 
 func TestPublicationGateApplyCrashHelper(t *testing.T) {
@@ -752,7 +812,10 @@ func (store *publicationTwoMachineProposalStore) List(context.Context) ([]servic
 	return records, nil
 }
 
-func (store *publicationTwoMachineProposalStore) Issue(_ context.Context, record service.PublicationProposalRecord) error {
+func (store *publicationTwoMachineProposalStore) Issue(
+	_ context.Context,
+	record service.PublicationProposalRecord,
+) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.records[record.PublicationID] = record
@@ -778,7 +841,9 @@ func (store *publicationTwoMachineProposalStore) Delete(_ context.Context, publi
 	return nil
 }
 
-func (reviews publicationTwoMachineReviews) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
+func (reviews publicationTwoMachineReviews) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
 	return reviews.review, config.Token{}, publicationTwoMachineGuard{}, nil
 }
 

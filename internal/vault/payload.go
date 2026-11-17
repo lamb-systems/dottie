@@ -118,7 +118,13 @@ func payloadInspectBound(kind string) error {
 
 func payloadBoundKind(kind string) bool {
 	switch kind {
-	case "MaxPackedBytes", "MaxManifestBytes", "MaxEntries", "MaxDepth", "MaxEntryBytes", "MaxTotalBytes", "MaxPathBytes":
+	case "MaxPackedBytes",
+		"MaxManifestBytes",
+		"MaxEntries",
+		"MaxDepth",
+		"MaxEntryBytes",
+		"MaxTotalBytes",
+		"MaxPathBytes":
 		return true
 	default:
 		return false

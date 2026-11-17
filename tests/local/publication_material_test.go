@@ -10,6 +10,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -18,8 +21,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
@@ -30,7 +31,14 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	initial := bytes.Clone(publicationReconcileInitial)
 	writePublicationReconcileFile(t, filepath.Join(home.selected, "settings.ini"), initial, 0o600)
 
-	expectedFloor, attemptID, expectedRecord, expectedPayload := finalizePublicationMaterialOwner(t, home, binding, target, portable, initial)
+	expectedFloor, attemptID, expectedRecord, expectedPayload := finalizePublicationMaterialOwner(
+		t,
+		home,
+		binding,
+		target,
+		portable,
+		initial,
+	)
 	reopened, err := publicationstate.Open(storeDirectory, binding)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, reopened.Close()) })
@@ -43,9 +51,21 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 
 	material, err := reopened.ReadAcceptedMaterial(ctx, binding, beforeRead.floor)
 	require.NoError(t, err)
-	require.True(t, reflect.DeepEqual(beforeRead.floor, material.Floor), "reader floor must match the independently loaded current floor")
-	require.True(t, bytes.Equal(expectedRecord, material.SnapshotRecord), "reader record must match the assertions-only setup oracle")
-	require.True(t, bytes.Equal(expectedPayload, material.Payload), "reader payload must match the assertions-only setup oracle")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead.floor, material.Floor),
+		"reader floor must match the independently loaded current floor",
+	)
+	require.True(
+		t,
+		bytes.Equal(expectedRecord, material.SnapshotRecord),
+		"reader record must match the assertions-only setup oracle",
+	)
+	require.True(
+		t,
+		bytes.Equal(expectedPayload, material.Payload),
+		"reader payload must match the assertions-only setup oracle",
+	)
 	requirePublicationMaterialFile(t, filepath.Join(home.selected, "settings.ini"), initial, 0o600)
 	requirePublicationMaterialFile(t, home.sentinel, publicationReconcileSentinelA, 0o640)
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
@@ -54,12 +74,24 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, model.SnapshotVersion, snapshot.Version)
 	require.Len(t, snapshot.Targets, 1)
-	require.True(t, reflect.DeepEqual(portable, snapshot.Targets[0]), "reader snapshot must contain the independently selected target")
+	require.True(
+		t,
+		reflect.DeepEqual(portable, snapshot.Targets[0]),
+		"reader snapshot must contain the independently selected target",
+	)
 	require.Len(t, snapshot.Entries, 1)
 	require.NotNil(t, snapshot.Entries[0].File)
-	require.Equal(t, model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}, snapshot.Entries[0].Identity())
+	require.Equal(
+		t,
+		model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"},
+		snapshot.Entries[0].Identity(),
+	)
 	require.Equal(t, model.FileRegular, snapshot.Entries[0].File.Kind)
-	require.True(t, bytes.Equal(initial, snapshot.Entries[0].File.Content), "reader snapshot must contain the independent expected file bytes")
+	require.True(
+		t,
+		bytes.Equal(initial, snapshot.Entries[0].File.Content),
+		"reader snapshot must contain the independent expected file bytes",
+	)
 	require.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
 
 	request := service.PublicationReconciliationRequest{
@@ -71,9 +103,17 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 
 	captured := requirePublicationMaterialCapture(t, ctx, home, target, initial)
 	require.Len(t, captured, 1)
-	require.True(t, reflect.DeepEqual(snapshot.Entries[0], captured[0]), "actual local capture must exactly converge with the reader snapshot before base establishment")
+	require.True(
+		t,
+		reflect.DeepEqual(snapshot.Entries[0], captured[0]),
+		"actual local capture must exactly converge with the reader snapshot before base establishment",
+	)
 	afterRead := readPublicationMaterialOwnedState(t, reopened, attemptID)
-	require.True(t, reflect.DeepEqual(beforeRead, afterRead), "reader and capture must preserve fresh public publication and attempt state")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead, afterRead),
+		"reader and capture must preserve fresh public publication and attempt state",
+	)
 	requirePublicationMaterialFile(t, filepath.Join(home.selected, "settings.ini"), initial, 0o600)
 	requirePublicationMaterialFile(t, home.sentinel, publicationReconcileSentinelA, 0o640)
 
@@ -81,7 +121,11 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, base)
 	afterEstablish := readPublicationMaterialOwnedState(t, reopened, attemptID)
-	require.True(t, reflect.DeepEqual(beforeRead, afterEstablish), "base establishment must preserve fresh public publication and attempt state")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead, afterEstablish),
+		"base establishment must preserve fresh public publication and attempt state",
+	)
 	requirePublicationMaterialFile(t, filepath.Join(home.selected, "settings.ini"), initial, 0o600)
 	requirePublicationMaterialFile(t, home.sentinel, publicationReconcileSentinelA, 0o640)
 
@@ -97,7 +141,12 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	require.Equal(t, publicationReconcileTargetID, preview.Targets[0].ID)
 	require.Len(t, preview.Targets[0].Entries, 1)
 	entry := preview.Targets[0].Entries[0]
-	require.True(t, entry.Key == (model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}), "preview must identify the selected synthetic file")
+	require.Equal(
+		t,
+		entry.Key,
+		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		"preview must identify the selected synthetic file",
+	)
 	require.Equal(t, syncengine.ActionUpload, entry.DecisionAction)
 	require.Equal(t, syncengine.PreviewChange, entry.Action)
 	require.Equal(t, syncengine.PreviewReasonLocalChanged, entry.Reason)
@@ -105,10 +154,18 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	require.Empty(t, entry.Detail)
 	require.NotNil(t, entry.Preimage)
 	localDigest := sha256.Sum256(localEdit)
-	require.True(t, hex.EncodeToString(localDigest[:]) == entry.Preimage.Digest, "preview preimage must match the independent synthetic edit SHA256")
+	require.Equal(
+		t,
+		hex.EncodeToString(localDigest[:]), entry.Preimage.Digest,
+		"preview preimage must match the independent synthetic edit SHA256",
+	)
 	require.Equal(t, uint32(0o600), entry.Preimage.Mode)
 	afterPreview := readPublicationMaterialOwnedState(t, reopened, attemptID)
-	require.True(t, reflect.DeepEqual(beforeRead, afterPreview), "preview must preserve fresh public publication and attempt state")
+	require.True(
+		t,
+		reflect.DeepEqual(beforeRead, afterPreview),
+		"preview must preserve fresh public publication and attempt state",
+	)
 	requirePublicationMaterialFile(t, filepath.Join(home.selected, "settings.ini"), localEdit, 0o600)
 	requirePublicationMaterialFile(t, home.sentinel, publicationReconcileSentinelA, 0o640)
 }
@@ -123,15 +180,29 @@ func TestPublicationMaterialPositionOnlyReadRefusesUnretainedFloor(t *testing.T)
 		Path: "settings.ini", State: model.FilePresent, Kind: model.FileRegular,
 		Content: bytes.Clone(incomingBytes), Mode: 0o600,
 	}}
-	snapshot := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: []model.Entry{entry}}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{portable},
+		Entries: []model.Entry{entry},
+	}
 	require.NoError(t, snapshot.Validate())
 	incoming := encodePublicationReconcileMaterial(t, binding, snapshot, 0, nil, [16]byte{0x25, 0xa3})
 	expectedRecord := bytes.Clone(incoming.record)
-	supplied := publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}}
+	supplied := publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-revision",
+		RepositoryDigest:   []byte{1, 2, 3},
+	}
 	observation := publicationReconcileObservation(binding, supplied, incoming)
 	proposal, err := home.pubStore.Prepare(ctx, publicationstate.ModeFirstUse, observation, incoming.payload)
 	require.NoError(t, err)
-	acceptedFloor, err := home.pubStore.Accept(ctx, publicationstate.ModeFirstUse, proposal.StateToken, observation, incoming.payload, proposal.Confirmation)
+	acceptedFloor, err := home.pubStore.Accept(
+		ctx,
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		incoming.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	clear(incoming.payload)
 	incoming.payload = nil
@@ -147,10 +218,18 @@ func TestPublicationMaterialPositionOnlyReadRefusesUnretainedFloor(t *testing.T)
 	}
 
 	before := readPublicationMaterialPositionOnlyState(t, home.pubStore)
-	require.True(t, reflect.DeepEqual(acceptedFloor, before.floor), "fresh public load must identify the accepted current floor")
+	require.True(
+		t,
+		reflect.DeepEqual(acceptedFloor, before.floor),
+		"fresh public load must identify the accepted current floor",
+	)
 	requirePublicationMaterialPositionOnlyLink(t, before, expectedRecord)
 	material, err := home.pubStore.ReadAcceptedMaterial(ctx, binding, before.floor)
-	require.True(t, reflect.DeepEqual(publicationstate.AcceptedMaterial{}, material), "refusal must return zero material")
+	require.True(
+		t,
+		reflect.DeepEqual(publicationstate.AcceptedMaterial{}, material),
+		"refusal must return zero material",
+	)
 	require.ErrorIs(t, err, publicationstate.ErrStorage)
 	var classified *publicationstate.Error
 	require.ErrorAs(t, err, &classified)
@@ -158,7 +237,11 @@ func TestPublicationMaterialPositionOnlyReadRefusesUnretainedFloor(t *testing.T)
 	require.Equal(t, publicationstate.StageReadAcceptedMaterial, classified.Stage())
 	require.Equal(t, publicationstate.ReasonMaterialNotRetained, classified.Reason())
 	after := readPublicationMaterialPositionOnlyState(t, home.pubStore)
-	require.True(t, reflect.DeepEqual(before, after), "position-only read refusal must preserve fresh public floor/history and attempt metadata")
+	require.True(
+		t,
+		reflect.DeepEqual(before, after),
+		"position-only read refusal must preserve fresh public floor/history and attempt metadata",
+	)
 	requirePublicationMaterialPositionOnlyLink(t, after, expectedRecord)
 }
 
@@ -185,10 +268,20 @@ func newPublicationMaterialHome(t *testing.T, binding publicationstate.Binding) 
 	storeDirectory := filepath.Join(root, "publication-state")
 	require.NoError(t, os.Mkdir(storeDirectory, 0o700))
 	store := openPublicationMaterialStore(t, storeDirectory, binding)
-	return &publicationReconcileHome{paths: paths, root: selected, selected: selected, sentinel: sentinel, pubStore: store}, storeDirectory
+	return &publicationReconcileHome{
+		paths:    paths,
+		root:     selected,
+		selected: selected,
+		sentinel: sentinel,
+		pubStore: store,
+	}, storeDirectory
 }
 
-func openPublicationMaterialStore(t *testing.T, directory string, binding publicationstate.Binding) *publicationstate.Store {
+func openPublicationMaterialStore(
+	t *testing.T,
+	directory string,
+	binding publicationstate.Binding,
+) *publicationstate.Store {
 	t.Helper()
 	store, err := publicationstate.Open(directory, binding)
 	require.NoError(t, err)
@@ -199,8 +292,15 @@ func openPublicationMaterialStore(t *testing.T, directory string, binding public
 func publicationMaterialTarget(t *testing.T) (config.Target, config.Config, model.Target) {
 	t.Helper()
 	target := config.Target{
-		ID: publicationReconcileTargetID, Source: model.SourceFiles, Mode: config.Review,
-		Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory, Exclude: []string{"machine-only"}},
+		ID:     publicationReconcileTargetID,
+		Source: model.SourceFiles,
+		Mode:   config.Review,
+		Root: &config.Root{
+			Base:    model.RootHome,
+			Path:    "synthetic",
+			Kind:    model.SelectionDirectory,
+			Exclude: []string{"machine-only"},
+		},
 	}
 	portable, err := target.Model()
 	require.NoError(t, err)
@@ -210,7 +310,14 @@ func publicationMaterialTarget(t *testing.T) (config.Target, config.Config, mode
 	return target, configuration, portable
 }
 
-func finalizePublicationMaterialOwner(t *testing.T, home *publicationReconcileHome, binding publicationstate.Binding, target config.Target, portable model.Target, expectedBytes []byte) (publicationstate.Floor, [16]byte, []byte, []byte) {
+func finalizePublicationMaterialOwner(
+	t *testing.T,
+	home *publicationReconcileHome,
+	binding publicationstate.Binding,
+	target config.Target,
+	portable model.Target,
+	expectedBytes []byte,
+) (publicationstate.Floor, [16]byte, []byte, []byte) {
 	t.Helper()
 	ctx := context.Background()
 	captured := requirePublicationMaterialCapture(t, ctx, home, target, expectedBytes)
@@ -224,8 +331,12 @@ func finalizePublicationMaterialOwner(t *testing.T, home *publicationReconcileHo
 		HeadRecord: bytes.Clone(setup.head), Payload: bytes.Clone(setup.payload),
 	}
 	view := publicationstate.SuppliedRepositoryView{
-		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
-		SuppliedContext: publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}},
+		Origin: binding,
+		Scope:  publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-revision",
+			RepositoryDigest:   []byte{1, 2, 3},
+		},
 	}
 	review := publicationstate.LocalReviewContext{
 		SelectionDigest: [32]byte{0x61}, SelectionRevision: 1,
@@ -235,7 +346,14 @@ func finalizePublicationMaterialOwner(t *testing.T, home *publicationReconcileHo
 	require.NoError(t, err)
 	require.Equal(t, publicationstate.AttemptGenesis, proposal.Kind)
 	require.Equal(t, [16]byte{0x25, 0xa2}, proposal.AttemptID)
-	attempt, err := home.pubStore.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+	attempt, err := home.pubStore.CreateAttempt(
+		ctx,
+		proposal.StateToken,
+		candidate,
+		view,
+		review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, proposal.AttemptID, attempt.ID)
 	require.Equal(t, publicationstate.AttemptPrepared, attempt.Lifecycle)
@@ -245,35 +363,75 @@ func finalizePublicationMaterialOwner(t *testing.T, home *publicationReconcileHo
 	require.NoError(t, err)
 	require.Equal(t, attempt.ID, uploadProposal.AttemptID)
 	require.Equal(t, publicationstate.DispatchUpload, uploadProposal.Kind)
-	upload, err := home.pubStore.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, view, review, uploadProposal.Confirmation)
+	upload, err := home.pubStore.BeginUpload(
+		ctx,
+		attempt.ID,
+		uploadProposal.StateToken,
+		view,
+		review,
+		uploadProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, attempt.ID, upload.AttemptID)
-	require.True(t, bytes.Equal(expectedPayload, upload.Payload), "local upload reservation must match only the setup oracle")
+	require.True(
+		t,
+		bytes.Equal(expectedPayload, upload.Payload),
+		"local upload reservation must match only the setup oracle",
+	)
 	setupRecord, err := publication.DecodeSnapshot(expectedRecord)
 	require.NoError(t, err)
-	require.True(t, bytes.Equal(setupRecord.Blob.CID, upload.Blob.CID), "local upload reservation must bind the setup blob")
+	require.True(
+		t,
+		bytes.Equal(setupRecord.Blob.CID, upload.Blob.CID),
+		"local upload reservation must bind the setup blob",
+	)
 	afterUpload, err := home.pubStore.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	require.Equal(t, publicationstate.AttemptUploadStarted, afterUpload.Lifecycle)
 
-	submissionProposal, err := home.pubStore.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchSubmission, view, review)
+	submissionProposal, err := home.pubStore.PrepareDispatch(
+		ctx,
+		attempt.ID,
+		publicationstate.DispatchSubmission,
+		view,
+		review,
+	)
 	require.NoError(t, err)
 	require.Equal(t, attempt.ID, submissionProposal.AttemptID)
 	require.Equal(t, publicationstate.DispatchSubmission, submissionProposal.Kind)
-	submission, err := home.pubStore.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	submission, err := home.pubStore.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, attempt.ID, submission.AttemptID)
-	require.True(t, bytes.Equal(expectedRecord, submission.SnapshotRecord), "local submission reservation must match only the setup oracle")
-	require.True(t, bytes.Equal(candidate.HeadRecord, submission.HeadRecord), "local submission head must match the setup candidate")
+	require.True(
+		t,
+		bytes.Equal(expectedRecord, submission.SnapshotRecord),
+		"local submission reservation must match only the setup oracle",
+	)
+	require.True(
+		t,
+		bytes.Equal(candidate.HeadRecord, submission.HeadRecord),
+		"local submission head must match the setup candidate",
+	)
 	require.True(t, submission.SnapshotCreateOnly)
 	require.True(t, submission.RequiresAtomicBatch)
 	require.True(t, submission.RequiresCreateExclude)
 	require.True(t, submission.HeadCreate)
 
 	current := publicationstate.SuppliedRepositoryView{
-		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
-		SuppliedContext: view.SuppliedContext, Head: bytes.Clone(candidate.HeadRecord),
-		Snapshots: []publicationstate.SnapshotBlock{{Key: candidate.SnapshotKey, Raw: bytes.Clone(candidate.SnapshotRecord)}},
+		Origin:          binding,
+		Scope:           publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: view.SuppliedContext,
+		Head:            bytes.Clone(candidate.HeadRecord),
+		Snapshots: []publicationstate.SnapshotBlock{
+			{Key: candidate.SnapshotKey, Raw: bytes.Clone(candidate.SnapshotRecord)},
+		},
 	}
 	loaded, err := home.pubStore.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -317,7 +475,13 @@ func finalizePublicationMaterialOwner(t *testing.T, home *publicationReconcileHo
 	return finalized.Floor, attempt.ID, expectedRecord, expectedPayload
 }
 
-func requirePublicationMaterialCapture(t *testing.T, ctx context.Context, home *publicationReconcileHome, target config.Target, expectedBytes []byte) []model.Entry {
+func requirePublicationMaterialCapture(
+	t *testing.T,
+	ctx context.Context,
+	home *publicationReconcileHome,
+	target config.Target,
+	expectedBytes []byte,
+) []model.Entry {
 	t.Helper()
 	captured, err := (service.LocalFilesCapture{}).Capture(ctx, target, home.selected)
 	require.NoError(t, err)
@@ -325,12 +489,25 @@ func requirePublicationMaterialCapture(t *testing.T, ctx context.Context, home *
 	observation := captured.Observations[0]
 	require.Equal(t, model.ObservationPresent, observation.State)
 	require.NotNil(t, observation.Entry)
-	require.True(t, observation.Identity == (model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}), "local capture must identify the selected synthetic file")
-	require.True(t, observation.Entry.Identity() == observation.Identity, "present capture identity must match its entry")
+	require.Equal(
+		t,
+		observation.Identity,
+		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		"local capture must identify the selected synthetic file",
+	)
+	require.Equal(
+		t,
+		observation.Entry.Identity(), observation.Identity,
+		"present capture identity must match its entry",
+	)
 	require.NotNil(t, observation.Entry.File)
 	require.Equal(t, model.FileRegular, observation.Entry.File.Kind)
-	require.True(t, observation.Entry.File.Path == "settings.ini")
-	require.True(t, bytes.Equal(expectedBytes, observation.Entry.File.Content), "local capture must match only the independent expected file bytes")
+	require.Equal(t, observation.Entry.File.Path, "settings.ini")
+	require.True(
+		t,
+		bytes.Equal(expectedBytes, observation.Entry.File.Content),
+		"local capture must match only the independent expected file bytes",
+	)
 	require.Equal(t, uint32(0o600), observation.Entry.File.Mode)
 	require.Len(t, captured.Skipped, 1)
 	require.Equal(t, "machine-only", captured.Skipped[0].Path)
@@ -341,7 +518,11 @@ func requirePublicationMaterialCapture(t *testing.T, ctx context.Context, home *
 	return []model.Entry{entry}
 }
 
-func readPublicationMaterialOwnedState(t *testing.T, store *publicationstate.Store, attemptID [16]byte) publicationMaterialOwnedState {
+func readPublicationMaterialOwnedState(
+	t *testing.T,
+	store *publicationstate.Store,
+	attemptID [16]byte,
+) publicationMaterialOwnedState {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -355,7 +536,14 @@ func readPublicationMaterialOwnedState(t *testing.T, store *publicationstate.Sto
 	require.NoError(t, err)
 	active, activePresent, err := store.ActiveAttempt(ctx)
 	require.NoError(t, err)
-	return publicationMaterialOwnedState{floor: floor, history: history, attempt: attempt, attempts: attempts, active: active, activePresent: activePresent}
+	return publicationMaterialOwnedState{
+		floor:         floor,
+		history:       history,
+		attempt:       attempt,
+		attempts:      attempts,
+		active:        active,
+		activePresent: activePresent,
+	}
 }
 
 type publicationMaterialOwnedState struct {
@@ -367,9 +555,19 @@ type publicationMaterialOwnedState struct {
 	activePresent bool
 }
 
-func requirePublicationMaterialOwnedState(t *testing.T, state publicationMaterialOwnedState, expectedFloor publicationstate.Floor, attemptID [16]byte, expectedRecord []byte) {
+func requirePublicationMaterialOwnedState(
+	t *testing.T,
+	state publicationMaterialOwnedState,
+	expectedFloor publicationstate.Floor,
+	attemptID [16]byte,
+	expectedRecord []byte,
+) {
 	t.Helper()
-	require.True(t, reflect.DeepEqual(expectedFloor, state.floor), "public load must preserve the exact finalized floor")
+	require.True(
+		t,
+		reflect.DeepEqual(expectedFloor, state.floor),
+		"public load must preserve the exact finalized floor",
+	)
 	require.NotZero(t, state.floor.DatabaseID)
 	require.Equal(t, uint64(1), state.floor.Revision)
 	require.Equal(t, uint64(1), state.floor.Generation)
@@ -377,10 +575,14 @@ func requirePublicationMaterialOwnedState(t *testing.T, state publicationMateria
 	require.Len(t, state.history.Events, 1)
 	require.False(t, state.history.HasMore)
 	require.Equal(t, state.floor.Revision, state.history.NextRevision)
-	require.True(t, reflect.DeepEqual(state.floor, state.history.Events[0].NewFloor), "public history must preserve the exact current event floor")
+	require.True(
+		t,
+		reflect.DeepEqual(state.floor, state.history.Events[0].NewFloor),
+		"public history must preserve the exact current event floor",
+	)
 	require.Len(t, state.history.Events[0].Trace, 1)
 	require.Len(t, state.history.Records, 1)
-	require.True(t, state.history.Events[0].Trace[0].Key == state.floor.SnapshotKey)
+	require.Equal(t, state.history.Events[0].Trace[0].Key, state.floor.SnapshotKey)
 	require.Equal(t, state.floor.Revision, state.history.Events[0].Revision)
 	require.Equal(t, state.floor.Sequence, state.history.Events[0].Trace[0].Sequence)
 	require.True(t, bytes.Equal(state.floor.RecordCID, state.history.Events[0].Trace[0].CID))
@@ -391,15 +593,23 @@ func requirePublicationMaterialOwnedState(t *testing.T, state publicationMateria
 	expectedKey, err := publication.SequenceKey(state.floor.Sequence)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(expectedCID, state.floor.RecordCID))
-	require.True(t, state.floor.SnapshotKey == expectedKey)
+	require.Equal(t, state.floor.SnapshotKey, expectedKey)
 	require.Equal(t, expectedSnapshot.PublicationSeq, state.floor.Sequence)
 	require.Equal(t, expectedSnapshot.PublicationID, state.floor.PublicationID)
 	require.Equal(t, expectedSnapshot.Vault, state.floor.Binding.Vault)
 	require.True(t, bytes.Equal(expectedSnapshot.Blob.CID, state.floor.BlobCID))
 	require.Equal(t, expectedSnapshot.Blob.Size, state.floor.BlobSize)
 	require.NoError(t, publication.VerifyHeadBinding(state.floor.Head, expectedRecord, expectedKey))
-	require.True(t, bytes.Equal(expectedRecord, state.history.Records[0].Raw), "public history record must match the independent setup oracle")
-	require.True(t, reflect.DeepEqual(state.history.Events[0].Trace[0], state.history.Records[0].Reference), "public history evidence must join to the accepted trace")
+	require.True(
+		t,
+		bytes.Equal(expectedRecord, state.history.Records[0].Raw),
+		"public history record must match the independent setup oracle",
+	)
+	require.True(
+		t,
+		reflect.DeepEqual(state.history.Events[0].Trace[0], state.history.Records[0].Reference),
+		"public history evidence must join to the accepted trace",
+	)
 	require.Equal(t, attemptID, state.attempt.ID)
 	require.Equal(t, publicationstate.AttemptRetiredSuccess, state.attempt.Lifecycle)
 	require.Equal(t, publicationstate.OutcomeCurrent, state.attempt.Outcome)
@@ -410,10 +620,17 @@ func requirePublicationMaterialOwnedState(t *testing.T, state publicationMateria
 	require.Equal(t, publicationstate.AttemptRetiredSuccess, state.attempts.Attempts[0].Lifecycle)
 	require.Equal(t, publicationstate.OutcomeCurrent, state.attempts.Attempts[0].Outcome)
 	require.False(t, state.activePresent)
-	require.True(t, reflect.DeepEqual(publicationstate.Attempt{}, state.active), "finalized publication must leave no active attempt")
+	require.True(
+		t,
+		reflect.DeepEqual(publicationstate.Attempt{}, state.active),
+		"finalized publication must leave no active attempt",
+	)
 }
 
-func readPublicationMaterialPositionOnlyState(t *testing.T, store *publicationstate.Store) publicationMaterialPositionOnlyState {
+func readPublicationMaterialPositionOnlyState(
+	t *testing.T,
+	store *publicationstate.Store,
+) publicationMaterialPositionOnlyState {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -425,7 +642,13 @@ func readPublicationMaterialPositionOnlyState(t *testing.T, store *publicationst
 	require.NoError(t, err)
 	attempts, err := store.AttemptHistory(ctx, [16]byte{}, 1)
 	require.NoError(t, err)
-	return publicationMaterialPositionOnlyState{floor: floor, history: history, active: active, activePresent: activePresent, attempts: attempts}
+	return publicationMaterialPositionOnlyState{
+		floor:         floor,
+		history:       history,
+		active:        active,
+		activePresent: activePresent,
+		attempts:      attempts,
+	}
 }
 
 type publicationMaterialPositionOnlyState struct {
@@ -436,7 +659,11 @@ type publicationMaterialPositionOnlyState struct {
 	attempts      publicationstate.AttemptPage
 }
 
-func requirePublicationMaterialPositionOnlyLink(t *testing.T, state publicationMaterialPositionOnlyState, expectedRecord []byte) {
+func requirePublicationMaterialPositionOnlyLink(
+	t *testing.T,
+	state publicationMaterialPositionOnlyState,
+	expectedRecord []byte,
+) {
 	t.Helper()
 	record, err := publication.DecodeSnapshot(expectedRecord)
 	require.NoError(t, err)
@@ -446,7 +673,7 @@ func requirePublicationMaterialPositionOnlyLink(t *testing.T, state publicationM
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), record.PublicationSeq)
 	require.Equal(t, record.PublicationID, state.floor.PublicationID)
-	require.True(t, state.floor.SnapshotKey == key)
+	require.Equal(t, state.floor.SnapshotKey, key)
 	require.True(t, bytes.Equal(recordCID, state.floor.RecordCID))
 	require.Equal(t, record.Vault, state.floor.Binding.Vault)
 	require.Equal(t, record.Blob.Size, state.floor.BlobSize)
@@ -461,14 +688,26 @@ func requirePublicationMaterialPositionOnlyLink(t *testing.T, state publicationM
 	require.Len(t, state.history.Events, 1)
 	require.False(t, state.history.HasMore)
 	require.Equal(t, state.floor.Revision, state.history.NextRevision)
-	require.True(t, reflect.DeepEqual(state.floor, state.history.Events[0].NewFloor), "public history must show the exact accepted current floor")
+	require.True(
+		t,
+		reflect.DeepEqual(state.floor, state.history.Events[0].NewFloor),
+		"public history must show the exact accepted current floor",
+	)
 	require.Len(t, state.history.Events[0].Trace, 1)
 	require.Len(t, state.history.Records, 1)
-	require.True(t, state.history.Events[0].Trace[0].Key == key)
+	require.Equal(t, state.history.Events[0].Trace[0].Key, key)
 	require.Equal(t, uint64(0), state.history.Events[0].Trace[0].Sequence)
 	require.True(t, bytes.Equal(recordCID, state.history.Events[0].Trace[0].CID))
-	require.True(t, bytes.Equal(expectedRecord, state.history.Records[0].Raw), "accepted raw record must independently match the supplied fixture record")
-	require.True(t, reflect.DeepEqual(state.history.Events[0].Trace[0], state.history.Records[0].Reference), "public event must link the exact record evidence")
+	require.True(
+		t,
+		bytes.Equal(expectedRecord, state.history.Records[0].Raw),
+		"accepted raw record must independently match the supplied fixture record",
+	)
+	require.True(
+		t,
+		reflect.DeepEqual(state.history.Events[0].Trace[0], state.history.Records[0].Reference),
+		"public event must link the exact record evidence",
+	)
 	require.False(t, state.activePresent)
 	require.Empty(t, state.attempts.Attempts)
 }

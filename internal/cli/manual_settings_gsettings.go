@@ -25,7 +25,11 @@ func (manualSettingsSource) Resolve(_ context.Context, _, schemaID, path string)
 	return settings.Path(), nil
 }
 
-func (manualSettingsSource) Capture(ctx context.Context, targetID string, refs []service.SettingRef) (service.SettingsCapture, error) {
+func (manualSettingsSource) Capture(
+	ctx context.Context,
+	targetID string,
+	refs []service.SettingRef,
+) (service.SettingsCapture, error) {
 	keys := make([]matrix.KeyRef, 0, len(refs))
 	for _, ref := range refs {
 		keys = append(keys, matrix.KeyRef{SchemaID: ref.SchemaID, Path: ref.Path, Key: ref.Key})
@@ -36,7 +40,16 @@ func (manualSettingsSource) Capture(ctx context.Context, targetID string, refs [
 	}
 	unknown := make([]model.EntryKey, 0, len(captured.Unknown))
 	for _, key := range captured.Unknown {
-		unknown = append(unknown, model.EntryKey{TargetID: targetID, Source: model.SourceGNOME, SchemaID: key.SchemaID, SettingsPath: key.Path, SettingKey: key.Key})
+		unknown = append(
+			unknown,
+			model.EntryKey{
+				TargetID:     targetID,
+				Source:       model.SourceGNOME,
+				SchemaID:     key.SchemaID,
+				SettingsPath: key.Path,
+				SettingKey:   key.Key,
+			},
+		)
 	}
 	return service.SettingsCapture{Entries: captured.Entries, Unknown: unknown}, nil
 }

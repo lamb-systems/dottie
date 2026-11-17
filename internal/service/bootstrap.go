@@ -44,7 +44,10 @@ func (coordinator *Coordinator) PreflightVault(ctx context.Context) error {
 	return coordinator.deps.GenesisPreflight.Preflight(ctx)
 }
 
-func (coordinator *Coordinator) InitializeVault(ctx context.Context, request BootstrapRequest) (BootstrapResult, error) {
+func (coordinator *Coordinator) InitializeVault(
+	ctx context.Context,
+	request BootstrapRequest,
+) (BootstrapResult, error) {
 	if err := coordinator.lock(ctx); err != nil {
 		return BootstrapResult{}, err
 	}
@@ -52,7 +55,10 @@ func (coordinator *Coordinator) InitializeVault(ctx context.Context, request Boo
 	return coordinator.initializeVaultLocked(ctx, request)
 }
 
-func (coordinator *Coordinator) initializeVaultLocked(ctx context.Context, request BootstrapRequest) (BootstrapResult, error) {
+func (coordinator *Coordinator) initializeVaultLocked(
+	ctx context.Context,
+	request BootstrapRequest,
+) (BootstrapResult, error) {
 	if coordinator.deps.State == nil {
 		return BootstrapResult{}, errors.New("bootstrap coordinator state port is unavailable")
 	}

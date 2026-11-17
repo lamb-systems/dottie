@@ -15,6 +15,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -22,7 +23,7 @@ type AttestationRelayCommitter interface {
 	CommitAttestation(context.Context, *Revision, []byte) error
 }
 
-type ATProtoAttestationRelay struct {
+type AttestationRelay struct {
 	Reader           RevisionReader
 	Transport        Transport
 	DID              string
@@ -70,7 +71,14 @@ func PrepareAttestationRecordWrite(rkey string, signedBytes []byte) (RecordWrite
 	return RecordWrite{Action: RecordCreate, Collection: VaultAttestationNSID, RKey: rkey, Record: record}, nil
 }
 
-func PublishAttestationFenced(ctx context.Context, transport Transport, revision *Revision, rkey string, signedBytes []byte, verification vault.AttestationVerificationRequest) (PublishResult, error) {
+func PublishAttestationFenced(
+	ctx context.Context,
+	transport Transport,
+	revision *Revision,
+	rkey string,
+	signedBytes []byte,
+	verification vault.AttestationVerificationRequest,
+) (PublishResult, error) {
 	if transport == nil || revision == nil || !validDID(revision.did) || revision.commitCID == "" {
 		return PublishResult{}, fmt.Errorf("%w: verified revision and transport are required", ErrBatchRejected)
 	}
@@ -81,7 +89,11 @@ func PublishAttestationFenced(ctx context.Context, transport Transport, revision
 		return PublishResult{}, fmt.Errorf("%w: attestation signature or context", ErrBatchRejected)
 	}
 	if err := verifyAttestationContextRevision(revision, verification); err != nil {
-		return PublishResult{}, fmt.Errorf("%w: attestation context is not present in the fenced revision: %w", ErrBatchRejected, err)
+		return PublishResult{}, fmt.Errorf(
+			"%w: attestation context is not present in the fenced revision: %w",
+			ErrBatchRejected,
+			err,
+		)
 	}
 	write, err := PrepareAttestationRecordWrite(rkey, signedBytes)
 	if err != nil {
@@ -94,7 +106,10 @@ func PublishAttestationFenced(ctx context.Context, transport Transport, revision
 	decoded, err := decodeRecordJSON(write.Record)
 	attestationRecord, ok := decoded.(AttestationRecord)
 	if err != nil || !ok || attestationRecord.DeviceID != attestationRecord.SignerDeviceID {
-		return PublishResult{}, fmt.Errorf("%w: attestation record is malformed or has mismatched subject", ErrBatchRejected)
+		return PublishResult{}, fmt.Errorf(
+			"%w: attestation record is malformed or has mismatched subject",
+			ErrBatchRejected,
+		)
 	}
 	canonicalRecord, err := EncodeRecord(attestationRecord)
 	if err != nil || VerifyRecordBinding(canonicalRecord, signedBytes) != nil ||
@@ -134,15 +149,27 @@ func PublishAttestationFenced(ctx context.Context, transport Transport, revision
 	var output applyWritesOutput
 	if len(response) != 0 {
 		if err := json.Unmarshal(response, &output); err != nil {
-			return PublishResult{}, fmt.Errorf("%w: applyWrites response is malformed after submission", ErrAmbiguousTransport)
+			return PublishResult{}, fmt.Errorf(
+				"%w: applyWrites response is malformed after submission",
+				ErrAmbiguousTransport,
+			)
 		}
 	}
 	return PublishResult{CommitCID: output.Commit.CID}, nil
 }
 
-func RelayAttestation(ctx context.Context, committer AttestationRelayCommitter, revision *Revision, signedBytes []byte, verification vault.AttestationVerificationRequest) error {
+func RelayAttestation(
+	ctx context.Context,
+	committer AttestationRelayCommitter,
+	revision *Revision,
+	signedBytes []byte,
+	verification vault.AttestationVerificationRequest,
+) error {
 	if committer == nil || revision == nil || len(signedBytes) == 0 {
-		return fmt.Errorf("%w: attestation relay requires signed bytes, target revision, and committer", ErrBatchRejected)
+		return fmt.Errorf(
+			"%w: attestation relay requires signed bytes, target revision, and committer",
+			ErrBatchRejected,
+		)
 	}
 	if _, err := vault.VerifyAttestation(signedBytes, verification); err != nil {
 		return fmt.Errorf("%w: attestation signature or context", ErrBatchRejected)
@@ -150,7 +177,11 @@ func RelayAttestation(ctx context.Context, committer AttestationRelayCommitter, 
 	return committer.CommitAttestation(ctx, revision, bytes.Clone(signedBytes))
 }
 
-func (relay ATProtoAttestationRelay) CommitAttestation(ctx context.Context, revision *Revision, signedBytes []byte) error {
+func (relay AttestationRelay) CommitAttestation(
+	ctx context.Context,
+	revision *Revision,
+	signedBytes []byte,
+) error {
 	if revision == nil || relay.DID == "" || revision.DID() != relay.DID {
 		return fmt.Errorf("%w: relay revision and repository DID must match", ErrBatchRejected)
 	}
@@ -165,7 +196,7 @@ func (relay ATProtoAttestationRelay) CommitAttestation(ctx context.Context, revi
 	if relay.RKey != "" && relay.RKey != rkey {
 		return fmt.Errorf("%w: relay rkey differs from deterministic attestation key", ErrBatchRejected)
 	}
-	result, err := PublishAttestation(ctx, ATProtoPublicationIO{
+	result, err := PublishAttestation(ctx, PublicationIO{
 		Reader: relay.Reader, Transport: relay.Transport, DID: relay.DID, TrustAnchor: relay.TrustAnchor,
 		PreviousPolicies: relay.PreviousPolicies, PreviousControls: relay.PreviousControls,
 		ObservationStore: relay.ObservationStore, Clock: relay.Clock,
@@ -179,7 +210,10 @@ func (relay ATProtoAttestationRelay) CommitAttestation(ctx context.Context, revi
 	return nil
 }
 
-func VerifyAttestationRecord(recordBytes []byte, request vault.AttestationVerificationRequest) (vault.AttestationJudgement, error) {
+func VerifyAttestationRecord(
+	recordBytes []byte,
+	request vault.AttestationVerificationRequest,
+) (vault.AttestationJudgement, error) {
 	decoded, err := DecodeRecord(recordBytes)
 	if err != nil {
 		return vault.AttestationJudgement{}, err
@@ -189,7 +223,10 @@ func VerifyAttestationRecord(recordBytes []byte, request vault.AttestationVerifi
 		return vault.AttestationJudgement{}, &RecordDecodeError{Field: "$type", Reason: "not an attestation record"}
 	}
 	if record.DeviceID != record.SignerDeviceID {
-		return vault.AttestationJudgement{}, fmt.Errorf("%w: attestation subject does not match signer", vault.ErrAuthorization)
+		return vault.AttestationJudgement{}, fmt.Errorf(
+			"%w: attestation subject does not match signer",
+			vault.ErrAuthorization,
+		)
 	}
 	attestation := vault.Attestation{
 		SchemaVersion: uint8(record.SchemaVersion), Vault: [32]byte(record.Vault), DeviceID: record.DeviceID,
@@ -200,7 +237,10 @@ func VerifyAttestationRecord(recordBytes []byte, request vault.AttestationVerifi
 	}
 	attestation.RecoveryPoints = make([]vault.RetentionRecoveryPoint, len(record.RecoveryPoints))
 	for index, point := range record.RecoveryPoints {
-		attestation.RecoveryPoints[index] = vault.RetentionRecoveryPoint{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+		attestation.RecoveryPoints[index] = vault.RetentionRecoveryPoint{
+			Epoch:       point.Epoch,
+			SnapshotCID: bytes.Clone(point.SnapshotCID),
+		}
 	}
 	encoded, err := vault.EncodeAttestation(attestation)
 	if err != nil {
@@ -227,9 +267,19 @@ func AttestationRecordRKey(signedBytes []byte) (string, error) {
 	return "attest-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])), nil
 }
 
-func PublishAttestation(ctx context.Context, io ATProtoPublicationIO, localDeviceID string, localKeyID, signedBytes []byte) (AttestationPublishResult, error) {
-	if io.Transport == nil || io.Reader.Transport == nil || io.DID == "" || localDeviceID == "" || len(localKeyID) == 0 || len(signedBytes) == 0 {
-		return AttestationPublishResult{}, fmt.Errorf("%w: attestation publication inputs are required", ErrBatchRejected)
+func PublishAttestation(
+	ctx context.Context,
+	io PublicationIO,
+	localDeviceID string,
+	localKeyID, signedBytes []byte,
+) (AttestationPublishResult, error) {
+	if io.Transport == nil || io.Reader.Transport == nil || io.DID == "" || localDeviceID == "" ||
+		len(localKeyID) == 0 ||
+		len(signedBytes) == 0 {
+		return AttestationPublishResult{}, fmt.Errorf(
+			"%w: attestation publication inputs are required",
+			ErrBatchRejected,
+		)
 	}
 	revision, predecessor, err := io.ReadCurrent(ctx)
 	if err != nil {
@@ -243,8 +293,12 @@ func PublishAttestation(ctx context.Context, io ATProtoPublicationIO, localDevic
 	if err != nil {
 		return AttestationPublishResult{}, fmt.Errorf("%w: attestation object", ErrBatchRejected)
 	}
-	if attestation.DeviceID != localDeviceID || attestation.Signer.DeviceID != localDeviceID || !bytes.Equal(attestation.Signer.KeyID, localKeyID) {
-		return AttestationPublishResult{}, fmt.Errorf("%w: attestation is not signed for the selected local device", ErrBatchRejected)
+	if attestation.DeviceID != localDeviceID || attestation.Signer.DeviceID != localDeviceID ||
+		!bytes.Equal(attestation.Signer.KeyID, localKeyID) {
+		return AttestationPublishResult{}, fmt.Errorf(
+			"%w: attestation is not signed for the selected local device",
+			ErrBatchRejected,
+		)
 	}
 	if _, err := vault.VerifyAttestation(signedBytes, verification); err != nil {
 		return AttestationPublishResult{}, fmt.Errorf("%w: attestation signature or context", ErrBatchRejected)
@@ -263,7 +317,14 @@ func PublishAttestation(ctx context.Context, io ATProtoPublicationIO, localDevic
 	}
 	key := RecordKey{Collection: VaultAttestationNSID, RKey: rkey}
 	if revision.HasRecord(key) {
-		result, verifyErr := verifyPublishedAttestation(revision, key, expectedRecordCID, write.Record, signedBytes, verification)
+		result, verifyErr := verifyPublishedAttestation(
+			revision,
+			key,
+			expectedRecordCID,
+			write.Record,
+			signedBytes,
+			verification,
+		)
 		if verifyErr != nil {
 			return AttestationPublishResult{}, errors.Join(ErrAttestationConflict, verifyErr)
 		}
@@ -275,7 +336,14 @@ func PublishAttestation(ctx context.Context, io ATProtoPublicationIO, localDevic
 	if readErr != nil {
 		return AttestationPublishResult{}, errors.Join(ErrAttestationUnavailable, publishErr, readErr)
 	}
-	result, verifyErr := verifyPublishedAttestation(readBack, key, expectedRecordCID, write.Record, signedBytes, verification)
+	result, verifyErr := verifyPublishedAttestation(
+		readBack,
+		key,
+		expectedRecordCID,
+		write.Record,
+		signedBytes,
+		verification,
+	)
 	if verifyErr == nil {
 		result.CommitCID = readBack.CommitCID()
 		return result, nil
@@ -286,7 +354,9 @@ func PublishAttestation(ctx context.Context, io ATProtoPublicationIO, localDevic
 	return AttestationPublishResult{}, errors.Join(ErrAttestationNotLanded, verifyErr)
 }
 
-func attestationVerificationForPredecessor(predecessor vault.Predecessor) (vault.AttestationVerificationRequest, error) {
+func attestationVerificationForPredecessor(
+	predecessor vault.Predecessor,
+) (vault.AttestationVerificationRequest, error) {
 	policy, err := vault.DecodePolicy(predecessor.Policy)
 	if err != nil {
 		return vault.AttestationVerificationRequest{}, err
@@ -295,12 +365,23 @@ func attestationVerificationForPredecessor(predecessor vault.Predecessor) (vault
 		return vault.AttestationVerificationRequest{}, err
 	}
 	return vault.AttestationVerificationRequest{
-		VaultID: policy.Vault, TrustAnchor: predecessor.TrustAnchor,
-		State: vault.ControlEvidence{Policy: bytes.Clone(predecessor.Policy), Control: bytes.Clone(predecessor.Control), Certificates: predecessor.Certificates},
+		VaultID:     policy.Vault,
+		TrustAnchor: predecessor.TrustAnchor,
+		State: vault.ControlEvidence{
+			Policy:       bytes.Clone(predecessor.Policy),
+			Control:      bytes.Clone(predecessor.Control),
+			Certificates: predecessor.Certificates,
+		},
 	}, nil
 }
 
-func verifyPublishedAttestation(revision *Revision, key RecordKey, expectedCID string, expectedJSON, signedBytes []byte, verification vault.AttestationVerificationRequest) (AttestationPublishResult, error) {
+func verifyPublishedAttestation(
+	revision *Revision,
+	key RecordKey,
+	expectedCID string,
+	expectedJSON, signedBytes []byte,
+	verification vault.AttestationVerificationRequest,
+) (AttestationPublishResult, error) {
 	if revision == nil {
 		return AttestationPublishResult{}, ErrUnprovenMembership
 	}
@@ -326,7 +407,12 @@ func verifyPublishedAttestation(revision *Revision, key RecordKey, expectedCID s
 	if _, err := VerifyAttestationRecord(proven.Data, verification); err != nil {
 		return AttestationPublishResult{}, err
 	}
-	return AttestationPublishResult{RKey: key.RKey, RecordCID: expectedCID, CommitCID: revision.CommitCID(), Revision: revision}, nil
+	return AttestationPublishResult{
+		RKey:      key.RKey,
+		RecordCID: expectedCID,
+		CommitCID: revision.CommitCID(),
+		Revision:  revision,
+	}, nil
 }
 
 func verifyAttestationRecordContext(recordBytes []byte, verification vault.AttestationVerificationRequest) error {
@@ -405,7 +491,10 @@ func attestationRecordFromVault(value vault.Attestation) AttestationRecord {
 	}
 	record.RecoveryPoints = make([]AttestationRecoveryPointRecord, len(value.RecoveryPoints))
 	for index, point := range value.RecoveryPoints {
-		record.RecoveryPoints[index] = AttestationRecoveryPointRecord{Epoch: point.Epoch, SnapshotCID: bytes.Clone(point.SnapshotCID)}
+		record.RecoveryPoints[index] = AttestationRecoveryPointRecord{
+			Epoch:       point.Epoch,
+			SnapshotCID: bytes.Clone(point.SnapshotCID),
+		}
 	}
 	return record
 }

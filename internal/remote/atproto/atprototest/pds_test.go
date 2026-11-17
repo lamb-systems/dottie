@@ -21,7 +21,14 @@ const memoryPDSTestDID = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
 func TestMemoryPDSServesSignedRepositoryAndRecordEndpoints(t *testing.T) {
 	pds := newMemoryPDS(t)
 	ctx := context.Background()
-	status, body, err := pds.Do(ctx, "GET", "com.atproto.sync.getLatestCommit", url.Values{"did": {memoryPDSTestDID}}, nil, "")
+	status, body, err := pds.Do(
+		ctx,
+		"GET",
+		"com.atproto.sync.getLatestCommit",
+		url.Values{"did": {memoryPDSTestDID}},
+		nil,
+		"",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	var latest struct {
@@ -47,8 +54,22 @@ func TestMemoryPDSServesSignedRepositoryAndRecordEndpoints(t *testing.T) {
 	require.Len(t, carReader.Header.Roots, 1)
 	assert.Equal(t, pds.CurrentRevision().CommitCID, carReader.Header.Roots[0])
 
-	record := createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.preferences", "self", []byte(`{"$type":"systems.example.preferences","value":"synthetic"}`))
-	status, body, err = pds.Do(ctx, "GET", "com.atproto.repo.getRecord", url.Values{"repo": {memoryPDSTestDID}, "collection": {record.Collection}, "rkey": {record.RKey}}, nil, "")
+	record := createPDSRecord(
+		t,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"systems.example.preferences",
+		"self",
+		[]byte(`{"$type":"systems.example.preferences","value":"synthetic"}`),
+	)
+	status, body, err = pds.Do(
+		ctx,
+		"GET",
+		"com.atproto.repo.getRecord",
+		url.Values{"repo": {memoryPDSTestDID}, "collection": {record.Collection}, "rkey": {record.RKey}},
+		nil,
+		"",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	var result struct {
@@ -68,7 +89,14 @@ func TestMemoryPDSRejectsStaleSwapAtomically(t *testing.T) {
 	pds := newMemoryPDS(t)
 	ctx := context.Background()
 	staleCommit := pds.CurrentRevision().CommitCID.String()
-	winner := createPDSRecord(t, pds, staleCommit, "systems.example.preferences", "winner", []byte(`{"$type":"systems.example.preferences","value":"winner"}`))
+	winner := createPDSRecord(
+		t,
+		pds,
+		staleCommit,
+		"systems.example.preferences",
+		"winner",
+		[]byte(`{"$type":"systems.example.preferences","value":"winner"}`),
+	)
 	winnerCID, exists := pds.RecordCID(winner.Collection, winner.RKey)
 	require.True(t, exists)
 	winnerCommit := pds.CurrentRevision().CommitCID
@@ -94,7 +122,11 @@ func TestMemoryPDSRejectsStaleSwapAtomically(t *testing.T) {
 	_, exists = pds.Record("systems.example.blobRecord", "loser")
 	assert.False(t, exists)
 	assert.False(t, pds.BlobIsLive(blob.Ref.CID().String()))
-	status, _, err = pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blob.Ref.CID().String()}})
+	status, _, err = pds.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {memoryPDSTestDID}, "cid": {blob.Ref.CID().String()}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 404, status)
 }
@@ -106,7 +138,11 @@ func TestMemoryPDSBlobLifecycleAndServingRefusal(t *testing.T) {
 	blob := uploadPDSBlob(t, pds, blobData)
 	blobCID := blob.Ref.CID().String()
 	assert.False(t, pds.BlobIsLive(blobCID))
-	status, _, err := pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}})
+	status, _, err := pds.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 404, status)
 
@@ -114,7 +150,11 @@ func TestMemoryPDSBlobLifecycleAndServingRefusal(t *testing.T) {
 	require.NoError(t, err)
 	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "live", value)
 	assert.True(t, pds.BlobIsLive(blobCID))
-	status, stream, err := pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}})
+	status, stream, err := pds.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}},
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	served, err := io.ReadAll(stream)
@@ -123,7 +163,11 @@ func TestMemoryPDSBlobLifecycleAndServingRefusal(t *testing.T) {
 	assert.Equal(t, blobData, served)
 
 	pds.SetHooks(MemoryPDSHooks{GetBlobStatus: 503})
-	status, _, err = pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}})
+	status, _, err = pds.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 503, status)
 }
@@ -138,9 +182,20 @@ func TestMemoryPDSListRecordsAndListBlobsExposeLiveProjection(t *testing.T) {
 	liveRecord, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": live})
 	require.NoError(t, err)
 	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "live", liveRecord)
-	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.blobRecord", "second", []byte(`{"$type":"systems.example.blobRecord","value":"second"}`))
+	createPDSRecord(
+		t,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"systems.example.blobRecord",
+		"second",
+		[]byte(`{"$type":"systems.example.blobRecord","value":"second"}`),
+	)
 
-	recordsQuery := url.Values{"repo": {memoryPDSTestDID}, "collection": {"systems.example.blobRecord"}, "limit": {"100"}}
+	recordsQuery := url.Values{
+		"repo":       {memoryPDSTestDID},
+		"collection": {"systems.example.blobRecord"},
+		"limit":      {"100"},
+	}
 	status, body, err := pds.Do(ctx, "GET", "com.atproto.repo.listRecords", recordsQuery, nil, "")
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
@@ -186,14 +241,29 @@ func TestMemoryPDSFailureHooksAndPostProcessingExposure(t *testing.T) {
 	pds := newMemoryPDS(t)
 	ctx := context.Background()
 	pds.SetHooks(MemoryPDSHooks{RejectNextUploadBlobStatus: 413, RejectNextUploadBlobCode: "StorageQuotaExceeded"})
-	status, body, err := pds.Do(ctx, "POST", "com.atproto.repo.uploadBlob", nil, []byte("rejected"), "application/octet-stream")
+	status, body, err := pds.Do(
+		ctx,
+		"POST",
+		"com.atproto.repo.uploadBlob",
+		nil,
+		[]byte("rejected"),
+		"application/octet-stream",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 413, status)
 	assert.JSONEq(t, `{"error":"StorageQuotaExceeded"}`, string(body))
 	assert.Empty(t, pds.StoredBlobCIDs())
 
 	pds.SetHooks(MemoryPDSHooks{RejectNextApplyWritesStatus: 429, RejectNextApplyWritesCode: "QuotaExceeded"})
-	status, body, err = applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.preferences", "rejected", []byte(`{"$type":"systems.example.preferences","value":"no"}`))
+	status, body, err = applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.preferences",
+		"rejected",
+		[]byte(`{"$type":"systems.example.preferences","value":"no"}`),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 429, status)
 	assert.JSONEq(t, `{"error":"QuotaExceeded"}`, string(body))
@@ -210,7 +280,15 @@ func TestMemoryPDSFailureHooksAndPostProcessingExposure(t *testing.T) {
 		RejectNextApplyWritesAfterBlobProcessingCode:   "StorageQuotaExceeded",
 	})
 	before := pds.CurrentRevision().CommitCID
-	status, body, err = applyPDSRecord(ctx, pds, before.String(), "create", "systems.example.blobRecord", "candidate", value)
+	status, body, err = applyPDSRecord(
+		ctx,
+		pds,
+		before.String(),
+		"create",
+		"systems.example.blobRecord",
+		"candidate",
+		value,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 400, status)
 	assert.JSONEq(t, `{"error":"StorageQuotaExceeded"}`, string(body))
@@ -220,7 +298,11 @@ func TestMemoryPDSFailureHooksAndPostProcessingExposure(t *testing.T) {
 	assert.Contains(t, pds.StoredBlobCIDs(), blobCID)
 	assert.False(t, pds.BlobIsLive(blobCID))
 	assert.True(t, pds.PubliclyRetrievable(blobCID))
-	streamStatus, stream, err := pds.OpenStream(ctx, "com.atproto.sync.getBlob", url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}})
+	streamStatus, stream, err := pds.OpenStream(
+		ctx,
+		"com.atproto.sync.getBlob",
+		url.Values{"did": {memoryPDSTestDID}, "cid": {blobCID}},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 200, streamStatus)
 	served, err := io.ReadAll(stream)
@@ -234,34 +316,68 @@ func TestMemoryPDSApplyWritesResponseHooksAndDelete(t *testing.T) {
 	ctx := context.Background()
 	first := []byte(`{"$type":"systems.example.preferences","value":"one"}`)
 	pds.SetHooks(MemoryPDSHooks{LoseNextApplyWritesResponse: true})
-	_, _, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.preferences", "self", first)
+	_, _, err := applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.preferences",
+		"self",
+		first,
+	)
 	require.ErrorIs(t, err, ErrLostResponse)
 	_, exists := pds.Record("systems.example.preferences", "self")
 	assert.True(t, exists)
 
 	pds.SetHooks(MemoryPDSHooks{DuplicateNextApplyWritesResponse: true})
-	status, response, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "update", "systems.example.preferences", "self", []byte(`{"$type":"systems.example.preferences","value":"two"}`))
+	status, response, err := applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"update",
+		"systems.example.preferences",
+		"self",
+		[]byte(`{"$type":"systems.example.preferences","value":"two"}`),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 200, status)
 	assert.False(t, json.Valid(response))
 
 	before := pds.CurrentRevision().CommitCID
 	pds.SetHooks(MemoryPDSHooks{RejectNextApplyWrites: true})
-	status, _, err = applyPDSRecord(ctx, pds, before.String(), "create", "systems.example.preferences", "rejected", first)
+	status, _, err = applyPDSRecord(
+		ctx,
+		pds,
+		before.String(),
+		"create",
+		"systems.example.preferences",
+		"rejected",
+		first,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 400, status)
 	assert.Equal(t, before, pds.CurrentRevision().CommitCID)
 	_, exists = pds.Record("systems.example.preferences", "rejected")
 	assert.False(t, exists)
 
-	status, _, err = applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "delete", "systems.example.preferences", "self", nil)
+	status, _, err = applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"delete",
+		"systems.example.preferences",
+		"self",
+		nil,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 200, status)
 	_, exists = pds.Record("systems.example.preferences", "self")
 	assert.False(t, exists)
 	createPDSRecord(t, pds, pds.CurrentRevision().CommitCID.String(), "systems.example.preferences", "self", first)
 
-	deleteBody, err := json.Marshal(map[string]string{"repo": memoryPDSTestDID, "collection": "systems.example.preferences", "rkey": "self"})
+	deleteBody, err := json.Marshal(
+		map[string]string{"repo": memoryPDSTestDID, "collection": "systems.example.preferences", "rkey": "self"},
+	)
 	require.NoError(t, err)
 	status, _, err = pds.Do(ctx, "POST", "com.atproto.repo.deleteRecord", nil, deleteBody, "application/json")
 	require.NoError(t, err)
@@ -289,7 +405,12 @@ func createPDSRecord(t *testing.T, pds *MemoryPDS, swapCommit, collection, rkey 
 	return record
 }
 
-func applyPDSRecord(ctx context.Context, pds *MemoryPDS, swapCommit, action, collection, rkey string, value []byte) (int, []byte, error) {
+func applyPDSRecord(
+	ctx context.Context,
+	pds *MemoryPDS,
+	swapCommit, action, collection, rkey string,
+	value []byte,
+) (int, []byte, error) {
 	typeName := "com.atproto.repo.applyWrites#" + action
 	var jsonValue json.RawMessage = value
 	if action == "delete" {
@@ -307,7 +428,14 @@ func applyPDSRecord(ctx context.Context, pds *MemoryPDS, swapCommit, action, col
 
 func uploadPDSBlob(t *testing.T, pds *MemoryPDS, data []byte) atdata.Blob {
 	t.Helper()
-	status, response, err := pds.Do(context.Background(), "POST", "com.atproto.repo.uploadBlob", nil, data, "application/octet-stream")
+	status, response, err := pds.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.uploadBlob",
+		nil,
+		data,
+		"application/octet-stream",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 	var result struct {
@@ -330,7 +458,15 @@ func TestMemoryPDSCanonicalizedBlobMIMETypeMustMatchTheRecordBlob(t *testing.T) 
 	mismatched := atdata.Blob{Ref: blob.Ref, MimeType: "application/octet-stream", Size: blob.Size}
 	value, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": mismatched})
 	require.NoError(t, err)
-	status, body, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "mismatched", value)
+	status, body, err := applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.blobRecord",
+		"mismatched",
+		value,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 400, status)
 	assert.JSONEq(t, `{"error":"InvalidMimeType"}`, string(body))
@@ -340,7 +476,15 @@ func TestMemoryPDSCanonicalizedBlobMIMETypeMustMatchTheRecordBlob(t *testing.T) 
 	matched := atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size}
 	value, err = json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": matched})
 	require.NoError(t, err)
-	status, body, err = applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "matched", value)
+	status, body, err = applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.blobRecord",
+		"matched",
+		value,
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status, string(body))
 	_, exists = pds.Record("systems.example.blobRecord", "matched")
@@ -356,9 +500,22 @@ func TestMemoryPDSKeepsTheDeclaredBlobMIMETypeWithoutCanonicalization(t *testing
 	blob := uploadPDSBlob(t, pds, archive)
 	assert.Equal(t, "application/octet-stream", blob.MimeType)
 
-	value, err := json.Marshal(map[string]any{"$type": "systems.example.blobRecord", "blob": atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size}})
+	value, err := json.Marshal(
+		map[string]any{
+			"$type": "systems.example.blobRecord",
+			"blob":  atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size},
+		},
+	)
 	require.NoError(t, err)
-	status, body, err := applyPDSRecord(ctx, pds, pds.CurrentRevision().CommitCID.String(), "create", "systems.example.blobRecord", "unchecked", value)
+	status, body, err := applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.blobRecord",
+		"unchecked",
+		value,
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status, string(body))
 	_, exists := pds.Record("systems.example.blobRecord", "unchecked")
@@ -370,7 +527,12 @@ func memoryPDSTarArchive(t *testing.T) []byte {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
 	content := []byte("synthetic archive member\n")
-	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "member.txt", Mode: 0o600, Size: int64(len(content)), Typeflag: tar.TypeReg}))
+	require.NoError(
+		t,
+		writer.WriteHeader(
+			&tar.Header{Name: "member.txt", Mode: 0o600, Size: int64(len(content)), Typeflag: tar.TypeReg},
+		),
+	)
 	_, err := writer.Write(content)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())

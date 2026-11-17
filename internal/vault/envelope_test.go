@@ -15,12 +15,13 @@ import (
 	"testing"
 
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 type envelopeFixture struct {
@@ -146,12 +147,26 @@ func newEnvelopeFixture(t *testing.T) envelopeFixture {
 	}
 	certificateBytes := signCertificateValue(t, certificate, signingKey)
 	policy := Policy{
-		Vault: vaultID, EpochSeq: 7,
-		Roles:                []RoleBinding{{DeviceID: "device-root", Role: RoleRoot}, {DeviceID: "device-publisher", Role: RolePublisher}},
-		Recipients:           []PolicyRecipient{{DeviceID: "device-publisher", KeyID: []byte("recipient-a"), PublicKey: [32]byte(recipientKey.PublicKey().Bytes())}},
-		PolicyRetentionFloor: 2, RetainedRecoveryPoints: 3, MaxPublications: 100, MaxEpochAge: 86400,
-		RecoveryAnchor: [32]byte(fixtureBytes(71, 32)), PrevPolicyDigest: [32]byte{},
-		Signer: Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
+		Vault:    vaultID,
+		EpochSeq: 7,
+		Roles: []RoleBinding{
+			{DeviceID: "device-root", Role: RoleRoot},
+			{DeviceID: "device-publisher", Role: RolePublisher},
+		},
+		Recipients: []PolicyRecipient{
+			{
+				DeviceID:  "device-publisher",
+				KeyID:     []byte("recipient-a"),
+				PublicKey: [32]byte(recipientKey.PublicKey().Bytes()),
+			},
+		},
+		PolicyRetentionFloor:   2,
+		RetainedRecoveryPoints: 3,
+		MaxPublications:        100,
+		MaxEpochAge:            86400,
+		RecoveryAnchor:         [32]byte(fixtureBytes(71, 32)),
+		PrevPolicyDigest:       [32]byte{},
+		Signer:                 Signer{DeviceID: "device-root", KeyID: []byte("signer-root")},
 	}
 	policyBytes := signPolicyValue(t, policy, signingKey)
 	policy, err := DecodePolicy(policyBytes)
@@ -159,14 +174,23 @@ func newEnvelopeFixture(t *testing.T) envelopeFixture {
 	policyDigest, err := ComputePolicyDigest(policyBytes)
 	require.NoError(t, err)
 	prepared := PreparedSeal{
-		Purpose: PurposeSnapshot, Vault: vaultID, PublicationID: [16]byte(fixtureBytes(101, 16)),
-		EpochSeq: 7, PolicyDigest: policyDigest, Parent: fixtureCIDBytes(t),
-		DeviceID: certificate.DeviceID, KeyID: certificate.KeyID, Plaintext: []byte("fixture plaintext: path=/home/synthetic/.config/example, value=never-public"),
-		SigningKey: publisherKey, ContentKey: fixtureBytes(121, 32), Nonce: [24]byte(fixtureBytes(151, 24)),
+		Purpose:       PurposeSnapshot,
+		Vault:         vaultID,
+		PublicationID: [16]byte(fixtureBytes(101, 16)),
+		EpochSeq:      7,
+		PolicyDigest:  policyDigest,
+		Parent:        fixtureCIDBytes(t),
+		DeviceID:      certificate.DeviceID,
+		KeyID:         certificate.KeyID,
+		Plaintext:     []byte("fixture plaintext: path=/home/synthetic/.config/example, value=never-public"),
+		SigningKey:    publisherKey,
+		ContentKey:    fixtureBytes(121, 32),
+		Nonce:         [24]byte(fixtureBytes(151, 24)),
 		Recipients: []PreparedRecipient{{
 			KeyID: []byte("recipient-a"), PublicKey: recipientKey.PublicKey().Bytes(),
 			EphemeralPrivate: fixedX25519Key(41).Bytes(), WrapNonce: [24]byte(fixtureBytes(181, 24)),
-		}}, Policy: policy,
+		}},
+		Policy: policy,
 	}
 	envelope, err := SealPrepared(prepared)
 	require.NoError(t, err)
@@ -314,12 +338,20 @@ func TestKindByteDisambiguatesEveryObjectType(t *testing.T) {
 func TestSealGeneratesMaterialAndOpens(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	request := SealRequest{
-		Purpose: PurposeSnapshot, Vault: fixture.envelope.Vault, PublicationID: [16]byte(fixtureBytes(41, 16)),
-		EpochSeq: fixture.envelope.EpochSeq, PolicyDigest: fixture.envelope.PolicyDigest,
-		Parent: fixture.envelope.Parent, DeviceID: fixture.envelope.DeviceID, KeyID: fixture.envelope.KeyID,
-		Plaintext: fixture.prepared.Plaintext, SigningKey: fixture.publisherKey,
-		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
-		Policy:     fixture.policy,
+		Purpose:       PurposeSnapshot,
+		Vault:         fixture.envelope.Vault,
+		PublicationID: [16]byte(fixtureBytes(41, 16)),
+		EpochSeq:      fixture.envelope.EpochSeq,
+		PolicyDigest:  fixture.envelope.PolicyDigest,
+		Parent:        fixture.envelope.Parent,
+		DeviceID:      fixture.envelope.DeviceID,
+		KeyID:         fixture.envelope.KeyID,
+		Plaintext:     fixture.prepared.Plaintext,
+		SigningKey:    fixture.publisherKey,
+		Recipients: []RecipientPublicKey{
+			{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()},
+		},
+		Policy: fixture.policy,
 	}
 	envelope, err := Seal(request)
 	require.NoError(t, err)
@@ -462,9 +494,19 @@ func TestSignedObjectEncodersAndDecodersRoundTrip(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	rootPublic := fixture.signingKey.Public().(ed25519.PublicKey)
 	verifySignedObjectVector(t, vectors["policy-root-signed-chain.hex"], "dottie/v1/sig-policy", rootPublic)
-	verifySignedObjectVector(t, vectors["policy-many-recipients-root-signed-chain.hex"], "dottie/v1/sig-policy", rootPublic)
+	verifySignedObjectVector(
+		t,
+		vectors["policy-many-recipients-root-signed-chain.hex"],
+		"dottie/v1/sig-policy",
+		rootPublic,
+	)
 	verifySignedObjectVector(t, vectors["control-root-signed-chain.hex"], "dottie/v1/sig-control", rootPublic)
-	verifySignedObjectVector(t, vectors["certificate-publisher-root-issued-chain.hex"], "dottie/v1/sig-certificate", rootPublic)
+	verifySignedObjectVector(
+		t,
+		vectors["certificate-publisher-root-issued-chain.hex"],
+		"dottie/v1/sig-certificate",
+		rootPublic,
+	)
 	verifySignedObjectVector(t, vectors["certificate-root-self-signed.hex"], "dottie/v1/sig-certificate", rootPublic)
 	verifySignedObjectVector(t, vectors["checkpoint-root-signed-chain.hex"], "dottie/v1/sig-checkpoint", rootPublic)
 	verifySignedObjectVector(t, vectors["attestation-root-signed-chain.hex"], "dottie/v1/sig-attestation", rootPublic)
@@ -473,7 +515,15 @@ func TestSignedObjectEncodersAndDecodersRoundTrip(t *testing.T) {
 		require.NoError(t, decodeErr)
 		prefix, prefixErr := encodeEnvelopePrefix(envelope)
 		require.NoError(t, prefixErr)
-		assert.NoError(t, Verify(contextForPurpose(envelope.Purpose), append([]byte(preimageSig), prefix...), envelope.Signature[:], fixture.publisherKey.Public().(ed25519.PublicKey)))
+		assert.NoError(
+			t,
+			Verify(
+				contextForPurpose(envelope.Purpose),
+				append([]byte(preimageSig), prefix...),
+				envelope.Signature[:],
+				fixture.publisherKey.Public().(ed25519.PublicKey),
+			),
+		)
 	}
 }
 
@@ -493,15 +543,15 @@ func TestEnvelopeDecodeRejectsMalformedWire(t *testing.T) {
 	for _, boundary := range boundaries {
 		if boundary >= 0 && boundary < len(encoded) {
 			_, err := DecodeEnvelope(encoded[:boundary])
-			assert.Error(t, err, "accepted truncation at byte boundary %d", boundary)
+			require.Error(t, err, "accepted truncation at byte boundary %d", boundary)
 		}
 	}
-	for end := 0; end < len(encoded); end++ {
+	for end := range encoded {
 		_, err := DecodeEnvelope(encoded[:end])
-		assert.Error(t, err, "accepted truncation at byte %d", end)
+		require.Error(t, err, "accepted truncation at byte %d", end)
 	}
 	_, err = DecodeEnvelope(append(bytes.Clone(encoded), 0))
-	assert.ErrorIs(t, err, ErrFormat)
+	require.ErrorIs(t, err, ErrFormat)
 	for _, field := range envelopeLengthFields(encoded) {
 		malformed := bytes.Clone(encoded)
 		if field.width == 2 {
@@ -512,16 +562,16 @@ func TestEnvelopeDecodeRejectsMalformedWire(t *testing.T) {
 			binary.BigEndian.PutUint32(malformed[field.offset:field.offset+4], current+1)
 		}
 		_, err = DecodeEnvelope(malformed)
-		assert.Error(t, err, "accepted tampered length field at byte %d", field.offset)
+		require.Error(t, err, "accepted tampered length field at byte %d", field.offset)
 	}
 	unknownMagic := bytes.Clone(encoded)
 	unknownMagic[0] ^= 0xff
 	_, err = DecodeEnvelope(unknownMagic)
-	assert.ErrorIs(t, err, ErrFormat)
+	require.ErrorIs(t, err, ErrFormat)
 	unknownPurpose := bytes.Clone(encoded)
 	unknownPurpose[5] = 99
 	_, err = DecodeEnvelope(unknownPurpose)
-	assert.ErrorIs(t, err, ErrFormat)
+	require.ErrorIs(t, err, ErrFormat)
 	unsupportedVersion := bytes.Clone(encoded)
 	unsupportedVersion[3] = 2
 	_, err = DecodeEnvelope(unsupportedVersion)
@@ -534,9 +584,12 @@ func TestEnvelopeRecipientsRequireUniqueByteOrder(t *testing.T) {
 	offsets := encodedRecipientKeyOffsets(many)
 	require.Len(t, offsets, 2)
 	duplicate := bytes.Clone(many)
-	copy(duplicate[offsets[1].start:offsets[1].start+offsets[1].length], duplicate[offsets[0].start:offsets[0].start+offsets[0].length])
+	copy(
+		duplicate[offsets[1].start:offsets[1].start+offsets[1].length],
+		duplicate[offsets[0].start:offsets[0].start+offsets[0].length],
+	)
 	_, err := DecodeEnvelope(duplicate)
-	assert.ErrorIs(t, err, ErrRecipient)
+	require.ErrorIs(t, err, ErrRecipient)
 	outOfOrder := bytes.Clone(many)
 	copy(outOfOrder[offsets[0].start:offsets[0].start+offsets[0].length], []byte("z"))
 	copy(outOfOrder[offsets[1].start:offsets[1].start+offsets[1].length], []byte("a"))
@@ -568,7 +621,7 @@ func envelopeLengthFields(data []byte) []wireLengthField {
 	fields = append(fields, wireLengthField{offset: offset, width: 2})
 	count := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 	offset += 2
-	for index := 0; index < count; index++ {
+	for range count {
 		fields = append(fields, wireLengthField{offset: offset, width: 2})
 		keyIDLength := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 		offset += 2 + keyIDLength + 32 + 24
@@ -653,8 +706,13 @@ func TestOpenJoinsAdministrativeSignerRolesToPolicy(t *testing.T) {
 	t.Run("consistent administrative signers open", func(t *testing.T) {
 		request := fixture.openRequest
 		request.Control = signControlValue(t, Control{
-			Vault: fixture.policy.Vault, EpochSeq: fixture.policy.EpochSeq, PolicyDigest: request.PolicyDigest,
-			Signer: Signer{DeviceID: fixture.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.rootCertificate.KeyID)},
+			Vault:        fixture.policy.Vault,
+			EpochSeq:     fixture.policy.EpochSeq,
+			PolicyDigest: request.PolicyDigest,
+			Signer: Signer{
+				DeviceID: fixture.rootCertificate.DeviceID,
+				KeyID:    bytes.Clone(fixture.rootCertificate.KeyID),
+			},
 		}, fixture.signingKey)
 
 		plaintext, err := Open(fixture.envelope, request)
@@ -668,7 +726,9 @@ func TestOpenJoinsAdministrativeSignerRolesToPolicy(t *testing.T) {
 		policy := fixture.policy
 		policy.Roles = append(policy.Roles, RoleBinding{DeviceID: "device-control", Role: RolePublisher})
 		policy.Recipients = append(policy.Recipients, PolicyRecipient{
-			DeviceID: "device-control", KeyID: []byte("recipient-control"), PublicKey: [32]byte(controlRecipient.PublicKey().Bytes()),
+			DeviceID:  "device-control",
+			KeyID:     []byte("recipient-control"),
+			PublicKey: [32]byte(controlRecipient.PublicKey().Bytes()),
 		})
 		policyBytes := signPolicyValue(t, policy, fixture.signingKey)
 		policy, err := DecodePolicy(policyBytes)
@@ -676,11 +736,20 @@ func TestOpenJoinsAdministrativeSignerRolesToPolicy(t *testing.T) {
 		policyDigest, err := ComputePolicyDigest(policyBytes)
 		require.NoError(t, err)
 		controlCertificate := Certificate{
-			Vault: policy.Vault, DeviceID: "device-control", KeyID: []byte("signer-control"),
-			SigningPublicKey:    [ed25519.PublicKeySize]byte(controlKey.Public().(ed25519.PublicKey)),
-			EncryptionPublicKey: [32]byte(controlRecipient.PublicKey().Bytes()), Role: RoleRoot, CertEpoch: policy.EpochSeq,
-			Issuer: fixture.rootCertificate.DeviceID,
-			Signer: Signer{DeviceID: fixture.rootCertificate.DeviceID, KeyID: bytes.Clone(fixture.rootCertificate.KeyID)},
+			Vault:            policy.Vault,
+			DeviceID:         "device-control",
+			KeyID:            []byte("signer-control"),
+			SigningPublicKey: [ed25519.PublicKeySize]byte(controlKey.Public().(ed25519.PublicKey)),
+			EncryptionPublicKey: [32]byte(
+				controlRecipient.PublicKey().Bytes(),
+			),
+			Role:      RoleRoot,
+			CertEpoch: policy.EpochSeq,
+			Issuer:    fixture.rootCertificate.DeviceID,
+			Signer: Signer{
+				DeviceID: fixture.rootCertificate.DeviceID,
+				KeyID:    bytes.Clone(fixture.rootCertificate.KeyID),
+			},
 		}
 		controlCertificateBytes := signCertificateValue(t, controlCertificate, fixture.signingKey)
 
@@ -736,43 +805,47 @@ func TestOpenJoinsAdministrativeSignerRolesToPolicy(t *testing.T) {
 func TestOpenVerificationOrderAndAuthorizationErrors(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	_, err := Open(fixture.envelope, OpenRequest{})
-	assert.ErrorIs(t, err, ErrPolicyRequired)
+	require.ErrorIs(t, err, ErrPolicyRequired)
 	wrongVault := fixture.openRequest
 	wrongVault.Vault[0] ^= 1
 	_, err = Open(fixture.envelope, wrongVault)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	wrongEpoch := fixture.openRequest
 	wrongEpoch.EpochSeq++
 	_, err = Open(fixture.envelope, wrongEpoch)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	wrongPolicyDigest := fixture.openRequest
 	wrongPolicyDigest.PolicyDigest[0] ^= 1
 	_, err = Open(fixture.envelope, wrongPolicyDigest)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	wrongPolicyVault := fixture.policy
 	wrongPolicyVault.Vault[0] ^= 1
 	wrongPolicyBytes := signPolicyValue(t, wrongPolicyVault, fixture.signingKey)
 	wrongPolicy := fixture.openRequest
 	wrongPolicy.Policy = wrongPolicyBytes
 	_, err = Open(fixture.envelope, wrongPolicy)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	wrongSignerKey := fixture.envelope
 	otherSigningKey := fixedSigningKey(99)
 	wrongPrefix, err := encodeEnvelopePrefix(wrongSignerKey)
 	require.NoError(t, err)
-	wrongSignature, err := Sign(contextForPurpose(wrongSignerKey.Purpose), append([]byte(preimageSig), wrongPrefix...), otherSigningKey)
+	wrongSignature, err := Sign(
+		contextForPurpose(wrongSignerKey.Purpose),
+		append([]byte(preimageSig), wrongPrefix...),
+		otherSigningKey,
+	)
 	require.NoError(t, err)
 	copy(wrongSignerKey.Signature[:], wrongSignature)
 	_, err = Open(wrongSignerKey, fixture.openRequest)
-	assert.ErrorIs(t, err, ErrSignature)
+	require.ErrorIs(t, err, ErrSignature)
 	absentCertificate := fixture.openRequest
 	absentCertificate.Certificates = nil
 	_, err = Open(fixture.envelope, absentCertificate)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	absentRecipient := fixture.openRequest
 	absentRecipient.DeviceKeyID = []byte("absent")
 	_, err = Open(fixture.envelope, absentRecipient)
-	assert.ErrorIs(t, err, ErrRecipient)
+	require.ErrorIs(t, err, ErrRecipient)
 	wrongDeviceKey := fixture.openRequest
 	wrongDeviceKey.DeviceKey = fixedX25519Key(88)
 	_, err = Open(fixture.envelope, wrongDeviceKey)
@@ -858,8 +931,13 @@ func TestSealPreparedRequiresExactPolicyPairsAndMetadata(t *testing.T) {
 			}
 			test.mutate(&prepared)
 			_, err := SealPrepared(prepared)
-			assert.ErrorIs(t, err, test.want)
-			assert.Equal(t, originalRecipientPublicKey, fixture.prepared.Recipients[0].PublicKey, "subtest mutation must not affect the fixture")
+			require.ErrorIs(t, err, test.want)
+			assert.Equal(
+				t,
+				originalRecipientPublicKey,
+				fixture.prepared.Recipients[0].PublicKey,
+				"subtest mutation must not affect the fixture",
+			)
 		})
 	}
 }
@@ -881,7 +959,7 @@ func TestSealPreparedRejectsLowOrderRecipientKey(t *testing.T) {
 		EphemeralPrivate: fixedX25519Key(52).Bytes(), WrapNonce: [24]byte(fixtureBytes(220, 24)),
 	}}
 	_, err = SealPrepared(prepared)
-	assert.ErrorIs(t, err, ErrRecipient)
+	require.ErrorIs(t, err, ErrRecipient)
 	assert.ErrorContains(t, err, "X25519")
 }
 
@@ -895,7 +973,7 @@ func TestCommitmentRejectsCiphertextValidUnderTwoContentKeys(t *testing.T) {
 		aead, err := chacha20poly1305.NewX(key)
 		require.NoError(t, err)
 		_, err = aead.Open(nil, fixture.envelope.Nonce[:], sealed, ad)
-		assert.NoError(t, err, "crafted ciphertext did not authenticate under both content keys")
+		require.NoError(t, err, "crafted ciphertext did not authenticate under both content keys")
 	}
 	changed := fixture.envelope
 	changed.Ciphertext = ciphertext
@@ -907,19 +985,36 @@ func TestCommitmentRejectsCiphertextValidUnderTwoContentKeys(t *testing.T) {
 	require.NoError(t, err)
 	sharedSecret, err := ephemeralPrivate.ECDH(recipientPublic)
 	require.NoError(t, err)
-	wrapKey, err := deriveWrapKey(sharedSecret, changed.Vault, changed.Recipients[0].KeyID, changed.EpochSeq, changed.Purpose)
+	wrapKey, err := deriveWrapKey(
+		sharedSecret,
+		changed.Vault,
+		changed.Recipients[0].KeyID,
+		changed.EpochSeq,
+		changed.Purpose,
+	)
 	require.NoError(t, err)
 	wrapAEAD, err := chacha20poly1305.NewX(wrapKey)
 	require.NoError(t, err)
-	wrapAD := wrapAssociatedData(changed.Vault, changed.Recipients[0].KeyID, changed.EpochSeq, changed.Purpose, fixture.prepared.Recipients[0].PublicKey, ephemeralPrivate.PublicKey().Bytes())
+	wrapAD := wrapAssociatedData(
+		changed.Vault,
+		changed.Recipients[0].KeyID,
+		changed.EpochSeq,
+		changed.Purpose,
+		fixture.prepared.Recipients[0].PublicKey,
+		ephemeralPrivate.PublicKey().Bytes(),
+	)
 	changed.Recipients[0].WrappedKey = wrapAEAD.Seal(nil, changed.Recipients[0].WrapNonce[:], otherContentKey, wrapAD)
 	prefix, err := encodeEnvelopePrefix(changed)
 	require.NoError(t, err)
-	signature, err := Sign(contextForPurpose(changed.Purpose), append([]byte(preimageSig), prefix...), fixture.publisherKey)
+	signature, err := Sign(
+		contextForPurpose(changed.Purpose),
+		append([]byte(preimageSig), prefix...),
+		fixture.publisherKey,
+	)
 	require.NoError(t, err)
 	copy(changed.Signature[:], signature)
 	plaintext, err := Open(changed, fixture.openRequest)
-	assert.ErrorIs(t, err, ErrCommitment)
+	require.ErrorIs(t, err, ErrCommitment)
 	assert.Nil(t, plaintext)
 }
 
@@ -950,7 +1045,7 @@ func dualKeyCiphertext(t *testing.T, keyA, keyB, nonce, associatedData []byte) (
 	constant.Mod(constant, prime)
 	maxBlock := new(big.Int).Lsh(big.NewInt(1), 128)
 	var x, y *big.Int
-	for candidate := int64(0); candidate < 256; candidate++ {
+	for candidate := range int64(256) {
 		x = big.NewInt(candidate)
 		numerator := new(big.Int).Mul(coefficientX, x)
 		numerator.Add(numerator, constant)
@@ -963,7 +1058,7 @@ func dualKeyCiphertext(t *testing.T, keyA, keyB, nonce, associatedData []byte) (
 		}
 	}
 	require.NotNil(t, y)
-	assert.Less(t, y.Cmp(maxBlock), 0, "could not find a bounded ciphertext block collision")
+	assert.Negative(t, y.Cmp(maxBlock), "could not find a bounded ciphertext block collision")
 	ciphertext := make([]byte, 32)
 	copy(ciphertext[:16], bigIntLittleEndian(x, 16))
 	copy(ciphertext[16:], bigIntLittleEndian(y, 16))
@@ -1039,7 +1134,7 @@ func reverseBytes(value []byte) []byte {
 func bigIntLittleEndian(value *big.Int, length int) []byte {
 	bigEndian := value.Bytes()
 	result := make([]byte, length)
-	for index := 0; index < len(bigEndian); index++ {
+	for index := range bigEndian {
 		result[index] = bigEndian[len(bigEndian)-index-1]
 	}
 	return result
@@ -1080,11 +1175,11 @@ func TestObjectMagicKindAndUnknownRolesAreRejected(t *testing.T) {
 	policyBytes := bytes.Clone(fixture.policyBytes)
 	policyBytes[4] = objectKindCertificate
 	_, err := DecodePolicy(policyBytes)
-	assert.ErrorIs(t, err, ErrFormat)
+	require.ErrorIs(t, err, ErrFormat)
 	unsupported := bytes.Clone(fixture.policyBytes)
 	unsupported[3] = 2
 	_, err = DecodePolicy(unsupported)
-	assert.ErrorIs(t, err, ErrUnsupportedVersion)
+	require.ErrorIs(t, err, ErrUnsupportedVersion)
 	badRole := fixture.policy
 	badRole.Roles = []RoleBinding{{DeviceID: "device-root", Role: 99}}
 	_, err = EncodePolicy(badRole)
@@ -1111,8 +1206,8 @@ func TestObjectDecodersRejectTrailingAndTruncatedInput(t *testing.T) {
 	for name, decode := range decoders {
 		t.Run(name, func(t *testing.T) {
 			data := vectors[name]
-			for index := 0; index < len(data); index++ {
-				assert.Error(t, decode(data[:index]), "accepted truncated object at %d", index)
+			for index := range data {
+				require.Error(t, decode(data[:index]), "accepted truncated object at %d", index)
 			}
 			assert.ErrorIs(t, decode(append(bytes.Clone(data), 0)), ErrFormat)
 		})
@@ -1164,7 +1259,7 @@ func TestEnvelopeDecodeBoundsDeclaredLengthsBeforeAllocation(t *testing.T) {
 func FuzzDecodeEnvelope(f *testing.F) {
 	f.Add(vectorSeed("envelope-one-recipient-chain.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, 1, 1})
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = DecodeEnvelope(data)
 	})
 }
@@ -1173,32 +1268,32 @@ func FuzzDecodePolicy(f *testing.F) {
 	f.Add(vectorSeed("policy-root-signed-chain.hex"))
 	f.Add(vectorSeed("policy-many-recipients-root-signed-chain.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, objectKindPolicy})
-	f.Fuzz(func(t *testing.T, data []byte) { _, _ = DecodePolicy(data) })
+	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = DecodePolicy(data) })
 }
 
 func FuzzDecodeControl(f *testing.F) {
 	f.Add(vectorSeed("control-root-signed-chain.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, objectKindControl})
-	f.Fuzz(func(t *testing.T, data []byte) { _, _ = DecodeControl(data) })
+	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = DecodeControl(data) })
 }
 
 func FuzzDecodeCertificate(f *testing.F) {
 	f.Add(vectorSeed("certificate-publisher-root-issued-chain.hex"))
 	f.Add(vectorSeed("certificate-root-self-signed.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, objectKindCertificate})
-	f.Fuzz(func(t *testing.T, data []byte) { _, _ = DecodeCertificate(data) })
+	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = DecodeCertificate(data) })
 }
 
 func FuzzDecodeCheckpoint(f *testing.F) {
 	f.Add(vectorSeed("checkpoint-root-signed-chain.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, objectKindCheckpoint})
-	f.Fuzz(func(t *testing.T, data []byte) { _, _ = DecodeCheckpoint(data) })
+	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = DecodeCheckpoint(data) })
 }
 
 func FuzzDecodeAttestation(f *testing.F) {
 	f.Add(vectorSeed("attestation-root-signed-chain.hex"))
 	f.Add([]byte{0x44, 0x54, 0x45, 1, objectKindAttestation})
-	f.Fuzz(func(t *testing.T, data []byte) { _, _ = DecodeAttestation(data) })
+	f.Fuzz(func(_ *testing.T, data []byte) { _, _ = DecodeAttestation(data) })
 }
 
 func vectorSeed(name string) []byte {
@@ -1233,20 +1328,27 @@ func TestOpenRejectsPolicyEpochMismatch(t *testing.T) {
 	hostile, err = DecodeEnvelope(encoded)
 	require.NoError(t, err)
 	plaintext, err := Open(hostile, fixture.openRequest)
-	assert.ErrorIs(t, err, ErrAuthorization, "Open refuses an envelope whose epoch differs from its signed policy")
-	assert.ErrorContains(t, err, "policy epoch_seq")
+	require.ErrorIs(t, err, ErrAuthorization, "Open refuses an envelope whose epoch differs from its signed policy")
+	require.ErrorContains(t, err, "policy epoch_seq")
 	assert.Nil(t, plaintext)
 }
 
 func TestSealAuthorizedEnforcesRole(t *testing.T) {
 	fixture := newEnvelopeFixture(t)
 	request := SealRequest{
-		Purpose: PurposeSnapshot, Vault: fixture.policy.Vault,
-		PublicationID: [16]byte(fixtureBytes(101, 16)), EpochSeq: fixture.policy.EpochSeq,
-		PolicyDigest: fixture.prepared.PolicyDigest, Parent: fixtureCIDBytes(t),
-		DeviceID: fixture.certificate.DeviceID, KeyID: fixture.certificate.KeyID,
-		Plaintext: []byte("authorized sealing"), SigningKey: fixture.publisherKey,
-		Recipients: []RecipientPublicKey{{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()}},
+		Purpose:       PurposeSnapshot,
+		Vault:         fixture.policy.Vault,
+		PublicationID: [16]byte(fixtureBytes(101, 16)),
+		EpochSeq:      fixture.policy.EpochSeq,
+		PolicyDigest:  fixture.prepared.PolicyDigest,
+		Parent:        fixtureCIDBytes(t),
+		DeviceID:      fixture.certificate.DeviceID,
+		KeyID:         fixture.certificate.KeyID,
+		Plaintext:     []byte("authorized sealing"),
+		SigningKey:    fixture.publisherKey,
+		Recipients: []RecipientPublicKey{
+			{KeyID: []byte("recipient-a"), PublicKey: fixture.recipientKey.PublicKey().Bytes()},
+		},
 	}
 	_, err := SealAuthorized(request, fixture.certificate, fixture.policy)
 	require.NoError(t, err, "a publisher certificate listed in the policy may seal a snapshot")
@@ -1254,12 +1356,12 @@ func TestSealAuthorizedEnforcesRole(t *testing.T) {
 	restoreOnly := fixture.certificate
 	restoreOnly.Role = RoleRestoreOnly
 	_, err = SealAuthorized(request, restoreOnly, fixture.policy)
-	assert.ErrorIs(t, err, ErrAuthorization, "a restore-only certificate must not seal")
+	require.ErrorIs(t, err, ErrAuthorization, "a restore-only certificate must not seal")
 
 	absent := fixture.certificate
 	absent.DeviceID = "device-unknown"
 	_, err = SealAuthorized(request, absent, fixture.policy)
-	assert.ErrorIs(t, err, ErrAuthorization, "a certificate absent from the policy must not seal")
+	require.ErrorIs(t, err, ErrAuthorization, "a certificate absent from the policy must not seal")
 
 	restorePolicy := fixture.policy
 	restorePolicy.Roles = append(restorePolicy.Roles, RoleBinding{DeviceID: "device-restore", Role: RoleRestoreOnly})
@@ -1277,7 +1379,9 @@ func TestSealAuthorizedRefusesSubstitutedRecipientPair(t *testing.T) {
 	policy := fixture.policy
 	policy.Roles = append(policy.Roles, RoleBinding{DeviceID: "device-second", Role: RoleRestoreOnly})
 	policy.Recipients = append(policy.Recipients, PolicyRecipient{
-		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
+		DeviceID:  "device-second",
+		KeyID:     []byte("recipient-b"),
+		PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
 	})
 	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
 	policy, err := DecodePolicy(policyBytes)
@@ -1303,7 +1407,10 @@ func TestSealAuthorizedRefusesSubstitutedRecipientPair(t *testing.T) {
 	wrongDevicePair.Recipients[1].PublicKey = bytes.Clone(exactPairs[0].PublicKey)
 	duplicatedPair := request
 	duplicatedPair.Recipients = append([]RecipientPublicKey(nil), exactPairs...)
-	duplicatedPair.Recipients[1] = RecipientPublicKey{KeyID: bytes.Clone(exactPairs[0].KeyID), PublicKey: bytes.Clone(exactPairs[0].PublicKey)}
+	duplicatedPair.Recipients[1] = RecipientPublicKey{
+		KeyID:     bytes.Clone(exactPairs[0].KeyID),
+		PublicKey: bytes.Clone(exactPairs[0].PublicKey),
+	}
 	omittedPair := request
 	omittedPair.Recipients = append([]RecipientPublicKey(nil), exactPairs[:1]...)
 
@@ -1332,7 +1439,9 @@ func TestEnvelopeCodecRefusesDuplicateRecipientKeyIDs(t *testing.T) {
 	prepared := fixture.prepared
 	policy := fixture.policy
 	policy.Recipients = append(policy.Recipients, PolicyRecipient{
-		DeviceID: "device-second", KeyID: []byte("recipient-b"), PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
+		DeviceID:  "device-second",
+		KeyID:     []byte("recipient-b"),
+		PublicKey: [32]byte(secondRecipientKey.PublicKey().Bytes()),
 	})
 	policyBytes := signPolicyValue(t, policy, fixture.signingKey)
 	policy, err := DecodePolicy(policyBytes)

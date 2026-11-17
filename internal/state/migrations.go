@@ -72,7 +72,12 @@ func migrate(ctx context.Context, conn *sql.Conn, files fs.FS) error {
 	}
 	latest := migrations[len(migrations)-1].version
 	if version > latest {
-		return fmt.Errorf("%w: database schema version %d is newer; this binary supports version %d", ErrUnsupportedSchema, version, latest)
+		return fmt.Errorf(
+			"%w: database schema version %d is newer; this binary supports version %d",
+			ErrUnsupportedSchema,
+			version,
+			latest,
+		)
 	}
 	for _, item := range migrations {
 		if item.version <= version {
@@ -97,21 +102,28 @@ func ensureSupportedSchema(ctx context.Context, conn *sql.Conn, files fs.FS) err
 	}
 	latest := migrations[len(migrations)-1].version
 	if version > latest {
-		return fmt.Errorf("%w: database schema version %d is newer; this binary supports version %d", ErrUnsupportedSchema, version, latest)
+		return fmt.Errorf(
+			"%w: database schema version %d is newer; this binary supports version %d",
+			ErrUnsupportedSchema,
+			version,
+			latest,
+		)
 	}
 	return nil
 }
 
 func currentSchemaVersion(ctx context.Context, conn *sql.Conn) (int, error) {
 	var exists int
-	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").Scan(&exists); err != nil {
+	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").
+		Scan(&exists); err != nil {
 		return 0, fmt.Errorf("inspect schema version: %w", err)
 	}
 	if exists == 0 {
 		return 0, nil
 	}
 	var version int
-	if err := conn.QueryRowContext(ctx, "SELECT version FROM schema_version WHERE singleton = 1").Scan(&version); err != nil {
+	if err := conn.QueryRowContext(ctx, "SELECT version FROM schema_version WHERE singleton = 1").
+		Scan(&version); err != nil {
 		return 0, fmt.Errorf("read schema version: %w", err)
 	}
 	return version, nil

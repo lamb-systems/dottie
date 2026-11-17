@@ -3,17 +3,17 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type acceptedMaterialTestFixture struct {
@@ -41,10 +41,18 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 			SourceVersion: model.SourceVersion,
 			Root:          &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
 		}},
-		Entries: []model.Entry{{
-			TargetID: "synthetic-files",
-			File:     &model.FileEntry{Path: "settings.ini", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic accepted publication"), Mode: 0o600},
-		}},
+		Entries: []model.Entry{
+			{
+				TargetID: "synthetic-files",
+				File: &model.FileEntry{
+					Path:    "settings.ini",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("synthetic accepted publication"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -55,7 +63,11 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob:          publication.BlobReference{CID: blobCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType},
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -69,9 +81,16 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 		BlobCID:        blobCID,
 	})
 	require.NoError(t, err)
-	contextValue := publicationstate.SuppliedContext{RepositoryRevision: "synthetic-revision", RepositoryDigest: []byte{1, 2, 3}}
+	contextValue := publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-revision",
+		RepositoryDigest:   []byte{1, 2, 3},
+	}
 	if backend == publicationstate.BackendSpaces {
-		contextValue.Policy = &publicationstate.Policy{Revision: "synthetic-policy", Identity: []byte{4, 5, 6}, OwnerOnly: true}
+		contextValue.Policy = &publicationstate.Policy{
+			Revision:  "synthetic-policy",
+			Identity:  []byte{4, 5, 6},
+			OwnerOnly: true,
+		}
 	}
 	observation := publicationstate.Observation{
 		Origin:          binding,
@@ -86,7 +105,14 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	proposal, err := store.Prepare(context.Background(), publicationstate.ModeFirstUse, observation, packed.Payload)
 	require.NoError(t, err)
-	floor, err := store.Accept(context.Background(), publicationstate.ModeFirstUse, proposal.StateToken, observation, packed.Payload, proposal.Confirmation)
+	floor, err := store.Accept(
+		context.Background(),
+		publicationstate.ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		packed.Payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	return acceptedMaterialTestFixture{
 		store:     store,
@@ -215,8 +241,14 @@ func TestValidateAcceptedPublicationMaterialChecksBindingAndWholeFloor(t *testin
 		name   string
 		change func(*publicationstate.Binding)
 	}{
-		{name: "account", change: func(binding *publicationstate.Binding) { binding.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc" }},
-		{name: "backend", change: func(binding *publicationstate.Binding) { binding.Backend = publicationstate.BackendSpaces }},
+		{
+			name:   "account",
+			change: func(binding *publicationstate.Binding) { binding.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc" },
+		},
+		{
+			name:   "backend",
+			change: func(binding *publicationstate.Binding) { binding.Backend = publicationstate.BackendSpaces },
+		},
 		{name: "repository", change: func(binding *publicationstate.Binding) { binding.Repository += "/other" }},
 		{name: "vault", change: func(binding *publicationstate.Binding) { binding.Vault[0] ^= 0x80 }},
 	}
@@ -237,8 +269,14 @@ func TestValidateAcceptedPublicationMaterialChecksBindingAndWholeFloor(t *testin
 	}{
 		{name: "event_digest", change: func(floor *publicationstate.Floor) { floor.AcceptedEventDigest[0] ^= 1 }},
 		{name: "observation_digest", change: func(floor *publicationstate.Floor) { floor.ObservationDigest[0] ^= 1 }},
-		{name: "context", change: func(floor *publicationstate.Floor) { floor.SuppliedContext.RepositoryRevision += "x" }},
-		{name: "provenance", change: func(floor *publicationstate.Floor) { floor.Provenance = publicationstate.ProvenanceReplace }},
+		{
+			name:   "context",
+			change: func(floor *publicationstate.Floor) { floor.SuppliedContext.RepositoryRevision += "x" },
+		},
+		{
+			name:   "provenance",
+			change: func(floor *publicationstate.Floor) { floor.Provenance = publicationstate.ProvenanceReplace },
+		},
 		{name: "anchor", change: func(floor *publicationstate.Floor) { floor.AnchorCID[0] ^= 1 }},
 		{name: "snapshot_key", change: func(floor *publicationstate.Floor) { floor.SnapshotKey = "0000000000000001" }},
 		{name: "record_identity", change: func(floor *publicationstate.Floor) { floor.RecordCID[0] ^= 1 }},
@@ -260,25 +298,40 @@ func TestValidateAcceptedPublicationMaterialChecksBindingAndWholeFloor(t *testin
 func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(t *testing.T) {
 	fixture := newAcceptedMaterialTestFixture(t, publicationstate.BackendPublicRepo)
 	canary := "private-record-canary"
-	acceptedSnapshot, err := publication.DecodePayload(fixture.request.payload, publication.BlobReference{CID: fixture.request.expectedFloor.BlobCID, Size: fixture.request.expectedFloor.BlobSize})
+	acceptedSnapshot, err := publication.DecodePayload(
+		fixture.request.payload,
+		publication.BlobReference{
+			CID:  fixture.request.expectedFloor.BlobCID,
+			Size: fixture.request.expectedFloor.BlobSize,
+		},
+	)
 	require.NoError(t, err)
 	require.Len(t, acceptedSnapshot.Entries, 1)
 	require.NotNil(t, acceptedSnapshot.Entries[0].File)
-	alternateSnapshot, err := publication.DecodePayload(fixture.request.payload, publication.BlobReference{CID: fixture.request.expectedFloor.BlobCID, Size: fixture.request.expectedFloor.BlobSize})
+	alternateSnapshot, err := publication.DecodePayload(
+		fixture.request.payload,
+		publication.BlobReference{
+			CID:  fixture.request.expectedFloor.BlobCID,
+			Size: fixture.request.expectedFloor.BlobSize,
+		},
+	)
 	require.NoError(t, err)
 	require.Len(t, alternateSnapshot.Entries, 1)
 	require.NotNil(t, alternateSnapshot.Entries[0].File)
 	alternateContent := []byte("synthetic rejected publication")
-	require.Equal(t, len(acceptedSnapshot.Entries[0].File.Content), len(alternateContent))
+	require.Len(t, alternateContent, len(acceptedSnapshot.Entries[0].File.Content))
 	require.NotEqual(t, acceptedSnapshot.Entries[0].File.Content, alternateContent)
 	alternateSnapshot.Entries[0].File.Content = bytes.Clone(alternateContent)
 	alternatePacked, err := vault.Pack(alternateSnapshot)
 	require.NoError(t, err)
 	require.NotEqual(t, fixture.request.payload, alternatePacked.Payload)
-	require.Equal(t, len(fixture.request.payload), len(alternatePacked.Payload))
+	require.Len(t, alternatePacked.Payload, len(fixture.request.payload))
 	alternateCID, err := publication.RawPayloadCID(alternatePacked.Payload)
 	require.NoError(t, err)
-	decodedAlternate, err := publication.DecodePayload(alternatePacked.Payload, publication.BlobReference{CID: alternateCID, Size: uint64(len(alternatePacked.Payload))})
+	decodedAlternate, err := publication.DecodePayload(
+		alternatePacked.Payload,
+		publication.BlobReference{CID: alternateCID, Size: uint64(len(alternatePacked.Payload))},
+	)
 	require.NoError(t, err)
 	require.Len(t, decodedAlternate.Entries, 1)
 	require.NotNil(t, decodedAlternate.Entries[0].File)
@@ -442,7 +495,14 @@ func TestValidateAcceptedPublicationMaterialAcrossSequentialAdvanceAndReopen(t *
 	}
 	proposal, err := fixture.store.Prepare(ctx, publicationstate.ModeAdvance, observation, fixture.request.payload)
 	require.NoError(t, err)
-	successorFloor, err := fixture.store.Accept(ctx, publicationstate.ModeAdvance, proposal.StateToken, observation, fixture.request.payload, [32]byte{})
+	successorFloor, err := fixture.store.Accept(
+		ctx,
+		publicationstate.ModeAdvance,
+		proposal.StateToken,
+		observation,
+		fixture.request.payload,
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, fixture.request.expectedFloor.DatabaseID, successorFloor.DatabaseID)
 	assert.Equal(t, fixture.request.expectedFloor.Generation, successorFloor.Generation)
@@ -458,8 +518,12 @@ func TestValidateAcceptedPublicationMaterialAcrossSequentialAdvanceAndReopen(t *
 	require.Len(t, page.Records, 2)
 	assert.ElementsMatch(t, []publicationstate.RecordEvidence{
 		{
-			Reference: publicationstate.RecordReference{Key: fixture.request.expectedFloor.SnapshotKey, CID: bytes.Clone(parentCID), Sequence: fixture.request.expectedFloor.Sequence},
-			Raw:       bytes.Clone(fixture.request.snapshotRecord),
+			Reference: publicationstate.RecordReference{
+				Key:      fixture.request.expectedFloor.SnapshotKey,
+				CID:      bytes.Clone(parentCID),
+				Sequence: fixture.request.expectedFloor.Sequence,
+			},
+			Raw: bytes.Clone(fixture.request.snapshotRecord),
 		},
 		{
 			Reference: publicationstate.RecordReference{Key: successorKey, CID: bytes.Clone(successorCID), Sequence: 1},
@@ -528,7 +592,7 @@ func TestPublicationReconciliationErrorsRemainClosed(t *testing.T) {
 	result, err := validateAcceptedPublication(context.Background(), request)
 	require.Error(t, err)
 	assert.Equal(t, acceptedPublicationMaterial{}, result)
-	assert.True(t, errors.Is(err, ErrPublicationReconciliation))
+	require.ErrorIs(t, err, ErrPublicationReconciliation)
 	assert.NotContains(t, err.Error(), fixture.request.binding.AccountDID)
 	assert.NotContains(t, err.Error(), fixture.request.binding.Repository)
 	assert.NotContains(t, err.Error(), "synthetic accepted publication")

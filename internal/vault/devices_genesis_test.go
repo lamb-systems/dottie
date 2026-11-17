@@ -4,17 +4,32 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestComposeGenesisBindsCountZeroObjectsToCanonicalEmptySnapshot(t *testing.T) {
-	root := DeviceMaterial{DeviceID: "genesis-root", KeyID: []byte("genesis-root-key"), Signing: fixedSigningKey(11), Recipient: fixedX25519Key(21)}
+	root := DeviceMaterial{
+		DeviceID:  "genesis-root",
+		KeyID:     []byte("genesis-root-key"),
+		Signing:   fixedSigningKey(11),
+		Recipient: fixedX25519Key(21),
+	}
 	genesis, err := ComposeGenesis(GenesisIntent{
-		VaultName: "genesis fixture", RootDevice: root, ContentKey: fixtureBytes(31, 32),
-		Wraps:         []RecipientWrapInput{{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(41, 32)), WrapNonce: [24]byte(fixtureBytes(51, 24))}},
-		PublicationID: [16]byte(fixtureBytes(61, 16)), Nonce: [24]byte(fixtureBytes(71, 24)),
+		VaultName:  "genesis fixture",
+		RootDevice: root,
+		ContentKey: fixtureBytes(31, 32),
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(41, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(51, 24)),
+			},
+		},
+		PublicationID: [16]byte(fixtureBytes(61, 16)),
+		Nonce:         [24]byte(fixtureBytes(71, 24)),
 	})
 	require.NoError(t, err)
 	require.NoError(t, ValidateGenesis(genesis))
@@ -51,22 +66,36 @@ func TestComposeGenesisBindsCountZeroObjectsToCanonicalEmptySnapshot(t *testing.
 }
 
 func TestValidateGenesisRejectsMismatchedCheckpointAndHead(t *testing.T) {
-	root := DeviceMaterial{DeviceID: "genesis-root", KeyID: []byte("genesis-root-key"), Signing: fixedSigningKey(12), Recipient: fixedX25519Key(22)}
+	root := DeviceMaterial{
+		DeviceID:  "genesis-root",
+		KeyID:     []byte("genesis-root-key"),
+		Signing:   fixedSigningKey(12),
+		Recipient: fixedX25519Key(22),
+	}
 	genesis, err := ComposeGenesis(GenesisIntent{
-		VaultName: "genesis hostile fixture", RootDevice: root, ContentKey: fixtureBytes(32, 32),
-		Wraps:         []RecipientWrapInput{{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(fixtureBytes(42, 32)), WrapNonce: [24]byte(fixtureBytes(52, 24))}},
-		PublicationID: [16]byte(fixtureBytes(62, 16)), Nonce: [24]byte(fixtureBytes(72, 24)),
+		VaultName:  "genesis hostile fixture",
+		RootDevice: root,
+		ContentKey: fixtureBytes(32, 32),
+		Wraps: []RecipientWrapInput{
+			{
+				KeyID:            bytes.Clone(root.KeyID),
+				EphemeralPrivate: [32]byte(fixtureBytes(42, 32)),
+				WrapNonce:        [24]byte(fixtureBytes(52, 24)),
+			},
+		},
+		PublicationID: [16]byte(fixtureBytes(62, 16)),
+		Nonce:         [24]byte(fixtureBytes(72, 24)),
 	})
 	require.NoError(t, err)
 
 	omittedCheckpoint := genesis
 	omittedCheckpoint.Checkpoint = nil
-	assert.Error(t, ValidateGenesis(omittedCheckpoint))
+	require.Error(t, ValidateGenesis(omittedCheckpoint))
 
 	mismatchedCID := genesis
 	mismatchedCID.Checkpoint = bytes.Clone(genesis.Checkpoint)
 	mismatchedCID.Checkpoint[10] ^= 0xff
-	assert.Error(t, ValidateGenesis(mismatchedCID))
+	require.Error(t, ValidateGenesis(mismatchedCID))
 
 	mismatchedHead := genesis
 	mismatchedHead.Head = bytes.Clone(genesis.Head)

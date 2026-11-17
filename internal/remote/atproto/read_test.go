@@ -19,10 +19,11 @@ import (
 	"github.com/bluesky-social/indigo/atproto/repo"
 	"github.com/bluesky-social/indigo/atproto/repo/mst"
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/state"
 
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -77,19 +78,37 @@ func newReadFixture(t *testing.T) readFixture {
 	rootRecipient := readX25519Key(t, 21)
 	publisherSigning := fixtureSigningKey(12)
 	publisherRecipient := readX25519Key(t, 22)
-	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: rootRecipient}
+	rootDevice := vault.DeviceMaterial{
+		DeviceID:  "root",
+		KeyID:     []byte("root-sign"),
+		Signing:   rootSigning,
+		Recipient: rootRecipient,
+	}
 	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
 	ephemeralPublisher := readX25519Key(t, 31)
 	ephemeralRoot := readX25519Key(t, 32)
-	publisher := vault.DeviceMaterial{DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: publisherSigning, Recipient: publisherRecipient}
+	publisher := vault.DeviceMaterial{
+		DeviceID:  "publisher",
+		KeyID:     []byte("publisher-sign"),
+		Signing:   publisherSigning,
+		Recipient: publisherRecipient,
+	}
 	intent := vault.TransitionIntent{
 		Kind: vault.TransitionEnroll, Vault: bootstrap.Vault, Signer: rootDevice,
 		NewDevice: &publisher, RequestedRole: vault.RolePublisher, ContentKey: bytes.Repeat([]byte{41}, 32),
 		Recipients: [][]byte{bootstrap.Certificate},
 		Wraps: []vault.RecipientWrapInput{
-			{KeyID: []byte("publisher-sign"), EphemeralPrivate: [32]byte(ephemeralPublisher.Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24))},
-			{KeyID: []byte("root-sign"), EphemeralPrivate: [32]byte(ephemeralRoot.Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{52}, 24))},
+			{
+				KeyID:            []byte("publisher-sign"),
+				EphemeralPrivate: [32]byte(ephemeralPublisher.Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{51}, 24)),
+			},
+			{
+				KeyID:            []byte("root-sign"),
+				EphemeralPrivate: [32]byte(ephemeralRoot.Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{52}, 24)),
+			},
 		},
 		Plaintext: []byte("synthetic snapshot payload"), PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)),
 		Nonce: [24]byte(bytes.Repeat([]byte{62}, 24)),
@@ -109,12 +128,22 @@ func newReadFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	recipients := make([]vault.RecipientPublicKey, len(policyObject.Recipients))
 	for index, recipient := range policyObject.Recipients {
-		recipients[index] = vault.RecipientPublicKey{KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:])}
+		recipients[index] = vault.RecipientPublicKey{
+			KeyID:     bytes.Clone(recipient.KeyID),
+			PublicKey: bytes.Clone(recipient.PublicKey[:]),
+		}
 	}
 	envelope, err := vault.SealAuthorized(vault.SealRequest{
-		Purpose: vault.PurposeSnapshot, Vault: bootstrap.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
-		EpochSeq: policyObject.EpochSeq, PolicyDigest: policyDigest, DeviceID: publisher.DeviceID, KeyID: publisher.KeyID,
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: publisherSigning, Recipients: recipients,
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         bootstrap.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
+		EpochSeq:      policyObject.EpochSeq,
+		PolicyDigest:  policyDigest,
+		DeviceID:      publisher.DeviceID,
+		KeyID:         publisher.KeyID,
+		Plaintext:     []byte("synthetic snapshot payload"),
+		SigningKey:    publisherSigning,
+		Recipients:    recipients,
 	}, publisherCertificate, policyObject)
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -138,24 +167,49 @@ func newReadFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	digestValue := sha256Digest(envelope.Signature[:])
 	snapshot := SnapshotRecord{
-		SchemaVersion: 1, Vault: bytes.Clone(envelope.Vault[:]), PublicationID: bytes.Clone(envelope.PublicationID[:]),
-		EpochSeq: envelope.EpochSeq, PolicyDigest: bytes.Clone(envelope.PolicyDigest[:]), Parent: bytes.Clone(envelope.Parent),
-		Blob:           atdata.Blob{Ref: atdata.CIDLink(parsedEnvelopeCID), MimeType: "application/octet-stream", Size: int64(len(envelopeBytes))},
-		SignerDeviceID: envelope.DeviceID, SignerKeyID: bytes.Clone(envelope.KeyID), EnvelopeSignatureDigest: digestValue[:],
+		SchemaVersion: 1,
+		Vault:         bytes.Clone(envelope.Vault[:]),
+		PublicationID: bytes.Clone(envelope.PublicationID[:]),
+		EpochSeq:      envelope.EpochSeq,
+		PolicyDigest:  bytes.Clone(envelope.PolicyDigest[:]),
+		Parent:        bytes.Clone(envelope.Parent),
+		Blob: atdata.Blob{
+			Ref:      atdata.CIDLink(parsedEnvelopeCID),
+			MimeType: "application/octet-stream",
+			Size:     int64(len(envelopeBytes)),
+		},
+		SignerDeviceID:          envelope.DeviceID,
+		SignerKeyID:             bytes.Clone(envelope.KeyID),
+		EnvelopeSignatureDigest: digestValue[:],
 	}
 	snapshot, err = SignSnapshotRecord(snapshot, publisherSigning)
 	require.NoError(t, err)
 	snapshotBytes, err := EncodeRecord(snapshot)
 	require.NoError(t, err)
 	records := map[RecordKey][]byte{}
-	putReadRecord(t, records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(policyObject))
-	putReadRecord(t, records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(controlObject))
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultPolicyNSID, RKey: "self"},
+		policyRecordFromObject(policyObject),
+	)
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultControlNSID, RKey: "self"},
+		controlRecordFromObject(controlObject),
+	)
 	putReadRecord(t, records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(headObject))
 	records[RecordKey{Collection: VaultSnapshotNSID, RKey: "r0"}] = snapshotBytes
 	for index, encodedCertificate := range transition.Recipients {
 		certificate, decodeErr := vault.DecodeCertificate(encodedCertificate)
 		require.NoError(t, decodeErr)
-		putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: fmt.Sprintf("r%d", index+1)}, certificateRecordFromObject(certificate))
+		putReadRecord(
+			t,
+			records,
+			RecordKey{Collection: VaultCertificateNSID, RKey: fmt.Sprintf("r%d", index+1)},
+			certificateRecordFromObject(certificate),
+		)
 	}
 	car, blocks, root, method := buildReadCAR(t, records)
 	transport := &readTransport{
@@ -171,16 +225,28 @@ func newReadFixture(t *testing.T) readFixture {
 	previousControlRecord := encodeReadControlRecord(t, bootstrap.Control)
 	storeRoot := t.TempDir()
 	observationStore, err := state.Open(platform.Paths{
-		Home: filepath.Join(storeRoot, "home"), StateHome: filepath.Join(storeRoot, "state"), CacheHome: filepath.Join(storeRoot, "cache"),
+		Home: filepath.Join(
+			storeRoot,
+			"home",
+		),
+		StateHome: filepath.Join(storeRoot, "state"),
+		CacheHome: filepath.Join(storeRoot, "cache"),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, observationStore.Close()) })
 	return readFixture{
 		request: ReadRequest{
-			DID: proofTestDID, DIDDocumentID: proofTestDID,
-			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
-			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
-			PreviousControl: previousControlRecord, DeviceKeyID: []byte("publisher-sign"), DeviceKey: publisherRecipient,
+			DID:           proofTestDID,
+			DIDDocumentID: proofTestDID,
+			VerificationMethods: []VerificationMethod{
+				{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method},
+			},
+			Vault:           bootstrap.Vault,
+			TrustAnchor:     bootstrap.Anchor,
+			PreviousPolicy:  previousPolicyRecord,
+			PreviousControl: previousControlRecord,
+			DeviceKeyID:     []byte("publisher-sign"),
+			DeviceKey:       publisherRecipient,
 		},
 		transport: transport, observationStore: observationStore, records: records, blocks: blocks, root: root,
 	}
@@ -188,8 +254,18 @@ func newReadFixture(t *testing.T) readFixture {
 
 func newBuilderReadHistory(t *testing.T) readBuilderHistory {
 	t.Helper()
-	root := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: fixtureSigningKey(11), Recipient: readX25519Key(t, 21)}
-	publisher := vault.DeviceMaterial{DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: fixtureSigningKey(12), Recipient: readX25519Key(t, 22)}
+	root := vault.DeviceMaterial{
+		DeviceID:  "root",
+		KeyID:     []byte("root-sign"),
+		Signing:   fixtureSigningKey(11),
+		Recipient: readX25519Key(t, 21),
+	}
+	publisher := vault.DeviceMaterial{
+		DeviceID:  "publisher",
+		KeyID:     []byte("publisher-sign"),
+		Signing:   fixtureSigningKey(12),
+		Recipient: readX25519Key(t, 22),
+	}
 	bootstrap, err := vault.Bootstrap("builder read fixture", root)
 	require.NoError(t, err)
 	transition, err := vault.PrepareTransition(vault.Predecessor{
@@ -201,8 +277,16 @@ func newBuilderReadHistory(t *testing.T) readBuilderHistory {
 		NewDevice: &publisher, RequestedRole: vault.RolePublisher, ContentKey: bytes.Repeat([]byte{41}, 32),
 		Recipients: [][]byte{bytes.Clone(bootstrap.Certificate)},
 		Wraps: []vault.RecipientWrapInput{
-			{KeyID: bytes.Clone(root.KeyID), EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24))},
-			{KeyID: bytes.Clone(publisher.KeyID), EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{52}, 24))},
+			{
+				KeyID:            bytes.Clone(root.KeyID),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{51}, 24)),
+			},
+			{
+				KeyID:            bytes.Clone(publisher.KeyID),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{52}, 24)),
+			},
 		},
 		Plaintext: []byte("builder enrollment baseline"), PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)),
 		Nonce: [24]byte(bytes.Repeat([]byte{62}, 24)),
@@ -254,7 +338,13 @@ func readCurrentEpochTwoBuilderFixture(t *testing.T) (readFixture, []byte, []byt
 	require.NoError(t, err)
 	fixture := readFixtureForPreparedPublication(t, first.bootstrap, transition.Policy, transition.Control,
 		transition.Recipients, publication, first.publisher, first.predecessor.Policy, first.predecessor.Control)
-	return fixture, encodeReadControlRecord(t, first.predecessor.Control), encodeReadControlRecord(t, first.bootstrap.Control)
+	return fixture, encodeReadControlRecord(
+			t,
+			first.predecessor.Control,
+		), encodeReadControlRecord(
+			t,
+			first.bootstrap.Control,
+		)
 }
 
 func readPredecessorForTransition(t *testing.T, transition vault.Transition, anchor [32]byte) vault.Predecessor {
@@ -282,7 +372,14 @@ func readRecipientWraps(t *testing.T, certificates [][]byte, seed byte) []vault.
 		for offset := range nonce {
 			nonce[offset] = seed + byte(index) + byte(offset)
 		}
-		wraps = append(wraps, vault.RecipientWrapInput{KeyID: bytes.Clone(certificate.KeyID), EphemeralPrivate: private, WrapNonce: nonce})
+		wraps = append(
+			wraps,
+			vault.RecipientWrapInput{
+				KeyID:            bytes.Clone(certificate.KeyID),
+				EphemeralPrivate: private,
+				WrapNonce:        nonce,
+			},
+		)
 	}
 	return wraps
 }
@@ -295,8 +392,15 @@ func cloneReadByteSlices(values [][]byte) [][]byte {
 	return cloned
 }
 
-func readFixtureForPreparedPublication(t *testing.T, bootstrap vault.BootstrapResult, policyBytes, controlBytes []byte,
-	certificates [][]byte, publication vault.Publication, signer vault.DeviceMaterial, previousPolicyBytes, previousControlBytes []byte) readFixture {
+func readFixtureForPreparedPublication(
+	t *testing.T,
+	bootstrap vault.BootstrapResult,
+	policyBytes, controlBytes []byte,
+	certificates [][]byte,
+	publication vault.Publication,
+	signer vault.DeviceMaterial,
+	previousPolicyBytes, previousControlBytes []byte,
+) readFixture {
 	t.Helper()
 	policy, err := vault.DecodePolicy(policyBytes)
 	require.NoError(t, err)
@@ -306,7 +410,11 @@ func readFixtureForPreparedPublication(t *testing.T, bootstrap vault.BootstrapRe
 	require.NoError(t, err)
 	parsedCID, err := cid.Cast(publication.SnapshotCID)
 	require.NoError(t, err)
-	blob := atdata.Blob{Ref: atdata.CIDLink(parsedCID), MimeType: "application/octet-stream", Size: int64(len(publication.Snapshot))}
+	blob := atdata.Blob{
+		Ref:      atdata.CIDLink(parsedCID),
+		MimeType: "application/octet-stream",
+		Size:     int64(len(publication.Snapshot)),
+	}
 	snapshot, err := snapshotRecordForPublication(publication, blob, signer.Signing)
 	require.NoError(t, err)
 	snapshotBytes, err := EncodeRecord(snapshot)
@@ -319,7 +427,12 @@ func readFixtureForPreparedPublication(t *testing.T, bootstrap vault.BootstrapRe
 	for index, encodedCertificate := range certificates {
 		certificate, decodeErr := vault.DecodeCertificate(encodedCertificate)
 		require.NoError(t, decodeErr)
-		putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: fmt.Sprintf("r%d", index+1)}, certificateRecordFromObject(certificate))
+		putReadRecord(
+			t,
+			records,
+			RecordKey{Collection: VaultCertificateNSID, RKey: fmt.Sprintf("r%d", index+1)},
+			certificateRecordFromObject(certificate),
+		)
 	}
 	car, blocks, root, method := buildReadCAR(t, records)
 	transport := &readTransport{
@@ -332,16 +445,31 @@ func readFixtureForPreparedPublication(t *testing.T, bootstrap vault.BootstrapRe
 	require.NoError(t, err)
 	storeRoot := t.TempDir()
 	observationStore, err := state.Open(platform.Paths{
-		Home: filepath.Join(storeRoot, "home"), StateHome: filepath.Join(storeRoot, "state"), CacheHome: filepath.Join(storeRoot, "cache"),
+		Home: filepath.Join(
+			storeRoot,
+			"home",
+		),
+		StateHome: filepath.Join(storeRoot, "state"),
+		CacheHome: filepath.Join(storeRoot, "cache"),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, observationStore.Close()) })
 	return readFixture{
 		request: ReadRequest{
-			DID: proofTestDID, DIDDocumentID: proofTestDID,
-			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
-			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
-			PreviousControl: encodeReadControlRecord(t, previousControlBytes), DeviceKeyID: bytes.Clone(signer.KeyID), DeviceKey: signer.Recipient,
+			DID:           proofTestDID,
+			DIDDocumentID: proofTestDID,
+			VerificationMethods: []VerificationMethod{
+				{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method},
+			},
+			Vault:          bootstrap.Vault,
+			TrustAnchor:    bootstrap.Anchor,
+			PreviousPolicy: previousPolicyRecord,
+			PreviousControl: encodeReadControlRecord(
+				t,
+				previousControlBytes,
+			),
+			DeviceKeyID: bytes.Clone(signer.KeyID),
+			DeviceKey:   signer.Recipient,
 		},
 		transport: transport, observationStore: observationStore, records: records, blocks: blocks, root: root,
 	}
@@ -435,7 +563,11 @@ func buildReadCAR(t *testing.T, records map[RecordKey][]byte) ([]byte, []proofBl
 	return buildReadCARWithPrivateKey(t, records, privateKey)
 }
 
-func buildReadCARWithPrivateKey(t *testing.T, records map[RecordKey][]byte, privateKey *atcrypto.PrivateKeyP256) ([]byte, []proofBlock, cid.Cid, string) {
+func buildReadCARWithPrivateKey(
+	t *testing.T,
+	records map[RecordKey][]byte,
+	privateKey *atcrypto.PrivateKeyP256,
+) ([]byte, []proofBlock, cid.Cid, string) {
 	t.Helper()
 	publicKey, err := privateKey.PublicKey()
 	require.NoError(t, err)
@@ -505,7 +637,11 @@ func TestVaultReaderPersistsFirstSeenOncePerAuthenticatedEpoch(t *testing.T) {
 	reader.Clock = func() time.Time { return time.Unix(1_700_000_123, 0) }
 	result, err := reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
-	firstSeenAt, found, err := fixture.observationStore.VaultEpochFirstSeen(context.Background(), fixture.request.Vault, result.EpochSeq)
+	firstSeenAt, found, err := fixture.observationStore.VaultEpochFirstSeen(
+		context.Background(),
+		fixture.request.Vault,
+		result.EpochSeq,
+	)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, int64(1_700_000_123), firstSeenAt)
@@ -513,7 +649,11 @@ func TestVaultReaderPersistsFirstSeenOncePerAuthenticatedEpoch(t *testing.T) {
 	reader.Clock = func() time.Time { return time.Unix(1_701_000_123, 0) }
 	_, err = reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
-	firstSeenAt, found, err = fixture.observationStore.VaultEpochFirstSeen(context.Background(), fixture.request.Vault, result.EpochSeq)
+	firstSeenAt, found, err = fixture.observationStore.VaultEpochFirstSeen(
+		context.Background(),
+		fixture.request.Vault,
+		result.EpochSeq,
+	)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, int64(1_700_000_123), firstSeenAt)
@@ -666,7 +806,10 @@ func TestVaultReaderRejectsTamperedSnapshotRecord(t *testing.T) {
 func TestVaultReaderRejectsTamperedCARBlock(t *testing.T) {
 	fixture := newReadFixture(t)
 	for index := range fixture.blocks {
-		if bytes.Equal(fixture.blocks[index].data, fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}]) {
+		if bytes.Equal(
+			fixture.blocks[index].data,
+			fixture.records[RecordKey{Collection: VaultPolicyNSID, RKey: "self"}],
+		) {
 			fixture.blocks[index].data = bytes.Clone(fixture.blocks[index].data)
 			fixture.blocks[index].data[len(fixture.blocks[index].data)-1] ^= 1
 			break
@@ -684,11 +827,19 @@ func TestVaultReaderDistinguishesBlobFailures(t *testing.T) {
 		mutate func(*readFixture)
 		want   error
 	}{
-		{name: "CID mismatch", mutate: func(fixture *readFixture) { fixture.transport.blob[len(fixture.transport.blob)-1] ^= 1 }, want: ErrReadBlobCIDMismatch},
+		{
+			name:   "CID mismatch",
+			mutate: func(fixture *readFixture) { fixture.transport.blob[len(fixture.transport.blob)-1] ^= 1 },
+			want:   ErrReadBlobCIDMismatch,
+		},
 		{name: "truncated", mutate: func(fixture *readFixture) {
 			fixture.transport.blob = fixture.transport.blob[:len(fixture.transport.blob)-1]
 		}, want: ErrReadBlobTruncated},
-		{name: "missing", mutate: func(fixture *readFixture) { fixture.transport.blobStatus = 404 }, want: ErrReadBlobMissing},
+		{
+			name:   "missing",
+			mutate: func(fixture *readFixture) { fixture.transport.blobStatus = 404 },
+			want:   ErrReadBlobMissing,
+		},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
@@ -715,7 +866,7 @@ func TestVaultReaderRejectsWrongEpochPolicyDigestAndCrossVaultAtBinding(t *testi
 			record.PolicyDigest[0] ^= 1
 			return mustSignReadSnapshot(t, record)
 		}},
-		{name: "cross vault", mutate: func(t *testing.T, fixture *readFixture, record SnapshotRecord) SnapshotRecord {
+		{name: "cross vault", mutate: func(t *testing.T, _ *readFixture, record SnapshotRecord) SnapshotRecord {
 			record.Vault = bytes.Clone(record.Vault)
 			record.Vault[0] ^= 1
 			return mustSignReadSnapshot(t, record)
@@ -760,7 +911,10 @@ func TestVaultReaderRespectsCARBudget(t *testing.T) {
 	fixture := newReadFixture(t)
 	budgets := DefaultBudgets()
 	budgets.MaxCarBytes = int64(len(fixture.transport.carBytes) - 1)
-	_, err := (VaultReader{Transport: fixture.transport, ObservationStore: fixture.observationStore, Budgets: budgets}).Read(context.Background(), fixture.request)
+	_, err := (VaultReader{Transport: fixture.transport, ObservationStore: fixture.observationStore, Budgets: budgets}).Read(
+		context.Background(),
+		fixture.request,
+	)
 	require.ErrorIs(t, err, ErrUntrustedCar)
 	assert.Zero(t, fixture.transport.blobCalls)
 }
@@ -776,16 +930,25 @@ func TestVaultReaderRejectsOversizedDeclaredBlobBeforeFetching(t *testing.T) {
 func TestCheckPublicationCountRefusesBackwardRead(t *testing.T) {
 	root := t.TempDir()
 	store, err := state.Open(platform.Paths{
-		Home: filepath.Join(root, "home"), StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"),
+		Home: filepath.Join(
+			root,
+			"home",
+		),
+		StateHome: filepath.Join(root, "state"),
+		CacheHome: filepath.Join(root, "cache"),
 	})
 	require.NoError(t, err)
 	defer store.Close()
 	vaultID := [32]byte{9}
 	headCID := readRawCID(t, []byte("head-4"))
 	result := ReadResult{
-		PublicationCount: 4, PublicationCountBaseline: 0, EpochSeq: 2, HeadCID: headCID, ControlCID: readRawCID(t, []byte("control-2")),
-		Head:    HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
-		Control: ControlRecord{HeadSnapshotCID: bytes.Clone(headCID)},
+		PublicationCount:         4,
+		PublicationCountBaseline: 0,
+		EpochSeq:                 2,
+		HeadCID:                  headCID,
+		ControlCID:               readRawCID(t, []byte("control-2")),
+		Head:                     HeadRecord{PublicationCount: 4, EpochSeq: 2, SnapshotCID: bytes.Clone(headCID)},
+		Control:                  ControlRecord{HeadSnapshotCID: bytes.Clone(headCID)},
 	}
 	require.NoError(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}))
 	backwardsCID := readRawCID(t, []byte("head-3"))
@@ -793,9 +956,17 @@ func TestCheckPublicationCountRefusesBackwardRead(t *testing.T) {
 	result.Head.PublicationCount = 3
 	result.HeadCID = backwardsCID
 	result.Head.SnapshotCID = bytes.Clone(backwardsCID)
-	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}), ErrPublicationCountBackwards)
+	require.ErrorIs(
+		t,
+		CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}),
+		ErrPublicationCountBackwards,
+	)
 	result.PublicationCount = 4
 	result.Head.PublicationCount = 4
 	result.PublicationCountBaseline = 5
-	assert.ErrorIs(t, CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}), ErrPublicationCountBackwards)
+	assert.ErrorIs(
+		t,
+		CheckPublicationCount(context.Background(), store, vaultID, result, PublicationCountOptions{}),
+		ErrPublicationCountBackwards,
+	)
 }

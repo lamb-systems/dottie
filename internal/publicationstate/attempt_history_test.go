@@ -36,16 +36,28 @@ func TestAttemptHistoryLoweredPageBytesKeepsByIDConflictReadAvailable(t *testing
 	assert.Equal(t, conflict.Head, firstConflict.Head)
 
 	var roleCount int
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).Scan(&roleCount))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&roleCount),
+	)
 	assert.Equal(t, 3, roleCount)
 	attemptJSON, err := canonicalJSON(loaded)
 	require.NoError(t, err)
 	assert.Less(t, uint64(len(attemptJSON)), attemptLimits.HistoryPageBytes)
 
 	var evidenceBytes int64
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+32),0) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).Scan(&evidenceBytes))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(length(body)+32),0) FROM attempt_evidence WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&evidenceBytes),
+	)
 	var submissionBody []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).Scan(&submissionBody))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT body FROM attempt_events WHERE attempt_id=? AND kind='may-have-submitted'", attempt.ID[:]).
+			Scan(&submissionBody),
+	)
 	var submissionEvent attemptEventWire
 	require.NoError(t, strictJSON(submissionBody, &submissionEvent))
 	aggregateEntryBytes := uint64(len(attemptJSON)) + uint64(evidenceBytes) + uint64(len(submissionEvent.Evidence)+32)

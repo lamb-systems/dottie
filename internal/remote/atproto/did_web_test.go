@@ -17,6 +17,11 @@ func TestDiscoverDIDWebUsesHTTPSWellKnownDocument(t *testing.T) {
 		require.NoError(t, err)
 	}
 	if identity.DID != fake.did || identity.PDS != fake.pds {
-		require.False(t, identity.DID != fake.did || identity.PDS != fake.pds, "did:web discovery result = %+v", identity)
+		require.False(
+			t,
+			identity.DID != fake.did || identity.PDS != fake.pds,
+			"did:web discovery result = %+v",
+			identity,
+		)
 	}
 }

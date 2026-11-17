@@ -9,7 +9,9 @@ import (
 )
 
 var (
-	errPublicationStoreUnsafe   = errors.New("the publication position store is not a private 0700 directory owned by the current user")
+	errPublicationStoreUnsafe = errors.New(
+		"the publication position store is not a private 0700 directory owned by the current user",
+	)
 	errPublicationStoreCreation = errors.New("the publication position store directory cannot be created")
 )
 
@@ -45,7 +47,8 @@ func provisionPublicationStoreDirectory(directory string) error {
 }
 
 func verifyPublicationStoreDirectory(info os.FileInfo) error {
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 ||
+		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
 		return errPublicationStoreUnsafe
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)

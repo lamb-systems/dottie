@@ -86,7 +86,7 @@ var listDirectory = func(root *os.Root, name string, inspected os.FileInfo) ([]o
 	}
 	return entries, nil
 }
-var readFile = func(root *os.Root, name string, file *os.File, limit int64) ([]byte, error) {
+var readFile = func(_ *os.Root, _ string, file *os.File, limit int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(file, limit))
 }
 var openEntry = func(root *os.Root, name string) (*os.File, error) {
@@ -118,7 +118,8 @@ func Capture(selection Root) (Result, error) {
 		}
 		allowExternal[linkPath] = struct{}{}
 	}
-	if selection.Budget.MaxEntries <= 0 || selection.Budget.MaxDepth <= 0 || selection.Budget.MaxFileBytes <= 0 || selection.Budget.MaxTotalBytes <= 0 {
+	if selection.Budget.MaxEntries <= 0 || selection.Budget.MaxDepth <= 0 || selection.Budget.MaxFileBytes <= 0 ||
+		selection.Budget.MaxTotalBytes <= 0 {
 		return Result{}, errors.New("capture budget limits must be positive")
 	}
 	selection.Path = filepath.Clean(selection.Path)
@@ -264,7 +265,10 @@ func (s *captureState) captureDirectory(name, relative string, inspected os.File
 			return err
 		}
 		if pattern, excluded := s.matcher.Exclude(childRelative); excluded {
-			s.result.Skipped = append(s.result.Skipped, Skip{Path: childRelative, Reason: SkipExcluded, Detail: safeDetail(pattern)})
+			s.result.Skipped = append(
+				s.result.Skipped,
+				Skip{Path: childRelative, Reason: SkipExcluded, Detail: safeDetail(pattern)},
+			)
 			continue
 		}
 		childInfo, statErr := statPath(s.handle, childName)
@@ -294,7 +298,15 @@ func (s *captureState) captureDirectory(name, relative string, inspected os.File
 		}
 	}
 	if !root {
-		if err := s.addPresent(relative, model.FileEntry{Path: relative, State: model.FilePresent, Kind: model.FileDirectory, Mode: uint32(inspected.Mode().Perm() & 0o777)}); err != nil {
+		if err := s.addPresent(
+			relative,
+			model.FileEntry{
+				Path:  relative,
+				State: model.FilePresent,
+				Kind:  model.FileDirectory,
+				Mode:  uint32(inspected.Mode().Perm() & 0o777),
+			},
+		); err != nil {
 			return err
 		}
 	}
@@ -302,7 +314,7 @@ func (s *captureState) captureDirectory(name, relative string, inspected os.File
 }
 
 func (s *captureState) captureRegular(name, relative string, inspected os.FileInfo) error {
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if attempt > 0 {
 			var err error
 			inspected, err = statPath(s.handle, name)
@@ -349,7 +361,8 @@ func (s *captureState) captureRegular(name, relative string, inspected os.FileIn
 		fdAfter, fdErr := file.Stat()
 		pathAfter, pathErr := statPath(s.handle, name)
 		closeErr := file.Close()
-		if fdErr != nil || pathErr != nil || closeErr != nil || !fdAfter.Mode().IsRegular() || !pathAfter.Mode().IsRegular() {
+		if fdErr != nil || pathErr != nil || closeErr != nil || !fdAfter.Mode().IsRegular() ||
+			!pathAfter.Mode().IsRegular() {
 			return s.addUnknown(relative)
 		}
 		if !sameVersion(inspected, fdAfter) || !sameVersion(inspected, pathAfter) {
@@ -366,13 +379,25 @@ func (s *captureState) captureRegular(name, relative string, inspected os.FileIn
 		if content == nil {
 			content = []byte{}
 		}
-		return s.addPresent(relative, model.FileEntry{Path: relative, State: model.FilePresent, Kind: model.FileRegular, Content: content, Mode: uint32(inspected.Mode().Perm() & 0o777)})
+		return s.addPresent(
+			relative,
+			model.FileEntry{
+				Path:    relative,
+				State:   model.FilePresent,
+				Kind:    model.FileRegular,
+				Content: content,
+				Mode:    uint32(inspected.Mode().Perm() & 0o777),
+			},
+		)
 	}
 	return s.addUnknown(relative)
 }
 
 func (s *captureState) addUnknown(path string) error {
-	observation := model.Observation{State: model.ObservationUnknown, Identity: model.EntryKey{TargetID: s.root.TargetID, Source: model.SourceFiles, FilePath: path}}
+	observation := model.Observation{
+		State:    model.ObservationUnknown,
+		Identity: model.EntryKey{TargetID: s.root.TargetID, Source: model.SourceFiles, FilePath: path},
+	}
 	if err := observation.Validate(); err != nil {
 		return fmt.Errorf("invalid unknown capture observation: %w", err)
 	}
@@ -380,7 +405,7 @@ func (s *captureState) addUnknown(path string) error {
 	return nil
 }
 
-func (s *captureState) addPresent(path string, file model.FileEntry) error {
+func (s *captureState) addPresent(_ string, file model.FileEntry) error {
 	entry := model.Entry{TargetID: s.root.TargetID, File: &file}
 	observation := model.Observation{State: model.ObservationPresent, Identity: entry.Identity(), Entry: &entry}
 	if err := observation.Validate(); err != nil {

@@ -76,19 +76,42 @@ type PublicationAcceptRequest struct {
 	Payload       []byte
 }
 
-func StagePublicationAccept(ctx context.Context, request PublicationAcceptStageRequest) (PublicationAcceptProposal, error) {
+func StagePublicationAccept(
+	ctx context.Context,
+	request PublicationAcceptStageRequest,
+) (PublicationAcceptProposal, error) {
 	if ctx == nil || request.Directory == "" || len(request.Payload) == 0 {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(ctx, publicationAcceptStageInput, publicationAcceptReasonRequestInvalid, nil)
+		return PublicationAcceptProposal{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageInput,
+			publicationAcceptReasonRequestInvalid,
+			nil,
+		)
 	}
 	if err := ctx.Err(); err != nil {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(ctx, publicationAcceptStageInput, publicationAcceptReasonCanceled, err)
+		return PublicationAcceptProposal{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageInput,
+			publicationAcceptReasonCanceled,
+			err,
+		)
 	}
 	if _, err := publicationstate.Inspect(ctx, request.Directory, request.Binding); err != nil {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptPositionReason(err), err)
+		return PublicationAcceptProposal{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptPositionReason(err),
+			err,
+		)
 	}
 	store, err := publicationstate.Open(request.Directory, request.Binding)
 	if err != nil {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonUnavailable, err)
+		return PublicationAcceptProposal{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptReasonUnavailable,
+			err,
+		)
 	}
 	defer func() { _ = store.Close() }()
 	mode, err := publicationAcceptMode(ctx, store, request.FloorRevision)
@@ -97,7 +120,12 @@ func StagePublicationAccept(ctx context.Context, request PublicationAcceptStageR
 	}
 	proposal, err := store.Prepare(ctx, mode, request.Observation, request.Payload)
 	if err != nil {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(ctx, publicationAcceptStagePrepare, publicationAcceptReasonPrepare, err)
+		return PublicationAcceptProposal{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePrepare,
+			publicationAcceptReasonPrepare,
+			err,
+		)
 	}
 	return PublicationAcceptProposal{
 		Mode: proposal.Mode, StateToken: proposal.StateToken,
@@ -107,17 +135,37 @@ func StagePublicationAccept(ctx context.Context, request PublicationAcceptStageR
 
 func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (publicationstate.Floor, error) {
 	if ctx == nil || request.Directory == "" || len(request.Payload) == 0 {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStageInput, publicationAcceptReasonRequestInvalid, nil)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageInput,
+			publicationAcceptReasonRequestInvalid,
+			nil,
+		)
 	}
 	if publicationAcceptModeRefused(request.Mode) {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStageInput, publicationAcceptReasonMode, nil)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageInput,
+			publicationAcceptReasonMode,
+			nil,
+		)
 	}
 	if err := ctx.Err(); err != nil {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStageInput, publicationAcceptReasonCanceled, err)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageInput,
+			publicationAcceptReasonCanceled,
+			err,
+		)
 	}
 	store, err := publicationstate.Open(request.Directory, request.Binding)
 	if err != nil {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonUnavailable, err)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptReasonUnavailable,
+			err,
+		)
 	}
 	defer func() { _ = store.Close() }()
 	observed, err := publicationAcceptMode(ctx, store, request.FloorRevision)
@@ -125,28 +173,64 @@ func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (p
 		return publicationstate.Floor{}, err
 	}
 	if observed != request.Mode {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonMode, nil)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptReasonMode,
+			nil,
+		)
 	}
-	accepted, err := store.AcceptMaterial(ctx, request.Mode, request.StateToken, request.Observation, request.Payload, request.Confirmation)
+	accepted, err := store.AcceptMaterial(
+		ctx,
+		request.Mode,
+		request.StateToken,
+		request.Observation,
+		request.Payload,
+		request.Confirmation,
+	)
 	if err != nil {
-		return publicationstate.Floor{}, publicationAcceptFailure(ctx, publicationAcceptStageMaterial, publicationAcceptReasonMaterial, err)
+		return publicationstate.Floor{}, publicationAcceptFailure(
+			ctx,
+			publicationAcceptStageMaterial,
+			publicationAcceptReasonMaterial,
+			err,
+		)
 	}
 	return accepted, nil
 }
 
-func publicationAcceptMode(ctx context.Context, store *publicationstate.Store, floorRevision uint64) (publicationstate.Mode, error) {
+func publicationAcceptMode(
+	ctx context.Context,
+	store *publicationstate.Store,
+	floorRevision uint64,
+) (publicationstate.Mode, error) {
 	floor, present, err := store.Load(ctx)
 	if err != nil {
-		return "", publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonUnavailable, err)
+		return "", publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptReasonUnavailable,
+			err,
+		)
 	}
 	if !present {
 		if floorRevision != 0 {
-			return "", publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonRevision, errPublicationAcceptRevision)
+			return "", publicationAcceptFailure(
+				ctx,
+				publicationAcceptStagePosition,
+				publicationAcceptReasonRevision,
+				errPublicationAcceptRevision,
+			)
 		}
 		return publicationstate.ModeFirstUse, nil
 	}
 	if floor.Revision != floorRevision {
-		return "", publicationAcceptFailure(ctx, publicationAcceptStagePosition, publicationAcceptReasonRevision, errPublicationAcceptRevision)
+		return "", publicationAcceptFailure(
+			ctx,
+			publicationAcceptStagePosition,
+			publicationAcceptReasonRevision,
+			errPublicationAcceptRevision,
+		)
 	}
 	return publicationstate.ModeAdvance, nil
 }
@@ -163,7 +247,12 @@ func publicationAcceptModeRefused(mode publicationstate.Mode) bool {
 	return mode != publicationstate.ModeFirstUse && mode != publicationstate.ModeAdvance
 }
 
-func publicationAcceptFailure(ctx context.Context, stage publicationAcceptStage, reason publicationAcceptReason, cause error) error {
+func publicationAcceptFailure(
+	ctx context.Context,
+	stage publicationAcceptStage,
+	reason publicationAcceptReason,
+	cause error,
+) error {
 	cancellation := error(nil)
 	if ctx != nil {
 		if err := ctx.Err(); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

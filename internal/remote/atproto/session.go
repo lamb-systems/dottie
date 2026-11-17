@@ -46,7 +46,8 @@ type sessionEnvelope struct {
 }
 
 func (s *Session) Validate() error {
-	if s == nil || !validDID(s.DID) || s.Issuer == "" || s.TokenEndpoint == "" || s.RefreshToken.Reveal() == "" || s.DPoPPrivateKey.Reveal() == "" {
+	if s == nil || !validDID(s.DID) || s.Issuer == "" || s.TokenEndpoint == "" || s.RefreshToken.Reveal() == "" ||
+		s.DPoPPrivateKey.Reveal() == "" {
 		return errors.New("incomplete OAuth session")
 	}
 	if s.State != "" && s.State != SessionStateUsable {
@@ -117,5 +118,13 @@ func (e sessionEnvelope) status() (SessionStatus, error) {
 	if e.State == SessionStateRefreshPending && (e.RefreshToken != "" || e.DPoPPrivateKey != "") {
 		return SessionStatus{}, ErrSessionUnavailable
 	}
-	return SessionStatus{DID: e.DID, Handle: e.Handle, Issuer: e.Issuer, TokenEndpoint: e.TokenEndpoint, Scopes: scopes, State: e.State, HasRefresh: e.State == SessionStateUsable}, nil
+	return SessionStatus{
+		DID:           e.DID,
+		Handle:        e.Handle,
+		Issuer:        e.Issuer,
+		TokenEndpoint: e.TokenEndpoint,
+		Scopes:        scopes,
+		State:         e.State,
+		HasRefresh:    e.State == SessionStateUsable,
+	}, nil
 }

@@ -25,16 +25,26 @@ func TestAcceptRollbackLeavesAllRowsUnchangedAndRedactsSQLCanary(t *testing.T) {
 	require.NoError(t, err)
 	proposal := prepareFirstUse(t, store, observation, f.payload)
 	before := readLogicalRows(t, store.conn)
-	_, err = store.conn.ExecContext(ctx, "CREATE TRIGGER abort_publication_event BEFORE INSERT ON accepted_events BEGIN SELECT RAISE(ABORT,'raw-canary-publication-event'); END")
+	_, err = store.conn.ExecContext(
+		ctx,
+		"CREATE TRIGGER abort_publication_event BEFORE INSERT ON accepted_events BEGIN SELECT RAISE(ABORT,'raw-canary-publication-event'); END",
+	)
 	require.NoError(t, err)
-	result, acceptErr := store.Accept(ctx, ModeFirstUse, proposal.StateToken, observation, f.payload, proposal.Confirmation)
+	result, acceptErr := store.Accept(
+		ctx,
+		ModeFirstUse,
+		proposal.StateToken,
+		observation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.ErrorIs(t, acceptErr, ErrStorage)
 	assert.Equal(t, Floor{}, result)
 	assert.NotContains(t, acceptErr.Error(), "raw-canary-publication-event")
-	for current := error(acceptErr); current != nil; current = errors.Unwrap(current) {
+	for current := acceptErr; current != nil; current = errors.Unwrap(current) {
 		assert.NotContains(t, current.Error(), "raw-canary-publication-event")
 	}
-	assert.Nil(t, errors.Unwrap(errors.Unwrap(acceptErr)))
+	require.NoError(t, errors.Unwrap(errors.Unwrap(acceptErr)))
 	after := readLogicalRows(t, store.conn)
 	assert.Equal(t, before, after)
 	_, err = store.conn.ExecContext(ctx, "DROP TRIGGER abort_publication_event")

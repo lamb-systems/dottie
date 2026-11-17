@@ -55,7 +55,13 @@ func TestKeyringSaveReplacesExistingSameNamedItem(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, keyring.Save(context.Background(), "client-did", []byte("new")))
 	require.Len(t, backend.items, 1, "save did not replace the matching item: %#v", backend.items)
-	require.Equal(t, "new", string(backend.items["client-did"]), "save did not replace the matching item: %#v", backend.items)
+	require.Equal(
+		t,
+		"new",
+		string(backend.items["client-did"]),
+		"save did not replace the matching item: %#v",
+		backend.items,
+	)
 	loaded, err := keyring.Load(context.Background(), "client-did")
 	require.NoError(t, err, "load = %q, %v", loaded, err)
 	require.Equal(t, "new", string(loaded), "load = %q, %v", loaded, err)
@@ -72,7 +78,12 @@ func TestDeviceKeysUseOneNamedKeyringItem(t *testing.T) {
 	signing := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
 	recipient, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{0x33}, 32))
 	require.NoError(t, err)
-	material := vault.DeviceMaterial{DeviceID: "device-a", KeyID: []byte("key-a"), Signing: signing, Recipient: recipient}
+	material := vault.DeviceMaterial{
+		DeviceID:  "device-a",
+		KeyID:     []byte("key-a"),
+		Signing:   signing,
+		Recipient: recipient,
+	}
 	require.NoError(t, keyring.StoreDeviceKeys(context.Background(), vaultID, material))
 	name := "dottie:device:" + hex.EncodeToString(vaultID[:]) + ":device-a"
 	require.Len(t, backend.items, 1, "device key material was not stored in exactly one item")
@@ -93,12 +104,16 @@ func TestDeviceKeysReturnTypedAbsenceAndUnavailableErrors(t *testing.T) {
 	_, err = missing.LoadDeviceKeys(context.Background(), vaultID, "absent")
 	require.ErrorIs(t, err, ErrKeyringItemNotFound, "missing item error")
 
-	unavailable, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}, err: ErrKeyringUnavailable})
+	unavailable, err := NewKeyringWithBackend(
+		&fakeKeyringBackend{items: map[string][]byte{}, err: ErrKeyringUnavailable},
+	)
 	require.NoError(t, err)
 	_, err = unavailable.LoadDeviceKeys(context.Background(), vaultID, "device-a")
 	require.ErrorIs(t, err, ErrKeyringUnavailable, "unavailable item error")
 	err = unavailable.StoreDeviceKeys(context.Background(), vaultID, vault.DeviceMaterial{
-		DeviceID: "device-a", KeyID: []byte("key-a"), Signing: ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize)),
+		DeviceID:  "device-a",
+		KeyID:     []byte("key-a"),
+		Signing:   ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize)),
 		Recipient: mustPlatformRecipient(t, 0x33),
 	})
 	require.ErrorIs(t, err, ErrKeyringUnavailable, "unavailable store error")
@@ -158,7 +173,10 @@ func (f *fakeKeyringListingBackend) ListItems(_ context.Context, prefix string) 
 }
 
 func TestKeyringListItemsReturnsTheBackendNames(t *testing.T) {
-	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, names: []string{"session:one", "session:two"}}
+	backend := &fakeKeyringListingBackend{
+		fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}},
+		names:              []string{"session:one", "session:two"},
+	}
 	keyring, err := NewKeyringWithBackend(backend)
 	require.NoError(t, err)
 	names, err := keyring.ListItems(context.Background(), "session:")
@@ -168,11 +186,14 @@ func TestKeyringListItemsReturnsTheBackendNames(t *testing.T) {
 }
 
 func TestKeyringListItemsRefusesAnEmptyPrefix(t *testing.T) {
-	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, names: []string{"session:one"}}
+	backend := &fakeKeyringListingBackend{
+		fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}},
+		names:              []string{"session:one"},
+	}
 	keyring, err := NewKeyringWithBackend(backend)
 	require.NoError(t, err)
 	names, err := keyring.ListItems(context.Background(), "")
-	assert.ErrorIs(t, err, ErrKeyringUnavailable)
+	require.ErrorIs(t, err, ErrKeyringUnavailable)
 	assert.Empty(t, names)
 	assert.Empty(t, backend.prefixes, "an empty prefix reached the backend")
 }
@@ -181,15 +202,18 @@ func TestKeyringListItemsRequiresABackendThatCanList(t *testing.T) {
 	keyring, err := NewKeyringWithBackend(&fakeKeyringBackend{items: map[string][]byte{}})
 	require.NoError(t, err)
 	names, err := keyring.ListItems(context.Background(), "session:")
-	assert.ErrorIs(t, err, ErrKeyringUnavailable)
+	require.ErrorIs(t, err, ErrKeyringUnavailable)
 	assert.Empty(t, names)
 }
 
 func TestKeyringListItemsReportsALockedCollection(t *testing.T) {
-	backend := &fakeKeyringListingBackend{fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}}, listErr: ErrKeyringLocked}
+	backend := &fakeKeyringListingBackend{
+		fakeKeyringBackend: &fakeKeyringBackend{items: map[string][]byte{}},
+		listErr:            ErrKeyringLocked,
+	}
 	keyring, err := NewKeyringWithBackend(backend)
 	require.NoError(t, err)
 	names, err := keyring.ListItems(context.Background(), "session:")
-	assert.ErrorIs(t, err, ErrKeyringLocked)
+	require.ErrorIs(t, err, ErrKeyringLocked)
 	assert.Empty(t, names)
 }

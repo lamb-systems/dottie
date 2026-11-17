@@ -5,13 +5,20 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 func TestNewSettingFingerprint(t *testing.T) {
-	identity := model.EntryKey{TargetID: "settings", Source: model.SourceGNOME, SchemaID: "org.example.Settings", SettingsPath: "/", SettingKey: "enabled"}
+	identity := model.EntryKey{
+		TargetID:     "settings",
+		Source:       model.SourceGNOME,
+		SchemaID:     "org.example.Settings",
+		SettingsPath: "/",
+		SettingKey:   "enabled",
+	}
 
 	t.Run("present", func(t *testing.T) {
 		payload := []byte("b\x00true")

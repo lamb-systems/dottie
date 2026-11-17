@@ -26,13 +26,17 @@ import (
 )
 
 var (
-	ErrSessionUnavailable          = errors.New("stored session is unusable; sign in again")
-	ErrSessionRefreshPending       = errors.New("account refresh was interrupted; sign in again")
-	ErrSessionBusy                 = errors.New("another dottie command is updating the account session; retry when it finishes")
-	ErrSessionRelocated            = errors.New("account authorization server or token endpoint changed; sign in again")
-	ErrRevocationUnsupported       = errors.New("authorization server does not advertise a revocation endpoint")
-	ErrSessionNotFound             = errors.New("no stored account session")
-	ErrSessionLockUnavailable      = errors.New("cannot lock the account session; check the runtime directory and retry")
+	ErrSessionUnavailable    = errors.New("stored session is unusable; sign in again")
+	ErrSessionRefreshPending = errors.New("account refresh was interrupted; sign in again")
+	ErrSessionBusy           = errors.New(
+		"another dottie command is updating the account session; retry when it finishes",
+	)
+	ErrSessionRelocated       = errors.New("account authorization server or token endpoint changed; sign in again")
+	ErrRevocationUnsupported  = errors.New("authorization server does not advertise a revocation endpoint")
+	ErrSessionNotFound        = errors.New("no stored account session")
+	ErrSessionLockUnavailable = errors.New(
+		"cannot lock the account session; check the runtime directory and retry",
+	)
 	ErrSessionPersistenceUncertain = errors.New("authorization was obtained but keyring persistence is uncertain")
 )
 
@@ -127,8 +131,8 @@ func noRedirectClient(client *http.Client) *http.Client {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	} else {
-		copy := *client
-		client = &copy
+		cloned := *client
+		client = &cloned
 	}
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	return client
@@ -468,9 +472,25 @@ func sanitizedOAuthCode(body []byte) string {
 	return payload.Error
 }
 
-func (c *Client) postFormDPoP(ctx context.Context, endpoint string, form url.Values, key *ecdsa.PrivateKey, output any) error {
+func (c *Client) postFormDPoP(
+	ctx context.Context,
+	endpoint string,
+	form url.Values,
+	key *ecdsa.PrivateKey,
+	output any,
+) error {
 	body := form.Encode()
-	response, err := c.doDPoP(ctx, http.MethodPost, endpoint, strings.NewReader(body), int64(len(body)), "application/x-www-form-urlencoded", nil, key, Secret{})
+	response, err := c.doDPoP(
+		ctx,
+		http.MethodPost,
+		endpoint,
+		strings.NewReader(body),
+		int64(len(body)),
+		"application/x-www-form-urlencoded",
+		nil,
+		key,
+		Secret{},
+	)
 	if err != nil {
 		return err
 	}
@@ -490,9 +510,19 @@ func (c *Client) postFormDPoP(ctx context.Context, endpoint string, form url.Val
 	return nil
 }
 
-func (c *Client) doDPoP(ctx context.Context, method, endpoint string, body io.Reader, bodySize int64, contentType string, headers http.Header, key *ecdsa.PrivateKey, accessToken Secret) (*http.Response, error) {
+func (c *Client) doDPoP(
+	ctx context.Context,
+	method, endpoint string,
+	body io.Reader,
+	bodySize int64,
+	contentType string,
+	headers http.Header,
+	key *ecdsa.PrivateKey,
+	accessToken Secret,
+) (*http.Response, error) {
 	parsedEndpoint, err := url.Parse(endpoint)
-	if err != nil || parsedEndpoint.Scheme != "https" || parsedEndpoint.Host == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" {
+	if err != nil || parsedEndpoint.Scheme != "https" || parsedEndpoint.Host == "" || parsedEndpoint.User != nil ||
+		parsedEndpoint.Fragment != "" {
 		return nil, errors.New("credential-bearing endpoint must use HTTPS")
 	}
 	validated := parsedEndpoint.String()
@@ -501,7 +531,7 @@ func (c *Client) doDPoP(ctx context.Context, method, endpoint string, body io.Re
 		return nil, errors.New("cannot prepare OAuth request")
 	}
 	origin := urlOrigin(validated)
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		nonce := c.getNonce(origin)
 		proof, err := makeDPoPProof(key, method, validated, c.Clock(), c.Random, accessToken, nonce)
 		if err != nil {
@@ -569,7 +599,14 @@ func urlOrigin(endpoint string) string {
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }
 
-func (c *Client) finishToken(_ context.Context, identity Identity, requested, required []string, key *ecdsa.PrivateKey, result tokenResponse, existingRefresh string) (*Session, error) {
+func (c *Client) finishToken(
+	_ context.Context,
+	identity Identity,
+	requested, required []string,
+	key *ecdsa.PrivateKey,
+	result tokenResponse,
+	existingRefresh string,
+) (*Session, error) {
 	if result.Sub != identity.DID {
 		return nil, errors.New("token subject does not match the discovered DID")
 	}
@@ -653,7 +690,7 @@ func (c *Client) saveUsableSession(ctx context.Context, session *Session) error 
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() { _ = release() }()
 	if err := c.saveSession(ctx, session); err != nil {
 		return fmt.Errorf("%w: %w", ErrSessionPersistenceUncertain, err)
 	}
@@ -734,7 +771,7 @@ func (c *Client) DeleteSession(ctx context.Context, did string) error {
 	if err != nil {
 		return err
 	}
-	defer release()
+	defer func() { _ = release() }()
 	return c.Store.Delete(ctx, item)
 }
 
@@ -798,7 +835,7 @@ func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (
 	if err != nil {
 		return nil, identity, err
 	}
-	defer release()
+	defer func() { _ = release() }()
 	if err := ctx.Err(); err != nil {
 		return nil, identity, authorizationContextError(err)
 	}
@@ -851,7 +888,15 @@ func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (
 	if err := ctx.Err(); err != nil {
 		return nil, identity, authorizationContextError(err)
 	}
-	refreshed, err := c.finishToken(ctx, identity, latest.Scopes, latest.Scopes, key, result, latest.RefreshToken.Reveal())
+	refreshed, err := c.finishToken(
+		ctx,
+		identity,
+		latest.Scopes,
+		latest.Scopes,
+		key,
+		result,
+		latest.RefreshToken.Reveal(),
+	)
 	if err != nil {
 		return nil, identity, fmt.Errorf("%w; refresh outcome is unknown, sign in again", err)
 	}
@@ -865,7 +910,8 @@ func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (
 }
 
 func checkSessionBinding(identity Identity, session *Session) error {
-	if identity.DID != session.DID || identity.Issuer != session.Issuer || identity.TokenEndpoint != session.TokenEndpoint {
+	if identity.DID != session.DID || identity.Issuer != session.Issuer ||
+		identity.TokenEndpoint != session.TokenEndpoint {
 		return ErrSessionRelocated
 	}
 	return nil
@@ -886,7 +932,7 @@ func (c *Client) Logout(ctx context.Context, did, handle string, session *Sessio
 		if err != nil {
 			return LogoutResult{}, err
 		}
-		defer release()
+		defer func() { _ = release() }()
 		if err := c.Store.Delete(ctx, item); err != nil {
 			return LogoutResult{}, err
 		}
@@ -915,7 +961,7 @@ func (c *Client) Logout(ctx context.Context, did, handle string, session *Sessio
 	if err != nil {
 		return LogoutResult{}, err
 	}
-	defer release()
+	defer func() { _ = release() }()
 	latestEnvelope, _, err := c.loadEnvelope(ctx, did)
 	if err != nil {
 		return LogoutResult{}, err
@@ -937,7 +983,17 @@ func (c *Client) Logout(ctx context.Context, did, handle string, session *Sessio
 		"client_id":       {c.ClientID},
 	}
 	body := form.Encode()
-	response, err := c.doDPoP(ctx, http.MethodPost, identity.RevocationEndpoint, strings.NewReader(body), int64(len(body)), "application/x-www-form-urlencoded", nil, key, Secret{})
+	response, err := c.doDPoP(
+		ctx,
+		http.MethodPost,
+		identity.RevocationEndpoint,
+		strings.NewReader(body),
+		int64(len(body)),
+		"application/x-www-form-urlencoded",
+		nil,
+		key,
+		Secret{},
+	)
 	if err != nil {
 		return LogoutResult{}, err
 	}
@@ -959,7 +1015,13 @@ func sessionItemName(clientID, did string) string {
 	return "session:" + base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func (c *Client) DoResource(ctx context.Context, session *Session, method, endpoint string, body []byte, headers http.Header) (*http.Response, error) {
+func (c *Client) DoResource(
+	ctx context.Context,
+	session *Session,
+	method, endpoint string,
+	body []byte,
+	headers http.Header,
+) (*http.Response, error) {
 	if session == nil || session.Validate() != nil || session.AccessToken.Reveal() == "" {
 		return nil, ErrSessionUnavailable
 	}
@@ -967,5 +1029,15 @@ func (c *Client) DoResource(ctx context.Context, session *Session, method, endpo
 	if err != nil {
 		return nil, ErrSessionUnavailable
 	}
-	return c.doDPoP(ctx, method, endpoint, strings.NewReader(string(body)), int64(len(body)), "application/octet-stream", headers, key, session.AccessToken)
+	return c.doDPoP(
+		ctx,
+		method,
+		endpoint,
+		strings.NewReader(string(body)),
+		int64(len(body)),
+		"application/octet-stream",
+		headers,
+		key,
+		session.AccessToken,
+	)
 }

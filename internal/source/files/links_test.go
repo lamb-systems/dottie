@@ -71,7 +71,7 @@ func TestExternalLinkApprovalNeverOpensTargets(t *testing.T) {
 		readNames = append(readNames, name)
 		return originalReadLink(handle, name)
 	}
-	openEntry = func(handle *os.Root, name string) (*os.File, error) {
+	openEntry = func(_ *os.Root, name string) (*os.File, error) {
 		openNames = append(openNames, name)
 		return nil, syscall.EPERM
 	}
@@ -132,7 +132,7 @@ func TestCaptureInspectReadlinkSwapBecomesUnknown(t *testing.T) {
 		require.NoError(t, os.Symlink(outside, linkPath))
 		return originalReadLink(handle, name)
 	}
-	openEntry = func(handle *os.Root, name string) (*os.File, error) {
+	openEntry = func(_ *os.Root, _ string) (*os.File, error) {
 		openAttempts++
 		return nil, syscall.EPERM
 	}
@@ -180,7 +180,7 @@ func TestCaptureSpecialFilesAreSkippedWithoutOpening(t *testing.T) {
 	}
 	opened := make([]string, 0)
 	originalOpen := openEntry
-	openEntry = func(handle *os.Root, name string) (*os.File, error) {
+	openEntry = func(_ *os.Root, name string) (*os.File, error) {
 		opened = append(opened, name)
 		return nil, syscall.EPERM
 	}

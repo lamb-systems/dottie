@@ -5,20 +5,23 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
-	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
+	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 )
 
 func TestCleanupPublicationLiveRecordsAcceptsRecordNotFound(t *testing.T) {
@@ -27,7 +30,12 @@ func TestCleanupPublicationLiveRecordsAcceptsRecordNotFound(t *testing.T) {
 			getStatuses: []int{http.StatusBadRequest},
 			getBodies:   [][]byte{[]byte(`{"error":"RecordNotFound"}`)},
 		}
-		cleanupPublicationLiveRecords(t, transport, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", []string{"systems.lamb.dottie.vaultHead/self"})
+		cleanupPublicationLiveRecords(
+			t,
+			transport,
+			"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+			[]string{"systems.lamb.dottie.vaultHead/self"},
+		)
 		assert.Equal(t, []string{"GET com.atproto.repo.getRecord"}, transport.calls)
 	})
 
@@ -36,7 +44,12 @@ func TestCleanupPublicationLiveRecordsAcceptsRecordNotFound(t *testing.T) {
 			getStatuses: []int{http.StatusOK, http.StatusBadRequest},
 			getBodies:   [][]byte{[]byte(`{"value":{}}`), []byte(`{"error":"RecordNotFound"}`)},
 		}
-		cleanupPublicationLiveRecords(t, transport, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", []string{"systems.lamb.dottie.vaultHead/self"})
+		cleanupPublicationLiveRecords(
+			t,
+			transport,
+			"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+			[]string{"systems.lamb.dottie.vaultHead/self"},
+		)
 		assert.Equal(t, []string{
 			"GET com.atproto.repo.getRecord",
 			"POST com.atproto.repo.deleteRecord",
@@ -52,7 +65,13 @@ type publicationCleanupTransport struct {
 	calls       []string
 }
 
-func (transport *publicationCleanupTransport) Do(_ context.Context, method, endpoint string, _ url.Values, _ []byte, _ string) (int, []byte, error) {
+func (transport *publicationCleanupTransport) Do(
+	_ context.Context,
+	method, endpoint string,
+	_ url.Values,
+	_ []byte,
+	_ string,
+) (int, []byte, error) {
 	transport.calls = append(transport.calls, method+" "+endpoint)
 	if endpoint == "com.atproto.repo.getRecord" {
 		index := transport.getCalls
@@ -62,22 +81,32 @@ func (transport *publicationCleanupTransport) Do(_ context.Context, method, endp
 	if endpoint == "com.atproto.repo.deleteRecord" {
 		return http.StatusOK, nil, nil
 	}
-	return 0, nil, fmt.Errorf("unexpected endpoint")
+	return 0, nil, errors.New("unexpected endpoint")
 }
 
-func (transport *publicationCleanupTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
-	return 0, nil, fmt.Errorf("synthetic stream unavailable")
+func (transport *publicationCleanupTransport) OpenStream(
+	context.Context,
+	string,
+	url.Values,
+) (int, io.ReadCloser, error) {
+	return 0, nil, errors.New("synthetic stream unavailable")
 }
 
 func TestLivePublicationRepositoryPrecondition(t *testing.T) {
 	did := "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
 	transport := &liveRepositoryDescriptionTransport{
 		status: http.StatusOK,
-		body:   []byte(`{"did":"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa","collections":["app.bsky.graph.follow","app.bsky.actor.profile"]}`),
+		body: []byte(
+			`{"did":"did:plc:aaaaaaaaaaaaaaaaaaaaaaaa","collections":["app.bsky.graph.follow","app.bsky.actor.profile"]}`,
+		),
 	}
 	skipReason, err := livePublicationRepositoryPrecondition(context.Background(), transport, did)
 	require.NoError(t, err)
-	assert.Equal(t, "repository is not empty; collections: app.bsky.actor.profile, app.bsky.graph.follow; genesis requires an empty repository; a skipped gate is not provider evidence", skipReason)
+	assert.Equal(
+		t,
+		"repository is not empty; collections: app.bsky.actor.profile, app.bsky.graph.follow; genesis requires an empty repository; a skipped gate is not provider evidence",
+		skipReason,
+	)
 	assert.Equal(t, http.MethodGet, transport.method)
 	assert.Equal(t, "com.atproto.repo.describeRepo", transport.endpoint)
 	assert.Equal(t, did, transport.query.Get("repo"))
@@ -99,15 +128,25 @@ type liveRepositoryDescriptionTransport struct {
 	query    url.Values
 }
 
-func (transport *liveRepositoryDescriptionTransport) Do(_ context.Context, method, endpoint string, query url.Values, _ []byte, _ string) (int, []byte, error) {
+func (transport *liveRepositoryDescriptionTransport) Do(
+	_ context.Context,
+	method, endpoint string,
+	query url.Values,
+	_ []byte,
+	_ string,
+) (int, []byte, error) {
 	transport.method = method
 	transport.endpoint = endpoint
 	transport.query = query
 	return transport.status, bytes.Clone(transport.body), nil
 }
 
-func (transport *liveRepositoryDescriptionTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
-	return 0, nil, fmt.Errorf("synthetic stream unavailable")
+func (transport *liveRepositoryDescriptionTransport) OpenStream(
+	context.Context,
+	string,
+	url.Values,
+) (int, io.ReadCloser, error) {
+	return 0, nil, errors.New("synthetic stream unavailable")
 }
 
 type livePublicationRunManifest struct {
@@ -134,7 +173,9 @@ type livePublicationArtifact struct {
 
 func newLivePublicationArtifact(runID, provider string) livePublicationArtifact {
 	return livePublicationArtifact{
-		RunID: runID, Provider: provider, Criterion: "live publication privacy audited",
+		RunID:               runID,
+		Provider:            provider,
+		Criterion:           "live publication privacy audited",
 		RetainedSetEvidence: "retained_set=unobservable",
 		StandingLimits: []string{
 			"record reads are public", "blob fetches are public", "blob enumeration is authenticated",
@@ -222,7 +263,14 @@ func cleanupPublicationLiveRecords(t *testing.T, transport atproto.Transport, di
 		}
 		collection, rkey := parts[0], parts[1]
 		query := url.Values{"repo": {did}, "collection": {collection}, "rkey": {rkey}}
-		status, responseBody, err := transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
+		status, responseBody, err := transport.Do(
+			context.Background(),
+			"GET",
+			"com.atproto.repo.getRecord",
+			query,
+			nil,
+			"",
+		)
 		if err != nil {
 			assert.Fail(t, "live record cleanup lookup failed")
 			continue
@@ -239,17 +287,35 @@ func cleanupPublicationLiveRecords(t *testing.T, transport atproto.Transport, di
 			assert.Fail(t, "live record cleanup request could not be encoded")
 			continue
 		}
-		status, _, err = transport.Do(context.Background(), "POST", "com.atproto.repo.deleteRecord", nil, body, "application/json")
+		status, _, err = transport.Do(
+			context.Background(),
+			"POST",
+			"com.atproto.repo.deleteRecord",
+			nil,
+			body,
+			"application/json",
+		)
 		assert.True(t, err == nil && status >= 200 && status < 300, "live record cleanup request did not commit")
-		status, responseBody, err = transport.Do(context.Background(), "GET", "com.atproto.repo.getRecord", query, nil, "")
+		status, responseBody, err = transport.Do(
+			context.Background(),
+			"GET",
+			"com.atproto.repo.getRecord",
+			query,
+			nil,
+			"",
+		)
 		assert.True(t, err == nil && isPDSRecordAbsent(status, responseBody), "live record cleanup was not verified")
 	}
 }
 
-func livePublicationRepositoryPrecondition(ctx context.Context, transport atproto.Transport, did string) (string, error) {
+func livePublicationRepositoryPrecondition(
+	ctx context.Context,
+	transport atproto.Transport,
+	did string,
+) (string, error) {
 	status, body, err := transport.Do(ctx, "GET", "com.atproto.repo.describeRepo", url.Values{"repo": {did}}, nil, "")
 	if err != nil {
-		return "", fmt.Errorf("live repository description failed")
+		return "", errors.New("live repository description failed")
 	}
 	if status < 200 || status >= 300 {
 		return "", fmt.Errorf("live repository description returned status %d", status)
@@ -258,17 +324,20 @@ func livePublicationRepositoryPrecondition(ctx context.Context, transport atprot
 		Collections *[]string `json:"collections"`
 	}
 	if err := json.Unmarshal(body, &description); err != nil {
-		return "", fmt.Errorf("live repository description was invalid")
+		return "", errors.New("live repository description was invalid")
 	}
 	if description.Collections == nil {
-		return "", fmt.Errorf("live repository description omitted collections")
+		return "", errors.New("live repository description omitted collections")
 	}
 	if len(*description.Collections) == 0 {
 		return "", nil
 	}
 	collections := append([]string(nil), (*description.Collections)...)
 	sort.Strings(collections)
-	return "repository is not empty; collections: " + strings.Join(collections, ", ") + "; genesis requires an empty repository; a skipped gate is not provider evidence", nil
+	return "repository is not empty; collections: " + strings.Join(
+		collections,
+		", ",
+	) + "; genesis requires an empty repository; a skipped gate is not provider evidence", nil
 }
 
 type publicationAuditRecordingTransport struct {
@@ -277,12 +346,22 @@ type publicationAuditRecordingTransport struct {
 	blobCIDs []string
 }
 
-func (transport *publicationAuditRecordingTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (transport *publicationAuditRecordingTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	transport.calls = append(transport.calls, endpoint)
 	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
 }
 
-func (transport *publicationAuditRecordingTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (transport *publicationAuditRecordingTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	transport.calls = append(transport.calls, endpoint)
 	if endpoint == "com.atproto.sync.getBlob" {
 		transport.blobCIDs = append(transport.blobCIDs, query.Get("cid"))
@@ -302,7 +381,13 @@ type publicationCIDTracker struct {
 	onUpload     func(string) error
 }
 
-func (tracker *publicationCIDTracker) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (tracker *publicationCIDTracker) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if endpoint == "com.atproto.repo.applyWrites" && tracker.beforeWrite != nil {
 		if err := tracker.beforeWrite(body); err != nil {
 			return 0, nil, err
@@ -310,7 +395,7 @@ func (tracker *publicationCIDTracker) Do(ctx context.Context, method, endpoint s
 	}
 	if endpoint == "com.atproto.repo.uploadBlob" && tracker.manifestPath != "" {
 		if tracker.onUpload == nil {
-			return 0, nil, fmt.Errorf("publication blob upload has no run-manifest persistence callback")
+			return 0, nil, errors.New("publication blob upload has no run-manifest persistence callback")
 		}
 		if _, err := os.Stat(tracker.manifestPath); err != nil {
 			return 0, nil, fmt.Errorf("publication blob upload attempted before run manifest exists: %w", err)
@@ -320,7 +405,7 @@ func (tracker *publicationCIDTracker) Do(ctx context.Context, method, endpoint s
 	if endpoint == "com.atproto.repo.uploadBlob" && err == nil && status >= 200 && status < 300 {
 		blobCID := uploadedCID(response)
 		if blobCID == "" {
-			return status, response, fmt.Errorf("successful publication blob upload omitted its CID")
+			return status, response, errors.New("successful publication blob upload omitted its CID")
 		}
 		if !containsString(tracker.uploaded, blobCID) {
 			tracker.uploaded = append(tracker.uploaded, blobCID)
@@ -334,7 +419,11 @@ func (tracker *publicationCIDTracker) Do(ctx context.Context, method, endpoint s
 	return status, response, err
 }
 
-func (tracker *publicationCIDTracker) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (tracker *publicationCIDTracker) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	return tracker.base.OpenStream(ctx, endpoint, query)
 }
 
@@ -343,13 +432,20 @@ type publicationUploadTestTransport struct {
 	calls    int
 }
 
-func (transport *publicationUploadTestTransport) Do(context.Context, string, string, url.Values, []byte, string) (int, []byte, error) {
+func (transport *publicationUploadTestTransport) Do(
+	context.Context,
+	string,
+	string,
+	url.Values,
+	[]byte,
+	string,
+) (int, []byte, error) {
 	transport.calls++
 	return http.StatusOK, bytes.Clone(transport.response), nil
 }
 
 func (*publicationUploadTestTransport) OpenStream(context.Context, string, url.Values) (int, io.ReadCloser, error) {
-	return 0, nil, fmt.Errorf("synthetic stream unavailable")
+	return 0, nil, errors.New("synthetic stream unavailable")
 }
 
 func TestLivePublicationEvidencePersistsUploadedCIDsAndSuccessArtifact(t *testing.T) {
@@ -367,7 +463,14 @@ func TestLivePublicationEvidencePersistsUploadedCIDsAndSuccessArtifact(t *testin
 	}
 	for _, cid := range []string{"bafycid-one", "bafycid-two", "bafycid-one"} {
 		transport.response = []byte(fmt.Sprintf(`{"blob":{"ref":{"$link":%q}}}`, cid))
-		status, _, err := tracker.Do(context.Background(), "POST", "com.atproto.repo.uploadBlob", nil, nil, "application/octet-stream")
+		status, _, err := tracker.Do(
+			context.Background(),
+			"POST",
+			"com.atproto.repo.uploadBlob",
+			nil,
+			nil,
+			"application/octet-stream",
+		)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
 	}
@@ -416,9 +519,16 @@ func TestLivePublicationEvidencePersistsUploadedCIDsAndSuccessArtifact(t *testin
 	missingTransport := &publicationUploadTestTransport{response: transport.response}
 	missingTracker := &publicationCIDTracker{
 		base: missingTransport, manifestPath: filepath.Join(directory, "missing-manifest.json"),
-		onUpload: func(cid string) error { return nil },
+		onUpload: func(_ string) error { return nil },
 	}
-	_, _, err = missingTracker.Do(context.Background(), "POST", "com.atproto.repo.uploadBlob", nil, nil, "application/octet-stream")
+	_, _, err = missingTracker.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.uploadBlob",
+		nil,
+		nil,
+		"application/octet-stream",
+	)
 	require.ErrorContains(t, err, "attempted before run manifest exists")
 	require.Zero(t, missingTransport.calls)
 }
@@ -428,14 +538,26 @@ type publicationRevisionTransport struct {
 	revision atprototest.SignedRevision
 }
 
-func (transport publicationRevisionTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (transport publicationRevisionTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if endpoint == "com.atproto.sync.getLatestCommit" {
-		return 200, []byte(fmt.Sprintf(`{"cid":%q,"rev":%q}`, transport.revision.CommitCID.String(), atprototest.RepositoryRevision)), nil
+		return 200, []byte(
+			fmt.Sprintf(`{"cid":%q,"rev":%q}`, transport.revision.CommitCID.String(), atprototest.RepositoryRevision),
+		), nil
 	}
 	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
 }
 
-func (transport publicationRevisionTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (transport publicationRevisionTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	if endpoint == "com.atproto.sync.getRepo" {
 		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(transport.revision.CAR))), nil
 	}
@@ -450,20 +572,32 @@ type publicationMovingTransport struct {
 	stream int
 }
 
-func (transport *publicationMovingTransport) Do(ctx context.Context, method, endpoint string, query url.Values, body []byte, contentType string) (int, []byte, error) {
+func (transport *publicationMovingTransport) Do(
+	ctx context.Context,
+	method, endpoint string,
+	query url.Values,
+	body []byte,
+	contentType string,
+) (int, []byte, error) {
 	if endpoint == "com.atproto.sync.getLatestCommit" {
 		transport.latest++
 		revision := transport.first
 		if transport.latest%2 == 0 {
 			revision = transport.second
 		}
-		encoded, err := json.Marshal(map[string]string{"cid": revision.CommitCID.String(), "rev": atprototest.RepositoryRevision})
+		encoded, err := json.Marshal(
+			map[string]string{"cid": revision.CommitCID.String(), "rev": atprototest.RepositoryRevision},
+		)
 		return 200, encoded, err
 	}
 	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
 }
 
-func (transport *publicationMovingTransport) OpenStream(ctx context.Context, endpoint string, query url.Values) (int, io.ReadCloser, error) {
+func (transport *publicationMovingTransport) OpenStream(
+	ctx context.Context,
+	endpoint string,
+	query url.Values,
+) (int, io.ReadCloser, error) {
 	if endpoint == "com.atproto.sync.getRepo" {
 		transport.stream++
 		revision := transport.first
@@ -503,10 +637,5 @@ func publicationCallCount(pds *atprototest.MemoryPDS, endpoint string) int {
 }
 
 func containsString(values []string, value string) bool {
-	for _, item := range values {
-		if item == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, value)
 }

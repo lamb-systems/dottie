@@ -121,8 +121,7 @@ func newPlanCommand(stdout, stderr io.Writer, exitCode *int) *urfave.Command {
 	command.OnUsageError = usageHandler
 	command.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code >= 3 || (code != 1 && code != 2) {
@@ -236,7 +235,14 @@ func renderPreview(preview syncengine.Preview) string {
 			if label == "" {
 				label = "unchanged"
 			}
-			fmt.Fprintf(&output, "  %s\t%s\ttransfer-bytes=%d\tsnapshot-bytes=%d", escapePlanField(label), escapePlanField(previewEntryName(entry.Key)), entry.Size, entry.SnapshotBytes)
+			fmt.Fprintf(
+				&output,
+				"  %s\t%s\ttransfer-bytes=%d\tsnapshot-bytes=%d",
+				escapePlanField(label),
+				escapePlanField(previewEntryName(entry.Key)),
+				entry.Size,
+				entry.SnapshotBytes,
+			)
 			if entry.Reason != "" {
 				fmt.Fprintf(&output, "\treason=%s", escapePlanField(string(entry.Reason)))
 			}
@@ -258,7 +264,12 @@ func renderPreview(preview syncengine.Preview) string {
 	if preview.Complete {
 		fmt.Fprintf(&output, "resulting snapshot bytes=%d (complete)\n", preview.ResultingSnapshotBytes)
 	} else {
-		fmt.Fprintf(&output, "resulting snapshot at least %d bytes, incomplete: %d unresolved\n", preview.ResultingSnapshotBytes, preview.UnresolvedEntries)
+		fmt.Fprintf(
+			&output,
+			"resulting snapshot at least %d bytes, incomplete: %d unresolved\n",
+			preview.ResultingSnapshotBytes,
+			preview.UnresolvedEntries,
+		)
 	}
 	return output.String()
 }
@@ -374,10 +385,21 @@ type syncPushPreviewFactory func(context.Context, *urfave.Command, publicationst
 
 func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyringFactory, env func(string) string) int {
 	code := 0
-	command := newSyncCommand(stdout, stderr, &code,
-		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env),
-		productionPullVaultFactory(openKeyring, env), productionPullApplySourcesFactory(env), productionSyncPushPreviewFactory(env),
-		productionPushSourcesFactory(openKeyring, env), productionSessionDIDSource(openKeyring, env))
+	command := newSyncCommand(
+		stdout,
+		stderr,
+		&code,
+		productionPushSessionFactory(openKeyring, env),
+		productionPullRemoteFactory(openKeyring, env),
+		productionPullVaultFactory(
+			openKeyring,
+			env,
+		),
+		productionPullApplySourcesFactory(env),
+		productionSyncPushPreviewFactory(env),
+		productionPushSourcesFactory(openKeyring, env),
+		productionSessionDIDSource(openKeyring, env),
+	)
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
 	if err := command.Run(ctx, arguments); err != nil && code == 0 {
@@ -386,7 +408,17 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	return code
 }
 
-func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource) *urfave.Command {
+func newSyncCommand(
+	stdout, stderr io.Writer,
+	exitCode *int,
+	sessions pushSessionFactory,
+	remotes pullRemoteFactory,
+	vaults pullVaultFactory,
+	applySources pullApplySourcesFactory,
+	previews syncPushPreviewFactory,
+	pushes pushSourcesFactory,
+	dids sessionDIDSource,
+) *urfave.Command {
 	configure := func(command *urfave.Command) *urfave.Command {
 		command.Suggest = false
 		command.DefaultCommand = ""
@@ -406,14 +438,26 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier sync plan", OnlyOnce: true},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
-			return runSyncCommand(ctx, command, sessions, remotes, vaults, applySources, previews, pushes, dids, os.Getenv)
+			return runSyncCommand(
+				ctx,
+				command,
+				sessions,
+				remotes,
+				vaults,
+				applySources,
+				previews,
+				pushes,
+				dids,
+				os.Getenv,
+			)
 		},
 	})
-	root := configure(&urfave.Command{Name: "dottie", Commands: []*urfave.Command{sync}, Writer: stdout, ErrWriter: stderr})
+	root := configure(
+		&urfave.Command{Name: "dottie", Commands: []*urfave.Command{sync}, Writer: stdout, ErrWriter: stderr},
+	)
 	root.ExitErrHandler = func(_ context.Context, command *urfave.Command, err error) {
 		code := 1
-		var exitError urfave.ExitCoder
-		if errors.As(err, &exitError) {
+		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
 		if code != 2 && code != 3 && code != 4 {
@@ -427,7 +471,18 @@ func newSyncCommand(stdout, stderr io.Writer, exitCode *int, sessions pushSessio
 	return root
 }
 
-func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushSessionFactory, remotes pullRemoteFactory, vaults pullVaultFactory, applySources pullApplySourcesFactory, previews syncPushPreviewFactory, pushes pushSourcesFactory, dids sessionDIDSource, env func(string) string) error {
+func runSyncCommand(
+	ctx context.Context,
+	command *urfave.Command,
+	sessions pushSessionFactory,
+	remotes pullRemoteFactory,
+	vaults pullVaultFactory,
+	applySources pullApplySourcesFactory,
+	previews syncPushPreviewFactory,
+	pushes pushSourcesFactory,
+	dids sessionDIDSource,
+	env func(string) string,
+) error {
 	if command.NArg() != 0 {
 		return usageExit("sync takes no positional arguments")
 	}
@@ -470,7 +525,12 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return urfave.Exit(syncScopeRefusal(err, did.String()), 3)
 	}
 	if session.Session.DID != did.String() {
-		return urfave.Exit("sync refused: the authorized account differs from the --did publication binding; account "+escapeField(did.String())+" is unchanged", 3)
+		return urfave.Exit(
+			"sync refused: the authorized account differs from the --did publication binding; account "+escapeField(
+				did.String(),
+			)+" is unchanged",
+			3,
+		)
 	}
 	vault, err := resolvePublicationVault(ctx, command, "sync", vaults, session, override, paths.PublicationStateDir())
 	if err != nil {
@@ -522,14 +582,31 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		return nil
 	}
 	if finding.Kind == pullFindingDiverges && preparation.Plan.Changes == 0 {
-		return urfave.Exit("sync refused: the provider position differs from the accepted floor but the pull half changes nothing; the accepted floor cannot advance; nothing was changed", 3)
+		return urfave.Exit(
+			"sync refused: the provider position differs from the accepted floor but the pull half changes nothing; the accepted floor cannot advance; nothing was changed",
+			3,
+		)
 	}
-	identity, err := prepareSyncPushIdentity(ctx, previews, command, binding, preparation.Material.Base, preparation.Material.Remote)
+	identity, err := prepareSyncPushIdentity(
+		ctx,
+		previews,
+		command,
+		binding,
+		preparation.Material.Base,
+		preparation.Material.Remote,
+	)
 	if err != nil {
 		return err
 	}
 	viewDigest := syncViewDigest(view)
-	token := syncConfirmationToken(binding, preparation.Plan.Digest, preparation.Staged.StateToken, preparation.Staged.ObservationDigest, viewDigest, identity)
+	token := syncConfirmationToken(
+		binding,
+		preparation.Plan.Digest,
+		preparation.Staged.StateToken,
+		preparation.Staged.ObservationDigest,
+		viewDigest,
+		identity,
+	)
 	output := renderPullApplyPlan(preparation.Plan)
 	output += renderSyncPushPreview(identity)
 	output += fmt.Sprintf("confirmation: %x\n", token)
@@ -541,7 +618,10 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 		if writeErr := writeCommandOutput(command, output); writeErr != nil {
 			return writeErr
 		}
-		return urfave.Exit("sync refused: the reviewed pull and push plan is stale or bound to a different vault; nothing was changed", 3)
+		return urfave.Exit(
+			"sync refused: the reviewed pull and push plan is stale or bound to a different vault; nothing was changed",
+			3,
+		)
 	}
 	pullApplied := preparation.applies()
 	if pullApplied {
@@ -555,20 +635,36 @@ func runSyncCommand(ctx context.Context, command *urfave.Command, sessions pushS
 	return runSyncPushHalf(ctx, command, session, binding, view, viewDigest, identity, output, pushes)
 }
 
-func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushSession, binding publicationstate.Binding, view publicationstate.SuppliedRepositoryView, viewDigest [32]byte, identity syncPushIdentity, output string, pushes pushSourcesFactory) error {
+func runSyncPushHalf(
+	ctx context.Context,
+	command *urfave.Command,
+	session pushSession,
+	binding publicationstate.Binding,
+	view publicationstate.SuppliedRepositoryView,
+	viewDigest [32]byte,
+	identity syncPushIdentity,
+	output string,
+	pushes pushSourcesFactory,
+) error {
 	sources, err := pushes(ctx, command, session)
 	if err != nil {
 		if writeErr := writeCommandOutput(command, output); writeErr != nil {
 			return writeErr
 		}
-		return urfave.Exit("sync did not complete: the pull half is settled but the push half cannot be opened; re-run dottie sync", 4)
+		return urfave.Exit(
+			"sync did not complete: the pull half is settled but the push half cannot be opened; re-run dottie sync",
+			4,
+		)
 	}
 	defer sources.Close()
 	if sources.Binding != binding {
 		if writeErr := writeCommandOutput(command, output); writeErr != nil {
 			return writeErr
 		}
-		return urfave.Exit("sync refused: the push half resolved a different publication binding; nothing was published", 4)
+		return urfave.Exit(
+			"sync refused: the push half resolved a different publication binding; nothing was published",
+			4,
+		)
 	}
 	position, err := publicationstate.Open(sources.Paths.PublicationStateDir(), binding)
 	if err != nil {
@@ -580,17 +676,32 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 		return syncPushRefusal(command, output, "the post-pull accepted floor cannot be read", "post_pull_floor")
 	}
 	if err := syncViewMatchesFloor(floor, view); err != nil {
-		return syncPushRefusal(command, output, "the accepted floor does not match the reviewed provider position", "post_pull_floor_mismatch")
+		return syncPushRefusal(
+			command,
+			output,
+			"the accepted floor does not match the reviewed provider position",
+			"post_pull_floor_mismatch",
+		)
 	}
 	accepted, err := sources.Reader.ReadAcceptedPayload(ctx)
 	if err != nil {
 		return syncPushRefusal(command, output, "the provider position cannot be re-read", "post_pull_provider")
 	}
 	if syncViewDigest(accepted.View) != viewDigest {
-		return syncPushRefusal(command, output, "the provider position moved after the pull half was reviewed", "post_pull_provider_moved")
+		return syncPushRefusal(
+			command,
+			output,
+			"the provider position moved after the pull half was reviewed",
+			"post_pull_provider_moved",
+		)
 	}
 	if err := syncViewMatchesFloor(floor, accepted.View); err != nil {
-		return syncPushRefusal(command, output, "the provider position no longer matches the accepted floor", "post_pull_provider_moved")
+		return syncPushRefusal(
+			command,
+			output,
+			"the provider position no longer matches the accepted floor",
+			"post_pull_provider_moved",
+		)
 	}
 	material, err := position.ReadAcceptedMaterial(ctx, binding, floor)
 	if err != nil {
@@ -605,7 +716,10 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 		return syncPushRefusal(command, output, "a fresh publication identity is unavailable", "post_pull_candidate")
 	}
 	snapshot, err := sources.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
-		Configuration: sources.Configuration, FloorSnapshot: baseline, RemoteSnapshot: accepted.Snapshot, PublicationID: publicationID,
+		Configuration:  sources.Configuration,
+		FloorSnapshot:  baseline,
+		RemoteSnapshot: accepted.Snapshot,
+		PublicationID:  publicationID,
 	})
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication cannot be composed", "post_pull_candidate")
@@ -614,8 +728,16 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication cannot be packed", "post_pull_candidate")
 	}
-	if digest := syncPayloadDigest(packed.Payload); digest != identity.PayloadDigest || uint64(len(packed.Payload)) != identity.PayloadSize {
-		return syncPushRefusal(command, output, "the post-pull publication differs from the reviewed candidate", "post_pull_candidate_mismatch")
+	if digest := syncPayloadDigest(
+		packed.Payload,
+	); digest != identity.PayloadDigest ||
+		uint64(len(packed.Payload)) != identity.PayloadSize {
+		return syncPushRefusal(
+			command,
+			output,
+			"the post-pull publication differs from the reviewed candidate",
+			"post_pull_candidate_mismatch",
+		)
 	}
 	review, _, guard, err := sources.Reviews.Acquire(ctx)
 	if err != nil {
@@ -623,7 +745,12 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	}
 	guard.Release()
 	if review != identity.Review {
-		return syncPushRefusal(command, output, "the review identity changed after the sync plan was prepared", "post_pull_review_mismatch")
+		return syncPushRefusal(
+			command,
+			output,
+			"the review identity changed after the sync plan was prepared",
+			"post_pull_review_mismatch",
+		)
 	}
 	request := service.PublicationPushRequest{
 		Store: position, Transport: sources.Transport, Reader: sources.Reader, Records: sources.Records,
@@ -637,7 +764,12 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	if preparation.NoOp {
 		output += "push: no-op\n"
 		if preparation.Present {
-			output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", preparation.Floor.Revision, preparation.Floor.Generation, preparation.Floor.Sequence)
+			output += fmt.Sprintf(
+				"floor: revision=%d generation=%d sequence=%d\n",
+				preparation.Floor.Revision,
+				preparation.Floor.Generation,
+				preparation.Floor.Sequence,
+			)
 		}
 		if writeErr := writeCommandOutput(command, output); writeErr != nil {
 			return urfave.Exit("sync completed but its result could not be written", 4)
@@ -646,12 +778,27 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 	}
 	if !syncPreparedMatches(preparation.Record, binding, identity) {
 		_ = sources.Records.Delete(ctx, preparation.Record.PublicationID)
-		return syncPushRefusal(command, output, "the prepared attempt differs from the reviewed candidate", "post_pull_attempt_mismatch")
+		return syncPushRefusal(
+			command,
+			output,
+			"the prepared attempt differs from the reviewed candidate",
+			"post_pull_attempt_mismatch",
+		)
 	}
-	result, publishErr := sources.Coordinator.ConfirmPublicationPush(ctx, request, preparation, preparation.Proposal.Confirmation)
+	result, publishErr := sources.Coordinator.ConfirmPublicationPush(
+		ctx,
+		request,
+		preparation,
+		preparation.Proposal.Confirmation,
+	)
 	status := pushMaterialStatus(publishErr)
 	if status == service.StatusCommitted {
-		output += fmt.Sprintf("floor: revision=%d generation=%d sequence=%d\n", result.Floor.Revision, result.Floor.Generation, result.Floor.Sequence)
+		output += fmt.Sprintf(
+			"floor: revision=%d generation=%d sequence=%d\n",
+			result.Floor.Revision,
+			result.Floor.Generation,
+			result.Floor.Sequence,
+		)
 	}
 	if publishErr != nil {
 		output += renderPushFailure(status, publishErr)
@@ -668,16 +815,25 @@ func runSyncPushHalf(ctx context.Context, command *urfave.Command, session pushS
 		return nil
 	}
 	if status == service.StatusRejected || status == service.StatusConflicted {
-		return urfave.Exit("sync refused after pull: the push half did not commit; the pull half is settled and nothing was published", 4)
+		return urfave.Exit(
+			"sync refused after pull: the push half did not commit; the pull half is settled and nothing was published",
+			4,
+		)
 	}
-	return urfave.Exit("sync did not complete: the pull half is settled and the push half is indeterminate; re-run dottie sync", 4)
+	return urfave.Exit(
+		"sync did not complete: the pull half is settled and the push half is indeterminate; re-run dottie sync",
+		4,
+	)
 }
 
 func syncPushRefusal(command *urfave.Command, output, message, reason string) error {
 	if writeErr := writeCommandOutput(command, output); writeErr != nil {
 		return writeErr
 	}
-	return urfave.Exit("sync refused after pull: "+message+" ("+reason+"); the pull half is settled and nothing was published", 4)
+	return urfave.Exit(
+		"sync refused after pull: "+message+" ("+reason+"); the pull half is settled and nothing was published",
+		4,
+	)
 }
 
 func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.SuppliedRepositoryView) error {
@@ -693,7 +849,10 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 	if err != nil {
 		return errSyncFloorMismatch
 	}
-	if !bytes.Equal(floor.RecordCID, cid) || !bytes.Equal(floor.BlobCID, record.Blob.CID) || floor.BlobSize != record.Blob.Size || floor.Sequence != record.PublicationSeq || floor.SnapshotKey != terminal.Key {
+	if !bytes.Equal(floor.RecordCID, cid) || !bytes.Equal(floor.BlobCID, record.Blob.CID) ||
+		floor.BlobSize != record.Blob.Size ||
+		floor.Sequence != record.PublicationSeq ||
+		floor.SnapshotKey != terminal.Key {
 		return errSyncFloorMismatch
 	}
 	return nil
@@ -711,56 +870,106 @@ func syncPayloadDigest(payload []byte) [32]byte {
 	return sha256.Sum256(payload)
 }
 
-func syncPreparedMatches(record service.PublicationProposalRecord, binding publicationstate.Binding, identity syncPushIdentity) bool {
+func syncPreparedMatches(
+	record service.PublicationProposalRecord,
+	binding publicationstate.Binding,
+	identity syncPushIdentity,
+) bool {
 	return record.Binding == binding && record.Review == identity.Review &&
-		bytes.Equal(record.CandidatePayloadCID, identity.PayloadCID) && record.CandidatePayloadSize == identity.PayloadSize
+		bytes.Equal(
+			record.CandidatePayloadCID,
+			identity.PayloadCID,
+		) && record.CandidatePayloadSize == identity.PayloadSize
 }
 
 func renderSyncPushPreview(identity syncPushIdentity) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "push: targets=%d entries=%d\n", identity.Targets, identity.Entries)
 	fmt.Fprintf(&output, "push: candidate payload: %x size=%d\n", identity.PayloadCID, identity.PayloadSize)
-	fmt.Fprintf(&output, "push: review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
-		identity.Review.SelectionDigest, identity.Review.SelectionRevision, identity.Review.ApprovalDigest, identity.Review.ApprovalRevision)
+	fmt.Fprintf(
+		&output,
+		"push: review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
+		identity.Review.SelectionDigest,
+		identity.Review.SelectionRevision,
+		identity.Review.ApprovalDigest,
+		identity.Review.ApprovalRevision,
+	)
 	return output.String()
 }
 
-func prepareSyncPushIdentity(ctx context.Context, previews syncPushPreviewFactory, command *urfave.Command, binding publicationstate.Binding, floor, remote model.Snapshot) (syncPushIdentity, error) {
+func prepareSyncPushIdentity(
+	ctx context.Context,
+	previews syncPushPreviewFactory,
+	command *urfave.Command,
+	binding publicationstate.Binding,
+	floor, remote model.Snapshot,
+) (syncPushIdentity, error) {
 	preview, err := previews(ctx, command, binding)
 	if err != nil {
-		return syncPushIdentity{}, urfave.Exit("sync refused: the local publication configuration is unavailable; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the local publication configuration is unavailable; nothing was changed",
+			3,
+		)
 	}
 	defer preview.Close()
 	publicationID := [16]byte{}
 	if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
-		return syncPushIdentity{}, urfave.Exit("sync refused: a fresh publication identity is unavailable; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: a fresh publication identity is unavailable; nothing was changed",
+			3,
+		)
 	}
 	snapshot, err := preview.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
-		Configuration: preview.Configuration, FloorSnapshot: floor, RemoteSnapshot: remote, PublicationID: publicationID,
+		Configuration:  preview.Configuration,
+		FloorSnapshot:  floor,
+		RemoteSnapshot: remote,
+		PublicationID:  publicationID,
 	})
 	if err != nil {
-		return syncPushIdentity{}, urfave.Exit("sync refused: the push half cannot be composed from the post-pull state; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the push half cannot be composed from the post-pull state; nothing was changed",
+			3,
+		)
 	}
 	packed, err := vault.Pack(snapshot)
 	if err != nil {
-		return syncPushIdentity{}, urfave.Exit("sync refused: the post-pull publication cannot be packed; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the post-pull publication cannot be packed; nothing was changed",
+			3,
+		)
 	}
 	payloadCID, err := publication.RawPayloadCID(packed.Payload)
 	if err != nil {
-		return syncPushIdentity{}, urfave.Exit("sync refused: the post-pull publication identity is unavailable; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the post-pull publication identity is unavailable; nothing was changed",
+			3,
+		)
 	}
 	review, _, guard, err := preview.Reviews.Acquire(ctx)
 	if err != nil {
-		return syncPushIdentity{}, urfave.Exit("sync refused: the review identity is unavailable; nothing was changed", 3)
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the review identity is unavailable; nothing was changed",
+			3,
+		)
 	}
 	guard.Release()
 	return syncPushIdentity{
-		PayloadCID: append([]byte(nil), payloadCID...), PayloadDigest: syncPayloadDigest(packed.Payload), PayloadSize: uint64(len(packed.Payload)),
-		Targets: len(snapshot.Targets), Entries: len(snapshot.Entries), Review: review,
+		PayloadCID: append(
+			[]byte(nil),
+			payloadCID...),
+		PayloadDigest: syncPayloadDigest(packed.Payload),
+		PayloadSize:   uint64(len(packed.Payload)),
+		Targets:       len(snapshot.Targets),
+		Entries:       len(snapshot.Entries),
+		Review:        review,
 	}, nil
 }
 
-func syncConfirmationToken(binding publicationstate.Binding, plan, stateToken, observationDigest, viewDigest [32]byte, identity syncPushIdentity) [32]byte {
+func syncConfirmationToken(
+	binding publicationstate.Binding,
+	plan, stateToken, observationDigest, viewDigest [32]byte,
+	identity syncPushIdentity,
+) [32]byte {
 	digest := sha256.New()
 	var length [4]byte
 	writeField := func(value string) {
@@ -846,7 +1055,9 @@ func productionSyncPushPreviewFactory(env func(string) string) syncPushPreviewFa
 		}
 		if selected.Vault != binding.Vault {
 			closeResources()
-			return syncPushPreviewSources{}, errors.New("the local vault selection differs from the publication binding")
+			return syncPushPreviewSources{}, errors.New(
+				"the local vault selection differs from the publication binding",
+			)
 		}
 		loaded, err := configuration.Load(ctx)
 		if err != nil {
@@ -857,16 +1068,25 @@ func productionSyncPushPreviewFactory(env func(string) string) syncPushPreviewFa
 			closeResources()
 			return syncPushPreviewSources{}, err
 		}
-		return syncPushPreviewSources{Binding: binding, Coordinator: coordinator, Reviews: configuration, Configuration: loaded, Close: closeResources}, nil
+		return syncPushPreviewSources{
+			Binding:       binding,
+			Coordinator:   coordinator,
+			Reviews:       configuration,
+			Configuration: loaded,
+			Close:         closeResources,
+		}, nil
 	}
 }
 
 func syncScopeRefusal(err error, did string) string {
-	var scopeError *atproto.PublicationScopeError
-	if errors.As(err, &scopeError) {
-		return "sync refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it; account " + escapeField(did) + " is unchanged"
+	if _, ok := errors.AsType[*atproto.PublicationScopeError](err); ok {
+		return "sync refused: the account authorization does not cover the v2 publication profile; run dottie account login --handle HANDLE to sign in again and grant it; account " + escapeField(
+			did,
+		) + " is unchanged"
 	}
-	return "sync refused: the account session cannot prove the v2 publication scope; account " + escapeField(did) + " is unchanged"
+	return "sync refused: the account session cannot prove the v2 publication scope; account " + escapeField(
+		did,
+	) + " is unchanged"
 }
 
 func syncRemoteFailure(err error) string {
@@ -884,7 +1104,10 @@ func syncFindingExit(command *urfave.Command, finding pullFinding) error {
 	if err := writeCommandOutput(command, renderPullFinding(finding)); err != nil {
 		return err
 	}
-	return urfave.Exit("sync refused: the accepted position cannot be compared with the provider; nothing was changed", 3)
+	return urfave.Exit(
+		"sync refused: the accepted position cannot be compared with the provider; nothing was changed",
+		3,
+	)
 }
 
 func syncViewFailure(command *urfave.Command, err error) error {

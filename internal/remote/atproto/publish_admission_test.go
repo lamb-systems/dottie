@@ -7,8 +7,9 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type publicationFailureTransport struct {
@@ -17,7 +18,14 @@ type publicationFailureTransport struct {
 	calls  int
 }
 
-func (transport *publicationFailureTransport) Do(context.Context, string, string, url.Values, []byte, string) (int, []byte, error) {
+func (transport *publicationFailureTransport) Do(
+	context.Context,
+	string,
+	string,
+	url.Values,
+	[]byte,
+	string,
+) (int, []byte, error) {
 	transport.calls++
 	return transport.status, append([]byte(nil), transport.body...), nil
 }
@@ -78,7 +86,13 @@ func TestPublicationPredecessorMatchesRevisionRequiresHeadAndSnapshotCID(t *test
 func TestPublishSnapshotFencedSignalsCandidateDisclosureAfterRejection(t *testing.T) {
 	_, publisher, predecessor, publication := newAtprotoPublicationFixture(t)
 	revision := publicationTestRevision()
-	fenced, err := snapshotPublication(publication, publisher.Signing, blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)), revision, predecessor)
+	fenced, err := snapshotPublication(
+		publication,
+		publisher.Signing,
+		blobJSONFromCID(publication.SnapshotCID, len(publication.Snapshot)),
+		revision,
+		predecessor,
+	)
 	require.NoError(t, err)
 	transport := &publicationFailureTransport{status: 400, body: []byte(`{"error":"InvalidRequest"}`)}
 

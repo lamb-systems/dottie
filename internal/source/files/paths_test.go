@@ -27,7 +27,7 @@ func TestJoinRelative(t *testing.T) {
 	} {
 		got, err := JoinRelative(test.parent, test.name)
 		if test.bad {
-			assert.Error(t, err)
+			require.Error(t, err)
 			continue
 		}
 		require.NoError(t, err)

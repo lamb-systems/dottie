@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialDoesNotBorrowActiveCandidatePayload(t *testing.T) {
@@ -25,7 +26,14 @@ func TestPublicationReadAcceptedMaterialDoesNotBorrowActiveCandidatePayload(t *t
 	positionObservation := f.observation(1)
 	positionProposal, err := store.Prepare(ctx, ModeFirstUse, positionObservation, f.payload)
 	require.NoError(t, err)
-	positionFloor, err := store.Accept(ctx, ModeFirstUse, positionProposal.StateToken, positionObservation, f.payload, positionProposal.Confirmation)
+	positionFloor, err := store.Accept(
+		ctx,
+		ModeFirstUse,
+		positionProposal.StateToken,
+		positionObservation,
+		f.payload,
+		positionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), positionFloor.Sequence)
 
@@ -34,7 +42,14 @@ func TestPublicationReadAcceptedMaterialDoesNotBorrowActiveCandidatePayload(t *t
 	review := attemptReview()
 	proposal, err := store.PrepareAttempt(ctx, candidate, candidateView, review)
 	require.NoError(t, err)
-	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, candidateView, review, proposal.Confirmation)
+	attempt, err := store.CreateAttempt(
+		ctx,
+		proposal.StateToken,
+		candidate,
+		candidateView,
+		review,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, AttemptPrepared, attempt.Lifecycle)
 	require.Equal(t, OutcomeNotSubmitted, attempt.Outcome)
@@ -59,11 +74,27 @@ func TestPublicationReadAcceptedMaterialDoesNotBorrowActiveCandidatePayload(t *t
 	_, err = publication.DecodePayload(candidate.Payload, candidateBlob)
 	require.NoError(t, err)
 
-	before := observeAcceptedMaterialActiveCandidate(t, store, directory, attempt.ID, positionFloor, f.blocks[0].Raw, candidate)
+	before := observeAcceptedMaterialActiveCandidate(
+		t,
+		store,
+		directory,
+		attempt.ID,
+		positionFloor,
+		f.blocks[0].Raw,
+		candidate,
+	)
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, before.Floor)
 	require.Equal(t, AcceptedMaterial{}, material)
 	requireErrorMetadata(t, err, ErrStorage, StageReadAcceptedMaterial, ReasonMaterialNotRetained)
-	after := observeAcceptedMaterialActiveCandidate(t, store, directory, attempt.ID, positionFloor, f.blocks[0].Raw, candidate)
+	after := observeAcceptedMaterialActiveCandidate(
+		t,
+		store,
+		directory,
+		attempt.ID,
+		positionFloor,
+		f.blocks[0].Raw,
+		candidate,
+	)
 	require.Equal(t, before, after)
 }
 
@@ -81,13 +112,31 @@ func readAcceptedMaterialUnownedCounts(t *testing.T, store *Store) acceptedMater
 	t.Helper()
 	ctx := context.Background()
 	var counts acceptedMaterialUnownedCounts
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&counts.Attempts))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&counts.Active))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM publication_attempts").Scan(&counts.Attempts),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&counts.Active),
+	)
 	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&counts.Objects))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&counts.AttemptRefs))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&counts.Retained))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations").Scan(&counts.Reservations))
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_genesis").Scan(&counts.PendingGenesis))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_payload_refs").Scan(&counts.AttemptRefs),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications").Scan(&counts.Retained),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_reservations").Scan(&counts.Reservations),
+	)
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_genesis").Scan(&counts.PendingGenesis),
+	)
 	return counts
 }
 
@@ -104,7 +153,15 @@ type acceptedMaterialActiveCandidateState struct {
 	LogicalRows    map[string]string
 }
 
-func observeAcceptedMaterialActiveCandidate(t *testing.T, store *Store, directory string, attemptID [16]byte, expectedFloor Floor, expectedFloorRecord []byte, expectedCandidate CandidateInput) acceptedMaterialActiveCandidateState {
+func observeAcceptedMaterialActiveCandidate(
+	t *testing.T,
+	store *Store,
+	directory string,
+	attemptID [16]byte,
+	expectedFloor Floor,
+	expectedFloorRecord []byte,
+	expectedCandidate CandidateInput,
+) acceptedMaterialActiveCandidateState {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -121,7 +178,8 @@ func observeAcceptedMaterialActiveCandidate(t *testing.T, store *Store, director
 	require.Equal(t, "first_use", history.Events[0].Stop)
 	var historyRecord []byte
 	for _, record := range history.Records {
-		if record.Reference.Key == floor.SnapshotKey && bytes.Equal(record.Reference.CID, floor.RecordCID) && record.Reference.Sequence == floor.Sequence {
+		if record.Reference.Key == floor.SnapshotKey && bytes.Equal(record.Reference.CID, floor.RecordCID) &&
+			record.Reference.Sequence == floor.Sequence {
 			historyRecord = bytes.Clone(record.Raw)
 		}
 	}
@@ -156,13 +214,21 @@ func observeAcceptedMaterialActiveCandidate(t *testing.T, store *Store, director
 	candidateBlob := blobForCandidate(t, expectedCandidate)
 	require.Equal(t, candidateBlob, candidate.Blob)
 	var attemptReference []byte
-	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT blob_cid FROM attempt_payload_refs WHERE attempt_id=?", attemptID[:]).Scan(&attemptReference))
+	require.NoError(
+		t,
+		store.conn.QueryRowContext(ctx, "SELECT blob_cid FROM attempt_payload_refs WHERE attempt_id=?", attemptID[:]).
+			Scan(&attemptReference),
+	)
 	require.Equal(t, candidateBlob.CID, attemptReference)
 	require.Equal(t, floor.BlobCID, candidate.Blob.CID)
 	require.Equal(t, floor.BlobSize, candidate.Blob.Size)
 
 	counts := readAcceptedMaterialUnownedCounts(t, store)
-	require.Equal(t, acceptedMaterialUnownedCounts{Attempts: 1, Active: 1, Objects: 1, AttemptRefs: 1, Reservations: 1}, counts)
+	require.Equal(
+		t,
+		acceptedMaterialUnownedCounts{Attempts: 1, Active: 1, Objects: 1, AttemptRefs: 1, Reservations: 1},
+		counts,
+	)
 
 	basename, err := payloadBasenameFromCID(floor.BlobCID)
 	require.NoError(t, err)
@@ -172,7 +238,10 @@ func observeAcceptedMaterialActiveCandidate(t *testing.T, store *Store, director
 	var directoryStat unix.Stat_t
 	require.NoError(t, unix.Fstat(store.payloadFD, &directoryStat))
 	require.Equal(t, uint32(unix.S_IFDIR|0o700), directoryStat.Mode&uint32(unix.S_IFMT|0o777))
-	file, err := observeAcceptedMaterialPayloadFile(filepath.Join(directory, payloadDirectoryName, basename), len(expectedCandidate.Payload))
+	file, err := observeAcceptedMaterialPayloadFile(
+		filepath.Join(directory, payloadDirectoryName, basename),
+		len(expectedCandidate.Payload),
+	)
 	require.NoError(t, err)
 	require.True(t, file.Exists)
 	require.Equal(t, expectedCandidate.Payload, file.Bytes)
@@ -236,8 +305,8 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 		}
 		regularSyncs++
 		observation := acceptedMaterialFileSyncObservation{
-			Device: uint64(stat.Dev), Inode: stat.Ino, Mode: stat.Mode,
-			Nlink: uint64(stat.Nlink), Size: stat.Size,
+			Device: stat.Dev, Inode: stat.Ino, Mode: stat.Mode,
+			Nlink: stat.Nlink, Size: stat.Size,
 		}
 		if regularSyncs == 2 {
 			if store.payloadFD < 0 {
@@ -250,10 +319,10 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 				return err
 			}
 			observation.Named = true
-			observation.NamedDevice = uint64(named.Dev)
+			observation.NamedDevice = named.Dev
 			observation.NamedInode = named.Ino
 			observation.NamedMode = named.Mode
-			observation.NamedNlink = uint64(named.Nlink)
+			observation.NamedNlink = named.Nlink
 			observation.NamedSize = named.Size
 			observations = append(observations, observation)
 			injections++
@@ -305,7 +374,14 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	observation := f.observation(1)
 	positionProposal, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
 	require.NoError(t, err)
-	acceptedFloor, err := store.Accept(ctx, ModeFirstUse, positionProposal.StateToken, observation, f.payload, positionProposal.Confirmation)
+	acceptedFloor, err := store.Accept(
+		ctx,
+		ModeFirstUse,
+		positionProposal.StateToken,
+		observation,
+		f.payload,
+		positionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), acceptedFloor.Sequence)
 	acceptedRecord, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -406,7 +482,12 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	require.NotEqual(t, []byte("{}"), healthyEvent.Body)
 
 	corruptBody := []byte("{}")
-	result, err := reopened.conn.ExecContext(ctx, "UPDATE accepted_events SET body=? WHERE revision=?", corruptBody, int64(expectedFloor.Revision))
+	result, err := reopened.conn.ExecContext(
+		ctx,
+		"UPDATE accepted_events SET body=? WHERE revision=?",
+		corruptBody,
+		int64(expectedFloor.Revision),
+	)
 	require.NoError(t, err)
 	affected, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -432,7 +513,7 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	material, err := reopened.ReadAcceptedMaterial(ctx, f.binding, expectedFloor)
 	require.Equal(t, AcceptedMaterial{}, material)
 	requireErrorMetadata(t, err, ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
-	require.Equal(t, callerFloor, expectedFloor)
+	require.Equal(t, expectedFloor, callerFloor)
 	require.Equal(t, -1, reopened.payloadFD)
 	require.Equal(t, faultedRows, readAttemptLogicalRows(t, reopened))
 	require.Equal(t, faultedEvent, readAcceptedMaterialAuditEvent(t, reopened, int64(expectedFloor.Revision)))
@@ -448,7 +529,11 @@ type acceptedMaterialAuditPublicState struct {
 	AttemptHistory AttemptPage
 }
 
-func observeAcceptedMaterialAuditPublicState(t *testing.T, store *Store, attemptID [16]byte) acceptedMaterialAuditPublicState {
+func observeAcceptedMaterialAuditPublicState(
+	t *testing.T,
+	store *Store,
+	attemptID [16]byte,
+) acceptedMaterialAuditPublicState {
 	t.Helper()
 	ctx := context.Background()
 	floor, present, err := store.Load(ctx)
@@ -468,7 +553,12 @@ func observeAcceptedMaterialAuditPublicState(t *testing.T, store *Store, attempt
 	require.Len(t, attemptHistory.Attempts, 1)
 	require.Equal(t, attemptID, attemptHistory.Attempts[0].ID)
 	require.Equal(t, AttemptRetiredSuccess, attemptHistory.Attempts[0].Lifecycle)
-	return acceptedMaterialAuditPublicState{Floor: floor, History: history, Attempt: attempt, AttemptHistory: attemptHistory}
+	return acceptedMaterialAuditPublicState{
+		Floor:          floor,
+		History:        history,
+		Attempt:        attempt,
+		AttemptHistory: attemptHistory,
+	}
 }
 
 type acceptedMaterialAuditEvent struct {
@@ -486,9 +576,10 @@ type acceptedMaterialAuditEvent struct {
 func readAcceptedMaterialAuditEvent(t *testing.T, store *Store, revision int64) acceptedMaterialAuditEvent {
 	t.Helper()
 	var event acceptedMaterialAuditEvent
-	err := store.conn.QueryRowContext(context.Background(), "SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events WHERE revision=?", revision).Scan(
-		&event.Revision, &event.Mode, &event.Reason, &event.Stop, &event.OldFloor, &event.NewFloor, &event.Body, &event.Digest, &event.LogicalBytes,
-	)
+	err := store.conn.QueryRowContext(context.Background(), "SELECT revision,mode,reason,stop,old_floor,new_floor,body,digest,logical_bytes FROM accepted_events WHERE revision=?", revision).
+		Scan(
+			&event.Revision, &event.Mode, &event.Reason, &event.Stop, &event.OldFloor, &event.NewFloor, &event.Body, &event.Digest, &event.LogicalBytes,
+		)
 	require.NoError(t, err)
 	event.OldFloor = bytes.Clone(event.OldFloor)
 	event.NewFloor = bytes.Clone(event.NewFloor)

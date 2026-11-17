@@ -20,7 +20,14 @@ type materialAttachment struct {
 	name    string
 }
 
-func (s *Store) AcceptMaterial(ctx context.Context, mode Mode, expectedStateToken [32]byte, observation Observation, payload []byte, confirmation [32]byte) (Floor, error) {
+func (s *Store) AcceptMaterial(
+	ctx context.Context,
+	mode Mode,
+	expectedStateToken [32]byte,
+	observation Observation,
+	payload []byte,
+	confirmation [32]byte,
+) (Floor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkContext(ctx, StageAcceptMaterial); err != nil {
@@ -53,7 +60,16 @@ func (s *Store) AcceptMaterial(ctx context.Context, mode Mode, expectedStateToke
 	var accepted Floor
 	var attemptMutationChanged bool
 	err = s.withTx(ctx, StageAcceptMaterial, func(tx *sql.Tx) error {
-		floor, changed, txErr := s.acceptTx(ctx, tx, StageAcceptMaterial, mode, expectedStateToken, validated, confirmation, &material)
+		floor, changed, txErr := s.acceptTx(
+			ctx,
+			tx,
+			StageAcceptMaterial,
+			mode,
+			expectedStateToken,
+			validated,
+			confirmation,
+			&material,
+		)
 		if txErr != nil {
 			return txErr
 		}
@@ -70,7 +86,16 @@ func (s *Store) AcceptMaterial(ctx context.Context, mode Mode, expectedStateToke
 	return cloneFloor(accepted), nil
 }
 
-func (s *Store) acceptTx(ctx context.Context, tx *sql.Tx, stage Stage, mode Mode, expectedStateToken [32]byte, validated validatedObservation, confirmation [32]byte, material *materialAttachment) (Floor, bool, error) {
+func (s *Store) acceptTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	stage Stage,
+	mode Mode,
+	expectedStateToken [32]byte,
+	validated validatedObservation,
+	confirmation [32]byte,
+	material *materialAttachment,
+) (Floor, bool, error) {
 	var accepted Floor
 	var attemptMutationChanged bool
 	state, err := s.readState(ctx, tx, stage)
@@ -157,38 +182,65 @@ func (s *Store) acceptTx(ctx context.Context, tx *sql.Tx, stage Stage, mode Mode
 	return accepted, attemptMutationChanged, nil
 }
 
-func (s *Store) attachIncomingMaterialTx(ctx context.Context, tx *sql.Tx, floor Floor, material materialAttachment) error {
+func (s *Store) attachIncomingMaterialTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	floor Floor,
+	material materialAttachment,
+) error {
 	if err := s.checkPayloadCapacityWithQueryer(ctx, tx, material.name, material.blob.Size, true); err != nil {
 		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)
 	}
 	if _, _, err := s.persistPayload(ctx, tx, material.payload, material.blob, material.name); err != nil {
 		return classifyMaterialCustody(err)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING", material.blob.CID, int64(material.blob.Size), material.name, int64(material.blob.Size)); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
+		material.blob.CID,
+		int64(material.blob.Size),
+		material.name,
+		int64(material.blob.Size),
+	); err != nil {
 		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	var cataloguedName string
 	var cataloguedSize any
-	if err := tx.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", material.blob.CID).Scan(&cataloguedName, &cataloguedSize); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", material.blob.CID).
+		Scan(&cataloguedName, &cataloguedSize); err != nil {
 		return storageFailure(ctx, StageAcceptMaterial, err)
 	}
 	size, ok := rawInt64(cataloguedSize)
 	if !ok || size <= 0 || uint64(size) != material.blob.Size || cataloguedName != material.name {
 		return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)", int64(floor.Revision), floor.RecordCID, floor.BlobCID); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,blob_cid) VALUES(?,?,?)",
+		int64(floor.Revision),
+		floor.RecordCID,
+		floor.BlobCID,
+	); err != nil {
 		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	return nil
 }
 
-func materialOwnerMatches(name string, record []byte, blob publication.BlobReference, expectedRecord []byte, material materialAttachment) bool {
-	return name == material.name && bytes.Equal(record, expectedRecord) && bytes.Equal(blob.CID, material.blob.CID) && blob.Size == material.blob.Size
+func materialOwnerMatches(
+	name string,
+	record []byte,
+	blob publication.BlobReference,
+	expectedRecord []byte,
+	material materialAttachment,
+) bool {
+	return name == material.name && bytes.Equal(record, expectedRecord) && bytes.Equal(blob.CID, material.blob.CID) &&
+		blob.Size == material.blob.Size
 }
 
 func materialNotRetained(err error) bool {
 	var stateError *Error
-	return errors.As(err, &stateError) && stateError.Class() == ErrStorage && stateError.Reason() == ReasonMaterialNotRetained
+	return errors.As(err, &stateError) && stateError.Class() == ErrStorage &&
+		stateError.Reason() == ReasonMaterialNotRetained
 }
 
 func classifyMaterialCustody(err error) error {

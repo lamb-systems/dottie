@@ -11,6 +11,7 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
+
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
@@ -19,7 +20,11 @@ type attestationRelayCapture struct {
 	bytes    []byte
 }
 
-func (capture *attestationRelayCapture) CommitAttestation(_ context.Context, revision *Revision, signedBytes []byte) error {
+func (capture *attestationRelayCapture) CommitAttestation(
+	_ context.Context,
+	revision *Revision,
+	signedBytes []byte,
+) error {
 	capture.revision = revision
 	capture.bytes = bytes.Clone(signedBytes)
 	return nil
@@ -31,9 +36,13 @@ func TestPrepareAndPublishAttestationFencedWritesOnlyAttestation(t *testing.T) {
 	policy, err := vault.DecodePolicy(verification.State.Policy)
 	require.NoError(t, err)
 	attestation := vault.Attestation{
-		Vault: fixture.request.Vault, DeviceID: "root", PolicyDigest: policyDigestBytes(t, verification.State.Policy),
-		RetentionFloor: policy.PolicyRetentionFloor, RetainedRecoveryPoints: 0, ControlCID: readRawCID(t, verification.State.Control),
-		Signer: vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")},
+		Vault:                  fixture.request.Vault,
+		DeviceID:               "root",
+		PolicyDigest:           policyDigestBytes(t, verification.State.Policy),
+		RetentionFloor:         policy.PolicyRetentionFloor,
+		RetainedRecoveryPoints: 0,
+		ControlCID:             readRawCID(t, verification.State.Control),
+		Signer:                 vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")},
 	}
 	signedBytes := signReadAttestation(t, attestation, fixtureSigningKey(11))
 	rkey, err := AttestationRecordRKey(signedBytes)
@@ -92,7 +101,7 @@ func TestRelayAttestationPassesSignedBytesUnchanged(t *testing.T) {
 	tampered := bytes.Clone(signedBytes)
 	tampered[len(tampered)-1] ^= 0x80
 	err = RelayAttestation(context.Background(), capture, revision, tampered, verification)
-	assert.ErrorIs(t, err, ErrBatchRejected)
+	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.Equal(t, signedBytes, capture.bytes)
 
 	wrongSubject, err := vault.DecodeAttestation(signedBytes)
@@ -100,7 +109,7 @@ func TestRelayAttestationPassesSignedBytesUnchanged(t *testing.T) {
 	wrongSubject.DeviceID = "other-device"
 	wrongSubjectBytes := signReadAttestation(t, wrongSubject, fixtureSigningKey(11))
 	err = RelayAttestation(context.Background(), capture, revision, wrongSubjectBytes, verification)
-	assert.ErrorIs(t, err, ErrBatchRejected)
+	require.ErrorIs(t, err, ErrBatchRejected)
 	assert.Equal(t, signedBytes, capture.bytes)
 }
 
@@ -145,10 +154,16 @@ func TestVerifyAttestationRecordSurfacesBelowPolicyFloorAndAuthenticatesSigner(t
 	require.NoError(t, err)
 	recordObject := decodedRecord.(AttestationRecord)
 	reencoded, err := vault.EncodeAttestation(vault.Attestation{
-		Vault: [32]byte(recordObject.Vault), DeviceID: recordObject.DeviceID, PolicyDigest: [32]byte(recordObject.PolicyDigest),
-		RetentionFloor: recordObject.RetentionFloor, RetainedRecoveryPoints: recordObject.RetainedRecoveryPoints,
-		ControlCID: recordObject.ControlCID, Signer: vault.Signer{DeviceID: recordObject.SignerDeviceID, KeyID: recordObject.SignerKeyID},
-		Signature: [64]byte(recordObject.Signature),
+		Vault: [32]byte(
+			recordObject.Vault,
+		),
+		DeviceID:               recordObject.DeviceID,
+		PolicyDigest:           [32]byte(recordObject.PolicyDigest),
+		RetentionFloor:         recordObject.RetentionFloor,
+		RetainedRecoveryPoints: recordObject.RetainedRecoveryPoints,
+		ControlCID:             recordObject.ControlCID,
+		Signer:                 vault.Signer{DeviceID: recordObject.SignerDeviceID, KeyID: recordObject.SignerKeyID},
+		Signature:              [64]byte(recordObject.Signature),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, signedBytes, reencoded)
@@ -166,7 +181,7 @@ func TestVerifyAttestationRecordSurfacesBelowPolicyFloorAndAuthenticatesSigner(t
 	mismatchedRecord, err := EncodeRecord(attestationRecordFromVault(mismatched))
 	require.NoError(t, err)
 	_, err = VerifyAttestationRecord(mismatchedRecord, verification)
-	assert.ErrorIs(t, err, vault.ErrAuthorization)
+	require.ErrorIs(t, err, vault.ErrAuthorization)
 
 	tampered := bytes.Clone(signedBytes)
 	tampered[len(tampered)-1] ^= 0x80
@@ -178,7 +193,11 @@ func TestVerifyAttestationRecordSurfacesBelowPolicyFloorAndAuthenticatesSigner(t
 	assert.ErrorIs(t, err, vault.ErrSignature)
 }
 
-func attestationContextRevision(t *testing.T, verification vault.AttestationVerificationRequest, commitCID string) *Revision {
+func attestationContextRevision(
+	t *testing.T,
+	verification vault.AttestationVerificationRequest,
+	commitCID string,
+) *Revision {
 	t.Helper()
 	policy, err := vault.DecodePolicy(verification.State.Policy)
 	require.NoError(t, err)

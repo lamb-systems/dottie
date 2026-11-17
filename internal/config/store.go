@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/lamb-systems/dottie/internal/platform"
 )
 
@@ -23,7 +24,9 @@ const maxRevision uint64 = math.MaxInt64
 
 var (
 	ErrConfigStale             = errors.New("configuration changed since it was read; re-run the command")
-	ErrConfigRevisionExhausted = errors.New("configuration revision cannot be advanced; restore the file or remove the revision keys")
+	ErrConfigRevisionExhausted = errors.New(
+		"configuration revision cannot be advanced; restore the file or remove the revision keys",
+	)
 )
 
 type Token [32]byte
@@ -124,11 +127,17 @@ func advance(previous Snapshot, mutated Config) (Config, error) {
 		return Config{}, err
 	}
 	var err error
-	next.SelectionRevision, err = nextRevision(previous.Selection.Revision, selectionDigest(next) != previous.Selection.Digest)
+	next.SelectionRevision, err = nextRevision(
+		previous.Selection.Revision,
+		selectionDigest(next) != previous.Selection.Digest,
+	)
 	if err != nil {
 		return Config{}, err
 	}
-	next.ApprovalRevision, err = nextRevision(previous.Approval.Revision, approvalDigest(next) != previous.Approval.Digest)
+	next.ApprovalRevision, err = nextRevision(
+		previous.Approval.Revision,
+		approvalDigest(next) != previous.Approval.Digest,
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -182,24 +191,32 @@ func readConfigFile(paths platform.Paths) ([]byte, bool, error) {
 	if err != nil {
 		linkInfo, linkErr := os.Lstat(configPath)
 		if linkErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
-			return nil, false, errors.New("configuration file is a symbolic link whose target cannot be resolved; restore the target or remove the link")
+			return nil, false, errors.New(
+				"configuration file is a symbolic link whose target cannot be resolved; restore the target or remove the link",
+			)
 		}
 		if errors.Is(err, os.ErrNotExist) && errors.Is(linkErr, os.ErrNotExist) {
 			return nil, false, nil
 		}
 		if linkErr != nil && !errors.Is(linkErr, os.ErrNotExist) {
-			return nil, false, errors.New("cannot inspect configuration file; check filesystem permissions and availability")
+			return nil, false, errors.New(
+				"cannot inspect configuration file; check filesystem permissions and availability",
+			)
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, errors.New("cannot resolve configuration file; check that it exists and is accessible")
 		}
-		return nil, false, errors.New("cannot inspect configuration file; check filesystem permissions and availability")
+		return nil, false, errors.New(
+			"cannot inspect configuration file; check filesystem permissions and availability",
+		)
 	}
 	if info.IsDir() {
 		return nil, false, errors.New("configuration path is a directory; replace it with a regular configuration file")
 	}
 	if !info.Mode().IsRegular() {
-		return nil, false, errors.New("configuration path is not a regular file; replace it with a regular configuration file")
+		return nil, false, errors.New(
+			"configuration path is not a regular file; replace it with a regular configuration file",
+		)
 	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -215,7 +232,9 @@ func checkDestination(directory string) (string, error) {
 	destination := filepath.Join(directory, FileName)
 	if info, err := os.Lstat(destination); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return "", errors.New("configuration file is a symbolic link; Dottie will not replace it; moving the file or removing the link resolves this")
+			return "", errors.New(
+				"configuration file is a symbolic link; Dottie will not replace it; moving the file or removing the link resolves this",
+			)
 		}
 		if info.IsDir() {
 			return "", errors.New("refusing to replace a directory at the configuration file path")
@@ -369,7 +388,7 @@ func encodeConfig(c Config) ([]byte, error) {
 }
 
 func createTemp(directory string) (*os.File, string, error) {
-	for attempt := 0; attempt < 8; attempt++ {
+	for range 8 {
 		var random [12]byte
 		if _, err := rand.Read(random[:]); err != nil {
 			return nil, "", err

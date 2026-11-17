@@ -128,7 +128,12 @@ func validateField(name, value string, maximum int) error {
 	return nil
 }
 
-func openNative(schemaDir, schemaID, path string, backendKind C.int, observed string, makePeer bool) (*Settings, error) {
+func openNative(
+	schemaDir, schemaID, path string,
+	backendKind C.int,
+	observed string,
+	makePeer bool,
+) (*Settings, error) {
 	cSchemaDir := C.CString(schemaDir)
 	defer C.free(unsafe.Pointer(cSchemaDir))
 	cSchemaID := C.CString(schemaID)
@@ -139,7 +144,16 @@ func openNative(schemaDir, schemaID, path string, backendKind C.int, observed st
 	defer C.free(unsafe.Pointer(cObserved))
 	var openError C.int
 	var cError *C.char
-	ptr := C.dottie_settings_open(cSchemaDir, cSchemaID, cPath, backendKind, cObserved, cbool(makePeer), &openError, &cError)
+	ptr := C.dottie_settings_open(
+		cSchemaDir,
+		cSchemaID,
+		cPath,
+		backendKind,
+		cObserved,
+		cbool(makePeer),
+		&openError,
+		&cError,
+	)
 	if ptr == nil {
 		openErr := nativeError(cError, "open GSettings handle failed")
 		switch openError {
@@ -198,12 +212,24 @@ func (settings *Settings) Read(key string) (Snapshot, error) {
 	}
 	defer C.dottie_read_free(readValue)
 	result := Snapshot{
-		Effective: Value{Type: C.GoString(readValue.effective_type), Text: C.GoString(readValue.effective_text), Present: true},
-		Default:   Value{Type: C.GoString(readValue.default_type), Text: C.GoString(readValue.default_text), Present: true},
-		Writable:  readValue.writable != 0,
+		Effective: Value{
+			Type:    C.GoString(readValue.effective_type),
+			Text:    C.GoString(readValue.effective_text),
+			Present: true,
+		},
+		Default: Value{
+			Type:    C.GoString(readValue.default_type),
+			Text:    C.GoString(readValue.default_text),
+			Present: true,
+		},
+		Writable: readValue.writable != 0,
 	}
 	if readValue.user_present != 0 {
-		result.User = &Value{Type: C.GoString(readValue.user_type), Text: C.GoString(readValue.user_text), Present: true}
+		result.User = &Value{
+			Type:    C.GoString(readValue.user_type),
+			Text:    C.GoString(readValue.user_text),
+			Present: true,
+		}
 	}
 	return result, nil
 }

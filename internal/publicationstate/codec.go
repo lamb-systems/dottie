@@ -185,11 +185,18 @@ func strictJSON(encoded []byte, target any) error {
 }
 
 func bindingToWire(binding Binding) bindingWire {
-	return bindingWire{AccountDID: binding.AccountDID, Backend: string(binding.Backend), Repository: binding.Repository, Vault: bytes.Clone(binding.Vault[:]), Profile: storageProfile}
+	return bindingWire{
+		AccountDID: binding.AccountDID,
+		Backend:    string(binding.Backend),
+		Repository: binding.Repository,
+		Vault:      bytes.Clone(binding.Vault[:]),
+		Profile:    storageProfile,
+	}
 }
 
 func bindingFromWire(w bindingWire) (Binding, error) {
-	if len(w.Vault) != 32 || w.Profile != storageProfile || !validText(w.AccountDID) || !validText(w.Backend) || !validText(w.Repository) {
+	if len(w.Vault) != 32 || w.Profile != storageProfile || !validText(w.AccountDID) || !validText(w.Backend) ||
+		!validText(w.Repository) {
 		return Binding{}, errors.New("invalid binding")
 	}
 	var binding Binding
@@ -201,17 +208,32 @@ func bindingFromWire(w bindingWire) (Binding, error) {
 }
 
 func contextToWire(context SuppliedContext) contextWire {
-	wire := contextWire{RepositoryRevision: context.RepositoryRevision, RepositoryDigest: bytes.Clone(context.RepositoryDigest), Policy: nil}
+	wire := contextWire{
+		RepositoryRevision: context.RepositoryRevision,
+		RepositoryDigest:   bytes.Clone(context.RepositoryDigest),
+		Policy:             nil,
+	}
 	if context.Policy != nil {
-		wire.Policy = &policyWire{Revision: context.Policy.Revision, Identity: bytes.Clone(context.Policy.Identity), OwnerOnly: context.Policy.OwnerOnly}
+		wire.Policy = &policyWire{
+			Revision:  context.Policy.Revision,
+			Identity:  bytes.Clone(context.Policy.Identity),
+			OwnerOnly: context.Policy.OwnerOnly,
+		}
 	}
 	return wire
 }
 
 func contextFromWire(w contextWire) (SuppliedContext, error) {
-	context := SuppliedContext{RepositoryRevision: w.RepositoryRevision, RepositoryDigest: bytes.Clone(w.RepositoryDigest)}
+	context := SuppliedContext{
+		RepositoryRevision: w.RepositoryRevision,
+		RepositoryDigest:   bytes.Clone(w.RepositoryDigest),
+	}
 	if w.Policy != nil {
-		context.Policy = &Policy{Revision: w.Policy.Revision, Identity: bytes.Clone(w.Policy.Identity), OwnerOnly: w.Policy.OwnerOnly}
+		context.Policy = &Policy{
+			Revision:  w.Policy.Revision,
+			Identity:  bytes.Clone(w.Policy.Identity),
+			OwnerOnly: w.Policy.OwnerOnly,
+		}
 	}
 	if !validContextText(context) {
 		return SuppliedContext{}, errors.New("invalid context")
@@ -232,16 +254,68 @@ func referencesToWire(refs []RecordReference) []referenceWire {
 }
 
 func floorCoreToWire(f Floor) floorCoreWire {
-	return floorCoreWire{Version: 1, DatabaseID: bytes.Clone(f.DatabaseID[:]), Revision: f.Revision, Generation: f.Generation, Provenance: string(f.Provenance), AnchorCID: bytes.Clone(f.AnchorCID), Binding: bindingToWire(f.Binding), SuppliedContext: contextToWire(f.SuppliedContext), Head: bytes.Clone(f.Head), SnapshotKey: f.SnapshotKey, Sequence: f.Sequence, PublicationID: bytes.Clone(f.PublicationID[:]), RecordCID: bytes.Clone(f.RecordCID), BlobCID: bytes.Clone(f.BlobCID), BlobSize: f.BlobSize, ObservationDigest: bytes.Clone(f.ObservationDigest[:])}
+	return floorCoreWire{
+		Version:           1,
+		DatabaseID:        bytes.Clone(f.DatabaseID[:]),
+		Revision:          f.Revision,
+		Generation:        f.Generation,
+		Provenance:        string(f.Provenance),
+		AnchorCID:         bytes.Clone(f.AnchorCID),
+		Binding:           bindingToWire(f.Binding),
+		SuppliedContext:   contextToWire(f.SuppliedContext),
+		Head:              bytes.Clone(f.Head),
+		SnapshotKey:       f.SnapshotKey,
+		Sequence:          f.Sequence,
+		PublicationID:     bytes.Clone(f.PublicationID[:]),
+		RecordCID:         bytes.Clone(f.RecordCID),
+		BlobCID:           bytes.Clone(f.BlobCID),
+		BlobSize:          f.BlobSize,
+		ObservationDigest: bytes.Clone(f.ObservationDigest[:]),
+	}
 }
 
 func floorToWire(f Floor) floorWire {
 	core := floorCoreToWire(f)
-	return floorWire{Version: core.Version, DatabaseID: core.DatabaseID, Revision: core.Revision, Generation: core.Generation, Provenance: core.Provenance, AnchorCID: core.AnchorCID, Binding: core.Binding, SuppliedContext: core.SuppliedContext, Head: core.Head, SnapshotKey: core.SnapshotKey, Sequence: core.Sequence, PublicationID: core.PublicationID, RecordCID: core.RecordCID, BlobCID: core.BlobCID, BlobSize: core.BlobSize, ObservationDigest: core.ObservationDigest, AcceptedEventDigest: bytes.Clone(f.AcceptedEventDigest[:])}
+	return floorWire{
+		Version:             core.Version,
+		DatabaseID:          core.DatabaseID,
+		Revision:            core.Revision,
+		Generation:          core.Generation,
+		Provenance:          core.Provenance,
+		AnchorCID:           core.AnchorCID,
+		Binding:             core.Binding,
+		SuppliedContext:     core.SuppliedContext,
+		Head:                core.Head,
+		SnapshotKey:         core.SnapshotKey,
+		Sequence:            core.Sequence,
+		PublicationID:       core.PublicationID,
+		RecordCID:           core.RecordCID,
+		BlobCID:             core.BlobCID,
+		BlobSize:            core.BlobSize,
+		ObservationDigest:   core.ObservationDigest,
+		AcceptedEventDigest: bytes.Clone(f.AcceptedEventDigest[:]),
+	}
 }
 
 func floorFromWire(w floorWire) (Floor, error) {
-	core := floorCoreWire{Version: w.Version, DatabaseID: w.DatabaseID, Revision: w.Revision, Generation: w.Generation, Provenance: w.Provenance, AnchorCID: w.AnchorCID, Binding: w.Binding, SuppliedContext: w.SuppliedContext, Head: w.Head, SnapshotKey: w.SnapshotKey, Sequence: w.Sequence, PublicationID: w.PublicationID, RecordCID: w.RecordCID, BlobCID: w.BlobCID, BlobSize: w.BlobSize, ObservationDigest: w.ObservationDigest}
+	core := floorCoreWire{
+		Version:           w.Version,
+		DatabaseID:        w.DatabaseID,
+		Revision:          w.Revision,
+		Generation:        w.Generation,
+		Provenance:        w.Provenance,
+		AnchorCID:         w.AnchorCID,
+		Binding:           w.Binding,
+		SuppliedContext:   w.SuppliedContext,
+		Head:              w.Head,
+		SnapshotKey:       w.SnapshotKey,
+		Sequence:          w.Sequence,
+		PublicationID:     w.PublicationID,
+		RecordCID:         w.RecordCID,
+		BlobCID:           w.BlobCID,
+		BlobSize:          w.BlobSize,
+		ObservationDigest: w.ObservationDigest,
+	}
 	floor, err := floorCoreFromWire(core)
 	if err != nil || len(w.AcceptedEventDigest) != 32 {
 		return Floor{}, errors.New("invalid floor")
@@ -252,7 +326,14 @@ func floorFromWire(w floorWire) (Floor, error) {
 
 func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	binding, err := bindingFromWire(w.Binding)
-	if err != nil || w.Version != 1 || len(w.DatabaseID) != 32 || len(w.PublicationID) != 16 || len(w.ObservationDigest) != 32 || len(w.AnchorCID) == 0 || len(w.RecordCID) == 0 || len(w.BlobCID) == 0 || len(w.Head) == 0 || !validText(w.SnapshotKey) || !validText(w.Provenance) {
+	if err != nil || w.Version != 1 || len(w.DatabaseID) != 32 || len(w.PublicationID) != 16 ||
+		len(w.ObservationDigest) != 32 ||
+		len(w.AnchorCID) == 0 ||
+		len(w.RecordCID) == 0 ||
+		len(w.BlobCID) == 0 ||
+		len(w.Head) == 0 ||
+		!validText(w.SnapshotKey) ||
+		!validText(w.Provenance) {
 		return Floor{}, errors.New("invalid floor")
 	}
 	context, err := contextFromWire(w.SuppliedContext)
@@ -291,11 +372,13 @@ func decodeFloor(encoded []byte) (Floor, error) {
 func encodeBinding(binding Binding) ([]byte, error) { return canonicalJSON(bindingToWire(binding)) }
 func encodeLimits(limits Limits) ([]byte, error)    { return canonicalJSON(limitsToWire(limits)) }
 func encodeAttemptLimits(limits AttemptLimits) ([]byte, error) {
-	return canonicalJSON(attemptLimitsWire{ActiveAttempts: limits.ActiveAttempts, HistoricalAttempts: limits.HistoricalAttempts, RetainedPublications: limits.RetainedPublications, ManagedObjects: limits.ManagedObjects, CustodyBytes: limits.CustodyBytes, MetadataBytes: limits.MetadataBytes, EvidenceBytes: limits.EvidenceBytes, EvidenceSlotBytes: limits.EvidenceSlotBytes, LifecycleEvents: limits.LifecycleEvents, EventBytes: limits.EventBytes, CoreBytes: limits.CoreBytes, HistoryPageEntries: limits.HistoryPageEntries, HistoryPageBytes: limits.HistoryPageBytes})
+	return canonicalJSON(
+		attemptLimitsWire(limits),
+	)
 }
 
 func limitsToWire(l Limits) limitsWire {
-	return limitsWire{SuppliedSnapshotCount: l.SuppliedSnapshotCount, SuppliedTotalBytes: l.SuppliedTotalBytes, SuppliedContextBytes: l.SuppliedContextBytes, MaxLineageLinks: l.MaxLineageLinks, CacheRecordCount: l.CacheRecordCount, CacheObservationCount: l.CacheObservationCount, CacheLogicalBytes: l.CacheLogicalBytes, AcceptedRecordCount: l.AcceptedRecordCount, AcceptedEventCount: l.AcceptedEventCount, AcceptedLogicalBytes: l.AcceptedLogicalBytes, HistoryPageEvents: l.HistoryPageEvents, HistoryEvidenceBytes: l.HistoryEvidenceBytes}
+	return limitsWire(l)
 }
 
 func makeSetDigest(blocks []SnapshotBlock) [32]byte {
@@ -316,7 +399,13 @@ func makeSetDigest(blocks []SnapshotBlock) [32]byte {
 }
 
 func makeObservationDigest(origin Binding, context SuppliedContext, head []byte, setDigest [32]byte) ([32]byte, error) {
-	wire := observationWire{Version: 1, Origin: bindingToWire(origin), SuppliedContext: contextToWire(context), Head: bytes.Clone(head), SuppliedSetDigest: bytes.Clone(setDigest[:])}
+	wire := observationWire{
+		Version:           1,
+		Origin:            bindingToWire(origin),
+		SuppliedContext:   contextToWire(context),
+		Head:              bytes.Clone(head),
+		SuppliedSetDigest: bytes.Clone(setDigest[:]),
+	}
 	encoded, err := canonicalJSON(wire)
 	if err != nil {
 		return [32]byte{}, err
@@ -324,8 +413,22 @@ func makeObservationDigest(origin Binding, context SuppliedContext, head []byte,
 	return domainHash("systems.lamb.dottie.local-observation.v1", encoded), nil
 }
 
-func makeStateToken(dbid [32]byte, revision, generation uint64, binding Binding, limits Limits, floor *Floor) ([32]byte, error) {
-	wire := stateTokenWire{Version: 1, DatabaseID: bytes.Clone(dbid[:]), Revision: revision, Generation: generation, Binding: bindingToWire(binding), Limits: limitsToWire(limits), Floor: nil}
+func makeStateToken(
+	dbid [32]byte,
+	revision, generation uint64,
+	binding Binding,
+	limits Limits,
+	floor *Floor,
+) ([32]byte, error) {
+	wire := stateTokenWire{
+		Version:    1,
+		DatabaseID: bytes.Clone(dbid[:]),
+		Revision:   revision,
+		Generation: generation,
+		Binding:    bindingToWire(binding),
+		Limits:     limitsToWire(limits),
+		Floor:      nil,
+	}
 	if floor != nil {
 		encoded := floorToWire(*floor)
 		wire.Floor = &encoded
@@ -337,23 +440,63 @@ func makeStateToken(dbid [32]byte, revision, generation uint64, binding Binding,
 	return domainHash("systems.lamb.dottie.local-publication-state.v1", body), nil
 }
 
-func makeEventBody(mode Mode, reason Reason, old *Floor, next Floor, trace []RecordReference, stop string, observationDigest, setDigest [32]byte) ([]byte, error) {
+func makeEventBody(
+	mode Mode,
+	reason Reason,
+	old *Floor,
+	next Floor,
+	trace []RecordReference,
+	stop string,
+	observationDigest, setDigest [32]byte,
+) ([]byte, error) {
 	var oldWire *floorWire
 	if old != nil {
 		wire := floorToWire(*old)
 		oldWire = &wire
 	}
-	wire := eventBodyWire{Version: 1, Mode: string(mode), Reason: string(reason), OldFloor: oldWire, NewFloor: floorCoreToWire(next), Trace: referencesToWire(trace), Stop: stop, ObservationDigest: bytes.Clone(observationDigest[:]), SuppliedSetDigest: bytes.Clone(setDigest[:])}
+	wire := eventBodyWire{
+		Version:           1,
+		Mode:              string(mode),
+		Reason:            string(reason),
+		OldFloor:          oldWire,
+		NewFloor:          floorCoreToWire(next),
+		Trace:             referencesToWire(trace),
+		Stop:              stop,
+		ObservationDigest: bytes.Clone(observationDigest[:]),
+		SuppliedSetDigest: bytes.Clone(setDigest[:]),
+	}
 	return canonicalJSON(wire)
 }
 
-func makeConfirmation(dbid [32]byte, binding Binding, mode Mode, old *Floor, token, observationDigest [32]byte, trace []RecordReference, stop string, reason Reason, warning string) ([32]byte, error) {
+func makeConfirmation(
+	dbid [32]byte,
+	binding Binding,
+	mode Mode,
+	old *Floor,
+	token, observationDigest [32]byte,
+	trace []RecordReference,
+	stop string,
+	reason Reason,
+	warning string,
+) ([32]byte, error) {
 	var oldWire *floorWire
 	if old != nil {
 		wire := floorToWire(*old)
 		oldWire = &wire
 	}
-	wire := confirmationWire{Version: 1, DatabaseID: bytes.Clone(dbid[:]), Binding: bindingToWire(binding), Mode: string(mode), OldFloor: oldWire, StateToken: bytes.Clone(token[:]), ObservationDigest: bytes.Clone(observationDigest[:]), Trace: referencesToWire(trace), Stop: stop, Reason: string(reason), Warning: warning}
+	wire := confirmationWire{
+		Version:           1,
+		DatabaseID:        bytes.Clone(dbid[:]),
+		Binding:           bindingToWire(binding),
+		Mode:              string(mode),
+		OldFloor:          oldWire,
+		StateToken:        bytes.Clone(token[:]),
+		ObservationDigest: bytes.Clone(observationDigest[:]),
+		Trace:             referencesToWire(trace),
+		Stop:              stop,
+		Reason:            string(reason),
+		Warning:           warning,
+	}
 	body, err := canonicalJSON(wire)
 	if err != nil {
 		return [32]byte{}, err

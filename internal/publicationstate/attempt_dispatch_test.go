@@ -50,27 +50,60 @@ func TestPublicationAttemptUploadCanRepeatBeforeSubmissionAfterReadbackAndRestar
 	freshProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
 	require.NoError(t, err)
 	var beforeCore []byte
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).Scan(&beforeCore))
-	repeated, err := reopened.BeginUpload(ctx, attempt.ID, freshProposal.StateToken, view, review, freshProposal.Confirmation)
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&beforeCore),
+	)
+	repeated, err := reopened.BeginUpload(
+		ctx,
+		attempt.ID,
+		freshProposal.StateToken,
+		view,
+		review,
+		freshProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate.Payload, repeated.Payload)
 	var afterCore []byte
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).Scan(&afterCore))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT core FROM publication_attempts WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&afterCore),
+	)
 	assert.Equal(t, beforeCore, afterCore)
-	for repeat := 0; repeat < 20; repeat++ {
+	for range 20 {
 		repeatProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
 		require.NoError(t, err)
-		repeated, err := reopened.BeginUpload(ctx, attempt.ID, repeatProposal.StateToken, view, review, repeatProposal.Confirmation)
+		repeated, err := reopened.BeginUpload(
+			ctx,
+			attempt.ID,
+			repeatProposal.StateToken,
+			view,
+			review,
+			repeatProposal.Confirmation,
+		)
 		require.NoError(t, err)
 		assert.Equal(t, candidate.Payload, repeated.Payload)
 	}
 	var eventCount int
-	require.NoError(t, reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).Scan(&eventCount))
+	require.NoError(
+		t,
+		reopened.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM attempt_events WHERE attempt_id=?", attempt.ID[:]).
+			Scan(&eventCount),
+	)
 	assert.Equal(t, 2, eventCount)
 
 	submissionProposal, err := reopened.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = reopened.BeginSubmission(ctx, attempt.ID, submissionProposal.StateToken, view, review, submissionProposal.Confirmation)
+	_, err = reopened.BeginSubmission(
+		ctx,
+		attempt.ID,
+		submissionProposal.StateToken,
+		view,
+		review,
+		submissionProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	_, err = reopened.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
 	requireErrorMetadata(t, err, ErrConsent, StageDispatch, ReasonTransition)

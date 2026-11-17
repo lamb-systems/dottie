@@ -10,7 +10,10 @@ import (
 	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
-func (coordinator *Coordinator) captureLocal(ctx context.Context, target config.Target) ([]model.Observation, []model.Entry, []model.EntryKey, []model.EntryKey, []string, error) {
+func (coordinator *Coordinator) captureLocal(
+	ctx context.Context,
+	target config.Target,
+) ([]model.Observation, []model.Entry, []model.EntryKey, []model.EntryKey, []string, error) {
 	observations := make([]model.Observation, 0)
 	entries := make([]model.Entry, 0)
 	unknown := make([]model.EntryKey, 0)
@@ -87,7 +90,12 @@ func (coordinator *Coordinator) captureLocal(ctx context.Context, target config.
 	return observations, entries, unknown, nil, coverage, nil
 }
 
-func (coordinator *Coordinator) loadBase(ctx context.Context, target config.Target, portable model.Target, configuration config.Config) ([]model.Entry, syncengine.BaseStatus, []model.EntryKey, error) {
+func (coordinator *Coordinator) loadBase(
+	ctx context.Context,
+	target config.Target,
+	portable model.Target,
+	configuration config.Config,
+) ([]model.Entry, syncengine.BaseStatus, []model.EntryKey, error) {
 	records, err := coordinator.deps.State.AppliedBase(ctx, target.ID)
 	if err != nil {
 		return nil, "", nil, err
@@ -100,7 +108,13 @@ func (coordinator *Coordinator) loadBase(ctx context.Context, target config.Targ
 		var entry model.Entry
 		switch record.Identity.Source {
 		case model.SourceFiles:
-			file := &model.FileEntry{Path: record.Identity.FilePath, State: model.FileState(record.Fingerprint.State), Kind: record.Fingerprint.Kind, Mode: record.Fingerprint.Mode, LinkTarget: record.Fingerprint.LinkTarget}
+			file := &model.FileEntry{
+				Path:       record.Identity.FilePath,
+				State:      model.FileState(record.Fingerprint.State),
+				Kind:       record.Fingerprint.Kind,
+				Mode:       record.Fingerprint.Mode,
+				LinkTarget: record.Fingerprint.LinkTarget,
+			}
 			if file.State == model.FilePresent && file.Kind == model.FileRegular {
 				payload, err := coordinator.deps.State.Payload(record.PayloadRef)
 				if err != nil {
@@ -110,9 +124,17 @@ func (coordinator *Coordinator) loadBase(ctx context.Context, target config.Targ
 			}
 			entry = model.Entry{TargetID: target.ID, File: file}
 		case model.SourceGNOME:
-			setting := &model.SettingEntry{SchemaID: record.Identity.SchemaID, Path: record.Identity.SettingsPath, Key: record.Identity.SettingKey, State: model.SettingState(record.Fingerprint.State)}
+			setting := &model.SettingEntry{
+				SchemaID: record.Identity.SchemaID,
+				Path:     record.Identity.SettingsPath,
+				Key:      record.Identity.SettingKey,
+				State:    model.SettingState(record.Fingerprint.State),
+			}
 			if setting.State == model.SettingPresent {
-				setting.Value = &model.VariantValue{Type: record.Fingerprint.ValueType, Text: record.Fingerprint.ValueText}
+				setting.Value = &model.VariantValue{
+					Type: record.Fingerprint.ValueType,
+					Text: record.Fingerprint.ValueText,
+				}
 			}
 			entry = model.Entry{TargetID: target.ID, Setting: setting}
 		default:
@@ -123,7 +145,12 @@ func (coordinator *Coordinator) loadBase(ctx context.Context, target config.Targ
 		}
 		entries = append(entries, entry)
 	}
-	filtered, untracked, err := filterSnapshot(ctx, configuration, coordinator.deps.Settings, model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: entries})
+	filtered, untracked, err := filterSnapshot(
+		ctx,
+		configuration,
+		coordinator.deps.Settings,
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: entries},
+	)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -142,5 +169,12 @@ func (LocalFilesCapture) Capture(_ context.Context, target config.Target, path s
 	if target.Root == nil {
 		return files.Result{}, errors.New("filesystem target has no root")
 	}
-	return files.Capture(files.Root{TargetID: target.ID, Path: path, Kind: target.Root.Kind, Exclude: append([]string(nil), target.Root.Exclude...)})
+	return files.Capture(
+		files.Root{
+			TargetID: target.ID,
+			Path:     path,
+			Kind:     target.Root.Kind,
+			Exclude:  append([]string(nil), target.Root.Exclude...),
+		},
+	)
 }

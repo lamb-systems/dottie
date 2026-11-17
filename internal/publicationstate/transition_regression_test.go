@@ -5,9 +5,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestMultiLinkForkReplacementHistorySurvivesReopenAndContinues(t *testing.T) {
@@ -19,7 +20,14 @@ func TestMultiLinkForkReplacementHistorySurvivesReopenAndContinues(t *testing.T)
 			store, directory := newStore(t, original)
 			initial := original.observation(1)
 			first := prepareFirstUse(t, store, initial, original.payload)
-			oldFloor, err := store.Accept(ctx, ModeFirstUse, first.StateToken, initial, original.payload, first.Confirmation)
+			oldFloor, err := store.Accept(
+				ctx,
+				ModeFirstUse,
+				first.StateToken,
+				initial,
+				original.payload,
+				first.Confirmation,
+			)
 			require.NoError(t, err)
 			fork := newFixture(t, BackendPublicRepo)
 			fork.appendRecord(t, 0)
@@ -35,8 +43,15 @@ func TestMultiLinkForkReplacementHistorySurvivesReopenAndContinues(t *testing.T)
 			proposal, err := store.Prepare(ctx, ModeReplaceFloor, candidate, fork.payload)
 			require.NoError(t, err)
 			assert.Equal(t, ReasonFork, proposal.Reason)
-			assert.Equal(t, int(links), len(proposal.Trace))
-			accepted, err := store.Accept(ctx, ModeReplaceFloor, proposal.StateToken, candidate, fork.payload, proposal.Confirmation)
+			assert.Len(t, proposal.Trace, int(links))
+			accepted, err := store.Accept(
+				ctx,
+				ModeReplaceFloor,
+				proposal.StateToken,
+				candidate,
+				fork.payload,
+				proposal.Confirmation,
+			)
 			require.NoError(t, err)
 			assert.Equal(t, uint64(2), accepted.Generation)
 			loaded, present, err := store.Load(ctx)
@@ -65,7 +80,14 @@ func TestMultiLinkForkReplacementHistorySurvivesReopenAndContinues(t *testing.T)
 			advance, err := reopened.Prepare(ctx, ModeAdvance, continued, fork.payload)
 			require.NoError(t, err)
 			assert.Equal(t, "joined", advance.Stop)
-			continuedFloor, err := reopened.Accept(ctx, ModeAdvance, advance.StateToken, continued, fork.payload, [32]byte{})
+			continuedFloor, err := reopened.Accept(
+				ctx,
+				ModeAdvance,
+				advance.StateToken,
+				continued,
+				fork.payload,
+				[32]byte{},
+			)
 			require.NoError(t, err)
 			assert.Equal(t, accepted.Revision+1, continuedFloor.Revision)
 		})
@@ -75,7 +97,7 @@ func TestMultiLinkForkReplacementHistorySurvivesReopenAndContinues(t *testing.T)
 func TestCachedBridgeUsesResolvedLineageLimitAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 4; sequence++ {
+	for sequence := range uint64(4) {
 		f.appendRecord(t, sequence)
 	}
 	limits := DefaultLimits()

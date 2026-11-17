@@ -8,7 +8,12 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-func (s *Store) ResolveAttempt(ctx context.Context, id [16]byte, expectedToken [32]byte, input SuppliedRepositoryView) (AttemptResolution, error) {
+func (s *Store) ResolveAttempt(
+	ctx context.Context,
+	id [16]byte,
+	expectedToken [32]byte,
+	input SuppliedRepositoryView,
+) (AttemptResolution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkContext(ctx, StageResolve); err != nil {
@@ -75,14 +80,50 @@ func (s *Store) ResolveAttempt(ctx context.Context, id [16]byte, expectedToken [
 			}
 			freshRole := "outcome"
 			if freshOutcome == OutcomeLostFence && !terminalOutcome(fresh.outcome) {
-				nextMutation, err = s.updateAttemptTxWithFirstConflict(ctx, tx, fresh, fresh.lifecycle, freshOutcome, fresh.blocked, freshRole, freshEvidence, nil, kind, nil, freshEvidence, &nextStateDigest, StageResolve)
+				nextMutation, err = s.updateAttemptTxWithFirstConflict(
+					ctx,
+					tx,
+					fresh,
+					fresh.lifecycle,
+					freshOutcome,
+					fresh.blocked,
+					freshRole,
+					freshEvidence,
+					nil,
+					kind,
+					nil,
+					freshEvidence,
+					&nextStateDigest,
+					StageResolve,
+				)
 			} else {
-				nextMutation, err = s.updateAttemptTx(ctx, tx, fresh, fresh.lifecycle, freshOutcome, fresh.blocked, freshRole, freshEvidence, nil, kind, nil, &nextStateDigest, StageResolve)
+				nextMutation, err = s.updateAttemptTx(
+					ctx,
+					tx,
+					fresh,
+					fresh.lifecycle,
+					freshOutcome,
+					fresh.blocked,
+					freshRole,
+					freshEvidence,
+					nil,
+					kind,
+					nil,
+					&nextStateDigest,
+					StageResolve,
+				)
 			}
 			if err != nil {
 				return err
 			}
-			resolvedAttempt = projectAttempt(fresh.core, fresh.lifecycle, freshOutcome, fresh.blocked, nextMutation, AvailabilityUnchecked)
+			resolvedAttempt = projectAttempt(
+				fresh.core,
+				fresh.lifecycle,
+				freshOutcome,
+				fresh.blocked,
+				nextMutation,
+				AvailabilityUnchecked,
+			)
 			resolvedAttempt.StateDigest = nextStateDigest
 			return nil
 		})
@@ -91,15 +132,36 @@ func (s *Store) ResolveAttempt(ctx context.Context, id [16]byte, expectedToken [
 		}
 		s.attemptMutationRevision = nextMutation
 		attempt := resolvedAttempt
-		return AttemptResolution{Attempt: attempt, Outcome: outcome, ViewDigest: view.digest, Evidence: bytes.Clone(evidence)}, nil
+		return AttemptResolution{
+			Attempt:    attempt,
+			Outcome:    outcome,
+			ViewDigest: view.digest,
+			Evidence:   bytes.Clone(evidence),
+		}, nil
 	}
-	attempt := projectAttempt(stored.core, stored.lifecycle, stored.outcome, stored.blocked, stored.mutationRevision, AvailabilityUnchecked)
+	attempt := projectAttempt(
+		stored.core,
+		stored.lifecycle,
+		stored.outcome,
+		stored.blocked,
+		stored.mutationRevision,
+		AvailabilityUnchecked,
+	)
 	copy(attempt.StateDigest[:], stored.stateDigest)
-	return AttemptResolution{Attempt: attempt, Outcome: outcome, ViewDigest: view.digest, Evidence: bytes.Clone(evidence)}, nil
+	return AttemptResolution{
+		Attempt:    attempt,
+		Outcome:    outcome,
+		ViewDigest: view.digest,
+		Evidence:   bytes.Clone(evidence),
+	}, nil
 }
 
-func (s *Store) deriveAttemptOutcome(stored storedAttempt, view validatedRepositoryView) (AttemptOutcome, []byte, error) {
-	if stored.lifecycle != AttemptMayHaveSubmitted && stored.lifecycle != AttemptRetiredSuccess && stored.lifecycle != AttemptRetiredAbandoned {
+func (s *Store) deriveAttemptOutcome(
+	stored storedAttempt,
+	view validatedRepositoryView,
+) (AttemptOutcome, []byte, error) {
+	if stored.lifecycle != AttemptMayHaveSubmitted && stored.lifecycle != AttemptRetiredSuccess &&
+		stored.lifecycle != AttemptRetiredAbandoned {
 		return OutcomeNotSubmitted, nil, nil
 	}
 	if view.empty {
@@ -137,7 +199,8 @@ func (s *Store) deriveAttemptOutcome(stored storedAttempt, view validatedReposit
 			return "", nil, classified(ErrSchema, StageResolve, ReasonCorrupt)
 		}
 		predecessor, ok := view.byCID[string(floor.RecordCID)]
-		if !ok || !bytes.Equal(predecessor.raw, stored.core.PredecessorRecord) || observed.ref.Sequence != floor.Sequence+1 {
+		if !ok || !bytes.Equal(predecessor.raw, stored.core.PredecessorRecord) ||
+			observed.ref.Sequence != floor.Sequence+1 {
 			return "", nil, classified(ErrContinuity, StageResolve, ReasonMissingLineage)
 		}
 	} else if observed.ref.Sequence != 0 {
@@ -156,10 +219,16 @@ func absenceViewPreservesPredecessor(stored storedAttempt, view validatedReposit
 		return false
 	}
 	predecessor, ok := view.byCID[string(floor.RecordCID)]
-	return ok && bytes.Equal(predecessor.raw, stored.core.PredecessorRecord) && view.head.PublicationSeq == floor.Sequence && bytes.Equal(view.head.SnapshotCID, floor.RecordCID)
+	return ok && bytes.Equal(predecessor.raw, stored.core.PredecessorRecord) &&
+		view.head.PublicationSeq == floor.Sequence &&
+		bytes.Equal(view.head.SnapshotCID, floor.RecordCID)
 }
 
-func (s *Store) compactAttemptEvidence(stored storedAttempt, view validatedRepositoryView, outcome AttemptOutcome) ([]byte, error) {
+func (s *Store) compactAttemptEvidence(
+	stored storedAttempt,
+	view validatedRepositoryView,
+	outcome AttemptOutcome,
+) ([]byte, error) {
 	var attempted []byte
 	var suffix []SnapshotBlock
 	if record, ok := view.byKey[stored.core.SnapshotKey]; ok {
@@ -171,7 +240,20 @@ func (s *Store) compactAttemptEvidence(stored storedAttempt, view validatedRepos
 			}
 		}
 	}
-	wire := attemptEvidenceWire{Version: 1, Role: "outcome", Scope: string(view.input.Scope), ViewDigest: bytes.Clone(view.digest[:]), Origin: bindingToWire(view.input.Origin), Context: contextToWire(view.input.SuppliedContext), Head: bytes.Clone(view.input.Head), AttemptedKey: stored.core.SnapshotKey, AttemptedRecord: attempted, PredecessorRecord: bytes.Clone(stored.core.PredecessorRecord), Suffix: suffix, Outcome: string(outcome)}
+	wire := attemptEvidenceWire{
+		Version:           1,
+		Role:              "outcome",
+		Scope:             string(view.input.Scope),
+		ViewDigest:        bytes.Clone(view.digest[:]),
+		Origin:            bindingToWire(view.input.Origin),
+		Context:           contextToWire(view.input.SuppliedContext),
+		Head:              bytes.Clone(view.input.Head),
+		AttemptedKey:      stored.core.SnapshotKey,
+		AttemptedRecord:   attempted,
+		PredecessorRecord: bytes.Clone(stored.core.PredecessorRecord),
+		Suffix:            suffix,
+		Outcome:           string(outcome),
+	}
 	encoded, err := encodeAttemptEvidence(wire)
 	if err != nil || uint64(len(encoded)) > s.attemptLimits.EvidenceSlotBytes {
 		return nil, classified(ErrLimit, StageResolve, ReasonCapacity)
@@ -219,12 +301,19 @@ func (s *Store) validateAttemptPolicy(core attemptCoreWire, context SuppliedCont
 }
 
 func terminalOutcome(outcome AttemptOutcome) bool {
-	return outcome == OutcomeCurrent || outcome == OutcomeSuperseded || outcome == OutcomeLostFence || outcome == OutcomeRejected
+	return outcome == OutcomeCurrent || outcome == OutcomeSuperseded || outcome == OutcomeLostFence ||
+		outcome == OutcomeRejected
 }
 
 func terminalEvidenceExtends(old, next []byte) bool {
 	var previous, refreshed attemptEvidenceWire
-	if strictJSON(old, &previous) != nil || strictJSON(next, &refreshed) != nil || previous.Role != "outcome" || refreshed.Role != "outcome" || previous.AttemptedKey != refreshed.AttemptedKey || !bytes.Equal(previous.AttemptedRecord, refreshed.AttemptedRecord) || !bytes.Equal(previous.PredecessorRecord, refreshed.PredecessorRecord) || len(previous.Suffix) == 0 || len(previous.Suffix) > len(refreshed.Suffix) {
+	if strictJSON(old, &previous) != nil || strictJSON(next, &refreshed) != nil || previous.Role != "outcome" ||
+		refreshed.Role != "outcome" ||
+		previous.AttemptedKey != refreshed.AttemptedKey ||
+		!bytes.Equal(previous.AttemptedRecord, refreshed.AttemptedRecord) ||
+		!bytes.Equal(previous.PredecessorRecord, refreshed.PredecessorRecord) ||
+		len(previous.Suffix) == 0 ||
+		len(previous.Suffix) > len(refreshed.Suffix) {
 		return false
 	}
 	for index, block := range previous.Suffix {

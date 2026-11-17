@@ -44,7 +44,13 @@ func TestProductionPackagesDoNotImportIntegrationHarness(t *testing.T) {
 				return err
 			}
 			if strings.Contains(path, "tests/integration") || strings.Contains(path, "contention_harness") {
-				assert.False(t, strings.Contains(path, "tests/integration") || strings.Contains(path, "contention_harness"), "non-test source %s imports test-only integration harness %q", file, path)
+				assert.False(
+					t,
+					strings.Contains(path, "tests/integration") || strings.Contains(path, "contention_harness"),
+					"non-test source %s imports test-only integration harness %q",
+					file,
+					path,
+				)
 			}
 		}
 		return nil

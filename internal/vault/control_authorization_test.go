@@ -38,7 +38,7 @@ func newPublisherAuthorizationFixture(t *testing.T) publisherAuthorizationFixtur
 func TestOpenControlRejectsRevokedPublisherButSkipsCheckWithoutControl(t *testing.T) {
 	fixture := newPublisherAuthorizationFixture(t)
 	_, err := Open(fixture.envelope, fixture.request)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	withoutControl := fixture.request
 	withoutControl.Control = nil
 	plaintext, err := Open(fixture.envelope, withoutControl)
@@ -81,7 +81,7 @@ func TestOpenRejectsMissingIssuerAndUntrustedRoot(t *testing.T) {
 	request := fixture.openRequest
 	request.Certificates = [][]byte{fixture.rootCertificateBytes, missingIssuerBytes}
 	_, err := Open(fixture.envelope, request)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	wrongAnchor := fixture.openRequest
 	wrongAnchor.TrustAnchor[0] ^= 1
 	_, err = Open(fixture.envelope, wrongAnchor)
@@ -116,7 +116,12 @@ func TestChainRejectsFutureCertEpoch(t *testing.T) {
 	request := base.openRequest
 	request.Certificates = [][]byte{base.rootCertificateBytes, signed}
 	err = verifyCertificateChain(decoded, request, 1, make(map[string]bool))
-	assert.ErrorIs(t, err, ErrAuthorization, "a signed certificate issued after the accepted epoch must not be trusted")
+	require.ErrorIs(
+		t,
+		err,
+		ErrAuthorization,
+		"a signed certificate issued after the accepted epoch must not be trusted",
+	)
 
 	accepted := base.openRequest
 	accepted.EpochSeq = decoded.CertEpoch

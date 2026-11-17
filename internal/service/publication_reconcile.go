@@ -66,59 +66,139 @@ const (
 	publicationReasonPosition       publicationReconciliationReason = "position_changed"
 )
 
-func validateAcceptedPublication(ctx context.Context, request acceptedPublicationRequest) (acceptedPublicationMaterial, error) {
+func validateAcceptedPublication(
+	ctx context.Context,
+	request acceptedPublicationRequest,
+) (acceptedPublicationMaterial, error) {
 	if ctx == nil || !validAcceptedPublicationRequest(request) {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageInput, publicationReasonRequestInvalid, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageInput,
+			publicationReasonRequestInvalid,
+			nil,
+		)
 	}
 	if err := ctx.Err(); err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageInput, publicationReasonCanceled, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageInput,
+			publicationReasonCanceled,
+			err,
+		)
 	}
 
 	floor, present, err := request.store.Load(ctx)
 	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageLoad, publicationReasonUnavailable, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageLoad,
+			publicationReasonUnavailable,
+			err,
+		)
 	}
 	if !present {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageLoad, publicationReasonNoFloor, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageLoad,
+			publicationReasonNoFloor,
+			nil,
+		)
 	}
 	if floor.Binding != request.binding {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStagePosition, publicationReasonBinding, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePosition,
+			publicationReasonBinding,
+			nil,
+		)
 	}
 	if !reflect.DeepEqual(floor, request.expectedFloor) {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStagePosition, publicationReasonFloor, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePosition,
+			publicationReasonFloor,
+			nil,
+		)
 	}
 	if err := ctx.Err(); err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonCanceled, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonCanceled,
+			err,
+		)
 	}
 
 	page, err := request.store.History(ctx, floor.Revision-1, 1)
 	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonUnavailable, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonUnavailable,
+			err,
+		)
 	}
 	if len(page.Events) != 1 || page.HasMore || page.NextRevision != floor.Revision {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonEvidence, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonEvidence,
+			nil,
+		)
 	}
 	event := page.Events[0]
-	if event.Revision != floor.Revision || !reflect.DeepEqual(event.NewFloor, floor) || event.EventDigest != floor.AcceptedEventDigest || event.ObservationDigest != floor.ObservationDigest {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonEvidence, nil)
+	if event.Revision != floor.Revision || !reflect.DeepEqual(event.NewFloor, floor) ||
+		event.EventDigest != floor.AcceptedEventDigest ||
+		event.ObservationDigest != floor.ObservationDigest {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonEvidence,
+			nil,
+		)
 	}
 	if !hasAcceptedRecordReference(event.Trace, floor) {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonEvidence, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonEvidence,
+			nil,
+		)
 	}
 	if !hasAcceptedRecordEvidence(page.Records, request.snapshotRecord, floor) {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageHistory, publicationReasonEvidence, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageHistory,
+			publicationReasonEvidence,
+			nil,
+		)
 	}
 
 	if err := ctx.Err(); err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonCanceled, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonCanceled,
+			err,
+		)
 	}
 	record, err := publication.DecodeSnapshot(request.snapshotRecord)
 	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			err,
+		)
 	}
 	recordCID, err := publication.RecordCID(request.snapshotRecord)
 	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			err,
+		)
 	}
 	if !bytes.Equal(recordCID, floor.RecordCID) ||
 		record.Vault != floor.Binding.Vault ||
@@ -126,34 +206,76 @@ func validateAcceptedPublication(ctx context.Context, request acceptedPublicatio
 		record.PublicationSeq != floor.Sequence ||
 		!bytes.Equal(record.Blob.CID, floor.BlobCID) ||
 		record.Blob.Size != floor.BlobSize {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, nil)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			nil,
+		)
 	}
-	if keySequence, keyErr := publication.ParseSequenceKey(floor.SnapshotKey); keyErr != nil || keySequence != floor.Sequence {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, nil)
+	if keySequence, keyErr := publication.ParseSequenceKey(
+		floor.SnapshotKey,
+	); keyErr != nil ||
+		keySequence != floor.Sequence {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			nil,
+		)
 	}
 	if err := publication.VerifyHeadBinding(floor.Head, request.snapshotRecord, floor.SnapshotKey); err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			err,
+		)
 	}
 	head, err := publication.DecodeHead(floor.Head)
-	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence || !bytes.Equal(head.SnapshotCID, floor.RecordCID) || !bytes.Equal(head.BlobCID, floor.BlobCID) {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStageRecord, publicationReasonRecord, err)
+	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence ||
+		!bytes.Equal(head.SnapshotCID, floor.RecordCID) ||
+		!bytes.Equal(head.BlobCID, floor.BlobCID) {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			err,
+		)
 	}
 
 	if err := ctx.Err(); err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStagePayload, publicationReasonCanceled, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePayload,
+			publicationReasonCanceled,
+			err,
+		)
 	}
 	snapshot, err := publication.DecodePayload(request.payload, record.Blob)
 	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(ctx, publicationStagePayload, publicationReasonPayload, err)
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePayload,
+			publicationReasonPayload,
+			err,
+		)
 	}
 
 	if err := checkAcceptedPublicationFloor(ctx, request.store, floor); err != nil {
 		return acceptedPublicationMaterial{}, err
 	}
-	return acceptedPublicationMaterial{floor: clonePublicationFloor(floor), snapshot: clonePublicationSnapshot(snapshot)}, nil
+	return acceptedPublicationMaterial{
+		floor:    clonePublicationFloor(floor),
+		snapshot: clonePublicationSnapshot(snapshot),
+	}, nil
 }
 
-func checkAcceptedPublicationFloor(ctx context.Context, store *publicationstate.Store, expected publicationstate.Floor) error {
+func checkAcceptedPublicationFloor(
+	ctx context.Context,
+	store *publicationstate.Store,
+	expected publicationstate.Floor,
+) error {
 	if ctx == nil || store == nil || !validPublicationFloorInput(expected) {
 		return publicationReconciliationFailure(ctx, publicationStageInput, publicationReasonRequestInvalid, nil)
 	}
@@ -181,20 +303,27 @@ func validAcceptedPublicationRequest(request acceptedPublicationRequest) bool {
 }
 
 func validPublicationBindingInput(binding publicationstate.Binding) bool {
-	return len(binding.AccountDID) > 0 && len(binding.AccountDID) <= 2048 && len(binding.Repository) > 0 && len(binding.Repository) <= 8192
+	return len(binding.AccountDID) > 0 && len(binding.AccountDID) <= 2048 && len(binding.Repository) > 0 &&
+		len(binding.Repository) <= 8192
 }
 
 func validPublicationFloorInput(floor publicationstate.Floor) bool {
-	if floor.Revision == 0 || floor.Revision > publication.MaxSequence || floor.Generation == 0 || floor.Generation > publication.MaxSequence || floor.Sequence > publication.MaxSequence {
+	if floor.Revision == 0 || floor.Revision > publication.MaxSequence || floor.Generation == 0 ||
+		floor.Generation > publication.MaxSequence ||
+		floor.Sequence > publication.MaxSequence {
 		return false
 	}
-	if len(floor.SnapshotKey) != publication.SequenceKeyLength || len(floor.AnchorCID) == 0 || len(floor.AnchorCID) > publication.MaxCIDBytes {
+	if len(floor.SnapshotKey) != publication.SequenceKeyLength || len(floor.AnchorCID) == 0 ||
+		len(floor.AnchorCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes || len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes {
+	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes || len(floor.BlobCID) == 0 ||
+		len(floor.BlobCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes || len(floor.Head) == 0 || len(floor.Head) > publication.MaxRecordBytes || !validPublicationBindingInput(floor.Binding) {
+	if floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes || len(floor.Head) == 0 ||
+		len(floor.Head) > publication.MaxRecordBytes ||
+		!validPublicationBindingInput(floor.Binding) {
 		return false
 	}
 	context := floor.SuppliedContext
@@ -209,17 +338,23 @@ func validPublicationFloorInput(floor publicationstate.Floor) bool {
 
 func hasAcceptedRecordReference(references []publicationstate.RecordReference, floor publicationstate.Floor) bool {
 	for _, reference := range references {
-		if reference.Key == floor.SnapshotKey && reference.Sequence == floor.Sequence && bytes.Equal(reference.CID, floor.RecordCID) {
+		if reference.Key == floor.SnapshotKey && reference.Sequence == floor.Sequence &&
+			bytes.Equal(reference.CID, floor.RecordCID) {
 			return true
 		}
 	}
 	return false
 }
 
-func hasAcceptedRecordEvidence(records []publicationstate.RecordEvidence, raw []byte, floor publicationstate.Floor) bool {
+func hasAcceptedRecordEvidence(
+	records []publicationstate.RecordEvidence,
+	raw []byte,
+	floor publicationstate.Floor,
+) bool {
 	matches := 0
 	for _, evidence := range records {
-		if evidence.Reference.Key != floor.SnapshotKey || evidence.Reference.Sequence != floor.Sequence || !bytes.Equal(evidence.Reference.CID, floor.RecordCID) {
+		if evidence.Reference.Key != floor.SnapshotKey || evidence.Reference.Sequence != floor.Sequence ||
+			!bytes.Equal(evidence.Reference.CID, floor.RecordCID) {
 			continue
 		}
 		matches++
@@ -230,7 +365,12 @@ func hasAcceptedRecordEvidence(records []publicationstate.RecordEvidence, raw []
 	return matches == 1
 }
 
-func publicationReconciliationFailure(ctx context.Context, stage publicationReconciliationStage, reason publicationReconciliationReason, cause error) error {
+func publicationReconciliationFailure(
+	ctx context.Context,
+	stage publicationReconciliationStage,
+	reason publicationReconciliationReason,
+	cause error,
+) error {
 	cancellation := error(nil)
 	if ctx != nil {
 		if err := ctx.Err(); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

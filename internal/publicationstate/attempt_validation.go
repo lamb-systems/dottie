@@ -37,7 +37,12 @@ type validatedCandidate struct {
 	predecessor *validatedRecord
 }
 
-func validateSuppliedRepositoryView(input SuppliedRepositoryView, binding Binding, limits Limits, allowOtherVault bool) (validatedRepositoryView, error) {
+func validateSuppliedRepositoryView(
+	input SuppliedRepositoryView,
+	binding Binding,
+	limits Limits,
+	allowOtherVault bool,
+) (validatedRepositoryView, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonBinding)
 	}
@@ -67,18 +72,22 @@ func validateSuppliedRepositoryView(input SuppliedRepositoryView, binding Bindin
 		if err != nil {
 			return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		return validatedRepositoryView{input: cloneSuppliedView(input), byKey: map[string]validatedRecord{}, byCID: map[string]validatedRecord{}, digest: digest, empty: true}, nil
+		return validatedRepositoryView{
+			input:  cloneSuppliedView(input),
+			byKey:  map[string]validatedRecord{},
+			byCID:  map[string]validatedRecord{},
+			digest: digest,
+			empty:  true,
+		}, nil
 	}
-	if len(input.Head) == 0 || len(input.Snapshots) > int(limits.SuppliedSnapshotCount) || len(input.Head) > publication.MaxRecordBytes {
+	if len(input.Head) == 0 || len(input.Snapshots) > int(limits.SuppliedSnapshotCount) ||
+		len(input.Head) > publication.MaxRecordBytes {
 		return validatedRepositoryView{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 	}
 	if uint64(len(input.Snapshots)-1) > uint64(limits.MaxLineageLinks) {
 		return validatedRepositoryView{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 	}
-	maxCount := uint32(4095)
-	if limits.SuppliedSnapshotCount < maxCount {
-		maxCount = limits.SuppliedSnapshotCount
-	}
+	maxCount := min(limits.SuppliedSnapshotCount, uint32(4095))
 	if uint32(len(input.Snapshots)) > maxCount {
 		return validatedRepositoryView{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 	}
@@ -145,18 +154,30 @@ func validateSuppliedRepositoryView(input SuppliedRepositoryView, binding Bindin
 		return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	last := blocks[len(blocks)-1]
-	if head.PublicationSeq != last.ref.Sequence || !bytes.Equal(head.SnapshotCID, last.ref.CID) || publication.VerifyHeadBinding(input.Head, last.raw, last.ref.Key) != nil {
+	if head.PublicationSeq != last.ref.Sequence || !bytes.Equal(head.SnapshotCID, last.ref.CID) ||
+		publication.VerifyHeadBinding(input.Head, last.raw, last.ref.Key) != nil {
 		return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	digest, err := makeViewDigest(input, publicBlocks)
 	if err != nil {
 		return validatedRepositoryView{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
-	return validatedRepositoryView{input: cloneSuppliedView(input), blocks: blocks, byKey: byKey, byCID: byCID, head: head, digest: digest}, nil
+	return validatedRepositoryView{
+		input:  cloneSuppliedView(input),
+		blocks: blocks,
+		byKey:  byKey,
+		byCID:  byCID,
+		head:   head,
+		digest: digest,
+	}, nil
 }
 
 func validateCandidateInput(input CandidateInput, binding Binding) (validatedCandidate, error) {
-	if len(input.SnapshotRecord) == 0 || len(input.SnapshotRecord) > publication.MaxRecordBytes || len(input.HeadRecord) == 0 || len(input.HeadRecord) > publication.MaxRecordBytes || len(input.Payload) == 0 || uint64(len(input.Payload)) > publication.MaxBlobBytes {
+	if len(input.SnapshotRecord) == 0 || len(input.SnapshotRecord) > publication.MaxRecordBytes ||
+		len(input.HeadRecord) == 0 ||
+		len(input.HeadRecord) > publication.MaxRecordBytes ||
+		len(input.Payload) == 0 ||
+		uint64(len(input.Payload)) > publication.MaxBlobBytes {
 		return validatedCandidate{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 	}
 	snapshot, err := publication.DecodeSnapshot(input.SnapshotRecord)
@@ -172,7 +193,10 @@ func validateCandidateInput(input CandidateInput, binding Binding) (validatedCan
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	head, err := publication.DecodeHead(input.HeadRecord)
-	if err != nil || head.Vault != binding.Vault || head.PublicationSeq != snapshot.PublicationSeq || !bytes.Equal(head.SnapshotCID, snapshotCID) || !bytes.Equal(head.BlobCID, snapshot.Blob.CID) || publication.VerifyHeadBinding(input.HeadRecord, input.SnapshotRecord, input.SnapshotKey) != nil {
+	if err != nil || head.Vault != binding.Vault || head.PublicationSeq != snapshot.PublicationSeq ||
+		!bytes.Equal(head.SnapshotCID, snapshotCID) ||
+		!bytes.Equal(head.BlobCID, snapshot.Blob.CID) ||
+		publication.VerifyHeadBinding(input.HeadRecord, input.SnapshotRecord, input.SnapshotKey) != nil {
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	headCID, err := publication.RecordCID(input.HeadRecord)
@@ -189,11 +213,32 @@ func validateCandidateInput(input CandidateInput, binding Binding) (validatedCan
 	if snapshot.PublicationSeq == 0 {
 		kind = AttemptGenesis
 	}
-	return validatedCandidate{kind: kind, id: snapshot.PublicationID, sequence: snapshot.PublicationSeq, key: key, snapshot: snapshot, head: head, snapshotCID: bytes.Clone(snapshotCID), headCID: bytes.Clone(headCID), blobCID: bytes.Clone(snapshot.Blob.CID), payload: bytes.Clone(input.Payload), snapshotRaw: bytes.Clone(input.SnapshotRecord), headRaw: bytes.Clone(input.HeadRecord)}, nil
+	return validatedCandidate{
+		kind:        kind,
+		id:          snapshot.PublicationID,
+		sequence:    snapshot.PublicationSeq,
+		key:         key,
+		snapshot:    snapshot,
+		head:        head,
+		snapshotCID: bytes.Clone(snapshotCID),
+		headCID:     bytes.Clone(headCID),
+		blobCID:     bytes.Clone(snapshot.Blob.CID),
+		payload:     bytes.Clone(input.Payload),
+		snapshotRaw: bytes.Clone(input.SnapshotRecord),
+		headRaw:     bytes.Clone(input.HeadRecord),
+	}, nil
 }
 
-func (s *Store) validateAttemptInput(ctx context.Context, input CandidateInput, viewInput SuppliedRepositoryView, review LocalReviewContext, state stateSnapshot, stage Stage) (validatedCandidate, error) {
-	if review.SelectionRevision == 0 || review.ApprovalRevision == 0 || allZero(review.SelectionDigest[:]) || allZero(review.ApprovalDigest[:]) {
+func (s *Store) validateAttemptInput(
+	ctx context.Context,
+	input CandidateInput,
+	viewInput SuppliedRepositoryView,
+	review LocalReviewContext,
+	state stateSnapshot,
+	stage Stage,
+) (validatedCandidate, error) {
+	if review.SelectionRevision == 0 || review.ApprovalRevision == 0 || allZero(review.SelectionDigest[:]) ||
+		allZero(review.ApprovalDigest[:]) {
 		return validatedCandidate{}, classified(ErrInvalid, stage, ReasonContext)
 	}
 	view, err := validateSuppliedRepositoryView(viewInput, s.binding, s.limits, false)
@@ -213,10 +258,18 @@ func (s *Store) validateAttemptInput(ctx context.Context, input CandidateInput, 
 			return validatedCandidate{}, classified(ErrContinuity, stage, ReasonFirstUseRequired)
 		}
 	} else {
-		if state.floor == nil || candidate.sequence != state.floor.Sequence+1 || !bytes.Equal(candidate.snapshot.Parent, state.floor.RecordCID) {
+		if state.floor == nil || candidate.sequence != state.floor.Sequence+1 ||
+			!bytes.Equal(candidate.snapshot.Parent, state.floor.RecordCID) {
 			return validatedCandidate{}, classified(ErrContinuity, stage, ReasonMissingLineage)
 		}
-		predecessor, err := s.loadRecordByCID(ctx, s.conn, state.floor.RecordCID, state.floor.SnapshotKey, state.floor.Sequence, stage)
+		predecessor, err := s.loadRecordByCID(
+			ctx,
+			s.conn,
+			state.floor.RecordCID,
+			state.floor.SnapshotKey,
+			state.floor.Sequence,
+			stage,
+		)
 		if err != nil {
 			return validatedCandidate{}, err
 		}
@@ -225,14 +278,17 @@ func (s *Store) validateAttemptInput(ctx context.Context, input CandidateInput, 
 		}
 		candidate.predecessor = &predecessor
 		observed, ok := view.byCID[string(state.floor.RecordCID)]
-		if !ok || !bytes.Equal(observed.raw, predecessor.raw) || view.empty || view.head.PublicationSeq != state.floor.Sequence || !bytes.Equal(view.head.SnapshotCID, state.floor.RecordCID) {
+		if !ok || !bytes.Equal(observed.raw, predecessor.raw) || view.empty ||
+			view.head.PublicationSeq != state.floor.Sequence ||
+			!bytes.Equal(view.head.SnapshotCID, state.floor.RecordCID) {
 			return validatedCandidate{}, classified(ErrContinuity, stage, ReasonMissingLineage)
 		}
 		if _, exists := view.byKey[candidate.key]; exists {
 			return validatedCandidate{}, classified(ErrContinuity, stage, ReasonFork)
 		}
 	}
-	if candidate.kind == AttemptGenesis && candidate.sequence != 0 || candidate.kind == AttemptSuccessor && candidate.sequence == 0 {
+	if candidate.kind == AttemptGenesis && candidate.sequence != 0 ||
+		candidate.kind == AttemptSuccessor && candidate.sequence == 0 {
 		return validatedCandidate{}, classified(ErrInvalid, stage, ReasonRecordSet)
 	}
 	futureCount := uint64(len(view.blocks)) + 1
@@ -265,7 +321,21 @@ func (s *Store) checkAttemptAdmissionFeasibility(candidate validatedCandidate, s
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	contextExpansion := uint64(s.limits.SuppliedContextBytes) - uint64(len(contextBytes))
-	submission, err := encodeAttemptEvidence(attemptEvidenceWire{Version: 1, Role: "submission", Scope: string(candidate.view.input.Scope), ViewDigest: bytes.Clone(candidate.view.digest[:]), Origin: bindingToWire(candidate.view.input.Origin), Context: contextToWire(candidate.view.input.SuppliedContext), Head: bytes.Clone(candidate.view.input.Head), AttemptedKey: candidate.key, AttemptedRecord: bytes.Clone(candidate.snapshotRaw), PredecessorRecord: candidatePredecessorRaw(candidate), Outcome: string(OutcomeUnresolved)})
+	submission, err := encodeAttemptEvidence(
+		attemptEvidenceWire{
+			Version:           1,
+			Role:              "submission",
+			Scope:             string(candidate.view.input.Scope),
+			ViewDigest:        bytes.Clone(candidate.view.digest[:]),
+			Origin:            bindingToWire(candidate.view.input.Origin),
+			Context:           contextToWire(candidate.view.input.SuppliedContext),
+			Head:              bytes.Clone(candidate.view.input.Head),
+			AttemptedKey:      candidate.key,
+			AttemptedRecord:   bytes.Clone(candidate.snapshotRaw),
+			PredecessorRecord: candidatePredecessorRaw(candidate),
+			Outcome:           string(OutcomeUnresolved),
+		},
+	)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -275,7 +345,14 @@ func (s *Store) checkAttemptAdmissionFeasibility(candidate validatedCandidate, s
 	}
 	var stateDigest [32]byte
 	previousDigest := make([]byte, 32)
-	eventBody, eventDigest, err := makeAttemptEvent(candidate.id, s.attemptLimits.LifecycleEvents, maximumAttemptEventKind(), previousDigest, make([]byte, int(maxSubmissionBytes)), stateDigest)
+	eventBody, eventDigest, err := makeAttemptEvent(
+		candidate.id,
+		s.attemptLimits.LifecycleEvents,
+		maximumAttemptEventKind(),
+		previousDigest,
+		make([]byte, int(maxSubmissionBytes)),
+		stateDigest,
+	)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -284,13 +361,31 @@ func (s *Store) checkAttemptAdmissionFeasibility(candidate validatedCandidate, s
 		return classified(ErrLimit, stage, ReasonCapacity)
 	}
 	currentViewInput := cloneSuppliedView(candidate.view.input)
-	currentViewInput.Snapshots = append(currentViewInput.Snapshots, SnapshotBlock{Key: candidate.key, Raw: bytes.Clone(candidate.snapshotRaw)})
+	currentViewInput.Snapshots = append(
+		currentViewInput.Snapshots,
+		SnapshotBlock{Key: candidate.key, Raw: bytes.Clone(candidate.snapshotRaw)},
+	)
 	currentViewInput.Head = bytes.Clone(candidate.headRaw)
 	currentView, err := validateSuppliedRepositoryView(currentViewInput, s.binding, s.limits, false)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	proof, err := encodeAttemptEvidence(attemptEvidenceWire{Version: 1, Role: "retirement", Scope: string(currentView.input.Scope), ViewDigest: bytes.Clone(currentView.digest[:]), Origin: bindingToWire(currentView.input.Origin), Context: contextToWire(currentView.input.SuppliedContext), Head: bytes.Clone(currentView.input.Head), AttemptedKey: candidate.key, AttemptedRecord: bytes.Clone(candidate.snapshotRaw), PredecessorRecord: candidatePredecessorRaw(candidate), Suffix: []SnapshotBlock{{Key: candidate.key, Raw: bytes.Clone(candidate.snapshotRaw)}}, Outcome: string(OutcomeCurrent)})
+	proof, err := encodeAttemptEvidence(
+		attemptEvidenceWire{
+			Version:           1,
+			Role:              "retirement",
+			Scope:             string(currentView.input.Scope),
+			ViewDigest:        bytes.Clone(currentView.digest[:]),
+			Origin:            bindingToWire(currentView.input.Origin),
+			Context:           contextToWire(currentView.input.SuppliedContext),
+			Head:              bytes.Clone(currentView.input.Head),
+			AttemptedKey:      candidate.key,
+			AttemptedRecord:   bytes.Clone(candidate.snapshotRaw),
+			PredecessorRecord: candidatePredecessorRaw(candidate),
+			Suffix:            []SnapshotBlock{{Key: candidate.key, Raw: bytes.Clone(candidate.snapshotRaw)}},
+			Outcome:           string(OutcomeCurrent),
+		},
+	)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -304,7 +399,11 @@ func (s *Store) checkAttemptAdmissionFeasibility(candidate validatedCandidate, s
 	return nil
 }
 
-func (s *Store) checkFirstConflictSlotFeasibility(candidate validatedCandidate, contextExpansion uint64, stage Stage) error {
+func (s *Store) checkFirstConflictSlotFeasibility(
+	candidate validatedCandidate,
+	contextExpansion uint64,
+	stage Stage,
+) error {
 	occupant := candidate.snapshot
 	occupant.Blob.Size = publication.MaxBlobBytes
 	occupant.PublicationID[15] ^= 1
@@ -319,12 +418,42 @@ func (s *Store) checkFirstConflictSlotFeasibility(candidate validatedCandidate, 
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: occupant.Vault, PublicationSeq: occupant.PublicationSeq, SnapshotCID: occupantCID, BlobCID: bytes.Clone(occupant.Blob.CID)})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          occupant.Vault,
+			PublicationSeq: occupant.PublicationSeq,
+			SnapshotCID:    occupantCID,
+			BlobCID:        bytes.Clone(occupant.Blob.CID),
+		},
+	)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	proof := attemptEvidenceWire{Version: 1, Role: "outcome", Scope: string(candidate.view.input.Scope), ViewDigest: make([]byte, 32), Origin: bindingToWire(candidate.view.input.Origin), Context: contextToWire(candidate.view.input.SuppliedContext), Head: head, AttemptedKey: candidate.key, AttemptedRecord: occupantRaw, PredecessorRecord: candidatePredecessorRaw(candidate), Suffix: []SnapshotBlock{{Key: candidate.key, Raw: occupantRaw}}, Outcome: string(OutcomeLostFence)}
-	wire := firstConflictWire{Version: 1, AttemptID: bytes.Clone(candidate.id[:]), CoreDigest: make([]byte, 32), EventOrdinal: s.attemptLimits.LifecycleEvents, MutationRevision: ^uint64(0) >> 1, EventStateDigest: make([]byte, 32), Blocked: "blocked-floor-replaced", Proof: proof}
+	proof := attemptEvidenceWire{
+		Version:           1,
+		Role:              "outcome",
+		Scope:             string(candidate.view.input.Scope),
+		ViewDigest:        make([]byte, 32),
+		Origin:            bindingToWire(candidate.view.input.Origin),
+		Context:           contextToWire(candidate.view.input.SuppliedContext),
+		Head:              head,
+		AttemptedKey:      candidate.key,
+		AttemptedRecord:   occupantRaw,
+		PredecessorRecord: candidatePredecessorRaw(candidate),
+		Suffix:            []SnapshotBlock{{Key: candidate.key, Raw: occupantRaw}},
+		Outcome:           string(OutcomeLostFence),
+	}
+	wire := firstConflictWire{
+		Version:          1,
+		AttemptID:        bytes.Clone(candidate.id[:]),
+		CoreDigest:       make([]byte, 32),
+		EventOrdinal:     s.attemptLimits.LifecycleEvents,
+		MutationRevision: ^uint64(0) >> 1,
+		EventStateDigest: make([]byte, 32),
+		Blocked:          "blocked-floor-replaced",
+		Proof:            proof,
+	}
 	encoded, err := canonicalJSON(wire)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
@@ -343,21 +472,43 @@ func candidatePredecessorRaw(candidate validatedCandidate) []byte {
 	return bytes.Clone(candidate.predecessor.raw)
 }
 
-func (s *Store) checkFinalizationFeasibility(ctx context.Context, candidate validatedCandidate, state stateSnapshot, stage Stage) error {
+func (s *Store) checkFinalizationFeasibility(
+	ctx context.Context,
+	candidate validatedCandidate,
+	state stateSnapshot,
+	stage Stage,
+) error {
 	finalContext := cloneContext(candidate.view.input.SuppliedContext)
 	encodedContext, err := canonicalJSON(contextToWire(finalContext))
 	if err != nil || uint64(len(encodedContext)) > uint64(s.limits.SuppliedContextBytes) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	contextExpansion := uint64(s.limits.SuppliedContextBytes) - uint64(len(encodedContext))
-	next := Floor{DatabaseID: s.databaseID, Revision: state.revision + 1, Generation: state.generation, Provenance: ProvenanceFirst, Binding: s.binding, SuppliedContext: finalContext, Head: bytes.Clone(candidate.headRaw), SnapshotKey: candidate.key, Sequence: candidate.sequence, PublicationID: candidate.id, RecordCID: bytes.Clone(candidate.snapshotCID), BlobCID: bytes.Clone(candidate.blobCID), BlobSize: candidate.snapshot.Blob.Size, ObservationDigest: [32]byte{1}}
+	next := Floor{
+		DatabaseID:        s.databaseID,
+		Revision:          state.revision + 1,
+		Generation:        state.generation,
+		Provenance:        ProvenanceFirst,
+		Binding:           s.binding,
+		SuppliedContext:   finalContext,
+		Head:              bytes.Clone(candidate.headRaw),
+		SnapshotKey:       candidate.key,
+		Sequence:          candidate.sequence,
+		PublicationID:     candidate.id,
+		RecordCID:         bytes.Clone(candidate.snapshotCID),
+		BlobCID:           bytes.Clone(candidate.blobCID),
+		BlobSize:          candidate.snapshot.Blob.Size,
+		ObservationDigest: [32]byte{1},
+	}
 	if state.floor == nil {
 		next.Generation = 1
 	} else {
 		next.Provenance = state.floor.Provenance
 		next.AnchorCID = bytes.Clone(state.floor.AnchorCID)
 	}
-	refs := []RecordReference{{Key: candidate.key, CID: bytes.Clone(candidate.snapshotCID), Sequence: candidate.sequence}}
+	refs := []RecordReference{
+		{Key: candidate.key, CID: bytes.Clone(candidate.snapshotCID), Sequence: candidate.sequence},
+	}
 	records := []validatedRecord{{ref: refs[0], raw: candidateSnapshotRaw(candidate)}}
 	var oldEncoded []byte
 	if state.floor != nil {
@@ -367,7 +518,10 @@ func (s *Store) checkFinalizationFeasibility(ctx context.Context, candidate vali
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		next.Provenance = old.Provenance
-		refs = append(refs, RecordReference{Key: old.SnapshotKey, CID: bytes.Clone(old.RecordCID), Sequence: old.Sequence})
+		refs = append(
+			refs,
+			RecordReference{Key: old.SnapshotKey, CID: bytes.Clone(old.RecordCID), Sequence: old.Sequence},
+		)
 		if candidate.predecessor == nil {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
@@ -407,7 +561,14 @@ func (s *Store) checkFinalizationFeasibility(ctx context.Context, candidate vali
 	}
 	if state.floor != nil {
 		if _, ok := seen[string(state.floor.RecordCID)]; !ok {
-			anchor, loadErr := s.loadRecordByCID(ctx, s.conn, state.floor.RecordCID, state.floor.SnapshotKey, state.floor.Sequence, stage)
+			anchor, loadErr := s.loadRecordByCID(
+				ctx,
+				s.conn,
+				state.floor.RecordCID,
+				state.floor.SnapshotKey,
+				state.floor.Sequence,
+				stage,
+			)
 			if loadErr != nil {
 				return loadErr
 			}
@@ -431,7 +592,13 @@ func candidateSnapshotRaw(candidate validatedCandidate) []byte {
 }
 
 func cloneSuppliedView(view SuppliedRepositoryView) SuppliedRepositoryView {
-	out := SuppliedRepositoryView{Origin: view.Origin, Scope: view.Scope, SuppliedContext: cloneContext(view.SuppliedContext), Head: bytes.Clone(view.Head), Snapshots: cloneSnapshotBlocks(view.Snapshots)}
+	out := SuppliedRepositoryView{
+		Origin:          view.Origin,
+		Scope:           view.Scope,
+		SuppliedContext: cloneContext(view.SuppliedContext),
+		Head:            bytes.Clone(view.Head),
+		Snapshots:       cloneSnapshotBlocks(view.Snapshots),
+	}
 	return out
 }
 
@@ -444,7 +611,11 @@ func cloneSnapshotBlocks(blocks []SnapshotBlock) []SnapshotBlock {
 }
 
 func attemptPayloadReference(candidate validatedCandidate) publication.BlobReference {
-	return publication.BlobReference{CID: bytes.Clone(candidate.blobCID), Size: candidate.snapshot.Blob.Size, MIMEType: candidate.snapshot.Blob.MIMEType}
+	return publication.BlobReference{
+		CID:      bytes.Clone(candidate.blobCID),
+		Size:     candidate.snapshot.Blob.Size,
+		MIMEType: candidate.snapshot.Blob.MIMEType,
+	}
 }
 
 func validLifecycle(value AttemptLifecycle) bool {
@@ -458,7 +629,13 @@ func validLifecycle(value AttemptLifecycle) bool {
 
 func validOutcome(value AttemptOutcome) bool {
 	switch value {
-	case OutcomeNotSubmitted, OutcomeUnresolved, OutcomeAbsentUnresolved, OutcomeCurrent, OutcomeSuperseded, OutcomeLostFence, OutcomeRejected:
+	case OutcomeNotSubmitted,
+		OutcomeUnresolved,
+		OutcomeAbsentUnresolved,
+		OutcomeCurrent,
+		OutcomeSuperseded,
+		OutcomeLostFence,
+		OutcomeRejected:
 		return true
 	default:
 		return false

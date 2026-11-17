@@ -81,7 +81,14 @@ func (s *Store) RecordJournalRollbackSkipped(ctx context.Context, id string) err
 		return err
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied' AND stage IN (?, ?)", JournalStageRollbackSkipped, id, JournalStageVerified, JournalStageRollbackPending)
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied' AND stage IN (?, ?)",
+			JournalStageRollbackSkipped,
+			id,
+			JournalStageVerified,
+			JournalStageRollbackPending,
+		)
 		if err != nil {
 			return err
 		}
@@ -90,7 +97,11 @@ func (s *Store) RecordJournalRollbackSkipped(ctx context.Context, id string) err
 			return err
 		}
 		if changed != 1 {
-			return fmt.Errorf("%w: journal entry %q is missing or not eligible for rollback skip", ErrInvalidJournalTransition, id)
+			return fmt.Errorf(
+				"%w: journal entry %q is missing or not eligible for rollback skip",
+				ErrInvalidJournalTransition,
+				id,
+			)
 		}
 		return nil
 	})
@@ -108,7 +119,14 @@ func (s *Store) BeginJournalRollbackWithBackup(ctx context.Context, id, backupRe
 		return err
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied' AND stage = ? AND backup_ref = ?", JournalStageRollbackPending, id, JournalStageVerified, backupRef)
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE apply_journal SET stage = ? WHERE id = ? AND state = 'applied' AND stage = ? AND backup_ref = ?",
+			JournalStageRollbackPending,
+			id,
+			JournalStageVerified,
+			backupRef,
+		)
 		if err != nil {
 			return err
 		}
@@ -124,7 +142,13 @@ func (s *Store) BeginJournalRollbackWithBackup(ctx context.Context, id, backupRe
 }
 
 func (s *Store) RecordJournalRollbackIndeterminate(ctx context.Context, id string) error {
-	return s.setJournalRollbackStage(ctx, id, JournalStageRollbackIndeterminate, JournalStageVerified, JournalStageRollbackPending)
+	return s.setJournalRollbackStage(
+		ctx,
+		id,
+		JournalStageRollbackIndeterminate,
+		JournalStageVerified,
+		JournalStageRollbackPending,
+	)
 }
 
 func (s *Store) setJournalRollbackStage(ctx context.Context, id, stage string, from ...string) error {
@@ -140,7 +164,10 @@ func (s *Store) setJournalRollbackStage(ctx context.Context, id, stage string, f
 		args = append(args, current)
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "UPDATE apply_journal SET stage = ? WHERE id = ? AND state = ? AND stage IN ("+placeholders+")", args...)
+		result, err := tx.ExecContext(
+			ctx,
+			"UPDATE apply_journal SET stage = ? WHERE id = ? AND state = ? AND stage IN ("+placeholders+")",
+			args...)
 		if err != nil {
 			return err
 		}
@@ -149,7 +176,12 @@ func (s *Store) setJournalRollbackStage(ctx context.Context, id, stage string, f
 			return err
 		}
 		if changed != 1 {
-			return fmt.Errorf("%w: journal entry %q is not eligible for rollback stage %q", ErrInvalidJournalTransition, id, stage)
+			return fmt.Errorf(
+				"%w: journal entry %q is not eligible for rollback stage %q",
+				ErrInvalidJournalTransition,
+				id,
+				stage,
+			)
 		}
 		return nil
 	})
@@ -174,18 +206,29 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 		var retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID []byte
 		var retentionEpoch sql.NullInt64
 		var retentionBindingVersion int
-		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at, source, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version FROM apply_journal WHERE id = ?", id).Scan(&state, &stage, &reference, &createdAt, &source, &retentionVault, &retentionEpoch, &retentionSnapshot, &retentionPolicyDigest, &retentionControlCID, &retentionBindingVersion); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT state, stage, backup_ref, created_at, source, vault, epoch, snapshot_cid, policy_digest, control_cid, retention_binding_version FROM apply_journal WHERE id = ?", id).
+			Scan(&state, &stage, &reference, &createdAt, &source, &retentionVault, &retentionEpoch, &retentionSnapshot, &retentionPolicyDigest, &retentionControlCID, &retentionBindingVersion); err != nil {
 			return err
 		}
 		if reference == "" {
 			return nil
 		}
 		rolledBack := state == "rolled-back" && stage == JournalStageRolledBack
-		aged := (state == "applied" && stage == JournalStageVerified || rolledBack) && !now.Before(time.Unix(createdAt, 0).Add(JournalBackupRetention))
+		aged := (state == "applied" && stage == JournalStageVerified || rolledBack) &&
+			!now.Before(time.Unix(createdAt, 0).Add(JournalBackupRetention))
 		if !rolledBack && !aged {
-			return errors.New("journal backup can only be pruned after verified rollback or seven-day expiry of a verified apply")
+			return errors.New(
+				"journal backup can only be pruned after verified rollback or seven-day expiry of a verified apply",
+			)
 		}
-		if !validRetentionJournalBinding(retentionVault, retentionEpoch, retentionSnapshot, retentionPolicyDigest, retentionControlCID, retentionBindingVersion) {
+		if !validRetentionJournalBinding(
+			retentionVault,
+			retentionEpoch,
+			retentionSnapshot,
+			retentionPolicyDigest,
+			retentionControlCID,
+			retentionBindingVersion,
+		) {
 			return nil
 		}
 		deviceID, err := selectedRetentionDeviceTx(ctx, tx, retentionVault)
@@ -196,7 +239,8 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 			return nil
 		}
 		var boundaryEpoch int64
-		if err := tx.QueryRowContext(ctx, "SELECT epoch FROM vault_checkpoints WHERE vault = ?", retentionVault).Scan(&boundaryEpoch); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT epoch FROM vault_checkpoints WHERE vault = ?", retentionVault).
+			Scan(&boundaryEpoch); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -205,7 +249,17 @@ func (s *Store) PruneJournalBackupIfEligible(ctx context.Context, id string, now
 		if boundaryEpoch < 0 || retentionEpoch.Int64 >= boundaryEpoch {
 			return nil
 		}
-		associated, err := retentionBackupAssociationTx(ctx, tx, retentionVault, deviceID, retentionEpoch.Int64, retentionSnapshot, retentionPolicyDigest, retentionControlCID, reference)
+		associated, err := retentionBackupAssociationTx(
+			ctx,
+			tx,
+			retentionVault,
+			deviceID,
+			retentionEpoch.Int64,
+			retentionSnapshot,
+			retentionPolicyDigest,
+			retentionControlCID,
+			reference,
+		)
 		if err != nil {
 			return err
 		}
@@ -311,7 +365,9 @@ func (s *Store) PruneExpiredJournalBackups(ctx context.Context, now time.Time) (
 	}
 	pruned := make([]string, 0)
 	for _, entry := range entries {
-		if entry.BackupRef == "" || (entry.State == "applied" && entry.Stage != JournalStageVerified) || (entry.State == "rolled-back" && entry.Stage != JournalStageRolledBack) || (entry.State != "applied" && entry.State != "rolled-back") {
+		if entry.BackupRef == "" || (entry.State == "applied" && entry.Stage != JournalStageVerified) ||
+			(entry.State == "rolled-back" && entry.Stage != JournalStageRolledBack) ||
+			(entry.State != "applied" && entry.State != "rolled-back") {
 			continue
 		}
 		if now.Before(time.Unix(entry.CreatedAt, 0).Add(JournalBackupRetention)) {

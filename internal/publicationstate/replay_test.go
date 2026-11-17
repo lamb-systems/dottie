@@ -40,18 +40,39 @@ func TestDatabaseIDPairRejectsCrossStoreAndRecreatedStoreReplay(t *testing.T) {
 	requireErrorMetadata(t, err, ErrConsent, StageAccept, ReasonStale)
 	freshProposal, err := recreated.Prepare(ctx, ModeFirstUse, observation, f.payload)
 	require.NoError(t, err)
-	freshFloor, err := recreated.Accept(ctx, ModeFirstUse, freshProposal.StateToken, observation, f.payload, freshProposal.Confirmation)
+	freshFloor, err := recreated.Accept(
+		ctx,
+		ModeFirstUse,
+		freshProposal.StateToken,
+		observation,
+		f.payload,
+		freshProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), freshFloor.Generation)
 	assert.NotEqual(t, oldStoreBID, freshFloor.DatabaseID)
-	firstFloor, err := storeA.Accept(ctx, ModeFirstUse, proposalA.StateToken, observation, f.payload, proposalA.Confirmation)
+	firstFloor, err := storeA.Accept(
+		ctx,
+		ModeFirstUse,
+		proposalA.StateToken,
+		observation,
+		f.payload,
+		proposalA.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.NotEqual(t, storeA.databaseID, storeB.databaseID)
 	alternate := fixtureRecord(t, f, 0, nil, 0x71)
 	alternateObservation := singleRecordObservation(t, f, alternate)
 	replacement, err := storeA.Prepare(ctx, ModeReplaceFloor, alternateObservation, f.payload)
 	require.NoError(t, err)
-	_, err = storeA.Accept(ctx, ModeReplaceFloor, replacement.StateToken, alternateObservation, f.payload, replacement.Confirmation)
+	_, err = storeA.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacement.StateToken,
+		alternateObservation,
+		f.payload,
+		replacement.Confirmation,
+	)
 	require.NoError(t, err)
 	back, err := storeA.Prepare(ctx, ModeReplaceFloor, observation, f.payload)
 	require.NoError(t, err)
@@ -87,7 +108,14 @@ func TestABAAcceptedAdvanceTokenIsStaleAfterReturningToSamePosition(t *testing.T
 	alternateObs := singleRecordObservation(t, f, alternate)
 	replacement, err := store.Prepare(ctx, ModeReplaceFloor, alternateObs, f.payload)
 	require.NoError(t, err)
-	_, err = store.Accept(ctx, ModeReplaceFloor, replacement.StateToken, alternateObs, f.payload, replacement.Confirmation)
+	_, err = store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacement.StateToken,
+		alternateObs,
+		f.payload,
+		replacement.Confirmation,
+	)
 	require.NoError(t, err)
 	back, err := store.Prepare(ctx, ModeReplaceFloor, original, f.payload)
 	require.NoError(t, err)

@@ -3,6 +3,7 @@ package syncengine
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/lamb-systems/dottie/internal/model"
@@ -166,13 +167,17 @@ func BuildPreview(plan Plan, targets []model.Target, observations []model.Observ
 					return Preview{}, err
 				}
 				entry.SnapshotBytes = estimate.PlaintextBytes
-				if len(estimate.EscapingLinks) != 0 && !containsPreviewReason(entry.Risks, PreviewReasonEscapingSymlink) {
+				if len(estimate.EscapingLinks) != 0 &&
+					!containsPreviewReason(entry.Risks, PreviewReasonEscapingSymlink) {
 					entry.Risks = append(entry.Risks, PreviewReasonEscapingSymlink)
 				}
 			}
 			resultEntries = append(resultEntries, *resultEntry)
 		}
-		preview.Targets[previewIndex[key.TargetID]].Entries = append(preview.Targets[previewIndex[key.TargetID]].Entries, entry)
+		preview.Targets[previewIndex[key.TargetID]].Entries = append(
+			preview.Targets[previewIndex[key.TargetID]].Entries,
+			entry,
+		)
 	}
 	unknownKeys := make(map[model.EntryKey]struct{})
 	for _, decision := range plan.Decisions {
@@ -193,12 +198,15 @@ func BuildPreview(plan Plan, targets []model.Target, observations []model.Observ
 			state = PreviewStateUnknown
 			reason = PreviewReasonUnknown
 		}
-		preview.Targets[previewIndex[key.TargetID]].Entries = append(preview.Targets[previewIndex[key.TargetID]].Entries, PreviewEntry{
-			Key:    key,
-			State:  state,
-			Reason: reason,
-			Detail: "unmatched",
-		})
+		preview.Targets[previewIndex[key.TargetID]].Entries = append(
+			preview.Targets[previewIndex[key.TargetID]].Entries,
+			PreviewEntry{
+				Key:    key,
+				State:  state,
+				Reason: reason,
+				Detail: "unmatched",
+			},
+		)
 		preview.Complete = false
 		preview.UnresolvedEntries++
 	}
@@ -208,14 +216,18 @@ func BuildPreview(plan Plan, targets []model.Target, observations []model.Observ
 		})
 	}
 	if len(transferEntries) != 0 {
-		estimate, err := vault.Estimate(model.Snapshot{Version: model.SnapshotVersion, Targets: orderedTargets, Entries: transferEntries})
+		estimate, err := vault.Estimate(
+			model.Snapshot{Version: model.SnapshotVersion, Targets: orderedTargets, Entries: transferEntries},
+		)
 		if err != nil {
 			return Preview{}, fmt.Errorf("estimate preview transfer size: %w", err)
 		}
 		preview.TransferBytes = estimate.PlaintextBytes
 	}
 	if len(resultEntries) != 0 {
-		estimate, err := vault.Estimate(model.Snapshot{Version: model.SnapshotVersion, Targets: orderedTargets, Entries: resultEntries})
+		estimate, err := vault.Estimate(
+			model.Snapshot{Version: model.SnapshotVersion, Targets: orderedTargets, Entries: resultEntries},
+		)
 		if err != nil {
 			return Preview{}, fmt.Errorf("estimate resulting snapshot size: %w", err)
 		}
@@ -225,7 +237,9 @@ func BuildPreview(plan Plan, targets []model.Target, observations []model.Observ
 }
 
 func estimatePreviewEntry(target model.Target, entry model.Entry) (vault.SizeEstimate, error) {
-	estimate, err := vault.Estimate(model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{target}, Entries: []model.Entry{entry}})
+	estimate, err := vault.Estimate(
+		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{target}, Entries: []model.Entry{entry}},
+	)
 	if err != nil {
 		return vault.SizeEstimate{}, fmt.Errorf("estimate preview entry size: %w", err)
 	}
@@ -233,12 +247,7 @@ func estimatePreviewEntry(target model.Target, entry model.Entry) (vault.SizeEst
 }
 
 func containsPreviewReason(reasons []PreviewReason, want PreviewReason) bool {
-	for _, reason := range reasons {
-		if reason == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(reasons, want)
 }
 
 func validateDecisionObservation(decision Decision, observation model.Observation, hasObservation bool) error {
@@ -267,7 +276,11 @@ func validateDecisionObservation(decision Decision, observation model.Observatio
 	return nil
 }
 
-func previewDecision(decision Decision, observation model.Observation, hasObservation bool) (PreviewEntry, *model.Entry, *model.Entry, bool) {
+func previewDecision(
+	decision Decision,
+	observation model.Observation,
+	hasObservation bool,
+) (PreviewEntry, *model.Entry, *model.Entry, bool) {
 	entry := PreviewEntry{Key: decision.Key, DecisionAction: decision.Action}
 	if decision.States.Local == ValueUnknown || (hasObservation && observation.State == model.ObservationUnknown) {
 		entry.State = PreviewStateUnknown
@@ -307,7 +320,8 @@ func previewDecision(decision Decision, observation model.Observation, hasObserv
 			return entry, nil, nil, true
 		}
 		entry.Action = PreviewChange
-		if decision.States.Local == ValueKnownAbsent || (hasObservation && observation.State == model.ObservationMissing) {
+		if decision.States.Local == ValueKnownAbsent ||
+			(hasObservation && observation.State == model.ObservationMissing) {
 			entry.Action = PreviewCreate
 		}
 		return withDecisionReason(entry, decision), candidate, candidate, false
@@ -374,7 +388,8 @@ func presentEntry(entry *model.Entry) bool {
 	if entry.File != nil {
 		return entry.File.State == model.FilePresent
 	}
-	return entry.Setting != nil && (entry.Setting.State == model.SettingPresent || entry.Setting.State == model.SettingReset)
+	return entry.Setting != nil &&
+		(entry.Setting.State == model.SettingPresent || entry.Setting.State == model.SettingReset)
 }
 
 func withDecisionReason(entry PreviewEntry, decision Decision) PreviewEntry {

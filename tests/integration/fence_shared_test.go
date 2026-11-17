@@ -7,15 +7,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/multiformats/go-multihash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/remote/atproto"
 )
 
 const (
@@ -117,22 +119,36 @@ func newFenceProbeKey(t *testing.T) string {
 	return "probe-" + key
 }
 
-func cleanupFenceRecords(t *testing.T, provider string, identity atproto.Identity, transport atproto.Transport, reader atproto.RevisionReader, records []fenceCreatedRecord) {
+func cleanupFenceRecords(
+	t *testing.T,
+	_ string,
+	identity atproto.Identity,
+	transport atproto.Transport,
+	reader atproto.RevisionReader,
+	records []fenceCreatedRecord,
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	for index := len(records) - 1; index >= 0; index-- {
-		record := records[index]
+	for _, record := range slices.Backward(records) {
+
 		verified := false
-		for attempt := 0; attempt < 3; attempt++ {
+		for range 3 {
 			revision, err := reader.Read(ctx, identity.DID)
 			if err != nil {
-				assert.NoError(t, err, "F04 cleanup read %s/%s: %v", record.collection, record.rkey, err)
+				require.NoError(t, err, "F04 cleanup read %s/%s: %v", record.collection, record.rkey, err)
 				break
 			}
 			key := atproto.RecordKey{Collection: record.collection, RKey: record.rkey}
 			if !revision.HasRecord(key) {
-				if err := verifyFenceRecordDeleted(ctx, transport, reader, identity.DID, record.collection, record.rkey); err != nil {
+				if err := verifyFenceRecordDeleted(
+					ctx,
+					transport,
+					reader,
+					identity.DID,
+					record.collection,
+					record.rkey,
+				); err != nil {
 					assert.NoError(t, err, "F04 cleanup verification %s/%s: %v", record.collection, record.rkey, err)
 				} else {
 					verified = true
@@ -146,10 +162,17 @@ func cleanupFenceRecords(t *testing.T, provider string, identity atproto.Identit
 			}{{Type: "com.repo.applyWrites#delete", Collection: record.collection, RKey: record.rkey}}}
 			body, err := json.Marshal(input)
 			if err != nil {
-				assert.NoError(t, err, "F04 cleanup encode %s/%s: %v", record.collection, record.rkey, err)
+				require.NoError(t, err, "F04 cleanup encode %s/%s: %v", record.collection, record.rkey, err)
 				break
 			}
-			status, response, requestErr := transport.Do(ctx, http.MethodPost, "com.repo.applyWrites", nil, body, "application/json")
+			status, response, requestErr := transport.Do(
+				ctx,
+				http.MethodPost,
+				"com.repo.applyWrites",
+				nil,
+				body,
+				"application/json",
+			)
 			verifyErr := verifyFenceRecordDeleted(ctx, transport, reader, identity.DID, record.collection, record.rkey)
 			if verifyErr == nil {
 				verified = true
@@ -159,27 +182,78 @@ func cleanupFenceRecords(t *testing.T, provider string, identity atproto.Identit
 				continue
 			}
 			if requestErr != nil || status >= 500 {
-				assert.NoError(t, requestErr, "F04 cleanup delete %s/%s status=%d error=%v verification=%v", record.collection, record.rkey, status, requestErr, verifyErr)
-				assert.Less(t, status, 500, "F04 cleanup delete %s/%s status=%d error=%v verification=%v", record.collection, record.rkey, status, requestErr, verifyErr)
+				require.NoError(
+					t,
+					requestErr,
+					"F04 cleanup delete %s/%s status=%d error=%v verification=%v",
+					record.collection,
+					record.rkey,
+					status,
+					requestErr,
+					verifyErr,
+				)
+				assert.Less(
+					t,
+					status,
+					500,
+					"F04 cleanup delete %s/%s status=%d error=%v verification=%v",
+					record.collection,
+					record.rkey,
+					status,
+					requestErr,
+					verifyErr,
+				)
 				break
 			}
 			if status < 200 || status >= 300 {
-				assert.GreaterOrEqual(t, status, 200, "F04 cleanup delete %s/%s rejected status=%d body=%s verification=%v", record.collection, record.rkey, status, redactBodyPrefix(response), verifyErr)
-				assert.Less(t, status, 300, "F04 cleanup delete %s/%s rejected status=%d body=%s verification=%v", record.collection, record.rkey, status, redactBodyPrefix(response), verifyErr)
+				assert.GreaterOrEqual(
+					t,
+					status,
+					200,
+					"F04 cleanup delete %s/%s rejected status=%d body=%s verification=%v",
+					record.collection,
+					record.rkey,
+					status,
+					redactBodyPrefix(response),
+					verifyErr,
+				)
+				assert.Less(
+					t,
+					status,
+					300,
+					"F04 cleanup delete %s/%s rejected status=%d body=%s verification=%v",
+					record.collection,
+					record.rkey,
+					status,
+					redactBodyPrefix(response),
+					verifyErr,
+				)
 				break
 			}
 			assert.True(t, false, "F04 cleanup verification %s/%s: %v", record.collection, record.rkey, verifyErr)
 			break
 		}
 		if !verified {
-			if err := verifyFenceRecordDeleted(ctx, transport, reader, identity.DID, record.collection, record.rkey); err != nil {
+			if err := verifyFenceRecordDeleted(
+				ctx,
+				transport,
+				reader,
+				identity.DID,
+				record.collection,
+				record.rkey,
+			); err != nil {
 				assert.NoError(t, err, "F04 final cleanup verification %s/%s: %v", record.collection, record.rkey, err)
 			}
 		}
 	}
 }
 
-func verifyFenceRecordDeleted(ctx context.Context, transport atproto.Transport, reader atproto.RevisionReader, did, collection, rkey string) error {
+func verifyFenceRecordDeleted(
+	ctx context.Context,
+	transport atproto.Transport,
+	reader atproto.RevisionReader,
+	did, collection, rkey string,
+) error {
 	revision, err := reader.Read(ctx, did)
 	if err != nil {
 		return err
@@ -187,7 +261,14 @@ func verifyFenceRecordDeleted(ctx context.Context, transport atproto.Transport, 
 	if revision.HasRecord(atproto.RecordKey{Collection: collection, RKey: rkey}) {
 		return errors.New("record remains in the current verified revision")
 	}
-	status, body, err := transport.Do(ctx, http.MethodGet, "com.repo.getRecord", url.Values{"repo": {did}, "collection": {collection}, "rkey": {rkey}}, nil, "")
+	status, body, err := transport.Do(
+		ctx,
+		http.MethodGet,
+		"com.repo.getRecord",
+		url.Values{"repo": {did}, "collection": {collection}, "rkey": {rkey}},
+		nil,
+		"",
+	)
 	if err != nil {
 		return err
 	}

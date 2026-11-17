@@ -5,15 +5,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestTraceBoundaryUsesFinalHeldFloorEdge(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 4; sequence++ {
+	for sequence := range uint64(4) {
 		f.appendRecord(t, sequence)
 	}
 	limits := DefaultLimits()
@@ -40,7 +41,14 @@ func TestTraceBoundaryUsesFinalHeldFloorEdge(t *testing.T) {
 	assert.Equal(t, "walk_limit", proposal.Stop)
 	assert.Equal(t, ReasonMissingLineage, proposal.Reason)
 	assert.Len(t, proposal.Trace, 3)
-	_, err = oneOver.Accept(ctx, ModeReplaceFloor, proposal.StateToken, oneOverObservation, f.payload, proposal.Confirmation)
+	_, err = oneOver.Accept(
+		ctx,
+		ModeReplaceFloor,
+		proposal.StateToken,
+		oneOverObservation,
+		f.payload,
+		proposal.Confirmation,
+	)
 	require.NoError(t, err)
 	require.NoError(t, oneOver.Close())
 	reopened, err := OpenWithLimits(dir, f.binding, limits)
@@ -80,7 +88,14 @@ func TestForkAndWrongStructuralParentAreNotConsentEquivalent(t *testing.T) {
 	forkProposal, err := store.Prepare(ctx, ModeReplaceFloor, forkObservation, f.payload)
 	require.NoError(t, err)
 	assert.Equal(t, ReasonFork, forkProposal.Reason)
-	accepted, err := store.Accept(ctx, ModeReplaceFloor, forkProposal.StateToken, forkObservation, f.payload, forkProposal.Confirmation)
+	accepted, err := store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		forkProposal.StateToken,
+		forkObservation,
+		f.payload,
+		forkProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), accepted.Generation)
 
@@ -114,7 +129,17 @@ func fixtureRecord(t *testing.T, f fixture, sequence uint64, parent []byte, pubI
 	t.Helper()
 	blobCID, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: bytes.Clone(parent), Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload)), MIMEType: publication.SnapshotBlobMIMEType}}
+	record := publication.SnapshotRecord{
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          f.binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         bytes.Clone(parent),
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(f.payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
+	}
 	record.PublicationID[15] = pubID
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -129,11 +154,24 @@ func singleRecordObservation(t *testing.T, f fixture, block SnapshotBlock) Obser
 	require.NoError(t, err)
 	record, err := publication.DecodeSnapshot(block.Raw)
 	require.NoError(t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: record.PublicationSeq, SnapshotCID: cid, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          f.binding.Vault,
+			PublicationSeq: record.PublicationSeq,
+			SnapshotCID:    cid,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(t, err)
 	context := SuppliedContext{RepositoryRevision: "revision-alternate", RepositoryDigest: []byte{7, 8, 9}}
 	if f.binding.Backend == BackendSpaces {
 		context.Policy = &Policy{Revision: "policy-alternate", Identity: []byte{8, 9}, OwnerOnly: true}
 	}
-	return Observation{Origin: f.binding, SuppliedContext: context, Head: head, Snapshots: []SnapshotBlock{{Key: block.Key, Raw: bytes.Clone(block.Raw)}}}
+	return Observation{
+		Origin:          f.binding,
+		SuppliedContext: context,
+		Head:            head,
+		Snapshots:       []SnapshotBlock{{Key: block.Key, Raw: bytes.Clone(block.Raw)}},
+	}
 }

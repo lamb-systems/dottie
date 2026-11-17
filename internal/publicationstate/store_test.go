@@ -10,11 +10,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const testDID = "did:plc:abcdefghijklmnopqrstuvwx"
@@ -31,8 +32,26 @@ func newFixture(t *testing.T, backend Backend) fixture {
 	t.Helper()
 	payloadSnapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
-		Targets: []model.Target{{ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion, Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory}}},
-		Entries: []model.Entry{{TargetID: "files", File: &model.FileEntry{Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular, Content: []byte("synthetic publication state payload"), Mode: 0o600}}},
+		Targets: []model.Target{
+			{
+				ID:            "files",
+				Source:        model.SourceFiles,
+				SourceVersion: model.SourceVersion,
+				Root:          &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path:    "init.lua",
+					State:   model.FilePresent,
+					Kind:    model.FileRegular,
+					Content: []byte("synthetic publication state payload"),
+					Mode:    0o600,
+				},
+			},
+		},
 	}
 	blob, err := vault.Pack(payloadSnapshot)
 	require.NoError(t, err)
@@ -42,7 +61,12 @@ func newFixture(t *testing.T, backend Backend) fixture {
 	}
 	binding := Binding{AccountDID: testDID, Backend: backend, Repository: repository}
 	binding.Vault[0] = 9
-	return fixture{t: t, binding: binding, payload: bytes.Clone(blob.Payload), recordMIMEType: publication.SnapshotBlobMIMEType}
+	return fixture{
+		t:              t,
+		binding:        binding,
+		payload:        bytes.Clone(blob.Payload),
+		recordMIMEType: publication.SnapshotBlobMIMEType,
+	}
 }
 
 func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
@@ -56,7 +80,17 @@ func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
 	}
 	blobCID, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
-	record := publication.SnapshotRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: sequence, Parent: parent, Blob: publication.BlobReference{CID: blobCID, Size: uint64(len(f.payload)), MIMEType: f.recordMIMEType}}
+	record := publication.SnapshotRecord{
+		SchemaVersion:  publication.SchemaVersion,
+		Vault:          f.binding.Vault,
+		PublicationSeq: sequence,
+		Parent:         parent,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(f.payload)),
+			MIMEType: f.recordMIMEType,
+		},
+	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -80,7 +114,15 @@ func (f fixture) observation(count int) Observation {
 	require.NoError(f.t, err)
 	record, err := publication.DecodeSnapshot(candidate.Raw)
 	require.NoError(f.t, err)
-	head, err := publication.EncodeHead(publication.HeadRecord{SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationSeq: record.PublicationSeq, SnapshotCID: cid, BlobCID: record.Blob.CID})
+	head, err := publication.EncodeHead(
+		publication.HeadRecord{
+			SchemaVersion:  publication.SchemaVersion,
+			Vault:          f.binding.Vault,
+			PublicationSeq: record.PublicationSeq,
+			SnapshotCID:    cid,
+			BlobCID:        record.Blob.CID,
+		},
+	)
 	require.NoError(f.t, err)
 	context := SuppliedContext{RepositoryRevision: "revision-1", RepositoryDigest: []byte{1, 2, 3}}
 	if f.binding.Backend == BackendSpaces {
@@ -176,7 +218,7 @@ func TestStoreFirstUseAdvanceHistoryAndPayloadAvailability(t *testing.T) {
 	assert.True(t, exists)
 	assert.Equal(t, accepted, loaded)
 	_, err = reopened.Prepare(ctx, ModeAdvance, observation, nil)
-	assert.Error(t, err, "decoded marker must not substitute for the payload bytes")
+	require.Error(t, err, "decoded marker must not substitute for the payload bytes")
 	noOp, err := reopened.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
 	missingPayload, err := reopened.Accept(ctx, ModeAdvance, noOp.StateToken, observation, nil, [32]byte{})
@@ -191,7 +233,7 @@ func TestStoreFirstUseAdvanceHistoryAndPayloadAvailability(t *testing.T) {
 func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 4; sequence++ {
+	for sequence := range uint64(4) {
 		f.appendRecord(t, sequence)
 	}
 	store, directory := newStore(t, f)
@@ -218,9 +260,20 @@ func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 	replacement, err := store.Prepare(ctx, ModeReplaceFloor, replacementObs, f.payload)
 	require.NoError(t, err)
 	assert.Equal(t, ReasonMissingLineage, replacement.Reason)
-	assert.Equal(t, "replace floor: loses continuity with the prior recorded publication; no apply", replacement.Warning)
+	assert.Equal(
+		t,
+		"replace floor: loses continuity with the prior recorded publication; no apply",
+		replacement.Warning,
+	)
 	oldDBID := floor.DatabaseID
-	floor, err = store.Accept(ctx, ModeReplaceFloor, replacement.StateToken, replacementObs, f.payload, replacement.Confirmation)
+	floor, err = store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		replacement.StateToken,
+		replacementObs,
+		f.payload,
+		replacement.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), floor.Generation)
 	assert.Equal(t, ProvenanceReplace, floor.Provenance)
@@ -231,7 +284,14 @@ func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 	rollbackProposal, err := store.Prepare(ctx, ModeReplaceFloor, rollbackObs, f.payload)
 	require.NoError(t, err)
 	assert.Equal(t, ReasonRollback, rollbackProposal.Reason)
-	floor, err = store.Accept(ctx, ModeReplaceFloor, rollbackProposal.StateToken, rollbackObs, f.payload, rollbackProposal.Confirmation)
+	floor, err = store.Accept(
+		ctx,
+		ModeReplaceFloor,
+		rollbackProposal.StateToken,
+		rollbackObs,
+		f.payload,
+		rollbackProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(3), floor.Generation)
 	require.NoError(t, store.Close())
@@ -242,8 +302,16 @@ func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 	page, err := reopened.History(ctx, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, page.Events, 4)
-	assert.Equal(t, []uint64{1, 2, 3, 4}, []uint64{page.Events[0].Revision, page.Events[1].Revision, page.Events[2].Revision, page.Events[3].Revision})
-	assert.Equal(t, []string{"first_use", "joined", "missing_parent", "rollback"}, []string{page.Events[0].Stop, page.Events[1].Stop, page.Events[2].Stop, page.Events[3].Stop})
+	assert.Equal(
+		t,
+		[]uint64{1, 2, 3, 4},
+		[]uint64{page.Events[0].Revision, page.Events[1].Revision, page.Events[2].Revision, page.Events[3].Revision},
+	)
+	assert.Equal(
+		t,
+		[]string{"first_use", "joined", "missing_parent", "rollback"},
+		[]string{page.Events[0].Stop, page.Events[1].Stop, page.Events[2].Stop, page.Events[3].Stop},
+	)
 	assert.Equal(t, firstObs.SuppliedContext, page.Events[0].NewFloor.SuppliedContext)
 	assert.Equal(t, advanceObs.SuppliedContext, page.Events[1].NewFloor.SuppliedContext)
 	assert.Equal(t, replacementObs.SuppliedContext, page.Events[2].NewFloor.SuppliedContext)
@@ -292,7 +360,7 @@ func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 						previous = record.Raw
 					}
 				}
-				assert.NoError(t, publication.VerifySuccessor(previous, current, ref.Key))
+				require.NoError(t, publication.VerifySuccessor(previous, current, ref.Key))
 			}
 		}
 		if event.Stop == "joined" {
@@ -308,7 +376,7 @@ func TestStoreMultiLinkAdvanceAndReplacementHistory(t *testing.T) {
 					oldest = record.Raw
 				}
 			}
-			assert.NoError(t, publication.VerifySuccessor(held, oldest, last.Key))
+			require.NoError(t, publication.VerifySuccessor(held, oldest, last.Key))
 		}
 	}
 	firstPage, err := reopened.History(ctx, 0, 2)
@@ -375,7 +443,7 @@ func TestStoreOriginUTF8AndStaleTokensRefuseWithoutWrites(t *testing.T) {
 func TestStoreSeparateCacheAndAcceptedBudgetsAndDatabaseIdentity(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
-	for sequence := uint64(0); sequence < 3; sequence++ {
+	for sequence := range uint64(3) {
 		f.appendRecord(t, sequence)
 	}
 	limits := DefaultLimits()
@@ -422,7 +490,14 @@ func TestStoreSeparateCacheAndAcceptedBudgetsAndDatabaseIdentity(t *testing.T) {
 	defer other.Close()
 	otherProposal, err := other.Prepare(ctx, ModeFirstUse, first, f.payload)
 	require.NoError(t, err)
-	fresh, err := other.Accept(ctx, ModeFirstUse, otherProposal.StateToken, first, f.payload, otherProposal.Confirmation)
+	fresh, err := other.Accept(
+		ctx,
+		ModeFirstUse,
+		otherProposal.StateToken,
+		first,
+		f.payload,
+		otherProposal.Confirmation,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, firstFloor.Sequence, fresh.Sequence)
 	assert.Equal(t, firstFloor.Generation, fresh.Generation)
@@ -449,7 +524,17 @@ func TestCanonicalJSONEncodingUsesBase64AndDoesNotEscapeHTML(t *testing.T) {
 	for index := range dbid {
 		dbid[index] = byte(index)
 	}
-	wire := stateTokenWire{Version: 1, DatabaseID: bytes.Clone(dbid[:]), Revision: 7, Generation: 2, Binding: bindingToWire(Binding{AccountDID: "<>&", Backend: BackendPublicRepo, Repository: "at://did:plc:abcdefghijklmnopqrstuvwx"}), Limits: limitsToWire(DefaultLimits()), Floor: nil}
+	wire := stateTokenWire{
+		Version:    1,
+		DatabaseID: bytes.Clone(dbid[:]),
+		Revision:   7,
+		Generation: 2,
+		Binding: bindingToWire(
+			Binding{AccountDID: "<>&", Backend: BackendPublicRepo, Repository: "at://did:plc:abcdefghijklmnopqrstuvwx"},
+		),
+		Limits: limitsToWire(DefaultLimits()),
+		Floor:  nil,
+	}
 	encoded, err := canonicalJSON(wire)
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "\\u003c")
@@ -472,8 +557,7 @@ func mustCanonicalJSON(t *testing.T, value any) []byte {
 	return encoded
 }
 func bindingReason(err error) string {
-	var closed *closedError
-	if errors.As(err, &closed) {
+	if closed, ok := errors.AsType[*closedError](err); ok {
 		return string(closed.reason)
 	}
 	return ""

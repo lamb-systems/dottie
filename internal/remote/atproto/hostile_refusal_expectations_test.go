@@ -41,8 +41,22 @@ func TestExpectedRefusalReaderHeadEnvelopeParentLink(t *testing.T) {
 	controlFixture := newReadFixture(t)
 	_, controlS1 := buildGenuineChain(t, &controlFixture, 0xB0)
 	controlS2 := buildGenuineThirdPublication(t, &controlFixture, controlS1, 0xB2)
-	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(t, controlFixture, controlS2, 0xB3, []byte("coherent S3 payload"))
-	coherentHead := signFixtureHead(t, controlFixture, coherentEnvelope, 3, controlS2, publisherSigner(), fixtureSigningKey(12))
+	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS2,
+		0xB3,
+		[]byte("coherent S3 payload"),
+	)
+	coherentHead := signFixtureHead(
+		t,
+		controlFixture,
+		coherentEnvelope,
+		3,
+		controlS2,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, coherentEnvelope, coherentSnapshot, coherentHead)
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "the observed-store positive control reads coherent S3")
@@ -61,15 +75,31 @@ func TestExpectedRefusalReaderHeadEnvelopeParentLink(t *testing.T) {
 func TestExpectedRefusalReaderExtraRecipientInMetadata(t *testing.T) {
 	fixture := newReadFixture(t)
 	policy, _, _ := fixturePolicyParts(t, fixture)
-	extra := vault.RecipientPublicKey{KeyID: bytes.Clone(readRogueKeyID), PublicKey: readX25519Key(t, 99).PublicKey().Bytes()}
-	envelopeBytes, snapshot := sealFixtureSnapshotExtraRecipient(t, fixture, nil, 0x95, []byte("synthetic snapshot payload"), extra)
+	extra := vault.RecipientPublicKey{
+		KeyID:     bytes.Clone(readRogueKeyID),
+		PublicKey: readX25519Key(t, 99).PublicKey().Bytes(),
+	}
+	envelopeBytes, snapshot := sealFixtureSnapshotExtraRecipient(
+		t,
+		fixture,
+		nil,
+		0x95,
+		[]byte("synthetic snapshot payload"),
+		extra,
+	)
 	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 	fixture.request.DeviceKey = nil
 	fixture.request.DeviceKeyID = nil
 
 	controlFixture := newReadFixture(t)
-	controlEnvelope, controlSnapshot := sealFixtureSnapshot(t, controlFixture, nil, 0x95, []byte("synthetic snapshot payload"))
+	controlEnvelope, controlSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		nil,
+		0x95,
+		[]byte("synthetic snapshot payload"),
+	)
 	controlHead := signFixtureHead(t, controlFixture, controlEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &controlFixture, controlEnvelope, controlSnapshot, controlHead)
 	controlFixture.request.DeviceKey = nil
@@ -123,7 +153,14 @@ func TestReaderRefusesSameCountRecipientSet(t *testing.T) {
 	}
 }
 
-func sealFixtureSnapshotWithPreparedRecipients(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte, recipients []vault.PreparedRecipient) ([]byte, SnapshotRecord) {
+func sealFixtureSnapshotWithPreparedRecipients(
+	t *testing.T,
+	fixture readFixture,
+	parent []byte,
+	publicationSeed byte,
+	plaintext []byte,
+	recipients []vault.PreparedRecipient,
+) ([]byte, SnapshotRecord) {
 	t.Helper()
 	baseEnvelope, _ := sealFixtureSnapshot(t, fixture, parent, publicationSeed, plaintext)
 	keyIDs := make([][]byte, len(recipients))
@@ -147,7 +184,13 @@ func TestExpectedRefusalReaderUnauthorizedWrap(t *testing.T) {
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 
 	controlFixture := newReadFixture(t)
-	controlEnvelope, controlSnapshot := sealFixtureSnapshot(t, controlFixture, nil, 0x99, []byte("synthetic snapshot payload"))
+	controlEnvelope, controlSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		nil,
+		0x99,
+		[]byte("synthetic snapshot payload"),
+	)
 	controlHead := signFixtureHead(t, controlFixture, controlEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &controlFixture, controlEnvelope, controlSnapshot, controlHead)
 	controlResult, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
@@ -156,7 +199,12 @@ func TestExpectedRefusalReaderUnauthorizedWrap(t *testing.T) {
 	assert.Equal(t, len(policy.Recipients), len(controlResult.Envelope.Recipients))
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
-	require.ErrorIs(t, err, ErrReadRecipientSet, "the reader must reject an envelope carrying a wrap for a device the policy never named")
+	require.ErrorIs(
+		t,
+		err,
+		ErrReadRecipientSet,
+		"the reader must reject an envelope carrying a wrap for a device the policy never named",
+	)
 }
 
 func TestExpectedRefusalReaderOlderSnapshotAtNextCount(t *testing.T) {
@@ -165,16 +213,40 @@ func TestExpectedRefusalReaderOlderSnapshotAtNextCount(t *testing.T) {
 	controlS1CID := fixtureSnapshotCID(t, controlFixture)
 	_, err := controlReader.Read(context.Background(), controlFixture.request)
 	require.NoError(t, err)
-	controlS2, controlS2Snapshot := sealFixtureSnapshot(t, controlFixture, controlS1CID, 0x92, []byte("second snapshot payload"))
+	controlS2, controlS2Snapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS1CID,
+		0x92,
+		[]byte("second snapshot payload"),
+	)
 	controlS2CID := readRawCID(t, controlS2)
-	installSnapshot(t, &controlFixture, controlS2, controlS2Snapshot, signFixtureHead(t, controlFixture, controlS2, 2, controlS1CID, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&controlFixture,
+		controlS2,
+		controlS2Snapshot,
+		signFixtureHead(t, controlFixture, controlS2, 2, controlS1CID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	controlS2Result, err := controlReader.Read(context.Background(), controlFixture.request)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("second snapshot payload"), controlS2Result.Plaintext)
 	assert.Equal(t, controlS1CID, controlS2Result.Envelope.Parent)
 	assert.Equal(t, controlS1CID, controlS2Result.Head.PrevHeadCID)
-	controlS3, controlS3Snapshot := sealFixtureSnapshot(t, controlFixture, controlS2CID, 0x93, []byte("fresh third snapshot payload"))
-	installSnapshot(t, &controlFixture, controlS3, controlS3Snapshot, signFixtureHead(t, controlFixture, controlS3, 3, controlS2CID, publisherSigner(), fixtureSigningKey(12)))
+	controlS3, controlS3Snapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS2CID,
+		0x93,
+		[]byte("fresh third snapshot payload"),
+	)
+	installSnapshot(
+		t,
+		&controlFixture,
+		controlS3,
+		controlS3Snapshot,
+		signFixtureHead(t, controlFixture, controlS3, 3, controlS2CID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	controlS3Result, err := controlReader.Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "a fresh snapshot at the next count reads with consistent ancestry")
 	assert.Equal(t, []byte("fresh third snapshot payload"), controlS3Result.Plaintext)
@@ -189,10 +261,22 @@ func TestExpectedRefusalReaderOlderSnapshotAtNextCount(t *testing.T) {
 	_, err = reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	s2Envelope, s2Snapshot := sealFixtureSnapshot(t, fixture, s1CID, 0x92, []byte("second snapshot payload"))
-	installSnapshot(t, &fixture, s2Envelope, s2Snapshot, signFixtureHead(t, fixture, s2Envelope, 2, s1CID, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		s2Envelope,
+		s2Snapshot,
+		signFixtureHead(t, fixture, s2Envelope, 2, s1CID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	_, err = reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
-	installSnapshot(t, &fixture, s1Blob, s1Record, signFixtureHead(t, fixture, s1Blob, 3, s1Record.Parent, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		s1Blob,
+		s1Record,
+		signFixtureHead(t, fixture, s1Blob, 3, s1Record.Parent, publisherSigner(), fixtureSigningKey(12)),
+	)
 	_, err = reader.Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrVaultPublicationAncestry,
 		"the reader must reject an older snapshot republished at the next count")
@@ -208,8 +292,22 @@ func TestExpectedRefusalReaderCoherentForkBehindHead(t *testing.T) {
 	controlFixture := newReadFixture(t)
 	controlS0, controlS1 := buildGenuineChain(t, &controlFixture, 0xC0)
 	require.NotEqual(t, controlS0, controlS1)
-	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(t, controlFixture, controlS1, 0xC3, []byte("coherent S2 payload"))
-	coherentHead := signFixtureHead(t, controlFixture, coherentEnvelope, 2, controlS1, publisherSigner(), fixtureSigningKey(12))
+	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS1,
+		0xC3,
+		[]byte("coherent S2 payload"),
+	)
+	coherentHead := signFixtureHead(
+		t,
+		controlFixture,
+		coherentEnvelope,
+		2,
+		controlS1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, coherentEnvelope, coherentSnapshot, coherentHead)
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "the same S2 construction reads when both ancestry fields name observed S1")
@@ -226,12 +324,28 @@ func TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners(t *testing.T) {
 	fixture := newReadFixture(t)
 	snapshot := currentSnapshotRecord(t, fixture)
 	rootSigner := vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")}
-	head := signFixtureHead(t, fixture, fixture.transport.blob, 1, fixtureHeadObject(t, fixture).PrevHeadCID, rootSigner, fixtureSigningKey(11))
+	head := signFixtureHead(
+		t,
+		fixture,
+		fixture.transport.blob,
+		1,
+		fixtureHeadObject(t, fixture).PrevHeadCID,
+		rootSigner,
+		fixtureSigningKey(11),
+	)
 	installSnapshot(t, &fixture, bytes.Clone(fixture.transport.blob), snapshot, head)
 
 	controlFixture := newReadFixture(t)
 	controlSnapshot := currentSnapshotRecord(t, controlFixture)
-	controlHead := signFixtureHead(t, controlFixture, controlFixture.transport.blob, 1, fixtureHeadObject(t, controlFixture).PrevHeadCID, publisherSigner(), fixtureSigningKey(12))
+	controlHead := signFixtureHead(
+		t,
+		controlFixture,
+		controlFixture.transport.blob,
+		1,
+		fixtureHeadObject(t, controlFixture).PrevHeadCID,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, bytes.Clone(controlFixture.transport.blob), controlSnapshot, controlHead)
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "the same snapshot reads when its head and envelope use the same authorized signer")
@@ -281,16 +395,39 @@ func TestExpectedRefusalReaderControlAncestry(t *testing.T) {
 	_, _, controlP1Digest := fixturePolicyParts(t, controlFixture)
 	controlP1Record := bytes.Clone(controlFixture.records[controlPolicyKey])
 	controlP2Record, controlP2Object, controlP2Digest := craftSuccessorPolicy(t, controlFixture, 2, controlP1Digest)
-	controlEnv2, controlSnapshot2 := sealSnapshotAtEpoch(t, controlFixture, controlP2Object, controlP2Digest, 2, nil, 0xF2, []byte("epoch two payload"))
+	controlEnv2, controlSnapshot2 := sealSnapshotAtEpoch(
+		t,
+		controlFixture,
+		controlP2Object,
+		controlP2Digest,
+		2,
+		nil,
+		0xF2,
+		[]byte("epoch two payload"),
+	)
 	controlEnv2CID := readRawCID(t, controlEnv2)
 	coherentControl2 := craftControl(t, controlFixture, 2, controlP2Digest, controlEnv2CID, controlC1CID)
-	controlHead2 := craftHead(t, controlFixture, 2, controlP2Digest, controlEnv2CID, nil, 1, publisherSigner(), fixtureSigningKey(12))
+	controlHead2 := craftHead(
+		t,
+		controlFixture,
+		2,
+		controlP2Digest,
+		controlEnv2CID,
+		nil,
+		1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	controlFixture.records[controlPolicyKey] = controlP2Record
 	putReadRecord(t, controlFixture.records, controlRecordKey, coherentControl2)
 	installSnapshot(t, &controlFixture, controlEnv2, controlSnapshot2, controlHead2)
 	controlFixture.request.PreviousPolicy = controlP1Record
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
-	require.NoError(t, err, "the same successor reads when control and policy ancestry both name their genuine predecessors")
+	require.NoError(
+		t,
+		err,
+		"the same successor reads when control and policy ancestry both name their genuine predecessors",
+	)
 	assert.Equal(t, []byte("epoch two payload"), positive.Plaintext)
 	assert.Equal(t, controlC1CID, positive.Control.PrevControlCID)
 	assert.Equal(t, controlP1Digest[:], positive.Policy.PrevPolicyDigest)
@@ -312,7 +449,13 @@ func TestExpectedRefusalReaderHeadAboveMaxPublications(t *testing.T) {
 	reader := fixture.reader()
 	genuinePrev := fixtureSnapshotCID(t, fixture)
 	below, belowSnapshot := sealFixtureSnapshot(t, fixture, genuinePrev, 0x40, []byte("n-1 payload"))
-	installSnapshot(t, &fixture, below, belowSnapshot, signFixtureHead(t, fixture, below, maximum-1, genuinePrev, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		below,
+		belowSnapshot,
+		signFixtureHead(t, fixture, below, maximum-1, genuinePrev, publisherSigner(), fixtureSigningKey(12)),
+	)
 	belowResult, err := reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("n-1 payload"), belowResult.Plaintext)
@@ -320,7 +463,13 @@ func TestExpectedRefusalReaderHeadAboveMaxPublications(t *testing.T) {
 	assert.Equal(t, genuinePrev, belowResult.Head.PrevHeadCID)
 	belowCID := readRawCID(t, below)
 	atMax, atMaxSnapshot := sealFixtureSnapshot(t, fixture, belowCID, 0x41, []byte("n payload"))
-	installSnapshot(t, &fixture, atMax, atMaxSnapshot, signFixtureHead(t, fixture, atMax, maximum, belowCID, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		atMax,
+		atMaxSnapshot,
+		signFixtureHead(t, fixture, atMax, maximum, belowCID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	atMaxResult, err := reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("n payload"), atMaxResult.Plaintext)
@@ -328,11 +477,23 @@ func TestExpectedRefusalReaderHeadAboveMaxPublications(t *testing.T) {
 	assert.Equal(t, belowCID, atMaxResult.Head.PrevHeadCID)
 	atMaxCID := readRawCID(t, atMax)
 	over, overSnapshot := sealFixtureSnapshot(t, fixture, atMaxCID, 0x42, []byte("n+1 payload"))
-	installSnapshot(t, &fixture, over, overSnapshot, signFixtureHead(t, fixture, over, maximum+1, atMaxCID, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		over,
+		overSnapshot,
+		signFixtureHead(t, fixture, over, maximum+1, atMaxCID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	_, err = reader.Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, vault.ErrPublicationCount,
 		"the reader must reject a head above the policy publication maximum")
-	installSnapshot(t, &fixture, atMax, atMaxSnapshot, signFixtureHead(t, fixture, atMax, maximum, belowCID, publisherSigner(), fixtureSigningKey(12)))
+	installSnapshot(
+		t,
+		&fixture,
+		atMax,
+		atMaxSnapshot,
+		signFixtureHead(t, fixture, atMax, maximum, belowCID, publisherSigner(), fixtureSigningKey(12)),
+	)
 	positive, err := reader.Read(context.Background(), fixture.request)
 	require.NoError(t, err, "the refused over-limit read must not advance the observation")
 	assert.Equal(t, maximum, positive.PublicationCount)
@@ -375,7 +536,13 @@ func TestCaseMatrixMatchesRefusalTests(t *testing.T) {
 		require.True(t, ok, "frozen defect %s has no matrix row", frozen.id)
 		require.NotEmpty(t, row.refusal, "frozen defect %s has no refusal test name", frozen.id)
 		assert.Equal(t, frozen.refusal, row.refusal, "frozen defect %s names a different refusal test", frozen.id)
-		assert.True(t, functions[frozen.refusal], "frozen defect %s refusal test %q does not exist", frozen.id, frozen.refusal)
+		assert.True(
+			t,
+			functions[frozen.refusal],
+			"frozen defect %s refusal test %q does not exist",
+			frozen.id,
+			frozen.refusal,
+		)
 	}
 	for _, entry := range caseMatrix {
 		if _, frozen := frozenByID[entry.id]; !frozen {
@@ -399,7 +566,16 @@ func TestCaseSecurityGateIsClosed(t *testing.T) {
 		}
 	}
 	for _, defect := range knownSecurityDefects {
-		assert.Fail(t, "open security defect", "%s (%s) owner=%s contract=%s observation=%s", defect.caseID, defect.finding, defect.owner, defect.contract, defect.observation)
+		assert.Fail(
+			t,
+			"open security defect",
+			"%s (%s) owner=%s contract=%s observation=%s",
+			defect.caseID,
+			defect.finding,
+			defect.owner,
+			defect.contract,
+			defect.observation,
+		)
 	}
 	assert.Empty(t, open, "the security gate is open while frozen defect rows remain known-defect")
 	assert.Empty(t, knownSecurityDefects, "the security gate is open while the known-defect registry is non-empty")

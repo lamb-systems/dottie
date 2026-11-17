@@ -12,13 +12,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type publicationApplyFixture struct {
@@ -51,7 +52,11 @@ func newPublicationApplyFixture(t *testing.T) publicationApplyFixture {
 	require.NoError(t, os.Mkdir(filepath.Join(home, "applied"), 0o700))
 	root := filepath.Join(home, "applied", "tree")
 	require.NoError(t, os.Mkdir(root, 0o700))
-	target := config.Target{ID: "applied-files", Source: model.SourceFiles, Root: &config.Root{Base: model.RootHome, Path: "applied/tree", Kind: model.SelectionDirectory}}
+	target := config.Target{
+		ID:     "applied-files",
+		Source: model.SourceFiles,
+		Root:   &config.Root{Base: model.RootHome, Path: "applied/tree", Kind: model.SelectionDirectory},
+	}
 	configuration := config.Default()
 	configuration.Targets = []config.Target{target}
 	portable, err := target.Model()
@@ -66,12 +71,23 @@ func newPublicationApplyFixture(t *testing.T) publicationApplyFixture {
 	var vault [32]byte
 	vault[0] = 9
 	return publicationApplyFixture{
-		paths: paths, root: root, journalPath: filepath.Join(directory, "journal.db"), target: target, portable: portable,
-		configuration: configuration, journal: journal, local: local, vault: vault, floor: 1,
+		paths:         paths,
+		root:          root,
+		journalPath:   filepath.Join(directory, "journal.db"),
+		target:        target,
+		portable:      portable,
+		configuration: configuration,
+		journal:       journal,
+		local:         local,
+		vault:         vault,
+		floor:         1,
 	}
 }
 
-func (fixture publicationApplyFixture) request(local *PublicationLocalContext, base, remote model.Snapshot) PublicationApplyRequest {
+func (fixture publicationApplyFixture) request(
+	local *PublicationLocalContext,
+	base, remote model.Snapshot,
+) PublicationApplyRequest {
 	return PublicationApplyRequest{
 		Journal: fixture.journal, Vault: fixture.vault, FloorRevision: fixture.floor,
 		Configuration: fixture.configuration, BaseSnapshot: base, RemoteSnapshot: remote,
@@ -112,9 +128,12 @@ func (fixture publicationApplyFixture) readOther(t *testing.T, path string) stri
 
 func (fixture publicationApplyFixture) resolutions(t *testing.T) []publicationstate.JournalResolution {
 	t.Helper()
-	resolutions, err := fixture.journal.ResolveInterrupted(context.Background(), func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
-		return observePublicationApplyEntry(files.DefaultApplyFileSystem(), entry)
-	})
+	resolutions, err := fixture.journal.ResolveInterrupted(
+		context.Background(),
+		func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
+			return observePublicationApplyEntry(files.DefaultApplyFileSystem(), entry)
+		},
+	)
 	require.NoError(t, err)
 	return resolutions
 }
@@ -182,7 +201,11 @@ func TestApplyPublicationWritesChangesAndDeletes(t *testing.T) {
 	assert.Equal(t, 1, report.Unchanged)
 	assert.Equal(t, uint64(len("after")), report.BytesWritten)
 	require.Len(t, report.Entries, 3)
-	assert.Equal(t, []string{"changed.ini", "kept.ini", "removed.ini"}, []string{report.Entries[0].Path, report.Entries[1].Path, report.Entries[2].Path})
+	assert.Equal(
+		t,
+		[]string{"changed.ini", "kept.ini", "removed.ini"},
+		[]string{report.Entries[0].Path, report.Entries[1].Path, report.Entries[2].Path},
+	)
 
 	changed := publicationApplyEntryFor(t, report, "changed.ini")
 	assert.Equal(t, PublicationApplyWrite, changed.Operation)
@@ -200,7 +223,15 @@ func TestApplyPublicationWritesChangesAndDeletes(t *testing.T) {
 	assert.Equal(t, PublicationApplyDelete, removed.Operation)
 	assert.Equal(t, publicationstate.JournalStateApplied, removed.State)
 	assert.NotZero(t, removed.Journal)
-	assert.Equal(t, publicationstate.ObservedFile{}, publicationstate.ObservedFile{Present: removed.Digest != ([32]byte{}), Digest: removed.Digest, Size: removed.Size})
+	assert.Equal(
+		t,
+		publicationstate.ObservedFile{},
+		publicationstate.ObservedFile{
+			Present: removed.Digest != ([32]byte{}),
+			Digest:  removed.Digest,
+			Size:    removed.Size,
+		},
+	)
 	require.NotNil(t, removed.Backup)
 	removedBackup, err := fixture.journal.BackupBytes(context.Background(), *removed.Backup)
 	require.NoError(t, err)
@@ -227,8 +258,12 @@ func TestApplyPublicationLeavesUnchangedEntryWithoutJournalRow(t *testing.T) {
 	fixture.write(t, "same.ini", "same")
 	before, err := os.Lstat(fixture.path("same.ini"))
 	require.NoError(t, err)
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"same.ini": "same"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"same.ini": "same"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"same.ini": "same"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"same.ini": "same"}),
+	)
 
 	report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
 	require.NoError(t, err)
@@ -247,8 +282,12 @@ func TestApplyPublicationLeavesUnchangedEntryWithoutJournalRow(t *testing.T) {
 func TestApplyPublicationMarksMismatchedPostimageIndeterminateAndBlocksNextApply(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 
 	request := fixture.request(fixture.local, base, remote)
 	request.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {
@@ -276,8 +315,12 @@ func TestApplyPublicationMarksMismatchedPostimageIndeterminateAndBlocksNextApply
 func TestApplyPublicationResumesAfterInterruptedJournaledEntry(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 
 	stop := errors.New("synthetic stop before mutation")
 	request := fixture.request(fixture.local, base, remote)
@@ -309,8 +352,12 @@ func TestApplyPublicationResumesAfterInterruptedJournaledEntry(t *testing.T) {
 func TestApplyPublicationResolvesInterruptedMutationWithoutRewriting(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 
 	stop := errors.New("synthetic stop after mutation")
 	request := fixture.request(fixture.local, base, remote)
@@ -347,12 +394,23 @@ func TestApplyPublicationRefusesAdmissionWhileALiveRowExists(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "done")
 	entry, err := fixture.journal.BeginJournal(context.Background(), publicationstate.JournalIntent{
-		Vault: fixture.vault, Operation: "apply", DestinationDir: fixture.root, DestinationPath: "note.ini",
-		Anchor: fixture.anchor(t), Postimage: publicationstate.ObservedJournalFile([]byte("done")), SeenFloorRevision: 2,
+		Vault:           fixture.vault,
+		Operation:       "apply",
+		DestinationDir:  fixture.root,
+		DestinationPath: "note.ini",
+		Anchor: fixture.anchor(
+			t,
+		),
+		Postimage:         publicationstate.ObservedJournalFile([]byte("done")),
+		SeenFloorRevision: 2,
 	})
 	require.NoError(t, err)
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "done"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "next"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "done"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "next"}),
+	)
 
 	report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
 	var blocked *publicationstate.JournalBlockedError
@@ -368,14 +426,18 @@ func TestApplyPublicationRefusesOversizedPostCaptureGrowthWithoutMutating(t *tes
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "big.bin", "A")
 	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "A"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "B"}))
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "B"}),
+	)
 	oversized := bytes.Repeat([]byte("x"), 8<<20+1)
-	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		result, err := LocalFilesCapture{}.Capture(ctx, target, path)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(fixture.path("big.bin"), oversized, 0o600))
-		return result, nil
-	})
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(fixture.path("big.bin"), oversized, 0o600))
+			return result, nil
+		},
+	)
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 
@@ -394,8 +456,12 @@ func TestApplyPublicationRefusesContainmentBeforeJournaling(t *testing.T) {
 	t.Run("root mismatch", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
 		fixture.write(t, "moved.ini", "local")
-		base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"moved.ini": "local"}))
-		remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"moved.ini": "remote"}))
+		base := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"moved.ini": "local"}),
+		)
+		remote := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"moved.ini": "remote"}),
+		)
 		elsewhere := filepath.Join(fixture.paths.Home, "elsewhere")
 		require.NoError(t, os.Mkdir(elsewhere, 0o700))
 		request := fixture.request(fixture.local, base, remote)
@@ -410,9 +476,14 @@ func TestApplyPublicationRefusesContainmentBeforeJournaling(t *testing.T) {
 
 	t.Run("absent parent", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
-		remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"nested/deep.ini": "remote"}))
+		remote := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"nested/deep.ini": "remote"}),
+		)
 
-		_, err := ApplyPublication(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+		_, err := ApplyPublication(
+			context.Background(),
+			fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+		)
 		requirePublicationApplyRefusal(t, err, "apply-plan", "missing_parent")
 		assert.NoFileExists(t, fixture.path("nested"))
 		fixture.assertNoJournalRows(t)
@@ -420,14 +491,18 @@ func TestApplyPublicationRefusesContainmentBeforeJournaling(t *testing.T) {
 
 	t.Run("symlinked destination", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
-		remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"linked.ini": "remote"}))
+		remote := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"linked.ini": "remote"}),
+		)
 		outside := filepath.Join(fixture.paths.Home, "outside.ini")
-		capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-			result, err := LocalFilesCapture{}.Capture(ctx, target, path)
-			require.NoError(t, err)
-			require.NoError(t, os.Symlink(outside, fixture.path("linked.ini")))
-			return result, nil
-		})
+		capture := publicationCapturePortFunc(
+			func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+				result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+				require.NoError(t, err)
+				require.NoError(t, os.Symlink(outside, fixture.path("linked.ini")))
+				return result, nil
+			},
+		)
 		local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 		require.NoError(t, err)
 
@@ -447,11 +522,11 @@ func TestApplyPublicationRefusesContainmentBeforeJournaling(t *testing.T) {
 		elsewhere := filepath.Join(fixture.paths.Home, "elsewhere")
 		require.NoError(t, os.Mkdir(elsewhere, 0o700))
 
-		assert.Error(t, publicationApplyContainment(anchor, fixture.root, "../outside.ini"))
-		assert.Error(t, publicationApplyContainment(anchor, "/etc", "passwd"))
-		assert.Error(t, publicationApplyContainment(anchor, fixture.root, "."))
-		assert.Error(t, publicationApplyContainment(anchor, fixture.root, "/absolute.ini"))
-		assert.Error(t, publicationApplyContainment(anchor, elsewhere, "inside.ini"))
+		require.Error(t, publicationApplyContainment(anchor, fixture.root, "../outside.ini"))
+		require.Error(t, publicationApplyContainment(anchor, "/etc", "passwd"))
+		require.Error(t, publicationApplyContainment(anchor, fixture.root, "."))
+		require.Error(t, publicationApplyContainment(anchor, fixture.root, "/absolute.ini"))
+		require.Error(t, publicationApplyContainment(anchor, elsewhere, "inside.ini"))
 		assert.NoError(t, publicationApplyContainment(anchor, fixture.root, "inside.ini"))
 	})
 }
@@ -459,7 +534,9 @@ func TestApplyPublicationRefusesContainmentBeforeJournaling(t *testing.T) {
 func TestApplyPublicationLeavesInterruptedDeleteForResolution(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "removed.ini", "gone")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}),
+	)
 	remote := fixture.targetSnapshot(nil)
 
 	stop := errors.New("synthetic stop after unlink")
@@ -491,14 +568,18 @@ func TestApplyPublicationSkipsPlannedWorkThatIsAlreadySettled(t *testing.T) {
 	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
 		"changed.ini": "before", "removed.ini": "gone",
 	}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
-	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		result, err := LocalFilesCapture{}.Capture(ctx, target, path)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(fixture.path("changed.ini"), []byte("after"), 0o600))
-		require.NoError(t, os.Remove(fixture.path("removed.ini")))
-		return result, nil
-	})
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(fixture.path("changed.ini"), []byte("after"), 0o600))
+			require.NoError(t, os.Remove(fixture.path("removed.ini")))
+			return result, nil
+		},
+	)
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 
@@ -542,7 +623,15 @@ func TestApplyPublicationRefusesInvalidRequests(t *testing.T) {
 	requirePublicationApplyRefusal(t, err, "apply", "request_invalid")
 
 	unsupportedEntry := fixture.request(fixture.local, base, fixture.targetSnapshot([]model.Entry{
-		{TargetID: fixture.target.ID, File: &model.FileEntry{Path: "link.ini", State: model.FilePresent, Kind: model.FileSymlink, LinkTarget: "shared/target.ini"}},
+		{
+			TargetID: fixture.target.ID,
+			File: &model.FileEntry{
+				Path:       "link.ini",
+				State:      model.FilePresent,
+				Kind:       model.FileSymlink,
+				LinkTarget: "shared/target.ini",
+			},
+		},
 	}))
 	_, err = ApplyPublication(context.Background(), unsupportedEntry)
 	requirePublicationApplyRefusal(t, err, "apply-plan", "target_unsupported")
@@ -655,12 +744,14 @@ func TestApplyPublicationRefusesPostCaptureLocalChanges(t *testing.T) {
 			}
 			base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, testCase.base))
 			remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, testCase.remote))
-			capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-				result, err := LocalFilesCapture{}.Capture(ctx, target, path)
-				require.NoError(t, err)
-				testCase.inject(t, fixture)
-				return result, nil
-			})
+			capture := publicationCapturePortFunc(
+				func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+					result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+					require.NoError(t, err)
+					testCase.inject(t, fixture)
+					return result, nil
+				},
+			)
 			local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 			require.NoError(t, err)
 
@@ -680,8 +771,12 @@ func TestApplyPublicationRefusesPostCaptureLocalChanges(t *testing.T) {
 func TestApplyPublicationRefusesAncestorSwapBeforeMutation(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 	other := filepath.Join(fixture.paths.Home, "other")
 	require.NoError(t, os.MkdirAll(filepath.Join(other, "tree"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(other, "tree", "changed.ini"), []byte("before"), 0o600))
@@ -708,8 +803,12 @@ func TestApplyPublicationRefusesReplacedTargetBetweenEntries(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "a.ini", "before")
 	fixture.write(t, "b.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"a.ini": "before", "b.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"a.ini": "after", "b.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"a.ini": "before", "b.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"a.ini": "after", "b.ini": "after"}),
+	)
 	moved := fixture.root + "-moved"
 	swapping := &publicationApplySwappingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), at: 4}
 	swapping.swap = func() {
@@ -760,8 +859,12 @@ func TestApplyPublicationResolvesInterruptedAnchorMismatch(t *testing.T) {
 	t.Run("pending write replacement directory", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
 		fixture.write(t, "changed.ini", "before")
-		base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-		remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+		base := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+		)
+		remote := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+		)
 		entry := interrupt(t, fixture, base, remote)
 		moved := publicationApplyReplaceRoot(t, fixture)
 		require.NoError(t, os.WriteFile(fixture.path("changed.ini"), []byte("after"), 0o600))
@@ -775,8 +878,12 @@ func TestApplyPublicationResolvesInterruptedAnchorMismatch(t *testing.T) {
 	t.Run("pending write symlinked ancestor", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
 		fixture.write(t, "changed.ini", "before")
-		base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-		remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+		base := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+		)
+		remote := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+		)
 		entry := interrupt(t, fixture, base, remote)
 		movedTree, otherTree := publicationApplySymlinkAncestor(t, fixture)
 		require.NoError(t, os.WriteFile(filepath.Join(otherTree, "changed.ini"), []byte("after"), 0o600))
@@ -791,7 +898,9 @@ func TestApplyPublicationResolvesInterruptedAnchorMismatch(t *testing.T) {
 	t.Run("pending delete replacement directory", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
 		fixture.write(t, "removed.ini", "gone")
-		base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}))
+		base := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}),
+		)
 		remote := fixture.targetSnapshot(nil)
 		entry := interrupt(t, fixture, base, remote)
 		moved := publicationApplyReplaceRoot(t, fixture)
@@ -805,7 +914,9 @@ func TestApplyPublicationResolvesInterruptedAnchorMismatch(t *testing.T) {
 	t.Run("pending delete symlinked ancestor", func(t *testing.T) {
 		fixture := newPublicationApplyFixture(t)
 		fixture.write(t, "removed.ini", "gone")
-		base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}))
+		base := fixture.targetSnapshot(
+			publicationPreviewFileEntries(fixture.target.ID, map[string]string{"removed.ini": "gone"}),
+		)
 		remote := fixture.targetSnapshot(nil)
 		entry := interrupt(t, fixture, base, remote)
 		movedTree, otherTree := publicationApplySymlinkAncestor(t, fixture)
@@ -821,8 +932,12 @@ func TestApplyPublicationResolvesInterruptedAnchorMismatch(t *testing.T) {
 func TestApplyPublicationRefusesWhileAnApplyLeaseIsHeld(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 	lease, err := fixture.journal.AcquireApplyLease(context.Background())
 	require.NoError(t, err)
 
@@ -842,8 +957,12 @@ func TestApplyPublicationRefusesWhileAnApplyLeaseIsHeld(t *testing.T) {
 func TestApplyPublicationInterleavedInvocationCannotResolveTheLiveRow(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "changed.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+	)
 	var nested error
 	var nestedRows int64
 	var nestedState string
@@ -879,8 +998,12 @@ func TestApplyPublicationInterleavedInvocationCannotResolveTheLiveRow(t *testing
 func TestApplyPublicationRefusesReusingCorruptBackup(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
-	first := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "first"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}),
+	)
+	first := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "first"}),
+	)
 	report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, first))
 	require.NoError(t, err)
 	backup := publicationApplyEntryFor(t, report, "note.ini").Backup
@@ -888,7 +1011,9 @@ func TestApplyPublicationRefusesReusingCorruptBackup(t *testing.T) {
 	require.Equal(t, int64(1), fixture.journalRowCount(t))
 
 	fixture.write(t, "note.ini", "before")
-	next := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "second"}))
+	next := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "second"}),
+	)
 	for name, data := range map[string][]byte{"truncated": []byte("befor"), "same length corrupt": []byte("bEfore")} {
 		t.Run(name, func(t *testing.T) {
 			publicationApplyRewriteBackup(t, fixture, *backup, data)
@@ -919,8 +1044,15 @@ func TestApplyPublicationRefusesBackupOnlySelection(t *testing.T) {
 			apply(&fixture)
 			fixture.write(t, "changed.ini", "before")
 			fixture.write(t, "removed.ini", "gone")
-			base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "before", "removed.ini": "gone"}))
-			remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}))
+			base := fixture.targetSnapshot(
+				publicationPreviewFileEntries(
+					fixture.target.ID,
+					map[string]string{"changed.ini": "before", "removed.ini": "gone"},
+				),
+			)
+			remote := fixture.targetSnapshot(
+				publicationPreviewFileEntries(fixture.target.ID, map[string]string{"changed.ini": "after"}),
+			)
 
 			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, base, remote))
 			requirePublicationApplyRefusal(t, err, "apply-plan", "backup_only")
@@ -946,7 +1078,7 @@ func TestApplyPublicationJournalRowCountSeesTerminalRows(t *testing.T) {
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, publicationstate.JournalOutcomeFailed, resolutions[0].Outcome)
 	assert.Empty(t, fixture.resolutions(t))
-	assert.NoError(t, fixture.journal.CheckAdmission(context.Background(), 0))
+	require.NoError(t, fixture.journal.CheckAdmission(context.Background(), 0))
 	assert.Equal(t, int64(1), fixture.journalRowCount(t))
 	state, stage := publicationApplyJournalState(t, fixture, entry.Entry)
 	assert.Equal(t, "failed", state)
@@ -954,7 +1086,16 @@ func TestApplyPublicationJournalRowCountSeesTerminalRows(t *testing.T) {
 }
 
 func publicationApplyModeEntry(targetID, path, content string, mode uint32) model.Entry {
-	return model.Entry{TargetID: targetID, File: &model.FileEntry{Path: path, State: model.FilePresent, Kind: model.FileRegular, Content: []byte(content), Mode: mode}}
+	return model.Entry{
+		TargetID: targetID,
+		File: &model.FileEntry{
+			Path:    path,
+			State:   model.FilePresent,
+			Kind:    model.FileRegular,
+			Content: []byte(content),
+			Mode:    mode,
+		},
+	}
 }
 
 func TestPublicationApplySupportedMode(t *testing.T) {
@@ -975,9 +1116,14 @@ func TestApplyPublicationWritesTheDeclaredMode(t *testing.T) {
 	for name, declared := range cases {
 		t.Run(name, func(t *testing.T) {
 			fixture := newPublicationApplyFixture(t)
-			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", uint32(declared))})
+			remote := fixture.targetSnapshot(
+				[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", uint32(declared))},
+			)
 
-			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			report, err := ApplyPublication(
+				context.Background(),
+				fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+			)
 			require.NoError(t, err)
 			assert.Nil(t, report.Stopped)
 			assert.Equal(t, 1, report.Applied)
@@ -1006,8 +1152,14 @@ func TestApplyPublicationAppliesModeOnlyDivergence(t *testing.T) {
 			fixture := newPublicationApplyFixture(t)
 			fixture.write(t, "note.ini", "same")
 			require.NoError(t, os.Chmod(fixture.path("note.ini"), testCase.local))
-			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.local))})
-			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.declared))})
+			base := fixture.targetSnapshot(
+				[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.local))},
+			)
+			remote := fixture.targetSnapshot(
+				[]model.Entry{
+					publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(testCase.declared)),
+				},
+			)
 
 			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
 			require.NoError(t, err)
@@ -1034,14 +1186,22 @@ func TestApplyPublicationRefusesUnsupportedDeclaredModes(t *testing.T) {
 	for _, mode := range []uint32{0o755, 0o640, 0o660} {
 		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
 			fixture := newPublicationApplyFixture(t)
-			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", mode)})
+			remote := fixture.targetSnapshot(
+				[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", mode)},
+			)
 
-			plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			plan, err := PlanPublicationApply(
+				context.Background(),
+				fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+			)
 			refused := requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
 			assert.Contains(t, refused.Error(), fmt.Sprintf("%04o", mode))
 			assert.Empty(t, plan.Entries)
 
-			report, err := ApplyPublication(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+			report, err := ApplyPublication(
+				context.Background(),
+				fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+			)
 			refused = requirePublicationApplyRefusal(t, err, "apply-plan", "mode_unsupported")
 			assert.Contains(t, refused.Error(), fmt.Sprintf("%04o", mode))
 			assert.Equal(t, 0, report.Applied)
@@ -1059,8 +1219,12 @@ func TestApplyPublicationRefusesUnsupportedLocalModeOnlyChange(t *testing.T) {
 			fixture := newPublicationApplyFixture(t)
 			fixture.write(t, "note.ini", "same")
 			require.NoError(t, os.Chmod(fixture.path("note.ini"), local))
-			base := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(local))})
-			remote := fixture.targetSnapshot([]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o644)})
+			base := fixture.targetSnapshot(
+				[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", uint32(local))},
+			)
+			remote := fixture.targetSnapshot(
+				[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o644)},
+			)
 			before, err := os.Lstat(fixture.path("note.ini"))
 			require.NoError(t, err)
 
@@ -1146,11 +1310,8 @@ func (f *publicationApplyCountingFile) Read(buffer []byte) (int, error) {
 	if f.filesystem.growth == 0 {
 		return read, err
 	}
-	extra := f.filesystem.growth
-	if extra > len(buffer) {
-		extra = len(buffer)
-	}
-	for index := 0; index < extra; index++ {
+	extra := min(f.filesystem.growth, len(buffer))
+	for index := range extra {
 		buffer[index] = 'g'
 	}
 	f.filesystem.growth -= extra
@@ -1168,14 +1329,18 @@ func TestApplyPublicationRefusesOversizedPreimageWithoutReadingPastTheBound(t *t
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "big.bin", "A")
 	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "A"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "B"}))
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"big.bin": "B"}),
+	)
 	counter := &publicationApplyCountingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem(), growth: 1 << 16}
-	capture := publicationCapturePortFunc(func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-		result, err := LocalFilesCapture{}.Capture(ctx, target, path)
-		require.NoError(t, err)
-		fixture.writeSized(t, "big.bin", publicationApplyMaxObservedBytes)
-		return result, nil
-	})
+	capture := publicationCapturePortFunc(
+		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
+			result, err := LocalFilesCapture{}.Capture(ctx, target, path)
+			require.NoError(t, err)
+			fixture.writeSized(t, "big.bin", publicationApplyMaxObservedBytes)
+			return result, nil
+		},
+	)
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 	request := fixture.request(local, base, remote)
@@ -1197,8 +1362,12 @@ func TestApplyPublicationRefusesOversizedPreimageWithoutReadingPastTheBound(t *t
 func TestApplyPublicationRefusesOversizedPostimageWithoutReadingPastTheBound(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}),
+	)
 	counter := &publicationApplyCountingFileSystem{ApplyFileSystem: files.DefaultApplyFileSystem()}
 	request := fixture.request(fixture.local, base, remote)
 	request.FileSystem = counter
@@ -1224,8 +1393,12 @@ func TestApplyPublicationRefusesOversizedPostimageWithoutReadingPastTheBound(t *
 func TestApplyPublicationRefusesOversizedRecoveryObservationWithoutReadingPastTheBound(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "before")
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "after"}),
+	)
 	stop := errors.New("synthetic stop before mutation")
 	interrupted := fixture.request(fixture.local, base, remote)
 	interrupted.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {

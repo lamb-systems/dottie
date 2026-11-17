@@ -14,10 +14,11 @@ import (
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/state"
 
 	"github.com/lamb-systems/dottie/internal/vault"
 )
@@ -47,30 +48,88 @@ type securityDefect struct {
 }
 
 var caseMatrix = []matrixCase{
-	{id: "1a", status: statusNewRefusal, test: "TestReaderRefusesHeadEnvelopeParentMismatch", refusal: "TestExpectedRefusalReaderHeadEnvelopeParentLink"},
-	{id: "3b", status: statusNewRefusal, test: "TestReaderRefusesExtraRecipientInMetadata", refusal: "TestExpectedRefusalReaderExtraRecipientInMetadata"},
-	{id: "3c", status: statusNewRefusal, test: "TestReaderRefusesUnnamedRecipientSet", refusal: "TestExpectedRefusalReaderUnauthorizedWrap"},
+	{
+		id:      "1a",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesHeadEnvelopeParentMismatch",
+		refusal: "TestExpectedRefusalReaderHeadEnvelopeParentLink",
+	},
+	{
+		id:      "3b",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesExtraRecipientInMetadata",
+		refusal: "TestExpectedRefusalReaderExtraRecipientInMetadata",
+	},
+	{
+		id:      "3c",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesUnnamedRecipientSet",
+		refusal: "TestExpectedRefusalReaderUnauthorizedWrap",
+	},
 	{id: "4", status: statusNewRefusal, test: "TestReaderRefusesUnrelatedPredecessorPolicy"},
 	{id: "5a", status: statusExisting, test: "TestVaultReaderRejectsLowerCountOnAuthenticatedReread"},
-	{id: "5b", status: statusNewRefusal, test: "TestReaderRefusesOlderSnapshotAtNextCount", refusal: "TestExpectedRefusalReaderOlderSnapshotAtNextCount"},
-	{id: "5c", status: statusNewRefusal, test: "TestReaderRefusesCoherentForkBehindHead", refusal: "TestExpectedRefusalReaderCoherentForkBehindHead"},
+	{
+		id:      "5b",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesOlderSnapshotAtNextCount",
+		refusal: "TestExpectedRefusalReaderOlderSnapshotAtNextCount",
+	},
+	{
+		id:      "5c",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesCoherentForkBehindHead",
+		refusal: "TestExpectedRefusalReaderCoherentForkBehindHead",
+	},
 	{id: "6a", status: statusExisting, test: "TestRevisionReaderRejectsMissingRecordBlock"},
 	{id: "6b", status: statusNewRefusal, test: "TestReaderRefusesMissingSnapshotMembership"},
 	{id: "7", status: statusNewRefusal, test: "TestReaderRefusesRestoreOnlySnapshotSigner"},
 	{id: "8", status: statusNewRefusal, test: "TestReaderRefusesRevokedDeviceEnvelope"},
 	{id: "9", status: statusSeamBoundary, test: "TestSeamBoundaryAttestationSignerUnauthenticated"},
-	{id: "10", status: statusNewRefusal, test: "TestReaderRefusesHeadEnvelopeSignerMismatch", refusal: "TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners"},
-	{id: "11", status: statusNewRefusal, test: "TestReaderRefusesControlAncestry", refusal: "TestExpectedRefusalReaderControlAncestry"},
+	{
+		id:      "10",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesHeadEnvelopeSignerMismatch",
+		refusal: "TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners",
+	},
+	{
+		id:      "11",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesControlAncestry",
+		refusal: "TestExpectedRefusalReaderControlAncestry",
+	},
 	{id: "16", status: statusNewRefusal, test: "TestReaderRefusesEpochMixedSnapshotObject"},
 	{id: "17", status: statusNewRefusal, test: "TestReaderRefusesSuccessorPolicyFromUnauthorizedRoot"},
-	{id: "18", status: statusNewRefusal, test: "TestReaderRefusesHeadAboveMaxPublications", refusal: "TestExpectedRefusalReaderHeadAboveMaxPublications"},
+	{
+		id:      "18",
+		status:  statusNewRefusal,
+		test:    "TestReaderRefusesHeadAboveMaxPublications",
+		refusal: "TestExpectedRefusalReaderHeadAboveMaxPublications",
+	},
 }
 
 var knownSecurityDefects = []securityDefect{}
 
 const hostilePackageName = "atproto"
 
-var frozenCaseInventory = []string{"1a", "3b", "3c", "4", "5a", "5b", "5c", "6a", "6b", "7", "8", "9", "10", "11", "16", "17", "18"}
+var frozenCaseInventory = []string{
+	"1a",
+	"3b",
+	"3c",
+	"4",
+	"5a",
+	"5b",
+	"5c",
+	"6a",
+	"6b",
+	"7",
+	"8",
+	"9",
+	"10",
+	"11",
+	"16",
+	"17",
+	"18",
+}
 
 func testSourceFunctions(t *testing.T) map[string]bool {
 	t.Helper()
@@ -124,7 +183,14 @@ func TestCaseMatrixMatchesTests(t *testing.T) {
 		for _, entry := range caseMatrix {
 			if entry.test == name {
 				found = true
-				assert.Equal(t, statusKnownDefect, entry.status, "characterization test %q maps to a non-known-defect row %s", name, entry.id)
+				assert.Equal(
+					t,
+					statusKnownDefect,
+					entry.status,
+					"characterization test %q maps to a non-known-defect row %s",
+					name,
+					entry.id,
+				)
 			}
 		}
 		assert.True(t, found, "characterization test %q is not registered in the case matrix", name)
@@ -189,36 +255,68 @@ func fixturePublisherCertificate(t *testing.T, fixture readFixture) vault.Certif
 func fixtureRecipientPublicKeys(policy vault.Policy) []vault.RecipientPublicKey {
 	recipients := make([]vault.RecipientPublicKey, len(policy.Recipients))
 	for index, recipient := range policy.Recipients {
-		recipients[index] = vault.RecipientPublicKey{KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:])}
+		recipients[index] = vault.RecipientPublicKey{
+			KeyID:     bytes.Clone(recipient.KeyID),
+			PublicKey: bytes.Clone(recipient.PublicKey[:]),
+		}
 	}
 	return recipients
 }
 
-func snapshotRecordForEnvelope(t *testing.T, envelope vault.Envelope, envelopeBytes []byte, signing ed25519.PrivateKey) SnapshotRecord {
+func snapshotRecordForEnvelope(
+	t *testing.T,
+	envelope vault.Envelope,
+	envelopeBytes []byte,
+	signing ed25519.PrivateKey,
+) SnapshotRecord {
 	t.Helper()
 	envelopeCID := readRawCID(t, envelopeBytes)
 	parsed, err := cid.Cast(envelopeCID)
 	require.NoError(t, err)
 	digest := sha256Digest(envelope.Signature[:])
 	snapshot := SnapshotRecord{
-		SchemaVersion: 1, Vault: bytes.Clone(envelope.Vault[:]), PublicationID: bytes.Clone(envelope.PublicationID[:]),
-		EpochSeq: envelope.EpochSeq, PolicyDigest: bytes.Clone(envelope.PolicyDigest[:]), Parent: bytes.Clone(envelope.Parent),
-		Blob:           atdata.Blob{Ref: atdata.CIDLink(parsed), MimeType: "application/octet-stream", Size: int64(len(envelopeBytes))},
-		SignerDeviceID: envelope.DeviceID, SignerKeyID: bytes.Clone(envelope.KeyID), EnvelopeSignatureDigest: digest[:],
+		SchemaVersion: 1,
+		Vault:         bytes.Clone(envelope.Vault[:]),
+		PublicationID: bytes.Clone(envelope.PublicationID[:]),
+		EpochSeq:      envelope.EpochSeq,
+		PolicyDigest:  bytes.Clone(envelope.PolicyDigest[:]),
+		Parent:        bytes.Clone(envelope.Parent),
+		Blob: atdata.Blob{
+			Ref:      atdata.CIDLink(parsed),
+			MimeType: "application/octet-stream",
+			Size:     int64(len(envelopeBytes)),
+		},
+		SignerDeviceID:          envelope.DeviceID,
+		SignerKeyID:             bytes.Clone(envelope.KeyID),
+		EnvelopeSignatureDigest: digest[:],
 	}
 	signed, err := SignSnapshotRecord(snapshot, signing)
 	require.NoError(t, err)
 	return signed
 }
 
-func sealFixtureSnapshot(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte) ([]byte, SnapshotRecord) {
+func sealFixtureSnapshot(
+	t *testing.T,
+	fixture readFixture,
+	parent []byte,
+	publicationSeed byte,
+	plaintext []byte,
+) ([]byte, SnapshotRecord) {
 	t.Helper()
 	policy, _, digest := fixturePolicyParts(t, fixture)
 	certificate := fixturePublisherCertificate(t, fixture)
 	envelope, err := vault.SealAuthorized(vault.SealRequest{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: digest, Parent: parent, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: plaintext, SigningKey: fixtureSigningKey(12), Recipients: fixtureRecipientPublicKeys(policy),
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         fixture.request.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{publicationSeed}, 16)),
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  digest,
+		Parent:        parent,
+		DeviceID:      "publisher",
+		KeyID:         []byte("publisher-sign"),
+		Plaintext:     plaintext,
+		SigningKey:    fixtureSigningKey(12),
+		Recipients:    fixtureRecipientPublicKeys(policy),
 	}, certificate, policy)
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -235,7 +333,15 @@ func fixtureHeadObject(t *testing.T, fixture readFixture) vault.Head {
 	return headFromRecord(record)
 }
 
-func signFixtureHead(t *testing.T, fixture readFixture, envelopeBytes []byte, count uint64, prevHeadCID []byte, signer vault.Signer, signing ed25519.PrivateKey) HeadRecord {
+func signFixtureHead(
+	t *testing.T,
+	fixture readFixture,
+	envelopeBytes []byte,
+	count uint64,
+	prevHeadCID []byte,
+	signer vault.Signer,
+	signing ed25519.PrivateKey,
+) HeadRecord {
 	t.Helper()
 	head := fixtureHeadObject(t, fixture)
 	envelopeCID := readRawCID(t, envelopeBytes)
@@ -250,7 +356,13 @@ func signFixtureHead(t *testing.T, fixture readFixture, envelopeBytes []byte, co
 	return headRecordFromObject(decoded)
 }
 
-func installSnapshot(t *testing.T, fixture *readFixture, envelopeBytes []byte, snapshot SnapshotRecord, head HeadRecord) {
+func installSnapshot(
+	t *testing.T,
+	fixture *readFixture,
+	envelopeBytes []byte,
+	snapshot SnapshotRecord,
+	head HeadRecord,
+) {
 	t.Helper()
 	encoded, err := EncodeRecord(snapshot)
 	require.NoError(t, err)
@@ -319,7 +431,12 @@ func policyRecordDigest(t *testing.T, recordBytes []byte) [32]byte {
 	return digest
 }
 
-func craftSuccessorPolicy(t *testing.T, fixture readFixture, epoch uint64, prevPolicyDigest [32]byte) ([]byte, vault.Policy, [32]byte) {
+func craftSuccessorPolicy(
+	t *testing.T,
+	fixture readFixture,
+	epoch uint64,
+	prevPolicyDigest [32]byte,
+) ([]byte, vault.Policy, [32]byte) {
 	t.Helper()
 	base, _, _ := fixturePolicyParts(t, fixture)
 	base.EpochSeq = epoch
@@ -334,13 +451,30 @@ func craftSuccessorPolicy(t *testing.T, fixture readFixture, epoch uint64, prevP
 	return recordBytes, object, digest
 }
 
-func sealSnapshotAtEpoch(t *testing.T, fixture readFixture, policyObject vault.Policy, digest [32]byte, epoch uint64, parent []byte, seed byte, plaintext []byte) ([]byte, SnapshotRecord) {
+func sealSnapshotAtEpoch(
+	t *testing.T,
+	fixture readFixture,
+	policyObject vault.Policy,
+	digest [32]byte,
+	epoch uint64,
+	parent []byte,
+	seed byte,
+	plaintext []byte,
+) ([]byte, SnapshotRecord) {
 	t.Helper()
 	certificate := fixturePublisherCertificate(t, fixture)
 	envelope, err := vault.SealAuthorized(vault.SealRequest{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{seed}, 16)),
-		EpochSeq: epoch, PolicyDigest: digest, Parent: parent, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: plaintext, SigningKey: fixtureSigningKey(12), Recipients: fixtureRecipientPublicKeys(policyObject),
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         fixture.request.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{seed}, 16)),
+		EpochSeq:      epoch,
+		PolicyDigest:  digest,
+		Parent:        parent,
+		DeviceID:      "publisher",
+		KeyID:         []byte("publisher-sign"),
+		Plaintext:     plaintext,
+		SigningKey:    fixtureSigningKey(12),
+		Recipients:    fixtureRecipientPublicKeys(policyObject),
 	}, certificate, policyObject)
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -348,7 +482,13 @@ func sealSnapshotAtEpoch(t *testing.T, fixture readFixture, policyObject vault.P
 	return envelopeBytes, snapshotRecordForEnvelope(t, envelope, envelopeBytes, fixtureSigningKey(12))
 }
 
-func craftControl(t *testing.T, fixture readFixture, epoch uint64, digest [32]byte, headSnapshotCID, prevControlCID []byte) ControlRecord {
+func craftControl(
+	t *testing.T,
+	fixture readFixture,
+	epoch uint64,
+	digest [32]byte,
+	headSnapshotCID, prevControlCID []byte,
+) ControlRecord {
 	t.Helper()
 	decoded, err := DecodeRecord(fixture.records[RecordKey{Collection: VaultControlNSID, RKey: "self"}])
 	require.NoError(t, err)
@@ -363,12 +503,28 @@ func craftControl(t *testing.T, fixture readFixture, epoch uint64, digest [32]by
 	return controlRecordFromObject(rebuilt)
 }
 
-func craftHead(t *testing.T, fixture readFixture, epoch uint64, digest [32]byte, snapshotCID, prevHeadCID []byte, count uint64, signer vault.Signer, signing ed25519.PrivateKey) HeadRecord {
+func craftHead(
+	t *testing.T,
+	fixture readFixture,
+	epoch uint64,
+	digest [32]byte,
+	snapshotCID, prevHeadCID []byte,
+	count uint64,
+	signer vault.Signer,
+	signing ed25519.PrivateKey,
+) HeadRecord {
 	t.Helper()
 	head := vault.Head{
-		Vault: fixture.request.Vault, EpochSeq: epoch, PolicyDigest: digest,
-		SnapshotCID: bytes.Clone(snapshotCID), BlobCID: bytes.Clone(snapshotCID), PublicationCount: count,
-		PrevHeadCID: bytes.Clone(prevHeadCID), Signer: vault.Signer{DeviceID: signer.DeviceID, KeyID: bytes.Clone(signer.KeyID)},
+		Vault:            fixture.request.Vault,
+		EpochSeq:         epoch,
+		PolicyDigest:     digest,
+		SnapshotCID:      bytes.Clone(snapshotCID),
+		BlobCID:          bytes.Clone(snapshotCID),
+		PublicationCount: count,
+		PrevHeadCID: bytes.Clone(
+			prevHeadCID,
+		),
+		Signer: vault.Signer{DeviceID: signer.DeviceID, KeyID: bytes.Clone(signer.KeyID)},
 	}
 	headBytes := signReadHead(t, head, signing)
 	decoded, err := vault.DecodeHead(headBytes)
@@ -389,7 +545,11 @@ func fixtureCertificates(t *testing.T, fixture readFixture) map[string]storedCer
 		object := certificateFromRecord(record)
 		encoded, err := vault.EncodeCertificate(object)
 		require.NoError(t, err)
-		certificates[certificateIdentity(record.DeviceID, record.KeyID)] = storedCertificate{recordBytes: bytes.Clone(data), objectBytes: encoded, object: object}
+		certificates[certificateIdentity(record.DeviceID, record.KeyID)] = storedCertificate{
+			recordBytes: bytes.Clone(data),
+			objectBytes: encoded,
+			object:      object,
+		}
 	}
 	return certificates
 }
@@ -456,8 +616,22 @@ func TestReaderRefusesHeadEnvelopeParentMismatch(t *testing.T) {
 	controlFixture := newReadFixture(t)
 	_, controlS1 := buildGenuineChain(t, &controlFixture, 0xB0)
 	controlS2 := buildGenuineThirdPublication(t, &controlFixture, controlS1, 0xB2)
-	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(t, controlFixture, controlS2, 0xB3, []byte("coherent S3 payload"))
-	coherentHead := signFixtureHead(t, controlFixture, coherentEnvelope, 3, controlS2, publisherSigner(), fixtureSigningKey(12))
+	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS2,
+		0xB3,
+		[]byte("coherent S3 payload"),
+	)
+	coherentHead := signFixtureHead(
+		t,
+		controlFixture,
+		coherentEnvelope,
+		3,
+		controlS2,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, coherentEnvelope, coherentSnapshot, coherentHead)
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "observed-store positive control reads coherent S3")
@@ -500,7 +674,14 @@ func currentSnapshotRecord(t *testing.T, fixture readFixture) SnapshotRecord {
 	return record
 }
 
-func sealFixtureSnapshotExtraRecipient(t *testing.T, fixture readFixture, parent []byte, publicationSeed byte, plaintext []byte, extra vault.RecipientPublicKey) ([]byte, SnapshotRecord) {
+func sealFixtureSnapshotExtraRecipient(
+	t *testing.T,
+	fixture readFixture,
+	parent []byte,
+	publicationSeed byte,
+	plaintext []byte,
+	extra vault.RecipientPublicKey,
+) ([]byte, SnapshotRecord) {
 	t.Helper()
 	policy, _, _ := fixturePolicyParts(t, fixture)
 	envelopeBytes, _ := sealFixtureSnapshot(t, fixture, parent, publicationSeed, plaintext)
@@ -512,7 +693,12 @@ func sealFixtureSnapshotExtraRecipient(t *testing.T, fixture readFixture, parent
 	return forgeEnvelopeRecipientKeyIDs(t, envelopeBytes, keyIDs, fixtureSigningKey(12))
 }
 
-func forgeEnvelopeRecipientKeyIDs(t *testing.T, encoded []byte, keyIDs [][]byte, signer ed25519.PrivateKey) ([]byte, SnapshotRecord) {
+func forgeEnvelopeRecipientKeyIDs(
+	t *testing.T,
+	encoded []byte,
+	keyIDs [][]byte,
+	signer ed25519.PrivateKey,
+) ([]byte, SnapshotRecord) {
 	t.Helper()
 	envelope, err := vault.DecodeEnvelope(encoded)
 	require.NoError(t, err)
@@ -547,26 +733,42 @@ func forgeEnvelopeRecipientKeyIDs(t *testing.T, encoded []byte, keyIDs [][]byte,
 func TestReaderRefusesExtraRecipientInMetadata(t *testing.T) {
 	fixture := newReadFixture(t)
 	policy, _, _ := fixturePolicyParts(t, fixture)
-	extra := vault.RecipientPublicKey{KeyID: bytes.Clone(readRogueKeyID), PublicKey: readX25519Key(t, 99).PublicKey().Bytes()}
-	envelopeBytes, snapshot := sealFixtureSnapshotExtraRecipient(t, fixture, nil, 0x95, []byte("synthetic snapshot payload"), extra)
+	extra := vault.RecipientPublicKey{
+		KeyID:     bytes.Clone(readRogueKeyID),
+		PublicKey: readX25519Key(t, 99).PublicKey().Bytes(),
+	}
+	envelopeBytes, snapshot := sealFixtureSnapshotExtraRecipient(
+		t,
+		fixture,
+		nil,
+		0x95,
+		[]byte("synthetic snapshot payload"),
+		extra,
+	)
 	envelope, err := vault.DecodeEnvelope(envelopeBytes)
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(policy.Recipients))
-	assert.Equal(t, 3, len(envelope.Recipients))
+	assert.Len(t, policy.Recipients, 2)
+	assert.Len(t, envelope.Recipients, 3)
 	head := signFixtureHead(t, fixture, envelopeBytes, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 	fixture.request.DeviceKey = nil
 	fixture.request.DeviceKeyID = nil
 
 	controlFixture := newReadFixture(t)
-	controlEnvelope, controlSnapshot := sealFixtureSnapshot(t, controlFixture, nil, 0x95, []byte("synthetic snapshot payload"))
+	controlEnvelope, controlSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		nil,
+		0x95,
+		[]byte("synthetic snapshot payload"),
+	)
 	controlHead := signFixtureHead(t, controlFixture, controlEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &controlFixture, controlEnvelope, controlSnapshot, controlHead)
 	controlFixture.request.DeviceKey = nil
 	controlFixture.request.DeviceKeyID = nil
 	controlResult, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "an otherwise identical envelope without the extra recipient reads")
-	assert.Equal(t, 2, len(controlResult.Envelope.Recipients))
+	assert.Len(t, controlResult.Envelope.Recipients, 2)
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadRecipientSet,
@@ -589,10 +791,29 @@ func TestReaderRefusesUnrelatedPredecessorPolicy(t *testing.T) {
 	fixture.request.PreviousControl = inheritedControlRecordBytes
 
 	p2Record, p2Object, p2Digest := craftSuccessorPolicy(t, fixture, 2, p0Digest)
-	env2, snapshot2 := sealSnapshotAtEpoch(t, fixture, p2Object, p2Digest, 2, inheritedSnapshotCID, 0xE2, []byte("epoch two payload"))
+	env2, snapshot2 := sealSnapshotAtEpoch(
+		t,
+		fixture,
+		p2Object,
+		p2Digest,
+		2,
+		inheritedSnapshotCID,
+		0xE2,
+		[]byte("epoch two payload"),
+	)
 	env2CID := readRawCID(t, env2)
 	control2 := craftControl(t, fixture, 2, p2Digest, env2CID, inheritedControlCID)
-	head2 := craftHead(t, fixture, 2, p2Digest, env2CID, inheritedSnapshotCID, 1, publisherSigner(), fixtureSigningKey(12))
+	head2 := craftHead(
+		t,
+		fixture,
+		2,
+		p2Digest,
+		env2CID,
+		inheritedSnapshotCID,
+		1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 
 	fixture.records[policyKey] = p2Record
 	putReadRecord(t, fixture.records, controlKey, control2)
@@ -624,8 +845,22 @@ func TestReaderRefusesCoherentForkBehindHead(t *testing.T) {
 	controlFixture := newReadFixture(t)
 	controlS0, controlS1 := buildGenuineChain(t, &controlFixture, 0xC0)
 	require.NotEqual(t, controlS0, controlS1)
-	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(t, controlFixture, controlS1, 0xC3, []byte("coherent S2 payload"))
-	coherentHead := signFixtureHead(t, controlFixture, coherentEnvelope, 2, controlS1, publisherSigner(), fixtureSigningKey(12))
+	coherentEnvelope, coherentSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		controlS1,
+		0xC3,
+		[]byte("coherent S2 payload"),
+	)
+	coherentHead := signFixtureHead(
+		t,
+		controlFixture,
+		coherentEnvelope,
+		2,
+		controlS1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, coherentEnvelope, coherentSnapshot, coherentHead)
 	controlResult, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "the same S2 construction reads when both ancestry fields name observed S1")
@@ -660,7 +895,15 @@ func TestReaderRefusesHeadEnvelopeSignerMismatch(t *testing.T) {
 	fixture := newReadFixture(t)
 	snapshot := currentSnapshotRecord(t, fixture)
 	rootSigner := vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")}
-	head := signFixtureHead(t, fixture, fixture.transport.blob, 1, fixtureHeadObject(t, fixture).PrevHeadCID, rootSigner, fixtureSigningKey(11))
+	head := signFixtureHead(
+		t,
+		fixture,
+		fixture.transport.blob,
+		1,
+		fixtureHeadObject(t, fixture).PrevHeadCID,
+		rootSigner,
+		fixtureSigningKey(11),
+	)
 	installSnapshot(t, &fixture, bytes.Clone(fixture.transport.blob), snapshot, head)
 	envelope, err := vault.DecodeEnvelope(fixture.transport.blob)
 	require.NoError(t, err)
@@ -671,7 +914,15 @@ func TestReaderRefusesHeadEnvelopeSignerMismatch(t *testing.T) {
 
 	controlFixture := newReadFixture(t)
 	controlSnapshot := currentSnapshotRecord(t, controlFixture)
-	controlHead := signFixtureHead(t, controlFixture, controlFixture.transport.blob, 1, fixtureHeadObject(t, controlFixture).PrevHeadCID, publisherSigner(), fixtureSigningKey(12))
+	controlHead := signFixtureHead(
+		t,
+		controlFixture,
+		controlFixture.transport.blob,
+		1,
+		fixtureHeadObject(t, controlFixture).PrevHeadCID,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	installSnapshot(t, &controlFixture, bytes.Clone(controlFixture.transport.blob), controlSnapshot, controlHead)
 	positive, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
 	require.NoError(t, err, "the same snapshot reads when head and envelope signers match")
@@ -714,11 +965,11 @@ func TestReaderRefusesControlAncestry(t *testing.T) {
 
 	_, err = fixture.reader().Read(context.Background(), fixture.request)
 	require.ErrorIs(t, err, ErrReadControlLinkage)
-	assert.NotErrorIs(t, err, ErrReadControlType)
-	assert.NotErrorIs(t, err, ErrReadControlSignature)
-	assert.NotErrorIs(t, err, ErrReadControlSigner)
-	assert.NotErrorIs(t, err, ErrReadControlEpoch)
-	assert.NotErrorIs(t, err, ErrReadControlPolicyDigest)
+	require.NotErrorIs(t, err, ErrReadControlType)
+	require.NotErrorIs(t, err, ErrReadControlSignature)
+	require.NotErrorIs(t, err, ErrReadControlSigner)
+	require.NotErrorIs(t, err, ErrReadControlEpoch)
+	require.NotErrorIs(t, err, ErrReadControlPolicyDigest)
 
 	controlFixture := newReadFixture(t)
 	controlPolicyKey := RecordKey{Collection: VaultPolicyNSID, RKey: "self"}
@@ -733,10 +984,29 @@ func TestReaderRefusesControlAncestry(t *testing.T) {
 	_, _, controlP1Digest := fixturePolicyParts(t, controlFixture)
 	controlP1Record := bytes.Clone(controlFixture.records[controlPolicyKey])
 	controlP2Record, controlP2Object, controlP2Digest := craftSuccessorPolicy(t, controlFixture, 2, controlP1Digest)
-	controlEnv2, controlSnapshot2 := sealSnapshotAtEpoch(t, controlFixture, controlP2Object, controlP2Digest, 2, nil, 0xF2, []byte("epoch two payload"))
+	controlEnv2, controlSnapshot2 := sealSnapshotAtEpoch(
+		t,
+		controlFixture,
+		controlP2Object,
+		controlP2Digest,
+		2,
+		nil,
+		0xF2,
+		[]byte("epoch two payload"),
+	)
 	controlEnv2CID := readRawCID(t, controlEnv2)
 	coherentControl2 := craftControl(t, controlFixture, 2, controlP2Digest, controlEnv2CID, controlC1CID)
-	controlHead2 := craftHead(t, controlFixture, 2, controlP2Digest, controlEnv2CID, nil, 1, publisherSigner(), fixtureSigningKey(12))
+	controlHead2 := craftHead(
+		t,
+		controlFixture,
+		2,
+		controlP2Digest,
+		controlEnv2CID,
+		nil,
+		1,
+		publisherSigner(),
+		fixtureSigningKey(12),
+	)
 	controlFixture.records[controlPolicyKey] = controlP2Record
 	putReadRecord(t, controlFixture.records, controlKey, coherentControl2)
 	installSnapshot(t, &controlFixture, controlEnv2, controlSnapshot2, controlHead2)
@@ -818,9 +1088,15 @@ func TestSeamBoundaryAttestationSignerUnauthenticated(t *testing.T) {
 	require.NoError(t, VerifyRecordBinding(attestationRecordBytes, attestationEncoded),
 		"the attestation record binds to its signed object")
 
-	err = VerifyRecordContext(attestationRecordBytes, RecordContext{Policy: policyRecordBytes, Control: controlRecordBytes, TrustAnchor: fixture.request.TrustAnchor})
-	assert.NoError(t, err,
-		"record-context validation is not an authentication verdict: a validly signed attestation naming a device with no role still passes")
+	err = VerifyRecordContext(
+		attestationRecordBytes,
+		RecordContext{Policy: policyRecordBytes, Control: controlRecordBytes, TrustAnchor: fixture.request.TrustAnchor},
+	)
+	assert.NoError(
+		t,
+		err,
+		"record-context validation is not an authentication verdict: a validly signed attestation naming a device with no role still passes",
+	)
 }
 
 func TestReaderRefusesMissingPolicyRecipientKeyID(t *testing.T) {
@@ -851,7 +1127,13 @@ func TestReaderRefusesUnnamedRecipientSet(t *testing.T) {
 	installSnapshot(t, &fixture, envelopeBytes, snapshot, head)
 
 	controlFixture := newReadFixture(t)
-	controlEnvelope, controlSnapshot := sealFixtureSnapshot(t, controlFixture, nil, 0x99, []byte("synthetic snapshot payload"))
+	controlEnvelope, controlSnapshot := sealFixtureSnapshot(
+		t,
+		controlFixture,
+		nil,
+		0x99,
+		[]byte("synthetic snapshot payload"),
+	)
 	controlHead := signFixtureHead(t, controlFixture, controlEnvelope, 1, nil, publisherSigner(), fixtureSigningKey(12))
 	installSnapshot(t, &controlFixture, controlEnvelope, controlSnapshot, controlHead)
 	controlResult, err := controlFixture.reader().Read(context.Background(), controlFixture.request)
@@ -872,14 +1154,26 @@ func TestRogueWrapDisclosesContentKeyOutsideReader(t *testing.T) {
 		EphemeralPrivate: readX25519Key(t, 97).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{0x35}, 24)),
 	})
 	_, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12),
-		ContentKey: bytes.Repeat([]byte{0x5a}, 32), Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
-		Recipients: recipients, Policy: policy,
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         fixture.request.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  policyDigest,
+		DeviceID:      "publisher",
+		KeyID:         []byte("publisher-sign"),
+		Plaintext:     []byte("synthetic snapshot payload"),
+		SigningKey:    fixtureSigningKey(12),
+		ContentKey:    bytes.Repeat([]byte{0x5a}, 32),
+		Nonce:         [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
+		Recipients:    recipients,
+		Policy:        policy,
 	})
-	require.ErrorIs(t, err, vault.ErrRecipient,
-		"the extra-recipient attack is unconstructible through the production sealing primitive, rather than merely undetected at read time")
+	require.ErrorIs(
+		t,
+		err,
+		vault.ErrRecipient,
+		"the extra-recipient attack is unconstructible through the production sealing primitive, rather than merely undetected at read time",
+	)
 }
 
 func TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey(t *testing.T) {
@@ -897,13 +1191,28 @@ func TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey(t *testing.T) {
 	require.Equal(t, []byte("root-sign"), substitutedKeyID,
 		"the substituted public key keeps a key ID named by policy")
 	_, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: fixture.request.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
-		EpochSeq: policy.EpochSeq, PolicyDigest: policyDigest, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: fixtureSigningKey(12), ContentKey: bytes.Repeat([]byte{0x5a}, 32),
-		Nonce: [24]byte(bytes.Repeat([]byte{0x6b}, 24)), Recipients: recipients, Policy: policy,
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         fixture.request.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{0x99}, 16)),
+		EpochSeq:      policy.EpochSeq,
+		PolicyDigest:  policyDigest,
+		DeviceID:      "publisher",
+		KeyID:         []byte("publisher-sign"),
+		Plaintext: []byte(
+			"synthetic snapshot payload",
+		),
+		SigningKey: fixtureSigningKey(12),
+		ContentKey: bytes.Repeat([]byte{0x5a}, 32),
+		Nonce:      [24]byte(bytes.Repeat([]byte{0x6b}, 24)),
+		Recipients: recipients,
+		Policy:     policy,
 	})
-	require.ErrorIs(t, err, vault.ErrRecipient,
-		"the policy-key-ID substitution attack is unconstructible through the production sealing primitive, rather than merely undetected at read time")
+	require.ErrorIs(
+		t,
+		err,
+		vault.ErrRecipient,
+		"the policy-key-ID substitution attack is unconstructible through the production sealing primitive, rather than merely undetected at read time",
+	)
 }
 
 func fixturePublisherCertKey(t *testing.T, fixture readFixture) RecordKey {
@@ -949,12 +1258,28 @@ func TestReaderRefusesRevokedDeviceEnvelope(t *testing.T) {
 	putReadRecord(t, fixture.records, certKey, certificateRecordFromObject(rebuiltCert))
 
 	rootSigner := vault.Signer{DeviceID: "root", KeyID: []byte("root-sign")}
-	head := signFixtureHead(t, fixture, fixture.transport.blob, 1, fixtureHeadObject(t, fixture).PrevHeadCID, rootSigner, fixtureSigningKey(11))
+	head := signFixtureHead(
+		t,
+		fixture,
+		fixture.transport.blob,
+		1,
+		fixtureHeadObject(t, fixture).PrevHeadCID,
+		rootSigner,
+		fixtureSigningKey(11),
+	)
 	putReadRecord(t, fixture.records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, head)
 	replaceReadCAR(t, &fixture, fixture.records)
 
-	_, headAuthErr := authorizedReadSigner(rootSigner, policy.Roles, fixtureCertificates(t, fixture),
-		fixture.request.Vault, policy.EpochSeq, fixture.request.TrustAnchor, rebuiltControl.Revoked, vault.RolePublisher)
+	_, headAuthErr := authorizedReadSigner(
+		rootSigner,
+		policy.Roles,
+		fixtureCertificates(t, fixture),
+		fixture.request.Vault,
+		policy.EpochSeq,
+		fixture.request.TrustAnchor,
+		rebuiltControl.Revoked,
+		vault.RolePublisher,
+	)
 	require.NoError(t, headAuthErr,
 		"the active root head signer is authorized under the revoked set, so the head path does not refuse")
 
@@ -972,8 +1297,13 @@ func preparedRecipientsForPolicy(t *testing.T, policy vault.Policy, seed byte) [
 	prepared := make([]vault.PreparedRecipient, len(policy.Recipients))
 	for index, recipient := range policy.Recipients {
 		prepared[index] = vault.PreparedRecipient{
-			KeyID: bytes.Clone(recipient.KeyID), PublicKey: bytes.Clone(recipient.PublicKey[:]),
-			EphemeralPrivate: readX25519Key(t, seed+byte(index)).Bytes(), WrapNonce: [24]byte(bytes.Repeat([]byte{seed + byte(index)}, 24)),
+			KeyID:     bytes.Clone(recipient.KeyID),
+			PublicKey: bytes.Clone(recipient.PublicKey[:]),
+			EphemeralPrivate: readX25519Key(
+				t,
+				seed+byte(index),
+			).Bytes(),
+			WrapNonce: [24]byte(bytes.Repeat([]byte{seed + byte(index)}, 24)),
 		}
 	}
 	return prepared
@@ -985,22 +1315,54 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 	rootRecipient := readX25519Key(t, 21)
 	restoreSigning := fixtureSigningKey(12)
 	restoreRecipient := readX25519Key(t, 22)
-	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: rootRecipient}
+	rootDevice := vault.DeviceMaterial{
+		DeviceID:  "root",
+		KeyID:     []byte("root-sign"),
+		Signing:   rootSigning,
+		Recipient: rootRecipient,
+	}
 	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
-	restore := vault.DeviceMaterial{DeviceID: "restore", KeyID: []byte("restore-sign"), Signing: restoreSigning, Recipient: restoreRecipient}
+	restore := vault.DeviceMaterial{
+		DeviceID:  "restore",
+		KeyID:     []byte("restore-sign"),
+		Signing:   restoreSigning,
+		Recipient: restoreRecipient,
+	}
 	intent := vault.TransitionIntent{
-		Kind: vault.TransitionEnroll, Vault: bootstrap.Vault, Signer: rootDevice, NewDevice: &restore, RequestedRole: vault.RoleRestoreOnly,
-		ContentKey: bytes.Repeat([]byte{41}, 32), Recipients: [][]byte{bootstrap.Certificate},
+		Kind:          vault.TransitionEnroll,
+		Vault:         bootstrap.Vault,
+		Signer:        rootDevice,
+		NewDevice:     &restore,
+		RequestedRole: vault.RoleRestoreOnly,
+		ContentKey:    bytes.Repeat([]byte{41}, 32),
+		Recipients:    [][]byte{bootstrap.Certificate},
 		Wraps: []vault.RecipientWrapInput{
-			{KeyID: []byte("restore-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24))},
-			{KeyID: []byte("root-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{52}, 24))},
+			{
+				KeyID:            []byte("restore-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{51}, 24)),
+			},
+			{
+				KeyID:            []byte("root-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{52}, 24)),
+			},
 		},
-		Plaintext: []byte("synthetic snapshot payload"), PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{62}, 24)),
+		Plaintext: []byte(
+			"synthetic snapshot payload",
+		),
+		PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)),
+		Nonce:         [24]byte(bytes.Repeat([]byte{62}, 24)),
 	}
 	predecessor := vault.Predecessor{
-		ControlCID: readRawCID(t, bootstrap.Control), PolicyDigest: readPolicyDigest(t, bootstrap.Policy), EpochSeq: 0,
-		Control: bootstrap.Control, Policy: bootstrap.Policy, Certificates: [][]byte{bootstrap.Certificate}, TrustAnchor: bootstrap.Anchor,
+		ControlCID:   readRawCID(t, bootstrap.Control),
+		PolicyDigest: readPolicyDigest(t, bootstrap.Policy),
+		EpochSeq:     0,
+		Control:      bootstrap.Control,
+		Policy:       bootstrap.Policy,
+		Certificates: [][]byte{bootstrap.Certificate},
+		TrustAnchor:  bootstrap.Anchor,
 	}
 	transition, err := vault.PrepareTransition(predecessor, intent)
 	require.NoError(t, err)
@@ -1009,10 +1371,24 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 	policyDigest, err := vault.ComputePolicyDigest(transition.Policy)
 	require.NoError(t, err)
 	envelope, err := vault.SealPrepared(vault.PreparedSeal{
-		Purpose: vault.PurposeSnapshot, Vault: bootstrap.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
-		EpochSeq: policyObject.EpochSeq, PolicyDigest: policyDigest, Parent: nil, DeviceID: "restore", KeyID: []byte("restore-sign"),
-		Plaintext: []byte("synthetic snapshot payload"), SigningKey: restoreSigning, ContentKey: bytes.Repeat([]byte{45}, 32),
-		Nonce: [24]byte(bytes.Repeat([]byte{63}, 24)), Recipients: preparedRecipientsForPolicy(t, policyObject, 80), Policy: policyObject,
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         bootstrap.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
+		EpochSeq:      policyObject.EpochSeq,
+		PolicyDigest:  policyDigest,
+		Parent:        nil,
+		DeviceID:      "restore",
+		KeyID:         []byte("restore-sign"),
+		Plaintext: []byte(
+			"synthetic snapshot payload",
+		),
+		SigningKey: restoreSigning,
+		ContentKey: bytes.Repeat([]byte{45}, 32),
+		Nonce: [24]byte(
+			bytes.Repeat([]byte{63}, 24),
+		),
+		Recipients: preparedRecipientsForPolicy(t, policyObject, 80),
+		Policy:     policyObject,
 	})
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -1030,8 +1406,18 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, restoreSigning)
 	records := map[RecordKey][]byte{}
-	putReadRecord(t, records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(policyObject))
-	putReadRecord(t, records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(controlObject))
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultPolicyNSID, RKey: "self"},
+		policyRecordFromObject(policyObject),
+	)
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultControlNSID, RKey: "self"},
+		controlRecordFromObject(controlObject),
+	)
 	putReadRecord(t, records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(headObject))
 	snapshotBytes, err := EncodeRecord(snapshot)
 	require.NoError(t, err)
@@ -1039,19 +1425,32 @@ func buildRestoreOnlyReaderFixture(t *testing.T) readFixture {
 	for index, encodedCertificate := range transition.Recipients {
 		certificate, decodeErr := vault.DecodeCertificate(encodedCertificate)
 		require.NoError(t, decodeErr)
-		putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: fmtKey(index + 1)}, certificateRecordFromObject(certificate))
+		putReadRecord(
+			t,
+			records,
+			RecordKey{Collection: VaultCertificateNSID, RKey: fmtKey(index + 1)},
+			certificateRecordFromObject(certificate),
+		)
 	}
 	car, blocks, root, method := buildReadCAR(t, records)
-	transport := &readTransport{proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200}, blob: bytes.Clone(envelopeBytes)}
+	transport := &readTransport{
+		proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200},
+		blob:           bytes.Clone(envelopeBytes),
+	}
 	previousPolicyRecord, err := EncodeRecord(policyRecordFromObject(mustDecodePolicy(t, bootstrap.Policy)))
 	require.NoError(t, err)
 	previousControlRecord := encodeReadControlRecord(t, bootstrap.Control)
 	store := newObservationStore(t)
 	return readFixture{
 		request: ReadRequest{
-			DID: proofTestDID, DIDDocumentID: proofTestDID,
-			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
-			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
+			DID:           proofTestDID,
+			DIDDocumentID: proofTestDID,
+			VerificationMethods: []VerificationMethod{
+				{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method},
+			},
+			Vault:           bootstrap.Vault,
+			TrustAnchor:     bootstrap.Anchor,
+			PreviousPolicy:  previousPolicyRecord,
 			PreviousControl: previousControlRecord,
 		},
 		transport: transport, observationStore: store, records: records, blocks: blocks, root: root,
@@ -1071,7 +1470,12 @@ func newObservationStore(t *testing.T) *state.Store {
 	t.Helper()
 	root := t.TempDir()
 	store, err := state.Open(platform.Paths{
-		Home: filepath.Join(root, "home"), StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"),
+		Home: filepath.Join(
+			root,
+			"home",
+		),
+		StateHome: filepath.Join(root, "state"),
+		CacheHome: filepath.Join(root, "cache"),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
@@ -1095,22 +1499,54 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 	rootSigning := fixtureSigningKey(11)
 	publisherSigning := fixtureSigningKey(12)
 	thirdSigning := fixtureSigningKey(13)
-	rootDevice := vault.DeviceMaterial{DeviceID: "root", KeyID: []byte("root-sign"), Signing: rootSigning, Recipient: readX25519Key(t, 21)}
+	rootDevice := vault.DeviceMaterial{
+		DeviceID:  "root",
+		KeyID:     []byte("root-sign"),
+		Signing:   rootSigning,
+		Recipient: readX25519Key(t, 21),
+	}
 	bootstrap, err := vault.Bootstrap("read fixture", rootDevice)
 	require.NoError(t, err)
-	publisher := vault.DeviceMaterial{DeviceID: "publisher", KeyID: []byte("publisher-sign"), Signing: publisherSigning, Recipient: readX25519Key(t, 22)}
+	publisher := vault.DeviceMaterial{
+		DeviceID:  "publisher",
+		KeyID:     []byte("publisher-sign"),
+		Signing:   publisherSigning,
+		Recipient: readX25519Key(t, 22),
+	}
 	intentOne := vault.TransitionIntent{
-		Kind: vault.TransitionEnroll, Vault: bootstrap.Vault, Signer: rootDevice, NewDevice: &publisher, RequestedRole: vault.RolePublisher,
-		ContentKey: bytes.Repeat([]byte{41}, 32), Recipients: [][]byte{bootstrap.Certificate},
+		Kind:          vault.TransitionEnroll,
+		Vault:         bootstrap.Vault,
+		Signer:        rootDevice,
+		NewDevice:     &publisher,
+		RequestedRole: vault.RolePublisher,
+		ContentKey:    bytes.Repeat([]byte{41}, 32),
+		Recipients:    [][]byte{bootstrap.Certificate},
 		Wraps: []vault.RecipientWrapInput{
-			{KeyID: []byte("publisher-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{51}, 24))},
-			{KeyID: []byte("root-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{52}, 24))},
+			{
+				KeyID:            []byte("publisher-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 31).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{51}, 24)),
+			},
+			{
+				KeyID:            []byte("root-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 32).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{52}, 24)),
+			},
 		},
-		Plaintext: []byte("epoch one payload"), PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{62}, 24)),
+		Plaintext: []byte(
+			"epoch one payload",
+		),
+		PublicationID: [16]byte(bytes.Repeat([]byte{61}, 16)),
+		Nonce:         [24]byte(bytes.Repeat([]byte{62}, 24)),
 	}
 	predecessorOne := vault.Predecessor{
-		ControlCID: readRawCID(t, bootstrap.Control), PolicyDigest: readPolicyDigest(t, bootstrap.Policy), EpochSeq: 0,
-		Control: bootstrap.Control, Policy: bootstrap.Policy, Certificates: [][]byte{bootstrap.Certificate}, TrustAnchor: bootstrap.Anchor,
+		ControlCID:   readRawCID(t, bootstrap.Control),
+		PolicyDigest: readPolicyDigest(t, bootstrap.Policy),
+		EpochSeq:     0,
+		Control:      bootstrap.Control,
+		Policy:       bootstrap.Policy,
+		Certificates: [][]byte{bootstrap.Certificate},
+		TrustAnchor:  bootstrap.Anchor,
 	}
 	transitionOne, err := vault.PrepareTransition(predecessorOne, intentOne)
 	require.NoError(t, err)
@@ -1121,9 +1557,19 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 	publisherCertificate, err := vault.DecodeCertificate(transitionOne.Certificate)
 	require.NoError(t, err)
 	epochOneEnvelope, err := vault.SealAuthorized(vault.SealRequest{
-		Purpose: vault.PurposeSnapshot, Vault: bootstrap.Vault, PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
-		EpochSeq: policyOne.EpochSeq, PolicyDigest: digestOne, Parent: nil, DeviceID: "publisher", KeyID: []byte("publisher-sign"),
-		Plaintext: []byte("epoch one payload"), SigningKey: publisherSigning, Recipients: fixtureRecipientPublicKeys(policyOne),
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         bootstrap.Vault,
+		PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
+		EpochSeq:      policyOne.EpochSeq,
+		PolicyDigest:  digestOne,
+		Parent:        nil,
+		DeviceID:      "publisher",
+		KeyID:         []byte("publisher-sign"),
+		Plaintext: []byte(
+			"epoch one payload",
+		),
+		SigningKey: publisherSigning,
+		Recipients: fixtureRecipientPublicKeys(policyOne),
 	}, publisherCertificate, policyOne)
 	require.NoError(t, err)
 	epochOneBytes, err := vault.EncodeEnvelope(epochOneEnvelope)
@@ -1137,16 +1583,42 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 		HeadCID: bytes.Clone(transitionOneHead.SnapshotCID), Head: transitionOne.Head, Control: transitionOne.Control,
 		Policy: transitionOne.Policy, Certificates: transitionOne.Recipients, TrustAnchor: bootstrap.Anchor,
 	}
-	third := vault.DeviceMaterial{DeviceID: "third", KeyID: []byte("third-sign"), Signing: thirdSigning, Recipient: readX25519Key(t, 23)}
+	third := vault.DeviceMaterial{
+		DeviceID:  "third",
+		KeyID:     []byte("third-sign"),
+		Signing:   thirdSigning,
+		Recipient: readX25519Key(t, 23),
+	}
 	intentTwo := vault.TransitionIntent{
-		Kind: vault.TransitionEnroll, Vault: bootstrap.Vault, Signer: rootDevice, NewDevice: &third, RequestedRole: vault.RolePublisher,
-		ContentKey: bytes.Repeat([]byte{42}, 32), Recipients: transitionOne.Recipients,
+		Kind:          vault.TransitionEnroll,
+		Vault:         bootstrap.Vault,
+		Signer:        rootDevice,
+		NewDevice:     &third,
+		RequestedRole: vault.RolePublisher,
+		ContentKey:    bytes.Repeat([]byte{42}, 32),
+		Recipients:    transitionOne.Recipients,
 		Wraps: []vault.RecipientWrapInput{
-			{KeyID: []byte("root-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 33).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{53}, 24))},
-			{KeyID: []byte("publisher-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 34).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{54}, 24))},
-			{KeyID: []byte("third-sign"), EphemeralPrivate: [32]byte(readX25519Key(t, 35).Bytes()), WrapNonce: [24]byte(bytes.Repeat([]byte{55}, 24))},
+			{
+				KeyID:            []byte("root-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 33).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{53}, 24)),
+			},
+			{
+				KeyID:            []byte("publisher-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 34).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{54}, 24)),
+			},
+			{
+				KeyID:            []byte("third-sign"),
+				EphemeralPrivate: [32]byte(readX25519Key(t, 35).Bytes()),
+				WrapNonce:        [24]byte(bytes.Repeat([]byte{55}, 24)),
+			},
 		},
-		Plaintext: []byte("epoch two payload"), PublicationID: [16]byte(bytes.Repeat([]byte{72}, 16)), Nonce: [24]byte(bytes.Repeat([]byte{73}, 24)),
+		Plaintext: []byte(
+			"epoch two payload",
+		),
+		PublicationID: [16]byte(bytes.Repeat([]byte{72}, 16)),
+		Nonce:         [24]byte(bytes.Repeat([]byte{73}, 24)),
 	}
 	transitionTwo, err := vault.PrepareTransition(predecessorTwo, intentTwo)
 	require.NoError(t, err)
@@ -1169,10 +1641,20 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	envelopeSignatureDigest := sha256Digest(epochOneEnvelope.Signature[:])
 	snapshot := SnapshotRecord{
-		SchemaVersion: 1, Vault: bytes.Clone(epochOneEnvelope.Vault[:]), PublicationID: bytes.Clone(epochOneEnvelope.PublicationID[:]),
-		EpochSeq: policyTwo.EpochSeq, PolicyDigest: bytes.Clone(digestTwo[:]), Parent: bytes.Clone(epochOneEnvelope.Parent),
-		Blob:           atdata.Blob{Ref: atdata.CIDLink(parsedEpochOneCID), MimeType: "application/octet-stream", Size: int64(len(epochOneBytes))},
-		SignerDeviceID: "publisher", SignerKeyID: []byte("publisher-sign"), EnvelopeSignatureDigest: envelopeSignatureDigest[:],
+		SchemaVersion: 1,
+		Vault:         bytes.Clone(epochOneEnvelope.Vault[:]),
+		PublicationID: bytes.Clone(epochOneEnvelope.PublicationID[:]),
+		EpochSeq:      policyTwo.EpochSeq,
+		PolicyDigest:  bytes.Clone(digestTwo[:]),
+		Parent:        bytes.Clone(epochOneEnvelope.Parent),
+		Blob: atdata.Blob{
+			Ref:      atdata.CIDLink(parsedEpochOneCID),
+			MimeType: "application/octet-stream",
+			Size:     int64(len(epochOneBytes)),
+		},
+		SignerDeviceID:          "publisher",
+		SignerKeyID:             []byte("publisher-sign"),
+		EnvelopeSignatureDigest: envelopeSignatureDigest[:],
 	}
 	snapshot, err = SignSnapshotRecord(snapshot, publisherSigning)
 	require.NoError(t, err)
@@ -1181,24 +1663,42 @@ func buildEpochTwoReaderFixture(t *testing.T) readFixture {
 
 	records := map[RecordKey][]byte{}
 	putReadRecord(t, records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(policyTwo))
-	putReadRecord(t, records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(controlTwo))
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultControlNSID, RKey: "self"},
+		controlRecordFromObject(controlTwo),
+	)
 	putReadRecord(t, records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(head))
 	records[RecordKey{Collection: VaultSnapshotNSID, RKey: "r0"}] = snapshotBytes
 	for index, encodedCertificate := range transitionTwo.Recipients {
 		certificate, decodeErr := vault.DecodeCertificate(encodedCertificate)
 		require.NoError(t, decodeErr)
-		putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: fmtKey(index + 1)}, certificateRecordFromObject(certificate))
+		putReadRecord(
+			t,
+			records,
+			RecordKey{Collection: VaultCertificateNSID, RKey: fmtKey(index + 1)},
+			certificateRecordFromObject(certificate),
+		)
 	}
 	car, blocks, root, method := buildReadCAR(t, records)
-	transport := &readTransport{proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200}, blob: bytes.Clone(epochOneBytes)}
+	transport := &readTransport{
+		proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200},
+		blob:           bytes.Clone(epochOneBytes),
+	}
 	previousPolicyRecord, err := EncodeRecord(policyRecordFromObject(policyOne))
 	require.NoError(t, err)
 	previousControlRecord := encodeReadControlRecord(t, transitionOne.Control)
 	return readFixture{
 		request: ReadRequest{
-			DID: proofTestDID, DIDDocumentID: proofTestDID,
-			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
-			Vault:               bootstrap.Vault, TrustAnchor: bootstrap.Anchor, PreviousPolicy: previousPolicyRecord,
+			DID:           proofTestDID,
+			DIDDocumentID: proofTestDID,
+			VerificationMethods: []VerificationMethod{
+				{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method},
+			},
+			Vault:           bootstrap.Vault,
+			TrustAnchor:     bootstrap.Anchor,
+			PreviousPolicy:  previousPolicyRecord,
 			PreviousControl: previousControlRecord,
 		},
 		transport: transport, observationStore: newObservationStore(t), records: records, blocks: blocks, root: root,
@@ -1238,15 +1738,33 @@ func dualRootPolicyRecipient(t *testing.T, deviceID string, keyID []byte, key *e
 	return vault.PolicyRecipient{DeviceID: deviceID, KeyID: bytes.Clone(keyID), PublicKey: public}
 }
 
-func dualRootCertificate(t *testing.T, vaultID [32]byte, deviceID string, keyID []byte, signing ed25519.PrivateKey, recipient *ecdh.PrivateKey, certEpoch uint64, issuer string, issuerKeyID []byte, issuerSigning ed25519.PrivateKey) ([]byte, vault.Certificate) {
+func dualRootCertificate(
+	t *testing.T,
+	vaultID [32]byte,
+	deviceID string,
+	keyID []byte,
+	signing ed25519.PrivateKey,
+	recipient *ecdh.PrivateKey,
+	certEpoch uint64,
+	issuer string,
+	issuerKeyID []byte,
+	issuerSigning ed25519.PrivateKey,
+) ([]byte, vault.Certificate) {
 	t.Helper()
 	var encryption [32]byte
 	copy(encryption[:], recipient.PublicKey().Bytes())
 	certificate := vault.Certificate{
-		Vault: vaultID, DeviceID: deviceID, KeyID: bytes.Clone(keyID),
-		SigningPublicKey: [ed25519.PublicKeySize]byte(signing.Public().(ed25519.PublicKey)), EncryptionPublicKey: encryption,
-		Role: vault.RoleRoot, CertEpoch: certEpoch, Issuer: issuer,
-		Signer: vault.Signer{DeviceID: issuer, KeyID: bytes.Clone(issuerKeyID)},
+		Vault:    vaultID,
+		DeviceID: deviceID,
+		KeyID:    bytes.Clone(keyID),
+		SigningPublicKey: [ed25519.PublicKeySize]byte(
+			signing.Public().(ed25519.PublicKey),
+		),
+		EncryptionPublicKey: encryption,
+		Role:                vault.RoleRoot,
+		CertEpoch:           certEpoch,
+		Issuer:              issuer,
+		Signer:              vault.Signer{DeviceID: issuer, KeyID: bytes.Clone(issuerKeyID)},
 	}
 	encoded := signReadCertificate(t, certificate, issuerSigning)
 	decoded, err := vault.DecodeCertificate(encoded)
@@ -1263,16 +1781,49 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	rootOneSigning := fixtureSigningKey(62)
 	rootOneRecipient := readX25519Key(t, 63)
 	var anchor [32]byte
-	copy(anchor[:], func() []byte { digest := sha256Digest(rootZeroSigning.Public().(ed25519.PublicKey)); return digest[:] }())
+	copy(
+		anchor[:],
+		func() []byte { digest := sha256Digest(rootZeroSigning.Public().(ed25519.PublicKey)); return digest[:] }(),
+	)
 
-	rootZeroCertBytes, _ := dualRootCertificate(t, vaultID, "r0", []byte("r0-sign"), rootZeroSigning, rootZeroRecipient, 0, "r0", []byte("r0-sign"), rootZeroSigning)
-	rootOneCertBytes, rootOneCert := dualRootCertificate(t, vaultID, "r1", []byte("r1-sign"), rootOneSigning, rootOneRecipient, 1, "r0", []byte("r0-sign"), rootZeroSigning)
+	rootZeroCertBytes, _ := dualRootCertificate(
+		t,
+		vaultID,
+		"r0",
+		[]byte("r0-sign"),
+		rootZeroSigning,
+		rootZeroRecipient,
+		0,
+		"r0",
+		[]byte("r0-sign"),
+		rootZeroSigning,
+	)
+	rootOneCertBytes, rootOneCert := dualRootCertificate(
+		t,
+		vaultID,
+		"r1",
+		[]byte("r1-sign"),
+		rootOneSigning,
+		rootOneRecipient,
+		1,
+		"r0",
+		[]byte("r0-sign"),
+		rootZeroSigning,
+	)
 
 	genesisPolicy := vault.Policy{
-		Vault: vaultID, EpochSeq: 0, Roles: []vault.RoleBinding{{DeviceID: "r0", Role: vault.RoleRoot}},
-		Recipients:           []vault.PolicyRecipient{dualRootPolicyRecipient(t, "r0", []byte("r0-sign"), rootZeroRecipient)},
-		PolicyRetentionFloor: 0, RetainedRecoveryPoints: 3, MaxPublications: 100, MaxEpochAge: 86400, RecoveryAnchor: anchor,
-		Signer: vault.Signer{DeviceID: "r0", KeyID: []byte("r0-sign")},
+		Vault:    vaultID,
+		EpochSeq: 0,
+		Roles:    []vault.RoleBinding{{DeviceID: "r0", Role: vault.RoleRoot}},
+		Recipients: []vault.PolicyRecipient{
+			dualRootPolicyRecipient(t, "r0", []byte("r0-sign"), rootZeroRecipient),
+		},
+		PolicyRetentionFloor:   0,
+		RetainedRecoveryPoints: 3,
+		MaxPublications:        100,
+		MaxEpochAge:            86400,
+		RecoveryAnchor:         anchor,
+		Signer:                 vault.Signer{DeviceID: "r0", KeyID: []byte("r0-sign")},
 	}
 	genesisBytes := signReadPolicy(t, genesisPolicy, rootZeroSigning)
 	genesisDigest := readPolicyDigest(t, genesisBytes)
@@ -1280,14 +1831,20 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 
 	successorPolicy := vault.Policy{
-		Vault: vaultID, EpochSeq: 1,
-		Roles: []vault.RoleBinding{{DeviceID: "r0", Role: vault.RoleRoot}, {DeviceID: "r1", Role: vault.RoleRoot}},
+		Vault:    vaultID,
+		EpochSeq: 1,
+		Roles:    []vault.RoleBinding{{DeviceID: "r0", Role: vault.RoleRoot}, {DeviceID: "r1", Role: vault.RoleRoot}},
 		Recipients: []vault.PolicyRecipient{
 			dualRootPolicyRecipient(t, "r0", []byte("r0-sign"), rootZeroRecipient),
 			dualRootPolicyRecipient(t, "r1", []byte("r1-sign"), rootOneRecipient),
 		},
-		PolicyRetentionFloor: 0, RetainedRecoveryPoints: 3, MaxPublications: 100, MaxEpochAge: 86400, RecoveryAnchor: anchor,
-		PrevPolicyDigest: genesisDigest, Signer: vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
+		PolicyRetentionFloor:   0,
+		RetainedRecoveryPoints: 3,
+		MaxPublications:        100,
+		MaxEpochAge:            86400,
+		RecoveryAnchor:         anchor,
+		PrevPolicyDigest:       genesisDigest,
+		Signer:                 vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
 	}
 	successorBytes := signReadPolicy(t, successorPolicy, rootOneSigning)
 	successorDigest := readPolicyDigest(t, successorBytes)
@@ -1295,9 +1852,19 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 
 	envelope, err := vault.SealAuthorized(vault.SealRequest{
-		Purpose: vault.PurposeSnapshot, Vault: vaultID, PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
-		EpochSeq: 1, PolicyDigest: successorDigest, Parent: nil, DeviceID: "r1", KeyID: []byte("r1-sign"),
-		Plaintext: []byte("dual root payload"), SigningKey: rootOneSigning, Recipients: fixtureRecipientPublicKeys(successorObject),
+		Purpose:       vault.PurposeSnapshot,
+		Vault:         vaultID,
+		PublicationID: [16]byte(bytes.Repeat([]byte{71}, 16)),
+		EpochSeq:      1,
+		PolicyDigest:  successorDigest,
+		Parent:        nil,
+		DeviceID:      "r1",
+		KeyID:         []byte("r1-sign"),
+		Plaintext: []byte(
+			"dual root payload",
+		),
+		SigningKey: rootOneSigning,
+		Recipients: fixtureRecipientPublicKeys(successorObject),
 	}, rootOneCert, successorObject)
 	require.NoError(t, err)
 	envelopeBytes, err := vault.EncodeEnvelope(envelope)
@@ -1310,15 +1877,29 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	}, rootZeroSigning)
 	genesisControlRecord := encodeReadControlRecord(t, genesisControlBytes)
 	control := vault.Control{
-		Vault: vaultID, EpochSeq: 1, PolicyDigest: successorDigest, HeadSnapshotCID: bytes.Clone(envelopeCID),
-		PrevControlCID: readRawCID(t, genesisControlBytes), Signer: vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
+		Vault:           vaultID,
+		EpochSeq:        1,
+		PolicyDigest:    successorDigest,
+		HeadSnapshotCID: bytes.Clone(envelopeCID),
+		PrevControlCID: readRawCID(
+			t,
+			genesisControlBytes,
+		),
+		Signer: vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
 	}
 	controlBytes := signReadControl(t, control, rootOneSigning)
 	controlObject, err := vault.DecodeControl(controlBytes)
 	require.NoError(t, err)
 	head := vault.Head{
-		Vault: vaultID, EpochSeq: 1, PolicyDigest: successorDigest, SnapshotCID: bytes.Clone(envelopeCID),
-		BlobCID: bytes.Clone(envelopeCID), PublicationCount: 1, Signer: vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
+		Vault:        vaultID,
+		EpochSeq:     1,
+		PolicyDigest: successorDigest,
+		SnapshotCID:  bytes.Clone(envelopeCID),
+		BlobCID: bytes.Clone(
+			envelopeCID,
+		),
+		PublicationCount: 1,
+		Signer:           vault.Signer{DeviceID: "r1", KeyID: []byte("r1-sign")},
 	}
 	headBytes := signReadHead(t, head, rootOneSigning)
 	headObject, err := vault.DecodeHead(headBytes)
@@ -1326,8 +1907,18 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	snapshot := snapshotRecordForEnvelope(t, envelope, envelopeBytes, rootOneSigning)
 
 	records := map[RecordKey][]byte{}
-	putReadRecord(t, records, RecordKey{Collection: VaultPolicyNSID, RKey: "self"}, policyRecordFromObject(successorObject))
-	putReadRecord(t, records, RecordKey{Collection: VaultControlNSID, RKey: "self"}, controlRecordFromObject(controlObject))
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultPolicyNSID, RKey: "self"},
+		policyRecordFromObject(successorObject),
+	)
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultControlNSID, RKey: "self"},
+		controlRecordFromObject(controlObject),
+	)
 	putReadRecord(t, records, RecordKey{Collection: VaultHeadNSID, RKey: "self"}, headRecordFromObject(headObject))
 	snapshotBytes, err := EncodeRecord(snapshot)
 	require.NoError(t, err)
@@ -1336,17 +1927,35 @@ func buildDualRootReaderFixture(t *testing.T) readFixture {
 	require.NoError(t, err)
 	rootOneCertObject, err := vault.DecodeCertificate(rootOneCertBytes)
 	require.NoError(t, err)
-	putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: "r1"}, certificateRecordFromObject(rootZeroCertObject))
-	putReadRecord(t, records, RecordKey{Collection: VaultCertificateNSID, RKey: "r2"}, certificateRecordFromObject(rootOneCertObject))
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultCertificateNSID, RKey: "r1"},
+		certificateRecordFromObject(rootZeroCertObject),
+	)
+	putReadRecord(
+		t,
+		records,
+		RecordKey{Collection: VaultCertificateNSID, RKey: "r2"},
+		certificateRecordFromObject(rootOneCertObject),
+	)
 	car, blocks, root, method := buildReadCAR(t, records)
-	transport := &readTransport{proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200}, blob: bytes.Clone(envelopeBytes)}
+	transport := &readTransport{
+		proofTransport: &proofTransport{carBytes: car, latestCIDs: repeatedCIDs(root.String(), 20), streamStatus: 200},
+		blob:           bytes.Clone(envelopeBytes),
+	}
 	previousPolicyRecord, err := EncodeRecord(policyRecordFromObject(genesisObject))
 	require.NoError(t, err)
 	return readFixture{
 		request: ReadRequest{
-			DID: proofTestDID, DIDDocumentID: proofTestDID,
-			VerificationMethods: []VerificationMethod{{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method}},
-			Vault:               vaultID, TrustAnchor: anchor, PreviousPolicy: previousPolicyRecord,
+			DID:           proofTestDID,
+			DIDDocumentID: proofTestDID,
+			VerificationMethods: []VerificationMethod{
+				{ID: proofTestDID + "#atproto", Type: "Multikey", Controller: proofTestDID, PublicKeyMultibase: method},
+			},
+			Vault:           vaultID,
+			TrustAnchor:     anchor,
+			PreviousPolicy:  previousPolicyRecord,
 			PreviousControl: genesisControlRecord,
 		},
 		transport: transport, observationStore: newObservationStore(t), records: records, blocks: blocks, root: root,

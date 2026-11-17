@@ -20,12 +20,22 @@ func TestRun(t *testing.T) {
 		err  string
 	}{
 		{name: "default help", code: 0, out: "Usage:"},
-		{name: "help", args: []string{"help"}, code: 0, out: "See README.md for build instructions and current status."},
+		{
+			name: "help",
+			args: []string{"help"},
+			code: 0,
+			out:  "See README.md for build instructions and current status.",
+		},
 		{name: "help flag", args: []string{"--help"}, code: 0, out: "Usage:"},
 		{name: "short help", args: []string{"-h"}, code: 0, out: "Usage:"},
 		{name: "version", args: []string{"version"}, code: 0, out: "dottie dev (scaffold)"},
 		{name: "version flag", args: []string{"--version"}, code: 0, out: "dottie dev (scaffold)"},
-		{name: "sync rejects an unknown handle flag", args: []string{"sync", "--handle", "example.test"}, code: 2, err: "flag provided but not defined"},
+		{
+			name: "sync rejects an unknown handle flag",
+			args: []string{"sync", "--handle", "example.test"},
+			code: 2,
+			err:  "flag provided but not defined",
+		},
 		{name: "unimplemented daemon", args: []string{"serve"}, code: 2, err: "unsupported command"},
 		{name: "unimplemented login", args: []string{"login"}, code: 2, err: "unsupported command"},
 		{name: "unknown", args: []string{"unknown"}, code: 2, err: "unsupported command"},
@@ -59,7 +69,12 @@ func TestRemovedPreviewAndRestoreAreUnknownCommands(t *testing.T) {
 				code := Run(args, &stdout, &stderr)
 				require.Equal(t, 2, code, "usage-class refusal")
 				assert.Empty(t, stdout.String(), "a retired command must not claim success")
-				assert.Equal(t, fmt.Sprintf("dottie: unsupported command %q; run 'dottie help'\n", name), stderr.String(), "unknown command refusal")
+				assert.Equal(
+					t,
+					fmt.Sprintf("dottie: unsupported command %q; run 'dottie help'\n", name),
+					stderr.String(),
+					"unknown command refusal",
+				)
 			})
 		}
 		assert.NotContains(t, help, "dottie "+name+" ", "help must not advertise a retired command: %s", name)
@@ -100,7 +115,12 @@ func TestRunQuotesUntrustedArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	argument := "\x1b[2J\n"
 	require.Equal(t, 2, Run([]string{argument}, &stdout, &stderr), "exit code")
-	assert.Equal(t, "dottie: unsupported command "+fmt.Sprintf("%q", argument)+"; run 'dottie help'\n", stderr.String(), "unsupported command output")
+	assert.Equal(
+		t,
+		"dottie: unsupported command "+fmt.Sprintf("%q", argument)+"; run 'dottie help'\n",
+		stderr.String(),
+		"unsupported command output",
+	)
 	assert.NotContains(t, stderr.String(), "\x1b", "unescaped terminal controls")
 	assert.Equal(t, 1, strings.Count(stderr.String(), "\n"), "unescaped terminal controls")
 }

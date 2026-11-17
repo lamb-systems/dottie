@@ -25,14 +25,24 @@ func TestResolveSelectionNestingAndKinds(t *testing.T) {
 
 	root, err := ResolveSelection(paths, configFile)
 	require.NoError(t, err)
-	assert.Equal(t, Root{Base: model.RootXDGConfig, Path: "settings.ini", Kind: model.SelectionFile}, root, "config selection")
+	assert.Equal(
+		t,
+		Root{Base: model.RootXDGConfig, Path: "settings.ini", Kind: model.SelectionFile},
+		root,
+		"config selection",
+	)
 
 	directory := filepath.Join(paths.Home, "documents")
 	require.NoError(t, os.Mkdir(directory, 0o700))
 
 	root, err = ResolveSelection(paths, directory)
 	require.NoError(t, err)
-	assert.Equal(t, Root{Base: model.RootHome, Path: "documents", Kind: model.SelectionDirectory}, root, "home selection")
+	assert.Equal(
+		t,
+		Root{Base: model.RootHome, Path: "documents", Kind: model.SelectionDirectory},
+		root,
+		"home selection",
+	)
 }
 
 func TestResolveSelectionRejectsWholeBases(t *testing.T) {
@@ -114,7 +124,7 @@ func TestCheckAdditionOverlapUsesPathComponents(t *testing.T) {
 		filesTarget("sibling-prefix", model.RootHome, "dottie-notes", model.SelectionDirectory),
 		filesTarget("longer-sibling", model.RootHome, "bc", model.SelectionDirectory),
 	} {
-		assert.NoError(t, CheckAddition(current, paths, added), "sibling %q incorrectly overlaps", added.Root.Path)
+		require.NoError(t, CheckAddition(current, paths, added), "sibling %q incorrectly overlaps", added.Root.Path)
 	}
 
 	err := CheckAddition(current, paths, filesTarget("child", model.RootHome, "dottie/child", model.SelectionDirectory))
@@ -219,20 +229,20 @@ func TestConcurrentUpdatesSerialiseWithoutLostSelections(t *testing.T) {
 	seedConfig(t, paths, Default())
 
 	var group sync.WaitGroup
-	for writer := 0; writer < 2; writer++ {
+	for writer := range 2 {
 		group.Add(1)
 		go func(writer int) {
 			defer group.Done()
-			for i := 0; i < 4; i++ {
+			for i := range 4 {
 				if !assert.NoError(t, addPendingGnomeTarget(paths, fmt.Sprintf("writer-%d-%d", writer, i)), "Update") {
 					return
 				}
 			}
 		}(writer)
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		_, err := Load(paths)
-		assert.NoError(t, err, "Load")
+		require.NoError(t, err, "Load")
 	}
 	group.Wait()
 
@@ -242,13 +252,16 @@ func TestConcurrentUpdatesSerialiseWithoutLostSelections(t *testing.T) {
 }
 
 func addPendingGnomeTarget(paths platform.Paths, id string) error {
-	for attempt := 0; attempt < 64; attempt++ {
+	for range 64 {
 		snapshot, err := OpenSnapshot(paths)
 		if err != nil {
 			return err
 		}
 		_, err = Update(paths, snapshot.Token, func(current Config) (Config, error) {
-			current.Targets = append(current.Targets, Target{ID: id, Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}})
+			current.Targets = append(
+				current.Targets,
+				Target{ID: id, Source: model.SourceGNOME, GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending}},
+			)
 			return current, nil
 		})
 		if errors.Is(err, ErrConfigStale) {

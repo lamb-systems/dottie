@@ -16,6 +16,9 @@ import (
 
 	urfave "github.com/urfave/cli/v3"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
@@ -24,8 +27,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type pushTestTransport struct {
@@ -55,10 +56,16 @@ func newPushTestTransport(binding publicationstate.Binding) *pushTestTransport {
 }
 
 func pushTestContext(sequence int) publicationstate.SuppliedContext {
-	return publicationstate.SuppliedContext{RepositoryRevision: fmt.Sprintf("synthetic-revision-%d", sequence), RepositoryDigest: []byte{byte(sequence + 1), 0x5b}}
+	return publicationstate.SuppliedContext{
+		RepositoryRevision: fmt.Sprintf("synthetic-revision-%d", sequence),
+		RepositoryDigest:   []byte{byte(sequence + 1), 0x5b},
+	}
 }
 
-func (transport *pushTestTransport) UploadPayload(ctx context.Context, payload []byte) (publication.BlobReference, error) {
+func (transport *pushTestTransport) UploadPayload(
+	ctx context.Context,
+	payload []byte,
+) (publication.BlobReference, error) {
 	if err := ctx.Err(); err != nil {
 		return publication.BlobReference{}, err
 	}
@@ -73,10 +80,17 @@ func (transport *pushTestTransport) UploadPayload(ctx context.Context, payload [
 		return publication.BlobReference{}, err
 	}
 	transport.blobs[string(cid)] = bytes.Clone(payload)
-	return publication.BlobReference{CID: cid, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType}, nil
+	return publication.BlobReference{
+		CID:      cid,
+		Size:     uint64(len(payload)),
+		MIMEType: publication.SnapshotBlobMIMEType,
+	}, nil
 }
 
-func (transport *pushTestTransport) PrepareWrites(ctx context.Context, batch service.MaterialWriteBatch) (service.MaterialPreparedWrites, error) {
+func (transport *pushTestTransport) PrepareWrites(
+	ctx context.Context,
+	batch service.MaterialWriteBatch,
+) (service.MaterialPreparedWrites, error) {
 	if err := ctx.Err(); err != nil {
 		return service.MaterialPreparedWrites{}, err
 	}
@@ -90,7 +104,10 @@ func (transport *pushTestTransport) PrepareWrites(ctx context.Context, batch ser
 	return service.MaterialPreparedWrites{Secret: secret, Dispatch: 1}, nil
 }
 
-func (transport *pushTestTransport) SendWrites(ctx context.Context, prepared service.MaterialPreparedWrites) (service.MaterialWriteOutcome, error) {
+func (transport *pushTestTransport) SendWrites(
+	ctx context.Context,
+	prepared service.MaterialPreparedWrites,
+) (service.MaterialWriteOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return service.MaterialWriteOutcome{}, err
 	}
@@ -98,7 +115,9 @@ func (transport *pushTestTransport) SendWrites(ctx context.Context, prepared ser
 	defer transport.mu.Unlock()
 	batch, known := transport.prepared[prepared.Secret]
 	if !known || prepared.Dispatch != 1 || transport.dispatched[prepared.Secret] {
-		return service.MaterialWriteOutcome{}, errors.New("synthetic transport refused an unprepared or replayed dispatch")
+		return service.MaterialWriteOutcome{}, errors.New(
+			"synthetic transport refused an unprepared or replayed dispatch",
+		)
 	}
 	transport.dispatched[prepared.Secret] = true
 	transport.sends++
@@ -106,7 +125,9 @@ func (transport *pushTestTransport) SendWrites(ctx context.Context, prepared ser
 		return service.MaterialWriteOutcome{}, transport.sendErr
 	}
 	if transport.staleWrite || !samePushTestContext(batch.ExpectedContext, transport.context) {
-		return service.MaterialWriteOutcome{}, errors.New("synthetic transport refused a write with a stale expected context")
+		return service.MaterialWriteOutcome{}, errors.New(
+			"synthetic transport refused a write with a stale expected context",
+		)
 	}
 	transport.blocks[batch.SnapshotKey] = bytes.Clone(batch.SnapshotRecord)
 	transport.head = bytes.Clone(batch.HeadRecord)
@@ -116,7 +137,8 @@ func (transport *pushTestTransport) SendWrites(ctx context.Context, prepared ser
 }
 
 func samePushTestContext(left, right publicationstate.SuppliedContext) bool {
-	return left.RepositoryRevision == right.RepositoryRevision && bytes.Equal(left.RepositoryDigest, right.RepositoryDigest)
+	return left.RepositoryRevision == right.RepositoryRevision &&
+		bytes.Equal(left.RepositoryDigest, right.RepositoryDigest)
 }
 
 func (transport *pushTestTransport) ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error) {
@@ -139,12 +161,15 @@ func (transport *pushTestTransport) ReadView(ctx context.Context) (publicationst
 		Snapshots: make([]publicationstate.SnapshotBlock, 0, len(keys)),
 	}
 	for _, key := range keys {
-		view.Snapshots = append(view.Snapshots, publicationstate.SnapshotBlock{Key: key, Raw: bytes.Clone(transport.blocks[key])})
+		view.Snapshots = append(
+			view.Snapshots,
+			publicationstate.SnapshotBlock{Key: key, Raw: bytes.Clone(transport.blocks[key])},
+		)
 	}
 	return view, nil
 }
 
-func (transport *pushTestTransport) blob(ctx context.Context, reference publication.BlobReference) ([]byte, error) {
+func (transport *pushTestTransport) blob(_ context.Context, reference publication.BlobReference) ([]byte, error) {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	payload, found := transport.blobs[string(reference.CID)]
@@ -170,7 +195,10 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 		return service.AcceptedPublication{}, err
 	}
 	if len(view.Head) == 0 || len(view.Snapshots) == 0 {
-		return service.AcceptedPublication{}, errors.Join(service.ErrPublicationReaderAccepted, atproto.ErrReadRecordMissing)
+		return service.AcceptedPublication{}, errors.Join(
+			service.ErrPublicationReaderAccepted,
+			atproto.ErrReadRecordMissing,
+		)
 	}
 	terminal := view.Snapshots[len(view.Snapshots)-1]
 	record, err := publication.DecodeSnapshot(terminal.Raw)
@@ -199,11 +227,15 @@ type pushTestReviews struct {
 	failOn int
 }
 
-func (reviews pushTestReviews) Acquire(context.Context) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
+func (reviews pushTestReviews) Acquire(
+	context.Context,
+) (publicationstate.LocalReviewContext, config.Token, service.ConfigGuard, error) {
 	if reviews.calls != nil {
 		*reviews.calls++
 		if reviews.failOn != 0 && *reviews.calls == reviews.failOn {
-			return publicationstate.LocalReviewContext{}, config.Token{}, nil, errors.New("synthetic review acquisition refused")
+			return publicationstate.LocalReviewContext{}, config.Token{}, nil, errors.New(
+				"synthetic review acquisition refused",
+			)
 		}
 	}
 	if reviews.err != nil {
@@ -226,15 +258,24 @@ func newPublicationPushTestFixture(t *testing.T) *publicationPushTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
 		require.NoError(t, os.Chmod(directory, 0o700))
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "config"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(paths.Home, "config", "init.lua"), []byte("synthetic cli push payload"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(paths.Home, "config", "init.lua"), []byte("synthetic cli push payload"), 0o600),
+	)
 	require.NoError(t, os.MkdirAll(paths.PublicationStateDir(), 0o700))
 	require.NoError(t, os.Chmod(paths.PublicationStateDir(), 0o700))
 	store, err := state.Open(paths)
@@ -242,9 +283,18 @@ func newPublicationPushTestFixture(t *testing.T) *publicationPushTestFixture {
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	coordinator, err := service.NewCoordinator(service.Dependencies{State: store, Paths: paths})
 	require.NoError(t, err)
-	binding := publicationstate.Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62}}
+	binding := publicationstate.Binding{
+		AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
 	binding.Repository = "at://" + binding.AccountDID
-	review := publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x63}, SelectionRevision: 1, ApprovalDigest: [32]byte{0x64}, ApprovalRevision: 1}
+	review := publicationstate.LocalReviewContext{
+		SelectionDigest:   [32]byte{0x63},
+		SelectionRevision: 1,
+		ApprovalDigest:    [32]byte{0x64},
+		ApprovalRevision:  1,
+	}
 	return &publicationPushTestFixture{
 		paths: paths, binding: binding,
 		records: newPublicationProposalStore(paths.PublicationStateDir()), transport: newPushTestTransport(binding),
@@ -276,12 +326,36 @@ func pushTestDIDs(dids ...string) sessionDIDSource {
 	return func(context.Context) ([]string, error) { return dids, nil }
 }
 
-func newPushTestCommand(t *testing.T, stdout, stderr *bytes.Buffer, exitCode *int, session pushSession, factoryCalls *int, sessionErr error) *urfave.Command {
+func newPushTestCommand(
+	t *testing.T,
+	stdout, stderr *bytes.Buffer,
+	exitCode *int,
+	session pushSession,
+	factoryCalls *int,
+	sessionErr error,
+) *urfave.Command {
 	t.Helper()
-	return newPushTestCommandWithDIDs(t, stdout, stderr, exitCode, session, factoryCalls, sessionErr, pushTestDIDs(pushTestDID))
+	return newPushTestCommandWithDIDs(
+		t,
+		stdout,
+		stderr,
+		exitCode,
+		session,
+		factoryCalls,
+		sessionErr,
+		pushTestDIDs(pushTestDID),
+	)
 }
 
-func newPushTestCommandWithDIDs(t *testing.T, stdout, stderr *bytes.Buffer, exitCode *int, session pushSession, factoryCalls *int, sessionErr error, dids sessionDIDSource) *urfave.Command {
+func newPushTestCommandWithDIDs(
+	t *testing.T,
+	stdout, stderr *bytes.Buffer,
+	exitCode *int,
+	session pushSession,
+	factoryCalls *int,
+	sessionErr error,
+	dids sessionDIDSource,
+) *urfave.Command {
 	t.Helper()
 	diag := assert.New(t)
 	fixture := newPublicationPushTestFixture(t)
@@ -311,7 +385,7 @@ func runPushForTest(command *urfave.Command, exitCode *int, args ...string) int 
 
 func confirmationFromOutput(t *testing.T, output string) string {
 	t.Helper()
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if value, found := strings.CutPrefix(line, "confirmation: "); found {
 			return value
 		}
@@ -480,7 +554,15 @@ func TestPushRefusesAMismatchedConfirmationWithoutDispatch(t *testing.T) {
 	stderr.Reset()
 	code = 0
 	stale := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
-	code = runPushForTest(stale, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", hex.EncodeToString(other))
+	code = runPushForTest(
+		stale,
+		&code,
+		"push",
+		"--did",
+		fixture.binding.AccountDID,
+		"--confirm",
+		hex.EncodeToString(other),
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "stale")
 	_, sends := fixture.transport.counts()
@@ -549,7 +631,15 @@ func TestPushRefusesAConfirmationWhenNoProposalWasRetained(t *testing.T) {
 		return fixture.sources(), nil
 	}
 	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
-	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32)))
+	code = runPushForTest(
+		command,
+		&code,
+		"push",
+		"--did",
+		fixture.binding.AccountDID,
+		"--confirm",
+		hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32)),
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr.String(), "no retained publication proposal")
 	uploads, sends := fixture.transport.counts()
@@ -624,7 +714,9 @@ func TestPushRefusesAScopeGrantBeforeDiscovery(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := 0
 	factoryCalls := 0
-	session := pushSession{Session: &atproto.Session{DID: "did:plc:abcdefghijklmnopqrstuvwx", Scopes: []string{"atproto"}}}
+	session := pushSession{
+		Session: &atproto.Session{DID: "did:plc:abcdefghijklmnopqrstuvwx", Scopes: []string{"atproto"}},
+	}
 	command := newPushTestCommand(t, &stdout, &stderr, &code, session, &factoryCalls, nil)
 	code = runPushForTest(command, &code, "push", "--did", "did:plc:abcdefghijklmnopqrstuvwx")
 	require.Equal(t, 3, code)
@@ -638,7 +730,15 @@ func TestPushRefusesAnUnavailableSessionBeforeTheScopeCheck(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := 0
 	factoryCalls := 0
-	command := newPushTestCommand(t, &stdout, &stderr, &code, pushSession{}, &factoryCalls, errors.New("session unavailable"))
+	command := newPushTestCommand(
+		t,
+		&stdout,
+		&stderr,
+		&code,
+		pushSession{},
+		&factoryCalls,
+		errors.New("session unavailable"),
+	)
 	code = runPushForTest(command, &code, "push", "--did", "did:plc:abcdefghijklmnopqrstuvwx")
 	require.Equal(t, 3, code)
 	assert.Zero(t, factoryCalls)
@@ -774,7 +874,11 @@ func TestPushProvisionsAnAbsentPositionStoreAndPublishes(t *testing.T) {
 	uploads, sends := fixture.transport.counts()
 	assert.Equal(t, 1, uploads)
 	assert.Equal(t, 1, sends)
-	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	inspection, err := publicationstate.Inspect(
+		context.Background(),
+		fixture.paths.PublicationStateDir(),
+		fixture.binding,
+	)
 	require.NoError(t, err)
 	assert.True(t, inspection.Present)
 }
@@ -823,7 +927,11 @@ func TestPushRefusesAPositionStoreBoundToAnotherVaultWithoutRebindingIt(t *testi
 	recorded, err := publicationstate.ReadBinding(fixture.paths.PublicationStateDir())
 	require.NoError(t, err)
 	assert.Equal(t, foreign, recorded, "the refusal rebound the existing store")
-	inspection, err := publicationstate.Inspect(context.Background(), fixture.paths.PublicationStateDir(), fixture.binding)
+	inspection, err := publicationstate.Inspect(
+		context.Background(),
+		fixture.paths.PublicationStateDir(),
+		fixture.binding,
+	)
 	require.Error(t, err, "the existing store was reopened for the pushing account")
 	assert.False(t, inspection.Present)
 	uploads, sends := fixture.transport.counts()
@@ -867,14 +975,32 @@ func TestPublicationProposalStoreRoundTripsTheRetainedRecord(t *testing.T) {
 	_, err := rand.Read(publicationID[:])
 	require.NoError(t, err)
 	record := service.PublicationProposalRecord{
-		Version: 1, Binding: fixture.binding, DatabaseID: [32]byte{0x65}, Generation: 1, FloorRevision: 0,
-		CandidateRecordCID: []byte{0x66}, CandidatePayloadCID: []byte{0x67}, CandidatePayloadSize: 8,
-		Review:        publicationstate.LocalReviewContext{SelectionDigest: [32]byte{0x68}, SelectionRevision: 1, ApprovalDigest: [32]byte{0x69}, ApprovalRevision: 1},
-		PublicationID: publicationID, Lifecycle: publicationstate.AttemptPrepared, Confirmation: [32]byte{0x6a},
+		Version:              1,
+		Binding:              fixture.binding,
+		DatabaseID:           [32]byte{0x65},
+		Generation:           1,
+		FloorRevision:        0,
+		CandidateRecordCID:   []byte{0x66},
+		CandidatePayloadCID:  []byte{0x67},
+		CandidatePayloadSize: 8,
+		Review: publicationstate.LocalReviewContext{
+			SelectionDigest:   [32]byte{0x68},
+			SelectionRevision: 1,
+			ApprovalDigest:    [32]byte{0x69},
+			ApprovalRevision:  1,
+		},
+		PublicationID: publicationID,
+		Lifecycle:     publicationstate.AttemptPrepared,
+		Confirmation:  [32]byte{0x6a},
 	}
 	ctx := context.Background()
 	require.NoError(t, fixture.records.Issue(ctx, record))
-	require.ErrorIs(t, fixture.records.Issue(ctx, record), errProposalRecordDuplicate, "issuance overwrote a retained record")
+	require.ErrorIs(
+		t,
+		fixture.records.Issue(ctx, record),
+		errProposalRecordDuplicate,
+		"issuance overwrote a retained record",
+	)
 	records, err := fixture.records.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
@@ -903,11 +1029,27 @@ func TestPushMaterialStatusSeparatesRefusalsFromIndeterminateOutcomes(t *testing
 	assert.Equal(t, service.StatusCommitted, pushMaterialStatus(nil))
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(service.ErrPublicationProposalStale))
 	assert.Equal(t, service.StatusRejected, pushMaterialStatus(service.ErrPublicationProposalConsumed))
-	assert.Equal(t, service.StatusRejected, pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrPublicationProposalActive)))
-	assert.Equal(t, service.StatusRejected, pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrMaterialSubmissionRejected)))
+	assert.Equal(
+		t,
+		service.StatusRejected,
+		pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrPublicationProposalActive)),
+	)
+	assert.Equal(
+		t,
+		service.StatusRejected,
+		pushMaterialStatus(fmt.Errorf("wrapped: %w", service.ErrMaterialSubmissionRejected)),
+	)
 	assert.Equal(t, service.StatusFenceLost, pushMaterialStatus(fmt.Errorf("wrapped: %w", atproto.ErrFenceLost)))
-	assert.Equal(t, service.StatusRejected, pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonConfirmation}))
-	assert.Equal(t, service.StatusUnavailable, pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonCommitUnknown}))
+	assert.Equal(
+		t,
+		service.StatusRejected,
+		pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonConfirmation}),
+	)
+	assert.Equal(
+		t,
+		service.StatusUnavailable,
+		pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonCommitUnknown}),
+	)
 	assert.Equal(t, service.StatusUnavailable, pushMaterialStatus(errors.New("transport is unavailable")))
 }
 
@@ -936,9 +1078,13 @@ func TestPushReportsACommittedPublicationWhoseOutputFailed(t *testing.T) {
 
 func TestPublicationFailureDetailNamesTheStageReasonAndClass(t *testing.T) {
 	plain := errors.New("synthetic failure")
-	assert.Equal(t, "", publicationFailureDetail(plain), "a plain error must not fabricate a stage or reason")
+	assert.Empty(t, publicationFailureDetail(plain), "a plain error must not fabricate a stage or reason")
 
-	staged := publicationStageTestError{stage: "submission", reason: "confirmation_mismatch", cause: atproto.ErrInsufficientPublicationScope}
+	staged := publicationStageTestError{
+		stage:  "submission",
+		reason: "confirmation_mismatch",
+		cause:  atproto.ErrInsufficientPublicationScope,
+	}
 	detail := publicationFailureDetail(staged)
 	assert.Contains(t, detail, "stage=submission")
 	assert.Contains(t, detail, "reason=confirmation_mismatch")
@@ -1081,11 +1227,21 @@ func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
 }
 
 func TestSelectPublicationProposalIgnoresConsumedRecords(t *testing.T) {
-	binding := publicationstate.Binding{AccountDID: "did:plc:synthetic", Repository: "at://did:plc:synthetic", Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{1}}
+	binding := publicationstate.Binding{
+		AccountDID: "did:plc:synthetic",
+		Repository: "at://did:plc:synthetic",
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{1},
+	}
 	consumed := service.PublicationProposalRecord{Binding: binding, Consumed: true, PublicationID: [16]byte{1}}
 	live := service.PublicationProposalRecord{Binding: binding, PublicationID: [16]byte{2}}
 
-	selected, err := selectPublicationProposal([]service.PublicationProposalRecord{consumed, live}, binding, true, [32]byte{})
+	selected, err := selectPublicationProposal(
+		[]service.PublicationProposalRecord{consumed, live},
+		binding,
+		true,
+		[32]byte{},
+	)
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, [16]byte{2}, selected.PublicationID, "the live proposal must be selected beside a consumed one")
@@ -1110,8 +1266,15 @@ func TestPushResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := 0
 	sessions := func(_ context.Context, command *urfave.Command) (pushSession, error) {
-		assert.Equal(t, fixture.binding.AccountDID, command.String("did"), "the session was not resolved from the only authorised session")
-		return pushSession{Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()}}, nil
+		assert.Equal(
+			t,
+			fixture.binding.AccountDID,
+			command.String("did"),
+			"the session was not resolved from the only authorised session",
+		)
+		return pushSession{
+			Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()},
+		}, nil
 	}
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
@@ -1119,7 +1282,11 @@ func TestPushResolvesTheOnlyAuthorisedSessionWhenDIDIsOmitted(t *testing.T) {
 	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(fixture.binding.AccountDID))
 	code = runPushForTest(command, &code, "push")
 	require.Equal(t, 3, code, stderr.String())
-	assert.Contains(t, stdout.String(), "account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)")
+	assert.Contains(
+		t,
+		stdout.String(),
+		"account: "+fixture.binding.AccountDID+" (resolved from the only authorised session; --did was omitted)",
+	)
 	assert.Contains(t, stdout.String(), "push: review required")
 	assert.Contains(t, stdout.String(), "confirmation: ")
 	records, err := fixture.records.List(context.Background())
@@ -1140,7 +1307,11 @@ func TestPushRefusesWithoutAnyAuthorisedSession(t *testing.T) {
 	code = runPushForTest(command, &code, "push")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
-	assert.Equal(t, "dottie: push refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n", stderr.String())
+	assert.Equal(
+		t,
+		"dottie: push refused: no account is authorised locally; run dottie account login --handle HANDLE or pass --did DID\n",
+		stderr.String(),
+	)
 }
 
 func TestPushRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
@@ -1156,16 +1327,31 @@ func TestPushRefusesTwoAuthorisedSessionsWithoutDID(t *testing.T) {
 		return fixture.sources(), nil
 	}
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(fixture.binding.AccountDID, other))
+	command := newPushCommand(
+		&stdout,
+		&stderr,
+		&code,
+		sessions,
+		sources,
+		pushTestDIDs(fixture.binding.AccountDID, other),
+	)
 	code = runPushForTest(command, &code, "push")
 	require.Equal(t, 3, code)
 	assert.Empty(t, stdout.String())
-	assert.Equal(t, "dottie: push refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n", stderr.String())
+	assert.Equal(
+		t,
+		"dottie: push refused: 2 accounts are authorised locally; --did is required to choose the account this command acts on\n",
+		stderr.String(),
+	)
 	assert.Zero(t, factoryCalls, "the ambiguous refusal constructed the transport and reader")
 	uploads, sends := fixture.transport.counts()
 	assert.Zero(t, uploads, "the ambiguous refusal uploaded a payload")
 	assert.Zero(t, sends, "the ambiguous refusal dispatched writes")
-	assert.Empty(t, publicationStateEntries(t, fixture.paths.PublicationStateDir()), "the ambiguous refusal wrote local state")
+	assert.Empty(
+		t,
+		publicationStateEntries(t, fixture.paths.PublicationStateDir()),
+		"the ambiguous refusal wrote local state",
+	)
 }
 
 func TestPushProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T) {
@@ -1174,16 +1360,30 @@ func TestPushProceedsWithTheExplicitDIDWhenTwoSessionsAreAuthorised(t *testing.T
 	code := 0
 	sessions := func(_ context.Context, command *urfave.Command) (pushSession, error) {
 		assert.Equal(t, fixture.binding.AccountDID, command.String("did"), "the explicit --did was not used")
-		return pushSession{Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()}}, nil
+		return pushSession{
+			Session: &atproto.Session{DID: fixture.binding.AccountDID, Scopes: atproto.VaultScopes()},
+		}, nil
 	}
 	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
 		return fixture.sources(), nil
 	}
 	other := "did:plc:zyxwvutsrqponmlkjihgfedc"
-	command := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(other, fixture.binding.AccountDID))
+	command := newPushCommand(
+		&stdout,
+		&stderr,
+		&code,
+		sessions,
+		sources,
+		pushTestDIDs(other, fixture.binding.AccountDID),
+	)
 	code = runPushForTest(command, &code, "push", "--did", fixture.binding.AccountDID)
 	require.Equal(t, 3, code, stderr.String())
-	assert.NotContains(t, stdout.String(), "resolved from the only authorised session", "an explicit --did reported a session resolution")
+	assert.NotContains(
+		t,
+		stdout.String(),
+		"resolved from the only authorised session",
+		"an explicit --did reported a session resolution",
+	)
 	assert.Contains(t, stdout.String(), "push: review required")
 	uploads, sends := fixture.transport.counts()
 	assert.Zero(t, uploads)
@@ -1205,9 +1405,22 @@ func TestPushRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 func TestPushStillRejectsTheHandleSelector(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := 0
-	command := newPushTestCommandWithDIDs(t, &stdout, &stderr, &code, pushTestSession(t), nil, nil, pushTestDIDs(pushTestDID))
+	command := newPushTestCommandWithDIDs(
+		t,
+		&stdout,
+		&stderr,
+		&code,
+		pushTestSession(t),
+		nil,
+		nil,
+		pushTestDIDs(pushTestDID),
+	)
 	code = runPushForTest(command, &code, "push", "--handle", "example.test")
 	require.Equal(t, 2, code)
 	assert.Empty(t, stdout.String())
-	assert.Equal(t, "dottie: usage: push requires --did; a handle cannot be resolved before the publication scope check\n", stderr.String())
+	assert.Equal(
+		t,
+		"dottie: usage: push requires --did; a handle cannot be resolved before the publication scope check\n",
+		stderr.String(),
+	)
 }

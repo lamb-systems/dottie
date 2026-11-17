@@ -5,7 +5,12 @@ import "bytes"
 func attemptCandidate(f fixture, sequence uint64) CandidateInput {
 	block := f.blocks[sequence]
 	observation := f.observation(int(sequence + 1))
-	return CandidateInput{SnapshotKey: block.Key, SnapshotRecord: bytes.Clone(block.Raw), HeadRecord: bytes.Clone(observation.Head), Payload: bytes.Clone(f.payload)}
+	return CandidateInput{
+		SnapshotKey:    block.Key,
+		SnapshotRecord: bytes.Clone(block.Raw),
+		HeadRecord:     bytes.Clone(observation.Head),
+		Payload:        bytes.Clone(f.payload),
+	}
 }
 
 func attemptView(f fixture, observation Observation, empty bool) SuppliedRepositoryView {
@@ -13,7 +18,11 @@ func attemptView(f fixture, observation Observation, empty bool) SuppliedReposit
 	if f.binding.Backend == BackendSpaces {
 		scope = ViewScopeDedicatedSpace
 	}
-	view := SuppliedRepositoryView{Origin: f.binding, Scope: scope, SuppliedContext: cloneContext(observation.SuppliedContext)}
+	view := SuppliedRepositoryView{
+		Origin:          f.binding,
+		Scope:           scope,
+		SuppliedContext: cloneContext(observation.SuppliedContext),
+	}
 	if !empty {
 		view.Head = bytes.Clone(observation.Head)
 		view.Snapshots = cloneSnapshotBlocks(observation.Snapshots)

@@ -34,7 +34,7 @@ func TestVerifyAttestationRefusesPolicyRoleCertificateRoleMismatch(t *testing.T)
 	}, nil)
 	fixture.request.State = verification.State
 	_, buildErr := BuildAttestation(fixture.request)
-	assert.ErrorIs(t, buildErr, ErrAuthorization)
+	require.ErrorIs(t, buildErr, ErrAuthorization)
 
 	_, err := VerifyAttestation(encoded, verification)
 	assert.ErrorIs(t, err, ErrAuthorization)
@@ -45,12 +45,15 @@ func TestAttestationRefusesRevokedSigner(t *testing.T) {
 	certificate, err := DecodeCertificate(fixture.request.SignerCertificate)
 	require.NoError(t, err)
 	encoded, verification := buildAttestationWithVerificationEvidence(t, fixture, nil, func(control *Control) {
-		control.Revoked = append(control.Revoked, RevokedDevice{DeviceID: certificate.DeviceID, CertEpoch: certificate.CertEpoch})
+		control.Revoked = append(
+			control.Revoked,
+			RevokedDevice{DeviceID: certificate.DeviceID, CertEpoch: certificate.CertEpoch},
+		)
 	})
 	request := fixture.request
 	request.State = verification.State
 	_, buildErr := BuildAttestation(request)
-	assert.ErrorIs(t, buildErr, ErrAuthorization)
+	require.ErrorIs(t, buildErr, ErrAuthorization)
 
 	_, err = VerifyAttestation(encoded, verification)
 	assert.ErrorIs(t, err, ErrAuthorization)
@@ -62,7 +65,7 @@ func TestBuildAttestationRefusesUnknownEpochMaterialEvenAtZeroFloor(t *testing.T
 	fixture.request.UnknownEpochMaterial = true
 
 	encoded, err := BuildAttestation(fixture.request)
-	assert.ErrorIs(t, err, ErrAuthorization)
+	require.ErrorIs(t, err, ErrAuthorization)
 	assert.Nil(t, encoded)
 }
 
@@ -74,7 +77,12 @@ func TestBuildAttestationRequiresCertificateSigningKey(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAuthorization)
 }
 
-func buildAttestationWithVerificationEvidence(t *testing.T, fixture attestationFixture, mutatePolicy func(*Policy), mutateControl func(*Control)) ([]byte, AttestationVerificationRequest) {
+func buildAttestationWithVerificationEvidence(
+	t *testing.T,
+	fixture attestationFixture,
+	mutatePolicy func(*Policy),
+	mutateControl func(*Control),
+) ([]byte, AttestationVerificationRequest) {
 	t.Helper()
 	policy, err := DecodePolicy(fixture.verify.State.Policy)
 	require.NoError(t, err)

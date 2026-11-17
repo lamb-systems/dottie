@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type bootstrapTestKeyStore struct {
@@ -21,14 +22,22 @@ type bootstrapTestKeyStore struct {
 	deleteCalls int
 }
 
-func (keyring *bootstrapTestKeyStore) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+func (keyring *bootstrapTestKeyStore) LoadDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	deviceID string,
+) (vault.DeviceMaterial, error) {
 	if device, exists := keyring.items[deviceID]; exists && vaultID != ([32]byte{}) {
 		return device, nil
 	}
 	return vault.DeviceMaterial{}, platform.ErrKeyringItemNotFound
 }
 
-func (keyring *bootstrapTestKeyStore) StoreDeviceKeys(_ context.Context, _ [32]byte, device vault.DeviceMaterial) error {
+func (keyring *bootstrapTestKeyStore) StoreDeviceKeys(
+	_ context.Context,
+	_ [32]byte,
+	device vault.DeviceMaterial,
+) error {
 	if keyring.storeErr != nil {
 		return keyring.storeErr
 	}
@@ -36,7 +45,10 @@ func (keyring *bootstrapTestKeyStore) StoreDeviceKeys(_ context.Context, _ [32]b
 	return nil
 }
 
-func (keyring *bootstrapTestKeyStore) LoadDeviceKeysForVault(_ context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+func (keyring *bootstrapTestKeyStore) LoadDeviceKeysForVault(
+	_ context.Context,
+	vaultID [32]byte,
+) ([]vault.DeviceMaterial, error) {
 	if vaultID == ([32]byte{}) || len(keyring.items) == 0 {
 		return nil, platform.ErrKeyringItemNotFound
 	}
@@ -68,7 +80,12 @@ func newBootstrapTestDevice(t *testing.T, deviceID string) vault.DeviceMaterial 
 	signing, recipient, err := vault.GenerateDeviceKeys()
 	require.NoError(t, err)
 	t.Cleanup(func() { clear(signing) })
-	return vault.DeviceMaterial{DeviceID: deviceID, KeyID: signing.Public().(ed25519.PublicKey), Signing: signing, Recipient: recipient}
+	return vault.DeviceMaterial{
+		DeviceID:  deviceID,
+		KeyID:     signing.Public().(ed25519.PublicKey),
+		Signing:   signing,
+		Recipient: recipient,
+	}
 }
 
 func TestCoordinatorPreflightVaultRequiresThePreflightPort(t *testing.T) {
@@ -83,11 +100,16 @@ func TestCoordinatorInitializeVaultRecordsTheSelectionAndPublishesNothing(t *tes
 	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
 	preflight := &bootstrapTestPreflight{}
 	clock := func() time.Time { return time.Unix(1_800_000_000, 0) }
-	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: preflight, Clock: clock})
+	coordinator, err := NewCoordinator(
+		Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: preflight, Clock: clock},
+	)
 	require.NoError(t, err)
 	require.NoError(t, coordinator.PreflightVault(context.Background()))
 	device := newBootstrapTestDevice(t, "bootstrap-test-root")
-	result, err := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "bootstrap test", Device: device})
+	result, err := coordinator.InitializeVault(
+		context.Background(),
+		BootstrapRequest{VaultName: "bootstrap test", Device: device},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, BootstrapLocalIdentityRecorded, result.Outcome)
 	assert.NotEqual(t, [32]byte{}, result.Bootstrap.Vault)
@@ -123,9 +145,14 @@ func TestCoordinatorInitializeVaultRefusesCustodyAndSelectionFailures(t *testing
 			if test.existing {
 				keyring.items[device.DeviceID] = device
 			}
-			coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
+			coordinator, err := NewCoordinator(
+				Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}},
+			)
 			require.NoError(t, err)
-			result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "custody test", Device: device})
+			result, initializeErr := coordinator.InitializeVault(
+				context.Background(),
+				BootstrapRequest{VaultName: "custody test", Device: device},
+			)
 			require.Error(t, initializeErr)
 			assert.NotEqual(t, BootstrapLocalIdentityRecorded, result.Outcome)
 			assert.Equal(t, test.wantDelete, keyring.deleteCalls)
@@ -142,7 +169,9 @@ func TestCoordinatorInitializeVaultRefusesCustodyAndSelectionFailures(t *testing
 func TestCoordinatorInitializeVaultDeletesStoredKeysWhenTheSelectionCannotBeRecorded(t *testing.T) {
 	store, paths := openCoordinatorStateWithPaths(t)
 	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
-	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
+	coordinator, err := NewCoordinator(
+		Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}},
+	)
 	require.NoError(t, err)
 	interruptVaultSelectionWrites(t, paths)
 	result, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{
@@ -159,10 +188,15 @@ func TestCoordinatorInitializeVaultDeletesStoredKeysWhenTheSelectionCannotBeReco
 
 func interruptVaultSelectionWrites(t *testing.T, paths platform.Paths) {
 	t.Helper()
-	database, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: filepath.Join(paths.AppStateDir(), "state.db")}).String())
+	database, err := sql.Open(
+		"sqlite",
+		(&url.URL{Scheme: "file", Path: filepath.Join(paths.AppStateDir(), "state.db")}).String(),
+	)
 	require.NoError(t, err)
 	defer database.Close()
-	_, err = database.Exec(`CREATE TRIGGER fail_bootstrap_selection BEFORE INSERT ON vault_selections BEGIN SELECT RAISE(FAIL, 'interrupted write'); END`)
+	_, err = database.Exec(
+		`CREATE TRIGGER fail_bootstrap_selection BEFORE INSERT ON vault_selections BEGIN SELECT RAISE(FAIL, 'interrupted write'); END`,
+	)
 	require.NoError(t, err)
 }
 
@@ -171,16 +205,24 @@ func TestCoordinatorInitializeVaultRequiresDeviceKeyCustody(t *testing.T) {
 	coordinator, err := NewCoordinator(Dependencies{State: store, GenesisPreflight: &bootstrapTestPreflight{}})
 	require.NoError(t, err)
 	device := newBootstrapTestDevice(t, "custody-required-root")
-	_, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{VaultName: "custody required", Device: device})
+	_, initializeErr := coordinator.InitializeVault(
+		context.Background(),
+		BootstrapRequest{VaultName: "custody required", Device: device},
+	)
 	require.Error(t, initializeErr)
 }
 
 func TestCoordinatorInitializeVaultRequiresAVaultName(t *testing.T) {
 	store, _ := openCoordinatorStateWithPaths(t)
 	keyring := &bootstrapTestKeyStore{items: make(map[string]vault.DeviceMaterial)}
-	coordinator, err := NewCoordinator(Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}})
+	coordinator, err := NewCoordinator(
+		Dependencies{State: store, DeviceKeys: keyring, GenesisPreflight: &bootstrapTestPreflight{}},
+	)
 	require.NoError(t, err)
-	_, initializeErr := coordinator.InitializeVault(context.Background(), BootstrapRequest{Device: newBootstrapTestDevice(t, "nameless-root")})
+	_, initializeErr := coordinator.InitializeVault(
+		context.Background(),
+		BootstrapRequest{Device: newBootstrapTestDevice(t, "nameless-root")},
+	)
 	require.Error(t, initializeErr)
 	assert.Empty(t, keyring.items)
 	assert.Zero(t, keyring.deleteCalls)

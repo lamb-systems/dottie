@@ -8,10 +8,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 func TestPublicationReadAcceptedMaterialRefusesReplacedPayloadDirectory(t *testing.T) {
@@ -36,12 +37,25 @@ func TestPublicationReadAcceptedMaterialRefusesReplacedPayloadDirectory(t *testi
 	require.Equal(t, fixture.payloadDirectoryIdentity, before.HeldNameFD)
 	require.Equal(t, fixture.healthyPayload, before.HeldPayload)
 	require.Equal(t, fixture.healthyPayload, before.HeldNamePayload)
-	require.Equal(t, acceptedMaterialDirectoryIdentity{Device: before.NamedPath.Device, Inode: before.NamedPath.Inode, UID: before.NamedPath.UID, Mode: before.NamedPath.Mode}, before.NamedFD)
+	require.Equal(
+		t,
+		acceptedMaterialDirectoryIdentity{
+			Device: before.NamedPath.Device,
+			Inode:  before.NamedPath.Inode,
+			UID:    before.NamedPath.UID,
+			Mode:   before.NamedPath.Mode,
+		},
+		before.NamedFD,
+	)
 	requireAcceptedMaterialPrivateDirectory(t, before.HeldDescriptor)
 	requireAcceptedMaterialPrivateDirectory(t, before.HeldName)
 	requireAcceptedMaterialPrivateDirectory(t, before.NamedPath)
 	requireAcceptedMaterialPrivateDirectory(t, before.NamedFD)
-	require.NotEqual(t, acceptedMaterialDirectoryPair{Device: before.HeldDescriptor.Device, Inode: before.HeldDescriptor.Inode}, acceptedMaterialDirectoryPair{Device: before.NamedPath.Device, Inode: before.NamedPath.Inode})
+	require.NotEqual(
+		t,
+		acceptedMaterialDirectoryPair{Device: before.HeldDescriptor.Device, Inode: before.HeldDescriptor.Inode},
+		acceptedMaterialDirectoryPair{Device: before.NamedPath.Device, Inode: before.NamedPath.Inode},
+	)
 	requireAcceptedMaterialPayloadFile(t, before.HeldPayload, fixture.payload)
 	requireAcceptedMaterialPayloadFile(t, before.HeldNamePayload, fixture.payload)
 	requireAcceptedMaterialPayloadFile(t, before.NamedPayload, fixture.payload)
@@ -125,7 +139,11 @@ func TestPublicationReadAcceptedMaterialRefusesPayloadHardLink(t *testing.T) {
 	require.Equal(t, fixture.healthyPayload.Inode, before.Canonical.Inode)
 	requireAcceptedMaterialRegularFile(t, before.Canonical, fixture.payload, 0o600, 2)
 	requireAcceptedMaterialRegularFile(t, before.Alias, fixture.payload, 0o600, 2)
-	require.Equal(t, acceptedMaterialDirectoryPair{Device: before.Canonical.Device, Inode: before.Canonical.Inode}, acceptedMaterialDirectoryPair{Device: before.Alias.Device, Inode: before.Alias.Inode})
+	require.Equal(
+		t,
+		acceptedMaterialDirectoryPair{Device: before.Canonical.Device, Inode: before.Canonical.Inode},
+		acceptedMaterialDirectoryPair{Device: before.Alias.Device, Inode: before.Alias.Inode},
+	)
 
 	material, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.fixture.binding, fixture.expectedFloor)
 	assert.Equal(t, AcceptedMaterial{}, material)
@@ -186,7 +204,7 @@ func newAcceptedMaterialDirectoryLinkCase(t *testing.T) *acceptedMaterialDirecto
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
 	require.Equal(t, payloadBasename(payload), basename)
-	require.Equal(t, uint64(len(payload)), expectedFloor.BlobSize)
+	require.Equal(t, expectedFloor.BlobSize, uint64(len(payload)))
 
 	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, expectedFloor)
 	require.NoError(t, err)
@@ -304,8 +322,17 @@ type acceptedMaterialHardLinkNamespaceState struct {
 	Alias     acceptedMaterialFileState
 }
 
-func installAcceptedMaterialReplacementDirectory(fixture *acceptedMaterialDirectoryLinkCase, sentinelName string, sentinelBytes []byte) (resultErr error) {
-	directoryFD, err := unix.Openat(fixture.store.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+func installAcceptedMaterialReplacementDirectory(
+	fixture *acceptedMaterialDirectoryLinkCase,
+	sentinelName string,
+	sentinelBytes []byte,
+) (resultErr error) {
+	directoryFD, err := unix.Openat(
+		fixture.store.rootFD,
+		payloadDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return err
 	}
@@ -328,7 +355,12 @@ func installAcceptedMaterialReplacementDirectory(fixture *acceptedMaterialDirect
 }
 
 func createAcceptedMaterialRegularAt(directoryFD int, name string, data []byte, mode uint32) (resultErr error) {
-	fd, err := unix.Openat(directoryFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, mode)
+	fd, err := unix.Openat(
+		directoryFD,
+		name,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		mode,
+	)
 	if err != nil {
 		return err
 	}
@@ -364,7 +396,11 @@ func writeAcceptedMaterialFixtureBytes(fd int, data []byte) error {
 	return nil
 }
 
-func observeAcceptedMaterialReplacedDirectory(fixture *acceptedMaterialDirectoryLinkCase, heldName, sentinelName string, sentinelLength int) (state acceptedMaterialReplacedDirectoryState, resultErr error) {
+func observeAcceptedMaterialReplacedDirectory(
+	fixture *acceptedMaterialDirectoryLinkCase,
+	heldName, sentinelName string,
+	sentinelLength int,
+) (state acceptedMaterialReplacedDirectoryState, resultErr error) {
 	state.HeldDescriptor, resultErr = acceptedMaterialDirectoryIdentityFromFD(fixture.store.payloadFD)
 	if resultErr != nil {
 		return state, resultErr
@@ -377,7 +413,12 @@ func observeAcceptedMaterialReplacedDirectory(fixture *acceptedMaterialDirectory
 	if resultErr != nil {
 		return state, resultErr
 	}
-	heldNameFD, err := unix.Openat(fixture.store.rootFD, heldName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	heldNameFD, err := unix.Openat(
+		fixture.store.rootFD,
+		heldName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return state, err
 	}
@@ -391,7 +432,12 @@ func observeAcceptedMaterialReplacedDirectory(fixture *acceptedMaterialDirectory
 	if resultErr != nil {
 		return state, resultErr
 	}
-	namedFD, err := unix.Openat(fixture.store.rootFD, payloadDirectoryName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	namedFD, err := unix.Openat(
+		fixture.store.rootFD,
+		payloadDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return state, err
 	}
@@ -405,11 +451,19 @@ func observeAcceptedMaterialReplacedDirectory(fixture *acceptedMaterialDirectory
 	if resultErr != nil {
 		return state, resultErr
 	}
-	state.HeldPayload, resultErr = observeAcceptedMaterialRegularAt(fixture.store.payloadFD, fixture.basename, len(fixture.payload))
+	state.HeldPayload, resultErr = observeAcceptedMaterialRegularAt(
+		fixture.store.payloadFD,
+		fixture.basename,
+		len(fixture.payload),
+	)
 	if resultErr != nil {
 		return state, resultErr
 	}
-	state.HeldNamePayload, resultErr = observeAcceptedMaterialRegularAt(heldNameFD, fixture.basename, len(fixture.payload))
+	state.HeldNamePayload, resultErr = observeAcceptedMaterialRegularAt(
+		heldNameFD,
+		fixture.basename,
+		len(fixture.payload),
+	)
 	if resultErr != nil {
 		return state, resultErr
 	}
@@ -428,7 +482,10 @@ func observeAcceptedMaterialReplacedDirectory(fixture *acceptedMaterialDirectory
 	return state, nil
 }
 
-func observeAcceptedMaterialSymlink(fixture *acceptedMaterialDirectoryLinkCase, heldName string) (state acceptedMaterialSymlinkNamespaceState, resultErr error) {
+func observeAcceptedMaterialSymlink(
+	fixture *acceptedMaterialDirectoryLinkCase,
+	heldName string,
+) (state acceptedMaterialSymlinkNamespaceState, resultErr error) {
 	state.Directory, resultErr = observeAcceptedMaterialDirectoryPair(fixture)
 	if resultErr != nil {
 		return state, resultErr
@@ -437,16 +494,27 @@ func observeAcceptedMaterialSymlink(fixture *acceptedMaterialDirectoryLinkCase, 
 	if resultErr != nil {
 		return state, resultErr
 	}
-	state.HeldPayload, resultErr = observeAcceptedMaterialRegularAt(fixture.store.payloadFD, heldName, len(fixture.payload))
+	state.HeldPayload, resultErr = observeAcceptedMaterialRegularAt(
+		fixture.store.payloadFD,
+		heldName,
+		len(fixture.payload),
+	)
 	return state, resultErr
 }
 
-func observeAcceptedMaterialHardLink(fixture *acceptedMaterialDirectoryLinkCase, aliasName string) (state acceptedMaterialHardLinkNamespaceState, resultErr error) {
+func observeAcceptedMaterialHardLink(
+	fixture *acceptedMaterialDirectoryLinkCase,
+	aliasName string,
+) (state acceptedMaterialHardLinkNamespaceState, resultErr error) {
 	state.Directory, resultErr = observeAcceptedMaterialDirectoryPair(fixture)
 	if resultErr != nil {
 		return state, resultErr
 	}
-	state.Canonical, resultErr = observeAcceptedMaterialRegularAt(fixture.store.payloadFD, fixture.basename, len(fixture.payload))
+	state.Canonical, resultErr = observeAcceptedMaterialRegularAt(
+		fixture.store.payloadFD,
+		fixture.basename,
+		len(fixture.payload),
+	)
 	if resultErr != nil {
 		return state, resultErr
 	}
@@ -454,7 +522,9 @@ func observeAcceptedMaterialHardLink(fixture *acceptedMaterialDirectoryLinkCase,
 	return state, resultErr
 }
 
-func observeAcceptedMaterialDirectoryPair(fixture *acceptedMaterialDirectoryLinkCase) (acceptedMaterialDirectoryPairState, error) {
+func observeAcceptedMaterialDirectoryPair(
+	fixture *acceptedMaterialDirectoryLinkCase,
+) (acceptedMaterialDirectoryPairState, error) {
 	held, err := acceptedMaterialDirectoryIdentityFromFD(fixture.store.payloadFD)
 	if err != nil {
 		return acceptedMaterialDirectoryPairState{}, err
@@ -483,7 +553,7 @@ func acceptedMaterialDirectoryIdentityFromFD(fd int) (acceptedMaterialDirectoryI
 }
 
 func acceptedMaterialDirectoryIdentityFromStat(stat *unix.Stat_t) acceptedMaterialDirectoryIdentity {
-	return acceptedMaterialDirectoryIdentity{Device: uint64(stat.Dev), Inode: stat.Ino, UID: stat.Uid, Mode: stat.Mode}
+	return acceptedMaterialDirectoryIdentity{Device: stat.Dev, Inode: stat.Ino, UID: stat.Uid, Mode: stat.Mode}
 }
 
 func mustAcceptedMaterialDirectoryIdentity(t *testing.T, fd int) acceptedMaterialDirectoryIdentity {
@@ -493,7 +563,11 @@ func mustAcceptedMaterialDirectoryIdentity(t *testing.T, fd int) acceptedMateria
 	return identity
 }
 
-func observeAcceptedMaterialRegularAt(directoryFD int, name string, maximumBytes int) (state acceptedMaterialFileState, resultErr error) {
+func observeAcceptedMaterialRegularAt(
+	directoryFD int,
+	name string,
+	maximumBytes int,
+) (state acceptedMaterialFileState, resultErr error) {
 	if maximumBytes < 0 || uint64(maximumBytes) > publication.MaxBlobBytes {
 		return acceptedMaterialFileState{}, errors.New("invalid fixture read bound")
 	}
@@ -536,13 +610,17 @@ func observeAcceptedMaterialRegularAt(directoryFD int, name string, maximumBytes
 		return state, errors.New("fixture file changed while observed")
 	}
 	state = acceptedMaterialFileState{
-		Exists: true, Device: uint64(stat.Dev), Inode: stat.Ino, UID: stat.Uid,
-		Nlink: uint64(stat.Nlink), Mode: stat.Mode, Size: stat.Size, Bytes: bytes.Clone(buffer[:offset]),
+		Exists: true, Device: stat.Dev, Inode: stat.Ino, UID: stat.Uid,
+		Nlink: stat.Nlink, Mode: stat.Mode, Size: stat.Size, Bytes: bytes.Clone(buffer[:offset]),
 	}
 	return state, nil
 }
 
-func observeAcceptedMaterialSymlinkAt(directoryFD int, name string, maximumTargetBytes int) (acceptedMaterialSymlinkState, error) {
+func observeAcceptedMaterialSymlinkAt(
+	directoryFD int,
+	name string,
+	maximumTargetBytes int,
+) (acceptedMaterialSymlinkState, error) {
 	if maximumTargetBytes < 0 || maximumTargetBytes > 4096 {
 		return acceptedMaterialSymlinkState{}, errors.New("invalid fixture link bound")
 	}
@@ -562,7 +640,7 @@ func observeAcceptedMaterialSymlinkAt(directoryFD int, name string, maximumTarge
 		return acceptedMaterialSymlinkState{}, errors.New("fixture link changed while observed")
 	}
 	return acceptedMaterialSymlinkState{
-		Device: uint64(stat.Dev), Inode: stat.Ino, UID: stat.Uid, Nlink: uint64(stat.Nlink),
+		Device: stat.Dev, Inode: stat.Ino, UID: stat.Uid, Nlink: stat.Nlink,
 		Mode: stat.Mode, Size: stat.Size, Target: string(buffer[:count]),
 	}, nil
 }
@@ -586,7 +664,13 @@ func requireAcceptedMaterialPayloadFile(t *testing.T, state acceptedMaterialFile
 	requireAcceptedMaterialRegularFile(t, state, payload, 0o600, 1)
 }
 
-func requireAcceptedMaterialRegularFile(t *testing.T, state acceptedMaterialFileState, expected []byte, permissions uint32, nlink uint64) {
+func requireAcceptedMaterialRegularFile(
+	t *testing.T,
+	state acceptedMaterialFileState,
+	expected []byte,
+	permissions uint32,
+	nlink uint64,
+) {
 	t.Helper()
 	require.True(t, state.Exists)
 	require.Equal(t, uint32(os.Geteuid()), state.UID)

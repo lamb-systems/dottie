@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
@@ -17,8 +20,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const publicationAuditDID = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -27,7 +28,11 @@ type publicationKeyring struct {
 	devices map[string]vault.DeviceMaterial
 }
 
-func (keyring *publicationKeyring) LoadDeviceKeys(_ context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
+func (keyring *publicationKeyring) LoadDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	deviceID string,
+) (vault.DeviceMaterial, error) {
 	device, ok := keyring.devices[deviceID]
 	if vaultID == ([32]byte{}) {
 		return vault.DeviceMaterial{}, errors.New("synthetic device key is unavailable")
@@ -38,7 +43,11 @@ func (keyring *publicationKeyring) LoadDeviceKeys(_ context.Context, vaultID [32
 	return device, nil
 }
 
-func (keyring *publicationKeyring) StoreDeviceKeys(_ context.Context, vaultID [32]byte, device vault.DeviceMaterial) error {
+func (keyring *publicationKeyring) StoreDeviceKeys(
+	_ context.Context,
+	vaultID [32]byte,
+	device vault.DeviceMaterial,
+) error {
 	if vaultID == ([32]byte{}) || device.DeviceID == "" {
 		return errors.New("invalid synthetic device keys")
 	}
@@ -49,7 +58,10 @@ func (keyring *publicationKeyring) StoreDeviceKeys(_ context.Context, vaultID [3
 	return nil
 }
 
-func (keyring *publicationKeyring) LoadDeviceKeysForVault(_ context.Context, vaultID [32]byte) ([]vault.DeviceMaterial, error) {
+func (keyring *publicationKeyring) LoadDeviceKeysForVault(
+	_ context.Context,
+	vaultID [32]byte,
+) ([]vault.DeviceMaterial, error) {
 	if vaultID == ([32]byte{}) || len(keyring.devices) == 0 {
 		return nil, platform.ErrKeyringItemNotFound
 	}
@@ -94,8 +106,14 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	t.Helper()
 	root := t.TempDir()
 	paths := platform.Paths{
-		Home: filepath.Join(root, "home"), ConfigHome: filepath.Join(root, "config"),
-		StateHome: filepath.Join(root, "state"), CacheHome: filepath.Join(root, "cache"), DataHome: filepath.Join(root, "data"),
+		Home:       filepath.Join(root, "home"),
+		ConfigHome: filepath.Join(root, "config"),
+		StateHome: filepath.Join(
+			root,
+			"state",
+		),
+		CacheHome: filepath.Join(root, "cache"),
+		DataHome:  filepath.Join(root, "data"),
 	}
 	for _, directory := range []string{paths.Home, paths.ConfigHome, paths.StateHome, paths.CacheHome, paths.DataHome} {
 		require.NoError(t, os.MkdirAll(directory, 0o700))
@@ -110,9 +128,14 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	method := pds.VerificationMethod()
 	identity := atproto.Identity{
 		DID: publicationAuditDID, DIDDocumentID: publicationAuditDID,
-		VerificationMethods: []atproto.VerificationMethod{{
-			ID: method.ID, Type: method.Type, Controller: method.Controller, PublicKeyMultibase: method.PublicKeyMultibase,
-		}},
+		VerificationMethods: []atproto.VerificationMethod{
+			{
+				ID:                 method.ID,
+				Type:               method.Type,
+				Controller:         method.Controller,
+				PublicKeyMultibase: method.PublicKeyMultibase,
+			},
+		},
 	}
 	reader := atproto.RevisionReader{
 		Transport: pds, DIDDocumentID: identity.DIDDocumentID, VerificationMethods: identity.VerificationMethods,
@@ -158,7 +181,7 @@ func TestCoordinatorBootstrapRecordsLocalIdentityAndPublishesNoRecord(t *testing
 	assert.Equal(t, fixture.device.DeviceID, selections[0].DeviceID)
 	assert.Equal(t, time.Unix(1_800_000_000, 0).Unix(), selections[0].RecordedAt)
 	_, err = fixture.store.VaultCheckpoint(ctx, result.Bootstrap.Vault)
-	assert.ErrorIs(t, err, state.ErrVaultCheckpointNotFound)
+	require.ErrorIs(t, err, state.ErrVaultCheckpointNotFound)
 	after, err := fixture.reader.Read(ctx, publicationAuditDID)
 	require.NoError(t, err)
 	assert.Empty(t, after.Membership())
@@ -167,8 +190,17 @@ func TestCoordinatorBootstrapRecordsLocalIdentityAndPublishesNoRecord(t *testing
 
 func seedBootstrapRepositoryRecord(t *testing.T, pds *atprototest.MemoryPDS, collection, rkey string) {
 	t.Helper()
-	body := []byte(`{"repo":"` + publicationAuditDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap"}}]}`)
-	status, _, err := pds.Do(context.Background(), "POST", "com.atproto.repo.applyWrites", nil, body, "application/json")
+	body := []byte(
+		`{"repo":"` + publicationAuditDID + `","swapCommit":"` + pds.CurrentRevision().CommitCID.String() + `","writes":[{"$type":"com.atproto.repo.applyWrites#create","collection":"` + collection + `","rkey":"` + rkey + `","value":{"$type":"` + collection + `","probe":"bootstrap"}}]}`,
+	)
+	status, _, err := pds.Do(
+		context.Background(),
+		"POST",
+		"com.atproto.repo.applyWrites",
+		nil,
+		body,
+		"application/json",
+	)
 	require.NoError(t, err)
 	require.Equal(t, 200, status)
 }
@@ -195,7 +227,11 @@ func TestCoordinatorBootstrapSucceedsOnRepositoryHoldingOtherApplicationsRecords
 	after, err := fixture.reader.Read(ctx, publicationAuditDID)
 	require.NoError(t, err)
 	assert.Contains(t, after.Membership(), atproto.RecordKey{Collection: "app.bsky.actor.profile", RKey: "self"})
-	assert.Contains(t, after.Membership(), atproto.RecordKey{Collection: "com.example.thirdparty.note", RKey: "3foreignrecord"})
+	assert.Contains(
+		t,
+		after.Membership(),
+		atproto.RecordKey{Collection: "com.example.thirdparty.note", RKey: "3foreignrecord"},
+	)
 	assert.Equal(t, before.CommitCID(), after.CommitCID())
 }
 
