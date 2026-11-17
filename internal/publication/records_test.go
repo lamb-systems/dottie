@@ -795,7 +795,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	assert.Equal(t, "literal:self", head.Defs["main"].Key)
 	assert.Equal(
 		t,
-		[]string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
+		[]string{"parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
 		sortedStrings(snapshot.Defs["main"].Record.Required),
 	)
 	assert.Equal(
@@ -805,7 +805,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	)
 	assert.Equal(
 		t,
-		[]string{"blob", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
+		[]string{"blob", "entries", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
 		sortedPropertyKeys(snapshot.Defs["main"].Record.Properties),
 	)
 	assert.Equal(
@@ -841,6 +841,44 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 		t,
 		map[string]any{"type": "blob", "accept": []any{SnapshotBlobMIMEType}, "maxSize": float64(MaxBlobBytes)},
 		snapshot.Defs["main"].Record.Properties["blob"],
+	)
+	entriesProperty := snapshot.Defs["main"].Record.Properties["entries"]
+	assert.Equal(t, "array", entriesProperty["type"])
+	assert.InDelta(t, float64(MaxSnapshotEntries), entriesProperty["maxLength"], 0)
+	entryItems, ok := entriesProperty["items"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "object", entryItems["type"])
+	assert.Equal(t, []any{"path", "mode", "size", "kind", "blob"}, entryItems["required"])
+	entryProperties, ok := entryItems["properties"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(
+		t,
+		map[string]any{"type": "string", "maxLength": float64(MaxEntryPathBytes)},
+		entryProperties["path"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "integer", "minimum": float64(0), "maximum": float64(maxEntryModeBits)},
+		entryProperties["mode"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "integer", "minimum": float64(1), "maximum": float64(MaxBlobBytes)},
+		entryProperties["size"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "string", "const": SnapshotEntryKindFile},
+		entryProperties["kind"],
+	)
+	assert.Equal(
+		t,
+		map[string]any{
+			"type":    "blob",
+			"accept":  []any{BlobMIMEType, SnapshotBlobMIMEType},
+			"maxSize": float64(MaxBlobBytes),
+		},
+		entryProperties["blob"],
 	)
 	assert.Equal(
 		t,
@@ -1209,6 +1247,12 @@ func testCBOR(value any) []byte {
 		return []byte{0xf7}
 	case testTag:
 		return append(testCBORHead(6, item.number), testCBOR(item.value)...)
+	case []any:
+		encoded := testCBORHead(4, uint64(len(item)))
+		for _, nested := range item {
+			encoded = append(encoded, testCBOR(nested)...)
+		}
+		return encoded
 	case map[string]any:
 		pairs := make(testCBORPairs, 0, len(item))
 		for key, nested := range item {

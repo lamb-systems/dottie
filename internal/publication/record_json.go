@@ -25,6 +25,9 @@ func recordToJSONWithEncoder(canonicalRecord []byte, encode func(any) ([]byte, e
 
 	value, err := recordJSONValue(canonicalRecord)
 	if err != nil {
+		if errors.Is(err, ErrPackedPayloadRequired) {
+			return nil, err
+		}
 		return nil, recordJSONViolation("encoding")
 	}
 	if encode == nil {
@@ -60,7 +63,7 @@ func recordToJSONWithEncoder(canonicalRecord []byte, encode func(any) ([]byte, e
 }
 
 func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
-	object, err := decodeObject(canonicalRecord)
+	object, err := decodeSnapshotObject(canonicalRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +75,9 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 	case SnapshotNSID:
 		record, err := DecodeSnapshot(canonicalRecord)
 		if err != nil {
+			return nil, err
+		}
+		if _, err := record.PackedPayload(); err != nil {
 			return nil, err
 		}
 		blobCID, err := cid.Cast(record.Blob.CID)

@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A v2 publication pointer to one plaintext snapshot payload. The payload profile is vault Version 1 with CodecNone: canonical uncompressed USTAR and JSON manifest. The blob is the USTAR archive the packer emits (application/x-tar) and is limited to 402653184 bytes inclusive. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
+      "description": "A v2 publication pointer to exactly one plaintext snapshot payload, carried in one of two forms. The packed form is blob: the payload profile is vault Version 1 with CodecNone, canonical uncompressed USTAR and JSON manifest; the blob is the USTAR archive the packer emits (application/x-tar) and is limited to 402653184 bytes inclusive. The showcase form is entries: a manifest of individual files, each with its own file-level blob, for publications whose point is browsing the layout at the provider; showcase publications are opt-in per target, carry regular files only, and use paths that are relative, deterministic in order and unique within the record. Settings, symlinks and directories use the packed form. Exactly one of blob or entries is present; a record carrying both or neither is invalid. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
       "key": "any",
       "record": {
         "type": "object",
@@ -13,8 +13,7 @@
           "vault",
           "publicationId",
           "publicationSeq",
-          "parent",
-          "blob"
+          "parent"
         ],
         "properties": {
           "schemaVersion": {
@@ -46,6 +45,48 @@
               "application/x-tar"
             ],
             "maxSize": 402653184
+          },
+          "entries": {
+            "type": "array",
+            "maxLength": 512,
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "mode",
+                "size",
+                "kind",
+                "blob"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "mode": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 511
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 402653184
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "file"
+                },
+                "blob": {
+                  "type": "blob",
+                  "accept": [
+                    "application/octet-stream",
+                    "application/x-tar"
+                  ],
+                  "maxSize": 402653184
+                }
+              }
+            }
           }
         }
       }

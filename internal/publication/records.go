@@ -28,13 +28,23 @@ const (
 const legacySnapshotBlobMIMEType = BlobMIMEType
 
 var (
-	ErrInvalidRecord = errors.New("invalid publication record")
-	ErrNonCanonical  = errors.New("noncanonical publication record")
-	ErrSequenceKey   = errors.New("invalid publication sequence key")
-	ErrCID           = errors.New("invalid publication CID")
-	ErrBinding       = errors.New("publication binding mismatch")
-	ErrPayload       = errors.New("publication payload mismatch")
+	ErrInvalidRecord         = errors.New("invalid publication record")
+	ErrNonCanonical          = errors.New("noncanonical publication record")
+	ErrSequenceKey           = errors.New("invalid publication sequence key")
+	ErrCID                   = errors.New("invalid publication CID")
+	ErrBinding               = errors.New("publication binding mismatch")
+	ErrPayload               = errors.New("publication payload mismatch")
+	ErrPackedPayloadRequired = errors.New("publication packed payload required")
 )
+
+var snapshotCommonKeys = []string{
+	"$type",
+	"schemaVersion",
+	"vault",
+	"publicationId",
+	"publicationSeq",
+	"parent",
+}
 
 type ViolationError struct {
 	cause  error
@@ -65,6 +75,7 @@ type SnapshotRecord struct {
 	PublicationSeq uint64
 	Parent         []byte
 	Blob           BlobReference
+	Entries        []SnapshotEntry
 }
 
 type HeadRecord struct {
@@ -98,6 +109,13 @@ func ParseSequenceKey(key string) (uint64, error) {
 	return sequence, nil
 }
 
+func (record SnapshotRecord) PackedPayload() (BlobReference, error) {
+	if len(record.Entries) != 0 {
+		return BlobReference{}, violation(ErrPackedPayloadRequired, "entries", "packed_only")
+	}
+	return record.Blob, nil
+}
+
 func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 	if err := validateSnapshot(record); err != nil {
 		return nil, err
@@ -106,10 +124,6 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 	if parent == nil {
 		parent = []byte{}
 	}
-	blobCID, err := castCID(record.Blob.CID, cid.Raw, "blob.ref")
-	if err != nil {
-		return nil, err
-	}
 	object := map[string]any{
 		"$type":          SnapshotNSID,
 		"schemaVersion":  SchemaVersion,
@@ -117,37 +131,42 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 		"publicationId":  bytes.Clone(record.PublicationID[:]),
 		"publicationSeq": int64(record.PublicationSeq),
 		"parent":         parent,
-		"blob": atdata.Blob{
+	}
+	sizeLimit := MaxRecordBytes
+	if len(record.Entries) != 0 {
+		entries, err := encodeSnapshotEntries(record.Entries)
+		if err != nil {
+			return nil, err
+		}
+		object["entries"] = entries
+		sizeLimit = maxShowcaseRecordBytes
+	} else {
+		blobCID, err := castCID(record.Blob.CID, cid.Raw, "blob.ref")
+		if err != nil {
+			return nil, err
+		}
+		object["blob"] = atdata.Blob{
 			Ref:      atdata.CIDLink(blobCID),
 			MimeType: record.Blob.MIMEType,
 			Size:     int64(record.Blob.Size),
-		},
+		}
 	}
 	encoded, err := atdata.MarshalCBOR(object)
 	if err != nil {
 		return nil, violation(ErrInvalidRecord, "record", "encode")
 	}
-	if len(encoded) > MaxRecordBytes {
+	if len(encoded) > sizeLimit {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
 	return encoded, nil
 }
 
 func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
-	object, err := decodeObject(encoded)
+	object, err := decodeSnapshotObject(encoded)
 	if err != nil {
 		return SnapshotRecord{}, err
 	}
-	if err := exactKeys(
-		object,
-		"$type",
-		"schemaVersion",
-		"vault",
-		"publicationId",
-		"publicationSeq",
-		"parent",
-		"blob",
-	); err != nil {
+	if err := checkSnapshotKeys(object); err != nil {
 		return SnapshotRecord{}, err
 	}
 	if object["$type"] != SnapshotNSID {
@@ -173,27 +192,23 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 	if !ok || len(parent) > MaxCIDBytes {
 		return SnapshotRecord{}, violation(ErrInvalidRecord, "parent", "length")
 	}
-	blob, ok := object["blob"].(atdata.Blob)
-	if !ok {
-		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob", "type")
-	}
-	if blob.MimeType != SnapshotBlobMIMEType && blob.MimeType != legacySnapshotBlobMIMEType {
-		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
-	}
-	if blob.Size <= 0 || uint64(blob.Size) > MaxBlobBytes {
-		return SnapshotRecord{}, violation(ErrInvalidRecord, "blob.size", "range")
-	}
-	blobCID, err := validateCID(blob.Ref.CID().Bytes(), cid.Raw, "blob.ref")
-	if err != nil {
-		return SnapshotRecord{}, err
-	}
 	var record SnapshotRecord
 	record.SchemaVersion = version
 	copy(record.Vault[:], vaultBytes)
 	copy(record.PublicationID[:], publicationBytes)
 	record.PublicationSeq = sequence
 	record.Parent = bytes.Clone(parent)
-	record.Blob = BlobReference{CID: blobCID.Bytes(), Size: uint64(blob.Size), MIMEType: blob.MimeType}
+	if _, packed := object["blob"]; packed {
+		if err := decodeSnapshotBlob(object["blob"], &record); err != nil {
+			return SnapshotRecord{}, err
+		}
+	} else {
+		entries, err := decodeSnapshotEntries(object["entries"])
+		if err != nil {
+			return SnapshotRecord{}, err
+		}
+		record.Entries = entries
+	}
 	if err := validateSnapshot(record); err != nil {
 		return SnapshotRecord{}, err
 	}
@@ -205,6 +220,25 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 		return SnapshotRecord{}, violation(ErrNonCanonical, "record", "byte_mismatch")
 	}
 	return record, nil
+}
+
+func decodeSnapshotBlob(value any, record *SnapshotRecord) error {
+	blob, ok := value.(atdata.Blob)
+	if !ok {
+		return violation(ErrInvalidRecord, "blob", "type")
+	}
+	if blob.MimeType != SnapshotBlobMIMEType && blob.MimeType != legacySnapshotBlobMIMEType {
+		return violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
+	}
+	if blob.Size <= 0 || uint64(blob.Size) > MaxBlobBytes {
+		return violation(ErrInvalidRecord, "blob.size", "range")
+	}
+	blobCID, err := validateCID(blob.Ref.CID().Bytes(), cid.Raw, "blob.ref")
+	if err != nil {
+		return err
+	}
+	record.Blob = BlobReference{CID: blobCID.Bytes(), Size: uint64(blob.Size), MIMEType: blob.MimeType}
+	return nil
 }
 
 func EncodeHead(record HeadRecord) ([]byte, error) {
@@ -301,7 +335,7 @@ func DecodeHead(encoded []byte) (HeadRecord, error) {
 }
 
 func RecordCID(encoded []byte) ([]byte, error) {
-	object, err := decodeObject(encoded)
+	object, err := decodeSnapshotObject(encoded)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +458,11 @@ func VerifySuccessor(previousEncoded, successorEncoded []byte, successorKey stri
 }
 
 func decodeObject(encoded []byte) (map[string]any, error) {
-	if len(encoded) == 0 || len(encoded) > MaxRecordBytes {
+	return decodeObjectLimit(encoded, MaxRecordBytes)
+}
+
+func decodeObjectLimit(encoded []byte, limit int) (map[string]any, error) {
+	if len(encoded) == 0 || len(encoded) > limit {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
 	object, err := atdata.UnmarshalCBOR(encoded)
@@ -433,6 +471,23 @@ func decodeObject(encoded []byte) (map[string]any, error) {
 	}
 	if !validUTF8(object) {
 		return nil, violation(ErrNonCanonical, "record", "invalid_utf8")
+	}
+	return object, nil
+}
+
+func decodeSnapshotObject(encoded []byte) (map[string]any, error) {
+	if len(encoded) <= MaxRecordBytes {
+		return decodeObject(encoded)
+	}
+	if len(encoded) > maxShowcaseRecordBytes {
+		return nil, violation(ErrInvalidRecord, "record", "size_limit")
+	}
+	object, err := decodeObjectLimit(encoded, maxShowcaseRecordBytes)
+	if err != nil {
+		return nil, violation(ErrInvalidRecord, "record", "size_limit")
+	}
+	if _, showcase := object["entries"]; !showcase {
+		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
 	return object, nil
 }
@@ -471,6 +526,30 @@ func exactKeys(object map[string]any, names ...string) error {
 	return nil
 }
 
+func checkSnapshotKeys(object map[string]any) error {
+	_, packed := object["blob"]
+	_, showcase := object["entries"]
+	if packed && showcase {
+		return violation(ErrInvalidRecord, "record", "both_payload_forms")
+	}
+	expected := len(snapshotCommonKeys)
+	if packed || showcase {
+		expected++
+	}
+	if len(object) != expected {
+		return violation(ErrInvalidRecord, "record", "fields")
+	}
+	for _, name := range snapshotCommonKeys {
+		if _, ok := object[name]; !ok {
+			return violation(ErrInvalidRecord, name, "missing")
+		}
+	}
+	if !packed && !showcase {
+		return violation(ErrInvalidRecord, "record", "missing_payload_form")
+	}
+	return nil
+}
+
 func validateSnapshot(record SnapshotRecord) error {
 	if record.SchemaVersion != SchemaVersion {
 		return violation(ErrInvalidRecord, "schemaVersion", "unsupported")
@@ -498,16 +577,30 @@ func validateSnapshot(record SnapshotRecord) error {
 			return err
 		}
 	}
-	if record.Blob.Size == 0 || record.Blob.Size > MaxBlobBytes {
-		return violation(ErrInvalidRecord, "blob.size", "range")
+	return validateSnapshotPayload(record)
+}
+
+func validateSnapshotPayload(record SnapshotRecord) error {
+	packed := len(record.Blob.CID) != 0 || record.Blob.Size != 0 || record.Blob.MIMEType != ""
+	switch {
+	case packed && len(record.Entries) != 0:
+		return violation(ErrInvalidRecord, "record", "both_payload_forms")
+	case packed:
+		if record.Blob.Size == 0 || record.Blob.Size > MaxBlobBytes {
+			return violation(ErrInvalidRecord, "blob.size", "range")
+		}
+		if record.Blob.MIMEType != SnapshotBlobMIMEType && record.Blob.MIMEType != legacySnapshotBlobMIMEType {
+			return violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
+		}
+		if _, err := castCID(record.Blob.CID, cid.Raw, "blob.ref"); err != nil {
+			return err
+		}
+		return nil
+	case len(record.Entries) != 0:
+		return validateEntries(record.Entries)
+	default:
+		return violation(ErrInvalidRecord, "record", "missing_payload_form")
 	}
-	if record.Blob.MIMEType != SnapshotBlobMIMEType && record.Blob.MIMEType != legacySnapshotBlobMIMEType {
-		return violation(ErrInvalidRecord, "blob.mimeType", "unsupported")
-	}
-	if _, err := castCID(record.Blob.CID, cid.Raw, "blob.ref"); err != nil {
-		return err
-	}
-	return nil
 }
 
 func validateHead(record HeadRecord) error {
