@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -335,7 +336,7 @@ func (r RevisionReader) latest(ctx context.Context, did string) (latestCommit, e
 	}
 	if status < 200 || status >= 300 {
 		statusErr := &ReadStatusError{StatusCode: status, Code: safeProviderCode(body)}
-		if status >= 500 {
+		if status >= http.StatusInternalServerError {
 			return latestCommit{}, fmt.Errorf("%w: %w", ErrAmbiguousTransport, statusErr)
 		}
 		return latestCommit{}, statusErr
@@ -367,7 +368,7 @@ func (r RevisionReader) car(ctx context.Context, did string, budgets Budgets) ([
 	defer stream.Close()
 	if status < 200 || status >= 300 {
 		statusErr := &ReadStatusError{StatusCode: status}
-		if status >= 500 {
+		if status >= http.StatusInternalServerError {
 			return nil, cid.Undef, fmt.Errorf("%w: %w", ErrAmbiguousTransport, statusErr)
 		}
 		return nil, cid.Undef, statusErr

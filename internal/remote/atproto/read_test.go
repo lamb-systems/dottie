@@ -48,6 +48,7 @@ type readBuilderHistory struct {
 
 type readTransport struct {
 	*proofTransport
+
 	blob       []byte
 	blobStatus int
 	blobErr    error

@@ -7,7 +7,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/source/files"
-	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
 func (coordinator *Coordinator) captureLocal(
@@ -88,77 +87,6 @@ func (coordinator *Coordinator) captureLocal(
 		return nil, nil, nil, nil, nil, errors.New("unsupported target source")
 	}
 	return observations, entries, unknown, nil, coverage, nil
-}
-
-func (coordinator *Coordinator) loadBase(
-	ctx context.Context,
-	target config.Target,
-	portable model.Target,
-	configuration config.Config,
-) ([]model.Entry, syncengine.BaseStatus, []model.EntryKey, error) {
-	records, err := coordinator.deps.State.AppliedBase(ctx, target.ID)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	if len(records) == 0 {
-		return nil, syncengine.BaseMissing, nil, nil
-	}
-	entries := make([]model.Entry, 0, len(records))
-	for _, record := range records {
-		var entry model.Entry
-		switch record.Identity.Source {
-		case model.SourceFiles:
-			file := &model.FileEntry{
-				Path:       record.Identity.FilePath,
-				State:      model.FileState(record.Fingerprint.State),
-				Kind:       record.Fingerprint.Kind,
-				Mode:       record.Fingerprint.Mode,
-				LinkTarget: record.Fingerprint.LinkTarget,
-			}
-			if file.State == model.FilePresent && file.Kind == model.FileRegular {
-				payload, err := coordinator.deps.State.Payload(record.PayloadRef)
-				if err != nil {
-					return nil, "", nil, err
-				}
-				file.Content = payload
-			}
-			entry = model.Entry{TargetID: target.ID, File: file}
-		case model.SourceGNOME:
-			setting := &model.SettingEntry{
-				SchemaID: record.Identity.SchemaID,
-				Path:     record.Identity.SettingsPath,
-				Key:      record.Identity.SettingKey,
-				State:    model.SettingState(record.Fingerprint.State),
-			}
-			if setting.State == model.SettingPresent {
-				setting.Value = &model.VariantValue{
-					Type: record.Fingerprint.ValueType,
-					Text: record.Fingerprint.ValueText,
-				}
-			}
-			entry = model.Entry{TargetID: target.ID, Setting: setting}
-		default:
-			return nil, "", nil, errors.New("base record has an unsupported source")
-		}
-		if err := entry.Validate(); err != nil {
-			return nil, "", nil, err
-		}
-		entries = append(entries, entry)
-	}
-	filtered, untracked, err := filterSnapshot(
-		ctx,
-		configuration,
-		coordinator.deps.Settings,
-		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: entries},
-	)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	status := syncengine.BaseKnown
-	if len(untracked) != 0 {
-		status = syncengine.BaseStale
-	}
-	return filtered.Entries, status, untracked, nil
 }
 
 var _ CapturePort = LocalFilesCapture{}

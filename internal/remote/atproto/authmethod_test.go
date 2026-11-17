@@ -309,11 +309,12 @@ func TestAuthMethodLockHonorsContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	transport := &blockingAuthTransport{entered: make(chan struct{}), release: make(chan struct{})}
 	httpClient := &http.Client{Transport: transport}
+	shardRequest := mustAuthRequest(t, "https://shard.example/resource")
 	done := make(chan error, 1)
 	go func() {
 		_, authErr := auth.DoWithAuth(
 			httpClient,
-			mustAuthRequest(t, "https://shard.example/resource"),
+			shardRequest,
 			syntax.NSID("com.atproto.sync.getBlob"),
 		)
 		done <- authErr

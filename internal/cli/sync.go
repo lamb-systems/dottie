@@ -278,7 +278,7 @@ func escapePlanField(value string) string {
 	var escaped strings.Builder
 	for _, r := range value {
 		switch {
-		case r == 92:
+		case r == '\\':
 			escaped.WriteRune(r)
 			escaped.WriteRune(r)
 		case unicode.IsControl(r) && r <= 0xff:
@@ -316,7 +316,7 @@ func escapeJSONControls(encoded []byte) []byte {
 			index++
 			continue
 		}
-		if current == 92 {
+		if current == '\\' {
 			result = append(result, current)
 			escaped = true
 			index++
@@ -346,13 +346,17 @@ func escapeJSONControls(encoded []byte) []byte {
 }
 
 func appendJSONUnicodeEscape(destination []byte, value rune) []byte {
-	const digits = "0123456789abcdef"
-	destination = append(destination, 92, 'u')
+	const (
+		hexDigits  = "0123456789abcdef"
+		nibbleBits = 4
+		nibbleMask = 0xf
+	)
+	destination = append(destination, '\\', 'u')
 	destination = append(destination,
-		digits[(value>>12)&0xf],
-		digits[(value>>8)&0xf],
-		digits[(value>>4)&0xf],
-		digits[value&0xf],
+		hexDigits[(value>>(3*nibbleBits))&nibbleMask],
+		hexDigits[(value>>(2*nibbleBits))&nibbleMask],
+		hexDigits[(value>>nibbleBits)&nibbleMask],
+		hexDigits[value&nibbleMask],
 	)
 	return destination
 }

@@ -383,9 +383,8 @@ func TestPublicationProposalRecordCarriesNoPayloadBytes(t *testing.T) {
 	require.NoError(t, err)
 	record := preparation.Record
 	assert.Equal(t, fixture.binding.Vault, record.Binding.Vault)
-	assert.Empty(t, record.CandidateRecordCID[:0])
-	assert.Positive(t, len(record.CandidateRecordCID))
-	assert.Positive(t, len(record.CandidatePayloadCID))
+	assert.NotEmpty(t, record.CandidateRecordCID)
+	assert.NotEmpty(t, record.CandidatePayloadCID)
 	assert.Equal(t, 1, preparation.Targets)
 	assert.Equal(t, 1, preparation.Entries)
 }

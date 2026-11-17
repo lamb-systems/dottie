@@ -134,7 +134,7 @@ func TestRemovedV1ApplyEngineHasNoProductionReference(t *testing.T) {
 	assert.Empty(t, reintroduced, "the retired v1 apply engine must stay deleted")
 
 	references := make([]string, 0)
-	for _, directory := range []string{filepath.Join("cmd"), filepath.Join("internal", "cli"), filepath.Join("internal", "service")} {
+	for _, directory := range []string{"cmd", filepath.Join("internal", "cli"), filepath.Join("internal", "service")} {
 		entries, err := os.ReadDir(filepath.Join(root, directory))
 		require.NoError(t, err, "read production directory")
 		for _, entry := range entries {

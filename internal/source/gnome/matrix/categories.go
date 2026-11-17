@@ -21,6 +21,7 @@ var (
 
 type CategoryKey struct {
 	KeyRef
+
 	Type  string
 	Since uint32
 }

@@ -832,7 +832,7 @@ func transitionSignerKeyMatches(transition vault.Transition, signer ed25519.Priv
 	for _, encoded := range transition.Recipients {
 		certificate, err := vault.DecodeCertificate(encoded)
 		if err == nil && certificate.DeviceID == envelope.DeviceID && bytes.Equal(certificate.KeyID, envelope.KeyID) {
-			return bytes.Equal(certificate.SigningPublicKey[:], signer.Public().(ed25519.PublicKey))
+			return signerKeyMatches(signer, certificate.SigningPublicKey[:])
 		}
 	}
 	return false

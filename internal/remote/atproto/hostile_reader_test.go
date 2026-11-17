@@ -109,8 +109,6 @@ var caseMatrix = []matrixCase{
 
 var knownSecurityDefects = []securityDefect{}
 
-const hostilePackageName = "atproto"
-
 var frozenCaseInventory = []string{
 	"1a",
 	"3b",

@@ -114,6 +114,7 @@ func TestPublicationReadAcceptedMaterialRequiresExistingFloorAndValidContext(t *
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, AcceptedMaterial{}, material)
 
+	//nolint:staticcheck // the nil context is the input under test: it must refuse with ReasonContext
 	material, err = store.ReadAcceptedMaterial(nil, f.binding, Floor{})
 	requireErrorMetadata(t, err, ErrInvalid, StageReadAcceptedMaterial, ReasonContext)
 	assert.Equal(t, AcceptedMaterial{}, material)

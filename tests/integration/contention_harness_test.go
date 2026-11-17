@@ -167,12 +167,9 @@ func (b *contentionBudget) reserveRevision(cleanup bool) error {
 	return nil
 }
 
-func (b *contentionBudget) reserveApply(kind string, writeCount int, deleteKinds map[string]int) error {
+func (b *contentionBudget) reserveApply(kind string, deleteKinds map[string]int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if writeCount < 1 {
-		writeCount = 1
-	}
 	if b.applyWrites+1 > b.applyLimit {
 		return b.failLocked("applyWrites requests", b.applyLimit, b.applyWrites+1)
 	}
@@ -381,7 +378,7 @@ func (t *contentionTransport) Do(
 	contentType string,
 ) (int, []byte, error) {
 	if endpoint == "com.atproto.repo.applyWrites" {
-		keys, deleteKinds, writeCount, err := contentionWriteKeys(body, t.tracker)
+		keys, deleteKinds, _, err := contentionWriteKeys(body, t.tracker)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -393,7 +390,7 @@ func (t *contentionTransport) Do(
 		if err != nil {
 			return 0, nil, err
 		}
-		if err := t.budget.reserveApply(kind, writeCount, deleteKinds); err != nil {
+		if err := t.budget.reserveApply(kind, deleteKinds); err != nil {
 			return 0, nil, err
 		}
 		if t.tracker != nil {
@@ -3274,36 +3271,34 @@ func TestContentionBudgetCapsAndTypedErrors(t *testing.T) {
 	if err := budget.reserveHTTP(true); !errors.Is(err, errContentionBudget) {
 		require.ErrorIs(t, err, errContentionBudget, "HTTP over-budget error=%s", safeContentionError(err))
 	}
-	if _, _, _, _, _, _, _, exceeded := budget.snapshot(); exceeded == nil {
-		require.Error(t, exceeded, "budget exhaustion did not retain a typed error")
-	} else if _, ok := exceeded.(*contentionBudgetError); !ok {
-		require.IsType(t, &contentionBudgetError{}, exceeded, "budget exhaustion is not typed: %T", exceeded)
-	}
+	_, _, _, _, _, _, _, exceeded := budget.snapshot()
+	require.Error(t, exceeded, "budget exhaustion did not retain a typed error")
+	var budgetExceeded *contentionBudgetError
+	require.ErrorAs(t, exceeded, &budgetExceeded, "budget exhaustion is not typed: %T", exceeded)
 }
 
 func TestContentionBudgetEnforcesWriteAndCleanupCaps(t *testing.T) {
 	publications := newContentionBudget(false, 1)
 	for index := range contentionPublicationBudget {
-		if err := publications.reserveApply("publication", 3, nil); err != nil {
+		if err := publications.reserveApply("publication", nil); err != nil {
 			require.NoError(t, err, "publication %d unexpectedly rejected: %s", index+1, safeContentionError(err))
 		}
 	}
-	if err := publications.reserveApply("publication", 3, nil); !errors.Is(err, errContentionBudget) {
+	if err := publications.reserveApply("publication", nil); !errors.Is(err, errContentionBudget) {
 		require.ErrorIs(t, err, errContentionBudget, "publication over-budget error=%s", safeContentionError(err))
 	}
 
 	latency := newContentionBudget(false, 1)
-	if err := latency.reserveApply("latency", 3, nil); err != nil {
+	if err := latency.reserveApply("latency", nil); err != nil {
 		require.NoError(t, err, "first latency update rejected: %s", safeContentionError(err))
 	}
-	if err := latency.reserveApply("latency", 3, nil); !errors.Is(err, errContentionBudget) {
+	if err := latency.reserveApply("latency", nil); !errors.Is(err, errContentionBudget) {
 		require.ErrorIs(t, err, errContentionBudget, "latency over-budget error=%s", safeContentionError(err))
 	}
 
 	cleanup := newContentionBudget(false, 1)
 	if err := cleanup.reserveApply(
 		"cleanup",
-		13,
 		map[string]int{"publication": contentionCleanupBudget + 1},
 	); !errors.Is(
 		err,
@@ -3325,7 +3320,7 @@ func (f *contentionNonceChallengeFake) RoundTrip(request *http.Request) (*http.R
 	if f.perWrite == nil {
 		f.perWrite = make(map[string]int)
 	}
-	id := request.Header.Get("X-Write-ID")
+	id := request.Header.Get("X-Write-Id")
 	f.perWrite[id]++
 	count := f.perWrite[id]
 	f.mu.Unlock()
@@ -3373,7 +3368,7 @@ func newContentionFakeWriteRequest(t *testing.T, id string) *http.Request {
 	if err != nil {
 		require.NoError(t, err, safeContentionError(err))
 	}
-	request.Header.Set("X-Write-ID", id)
+	request.Header.Set("X-Write-Id", id)
 	return request
 }
 
@@ -3683,7 +3678,7 @@ func TestContentionBarrierForcedInterleavingDoesNotInferOverlap(t *testing.T) {
 			if !assert.NoError(t, err, safeContentionError(err)) {
 				return
 			}
-			request.Header.Set("X-Write-ID", fmt.Sprintf("serialized-%d", index))
+			request.Header.Set("X-Write-Id", fmt.Sprintf("serialized-%d", index))
 			request = request.WithContext(
 				context.WithValue(request.Context(), contentionWriterIDKey{}, fmt.Sprintf("writer-%d", index)),
 			)
@@ -4077,7 +4072,7 @@ func TestContentionOverlapAsyncCallbacksRemainInconclusiveUntilComplete(t *testi
 				responses <- err
 				return
 			}
-			request.Header.Set("X-Write-ID", fmt.Sprintf("async-trace-%d", index))
+			request.Header.Set("X-Write-Id", fmt.Sprintf("async-trace-%d", index))
 			request = request.WithContext(
 				context.WithValue(request.Context(), contentionWriterIDKey{}, fmt.Sprintf("async-writer-%d", index)),
 			)
@@ -4346,7 +4341,7 @@ func TestContentionSaturatedCleanupHTTPBudgetAllowsFinalVerification(t *testing.
 		}
 	}
 	reserve("initial verified read", 3)
-	if err := budget.reserveApply("cleanup", 1, nil); err != nil {
+	if err := budget.reserveApply("cleanup", nil); err != nil {
 		require.NoError(t, err, "challenged cleanup delete logical request blocked: %s", safeContentionError(err))
 	}
 	for replay := range 2 {
@@ -4419,14 +4414,14 @@ func TestContentionLatencyCreateUpdateCleanupCategories(t *testing.T) {
 	}
 	tracker.track([]contentionRecordKey{key}, "latency")
 	budget := newContentionBudget(false, 1)
-	if err := budget.reserveApply("latency-init", 3, nil); err != nil {
+	if err := budget.reserveApply("latency-init", nil); err != nil {
 		require.NoError(t, err, "create operation reserve: %s", safeContentionError(err))
 	}
-	if err := budget.reserveApply("latency", 3, nil); err != nil {
+	if err := budget.reserveApply("latency", nil); err != nil {
 		require.NoError(t, err, "update operation reserve: %s", safeContentionError(err))
 	}
 	deleteKinds := map[string]int{trackerKind(tracker, key): 1}
-	if err := budget.reserveApply("cleanup", 1, deleteKinds); err != nil {
+	if err := budget.reserveApply("cleanup", deleteKinds); err != nil {
 		require.NoError(t, err, "cleanup reserve: %s", safeContentionError(err))
 	}
 	httpRequests, logical, wire, _, _, cleanupDeletes, latencyUpdates, _ := budget.snapshot()
@@ -4506,7 +4501,7 @@ func TestContentionLatencyCreateUpdateCleanupCategories(t *testing.T) {
 	if _, err := contentionCleanupCategory("unknown"); err == nil {
 		require.Error(t, err, "unknown cleanup category was accepted")
 	}
-	if err := budget.reserveApply("cleanup", 1, map[string]int{"unknown": 1}); !errors.Is(err, errContentionBudget) {
+	if err := budget.reserveApply("cleanup", map[string]int{"unknown": 1}); !errors.Is(err, errContentionBudget) {
 		require.ErrorIs(t, err, errContentionBudget, "unknown delete category error=%s", safeContentionError(err))
 	}
 }

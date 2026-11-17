@@ -159,6 +159,7 @@ func TestKeyringErrorsCarryNoRemoteText(t *testing.T) {
 
 type fakeKeyringListingBackend struct {
 	*fakeKeyringBackend
+
 	prefixes []string
 	names    []string
 	listErr  error

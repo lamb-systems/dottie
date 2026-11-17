@@ -9,7 +9,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
 	"testing"
 
 	urfave "github.com/urfave/cli/v3"
@@ -132,7 +131,7 @@ func TestManualStatusPrintsAbsentVaultSelection(t *testing.T) {
 }
 
 func TestStatusDispatchPassesNoSessionFactory(t *testing.T) {
-	parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join("root.go"), nil, parser.SkipObjectResolution)
+	parsed, err := parser.ParseFile(token.NewFileSet(), "root.go", nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 	closures := make([]string, 0)
 	cases := 0

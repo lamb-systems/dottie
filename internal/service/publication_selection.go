@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -374,12 +375,7 @@ func publicationPathWithin(root, candidate string) bool {
 	if relative == "." {
 		return true
 	}
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
-		if component == ".." {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(strings.Split(relative, string(filepath.Separator)), "..")
 }
 
 func cloneSelectionTarget(target config.Target) config.Target {

@@ -281,11 +281,6 @@ func (fixture *pullTestFixture) accept(t *testing.T) {
 	require.NoError(t, store.Close())
 }
 
-func (fixture *pullTestFixture) emptyStore(t *testing.T) {
-	t.Helper()
-	require.NoError(t, fixture.openStore(t).Close())
-}
-
 func (fixture *pullTestFixture) payloads() map[uint64]model.Snapshot {
 	return map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot}
 }

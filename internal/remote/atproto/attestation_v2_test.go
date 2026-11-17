@@ -23,10 +23,13 @@ func TestAttestationLexiconKeepsRecoveryPointsOptionalAndVersioned(t *testing.T)
 	require.Equal(t, VaultAttestationNSID, attestation.ID)
 	properties := attestation.Defs["main"].Record["properties"].(map[string]any)
 	version := properties["schemaVersion"].(map[string]any)
+	//nolint:testifylint // the values are exact JSON integers decoded into float64; equality is the property under test
 	assert.Equal(t, float64(1), version["minimum"])
+	//nolint:testifylint // as above: an epsilon would stop testing the exact encoded bound
 	assert.Equal(t, float64(2), version["maximum"])
 	assert.NotContains(t, attestation.Defs["main"].Record["required"], "recoveryPoints")
 	points := properties["recoveryPoints"].(map[string]any)
+	//nolint:testifylint // the value is an exact JSON integer decoded into float64; equality is the property under test
 	assert.Equal(t, float64(65535), points["maxLength"])
 	item := points["items"].(map[string]any)
 	assert.Equal(t, []any{"epoch", "snapshotCid"}, item["required"])

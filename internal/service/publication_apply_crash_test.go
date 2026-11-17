@@ -101,12 +101,14 @@ type publicationApplyCrashRow struct {
 
 type publicationApplyCrashFileSystem struct {
 	files.ApplyFileSystem
+
 	killBeforeRename bool
 	killAfterRename  bool
 }
 
 type publicationApplyCrashRoot struct {
 	files.ApplyRoot
+
 	crash publicationApplyCrashFileSystem
 }
 

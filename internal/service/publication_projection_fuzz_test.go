@@ -199,10 +199,7 @@ func publicationProjectionFuzzSnapshot(
 		shape := input[cursor+1]
 		requested := int(binary.BigEndian.Uint16(input[cursor+2 : cursor+4]))
 		cursor += 4
-		valueBytes := min(requested, publicationProjectionFuzzMaxTextBytes)
-		if valueBytes > len(input)-cursor {
-			valueBytes = len(input) - cursor
-		}
+		valueBytes := min(requested, publicationProjectionFuzzMaxTextBytes, len(input)-cursor)
 		valueText := publicationProjectionFuzzText(input[cursor : cursor+valueBytes])
 		cursor += valueBytes
 
@@ -377,9 +374,8 @@ func publicationProjectionFuzzKeyLess(left, right model.EntryKey) bool {
 func publicationProjectionFuzzAssertError(t *testing.T, err error, reason publicationReconciliationReason) {
 	t.Helper()
 	require.ErrorIs(t, err, ErrPublicationReconciliation)
-	assert.IsType(t, &publicationReconciliationError{}, err)
-	classified, ok := err.(*publicationReconciliationError)
-	require.True(t, ok)
+	var classified *publicationReconciliationError
+	require.ErrorAs(t, err, &classified)
 	assert.Equal(t, string(publicationProjectionStage), classified.Stage())
 	assert.Equal(t, string(reason), classified.Reason())
 	assert.Equal(t, "publication reconciliation: "+string(publicationProjectionStage)+"/"+string(reason), err.Error())

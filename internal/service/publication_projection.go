@@ -357,5 +357,6 @@ func publicationProjectionKeyLess(left, right model.EntryKey) bool {
 }
 
 func publicationProjectionFailure(reason publicationReconciliationReason) error {
+	//nolint:staticcheck // a projection refusal has no caller context to carry; the nil is the value, not an omission
 	return publicationReconciliationFailure(nil, publicationProjectionStage, reason, nil)
 }

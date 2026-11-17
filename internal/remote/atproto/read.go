@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"sort"
 	"time"
@@ -497,7 +498,7 @@ func (r VaultReader) fetchBlob(ctx context.Context, did string, blobCID cid.Cid,
 	if err != nil {
 		return nil, &ReadError{Stage: ReadStageBlob, Err: fmt.Errorf("%w: %w", ErrReadBlobTransport, err)}
 	}
-	if status == 404 {
+	if status == http.StatusNotFound {
 		return nil, &ReadError{Stage: ReadStageBlob, Err: ErrReadBlobMissing}
 	}
 	if status < 200 || status >= 300 || stream == nil {

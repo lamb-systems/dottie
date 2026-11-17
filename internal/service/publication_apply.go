@@ -207,6 +207,7 @@ type publicationApplyOperation struct {
 
 type publicationApplyBoundFileSystem struct {
 	files.ApplyFileSystem
+
 	anchor publicationstate.JournalAnchor
 }
 
@@ -968,7 +969,8 @@ func observePublicationApplyEntry(
 
 func publicationApplyUnsupportedMode(ctx context.Context, mode uint32) error {
 	failure := publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonModeUnsupported, nil)
-	if refused, ok := failure.(*publicationApplyError); ok && refused.reason == publicationApplyReasonModeUnsupported {
+	var refused *publicationApplyError
+	if errors.As(failure, &refused) && refused.reason == publicationApplyReasonModeUnsupported {
 		refused.detail = fmt.Sprintf("mode %04o", mode)
 	}
 	return failure

@@ -787,6 +787,7 @@ func TestPublishWithRetryPersistsDispositionBeforeFailedOutcomeUpdate(t *testing
 
 type failPublicationDispositionStore struct {
 	*transitionTestStore
+
 	failValue string
 	failed    bool
 }
@@ -810,6 +811,7 @@ func (s *failPublicationDispositionStore) UpdateTransitionAttempt(
 
 type failPublicationOutcomeStore struct {
 	*transitionTestStore
+
 	failOutcome string
 	failed      bool
 }
@@ -971,10 +973,10 @@ func TestPublishWithRetrySerializesSameMarker(t *testing.T) {
 func waitForPublicationLockUsers(t *testing.T, marker RecordKey, users int) {
 	t.Helper()
 	for range 100000 {
-		publicationMarkerLocks.Lock()
+		publicationMarkerLocks.mu.Lock()
 		lock := publicationMarkerLocks.locks[marker]
 		found := lock != nil && lock.users >= users
-		publicationMarkerLocks.Unlock()
+		publicationMarkerLocks.mu.Unlock()
 		if found {
 			return
 		}
@@ -1049,6 +1051,7 @@ func TestPublicationRetryMaxElapsedCancelsRead(t *testing.T) {
 
 type blockingPublicationReadIO struct {
 	*publicationRetryTestIO
+
 	entered chan struct{}
 }
 

@@ -37,7 +37,7 @@ func LexicalResolve(linkDir, target string) (string, bool) {
 		return "", true
 	}
 	segments := Segments(linkDir)
-	for _, segment := range strings.Split(target, "/") {
+	for segment := range strings.SplitSeq(target, "/") {
 		switch segment {
 		case ".":
 		case "..":
@@ -76,7 +76,7 @@ func validRelativePath(rel string, allowRoot bool) bool {
 		hasDrivePrefix(rel) {
 		return false
 	}
-	for _, segment := range strings.Split(rel, "/") {
+	for segment := range strings.SplitSeq(rel, "/") {
 		if segment == "" || segment == "." || segment == ".." {
 			return false
 		}
@@ -101,7 +101,7 @@ func validLinkTextPath(target string) bool {
 		hasDrivePrefix(target) {
 		return false
 	}
-	for _, segment := range strings.Split(target, "/") {
+	for segment := range strings.SplitSeq(target, "/") {
 		if segment == "" {
 			return false
 		}

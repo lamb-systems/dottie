@@ -131,9 +131,13 @@ func newAccountCommandWithFactories(
 				return urfave.Exit("cannot generate device keys", 1)
 			}
 			defer clear(signing)
+			public, asserted := signing.Public().(ed25519.PublicKey)
+			if !asserted {
+				return urfave.Exit("cannot read the generated device public key", 1)
+			}
 			material := vault.DeviceMaterial{
 				DeviceID:  command.String("device-id"),
-				KeyID:     deviceKeyID(signing.Public().(ed25519.PublicKey)),
+				KeyID:     deviceKeyID(public),
 				Signing:   signing,
 				Recipient: recipient,
 			}

@@ -1,15 +1,10 @@
 package service
 
 import (
-	"archive/tar"
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"sync"
 	"time"
@@ -18,7 +13,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/state"
-	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type Coordinator struct {
@@ -156,48 +150,6 @@ func (coordinator *Coordinator) lock(ctx context.Context) error {
 		return err
 	}
 	return nil
-}
-
-func snapshotBlob(plaintext []byte) (vault.Blob, error) {
-	reader := tar.NewReader(bytes.NewReader(plaintext))
-	header, err := reader.Next()
-	if err != nil || header.Name != "000000" || header.Size < 0 || header.Size > 16<<20 {
-		return vault.Blob{}, errors.New("authenticated snapshot manifest is unavailable or exceeds its limit")
-	}
-	manifestBytes, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
-	if err != nil || int64(len(manifestBytes)) != header.Size {
-		return vault.Blob{}, errors.New("authenticated snapshot manifest is truncated")
-	}
-	var manifest struct {
-		Entries []struct {
-			Source string `json:"source"`
-			State  string `json:"state"`
-			Kind   string `json:"kind"`
-			Size   int64  `json:"size"`
-		} `json:"entries"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(manifestBytes))
-	if err := decoder.Decode(&manifest); err != nil {
-		return vault.Blob{}, errors.New("authenticated snapshot manifest cannot be inspected")
-	}
-	var plaintextBytes int64
-	for _, entry := range manifest.Entries {
-		if entry.Source == string(model.SourceFiles) && entry.State == string(model.FilePresent) &&
-			entry.Kind == string(model.FileRegular) {
-			if entry.Size < 0 || plaintextBytes > vault.DefaultLimits().MaxTotalBytes-entry.Size {
-				return vault.Blob{}, errors.New("authenticated snapshot exceeds its plaintext limit")
-			}
-			plaintextBytes += entry.Size
-		}
-	}
-	return vault.Blob{
-		Version:        vault.Version,
-		Codec:          vault.CodecNone,
-		Payload:        bytes.Clone(plaintext),
-		Digest:         sha256.Sum256(plaintext),
-		EntryCount:     len(manifest.Entries),
-		PlaintextBytes: plaintextBytes,
-	}, nil
 }
 
 func filterSnapshot(

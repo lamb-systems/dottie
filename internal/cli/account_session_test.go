@@ -41,6 +41,7 @@ const (
 
 type memoryOAuthKeyring struct {
 	*memoryAccountKeyring
+
 	mu                sync.Mutex
 	items             map[string][]byte
 	loadErr           error

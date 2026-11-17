@@ -641,6 +641,7 @@ func TestApplyPublicationRefusesInvalidRequests(t *testing.T) {
 
 type publicationApplySwappingFileSystem struct {
 	files.ApplyFileSystem
+
 	at    int
 	calls int
 	swap  func()
@@ -1271,17 +1272,20 @@ func TestApplyPublicationRefusesMixedPlanBeforeAnyMutation(t *testing.T) {
 
 type publicationApplyCountingFileSystem struct {
 	files.ApplyFileSystem
+
 	growth int
 	read   int64
 }
 
 type publicationApplyCountingRoot struct {
 	files.ApplyRoot
+
 	filesystem *publicationApplyCountingFileSystem
 }
 
 type publicationApplyCountingFile struct {
 	files.ApplyFile
+
 	filesystem *publicationApplyCountingFileSystem
 }
 

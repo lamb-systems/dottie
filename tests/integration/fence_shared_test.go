@@ -131,7 +131,6 @@ func cleanupFenceRecords(
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	for _, record := range slices.Backward(records) {
-
 		verified := false
 		for range 3 {
 			revision, err := reader.Read(ctx, identity.DID)
@@ -230,8 +229,7 @@ func cleanupFenceRecords(
 				)
 				break
 			}
-			assert.True(t, false, "F04 cleanup verification %s/%s: %v", record.collection, record.rkey, verifyErr)
-			break
+			t.Fatalf("F04 cleanup verification %s/%s: %v", record.collection, record.rkey, verifyErr)
 		}
 		if !verified {
 			if err := verifyFenceRecordDeleted(

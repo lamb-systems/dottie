@@ -422,6 +422,7 @@ func TestAcceptMaterialSyncsBeforeReferenceCommit(t *testing.T) {
 		var recordCID, blobCID []byte
 		scanErr := tx.QueryRowContext(ctx, "SELECT accepted_revision,record_cid,blob_cid FROM accepted_material_refs").
 			Scan(&revision, &recordCID, &blobCID)
+		//nolint:testifylint // require would Goexit out of the transaction callback before it can roll back
 		refsOK := assert.NoError(
 			t,
 			scanErr,

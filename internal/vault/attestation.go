@@ -63,8 +63,11 @@ func BuildAttestation(request AttestationBuildRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(request.SigningKey) != ed25519.PrivateKeySize ||
-		!bytes.Equal(request.SigningKey.Public().(ed25519.PublicKey), certificate.SigningPublicKey[:]) {
+	if len(request.SigningKey) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("%w: attestation signing key", ErrAuthorization)
+	}
+	signingPublic, asserted := signingPublicKey(request.SigningKey)
+	if !asserted || !bytes.Equal(signingPublic, certificate.SigningPublicKey[:]) {
 		return nil, fmt.Errorf("%w: attestation signing key", ErrAuthorization)
 	}
 	if request.RetentionFloor > MaxAttestationInteger {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"sync"
 	"time"
@@ -71,12 +71,12 @@ type publicationMarkerLock struct {
 }
 
 var publicationMarkerLocks = struct {
-	sync.Mutex
+	mu    sync.Mutex
 	locks map[RecordKey]*publicationMarkerLock
 }{locks: make(map[RecordKey]*publicationMarkerLock)}
 
 func acquirePublicationMarker(ctx context.Context, marker RecordKey) (func(), error) {
-	publicationMarkerLocks.Lock()
+	publicationMarkerLocks.mu.Lock()
 	lock := publicationMarkerLocks.locks[marker]
 	if lock == nil {
 		lock = &publicationMarkerLock{token: make(chan struct{}, 1)}
@@ -84,7 +84,7 @@ func acquirePublicationMarker(ctx context.Context, marker RecordKey) (func(), er
 		publicationMarkerLocks.locks[marker] = lock
 	}
 	lock.users++
-	publicationMarkerLocks.Unlock()
+	publicationMarkerLocks.mu.Unlock()
 
 	select {
 	case <-ctx.Done():
@@ -99,12 +99,12 @@ func acquirePublicationMarker(ctx context.Context, marker RecordKey) (func(), er
 }
 
 func releasePublicationMarkerRef(marker RecordKey, lock *publicationMarkerLock) {
-	publicationMarkerLocks.Lock()
+	publicationMarkerLocks.mu.Lock()
 	lock.users--
 	if lock.users == 0 {
 		delete(publicationMarkerLocks.locks, marker)
 	}
-	publicationMarkerLocks.Unlock()
+	publicationMarkerLocks.mu.Unlock()
 }
 
 func PublishWithRetry(
@@ -159,7 +159,7 @@ func publishWithRetry(
 			if limit <= 0 {
 				return 0
 			}
-			return time.Duration(rand.Int63n(int64(limit) + 1))
+			return time.Duration(rand.Int64N(int64(limit) + 1))
 		}
 	}
 
@@ -510,12 +510,8 @@ func retryWait(
 		delay = policy.MaxDelay
 	}
 	actual := max(jitter(delay), 0)
-	if actual > delay {
-		actual = delay
-	}
-	if actual > policy.MaxDelay {
-		actual = policy.MaxDelay
-	}
+	actual = min(actual, delay)
+	actual = min(actual, policy.MaxDelay)
 	remaining := policy.MaxElapsed - clock().Sub(startedAt)
 	if remaining <= 0 || actual >= remaining {
 		return context.DeadlineExceeded

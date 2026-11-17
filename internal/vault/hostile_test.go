@@ -80,8 +80,6 @@ var caseMatrix = []matrixCase{
 
 var knownSecurityDefects []securityDefect
 
-const hostilePackageName = "vault"
-
 var frozenCaseInventory = []string{"1b", "3a-i", "3a-ii", "13", "14", "15", "19", "20"}
 
 func testSourceFunctions(t *testing.T) map[string]bool {

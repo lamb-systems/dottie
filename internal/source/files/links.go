@@ -2,6 +2,7 @@ package files
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"unicode"
@@ -52,7 +53,7 @@ func safeDetail(value string) string {
 	for _, character := range value {
 		piece := string(character)
 		if unicode.IsControl(character) {
-			if character <= 0xffff {
+			if character <= math.MaxUint16 {
 				piece = fmt.Sprintf("\\u%04x", character)
 			} else {
 				piece = fmt.Sprintf("\\U%08x", character)

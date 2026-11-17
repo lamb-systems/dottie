@@ -491,7 +491,7 @@ func TestIncomingMaterialUpgradeSourceValidation(t *testing.T) {
 		assert.Equal(t, incomingMaterialUpgradeSource{}, refused)
 
 		loweredLimits := DefaultLimits()
-		loweredLimits.MaxLineageLinks = loweredLimits.MaxLineageLinks - 1
+		loweredLimits.MaxLineageLinks--
 		require.NoError(t, validateLimits(loweredLimits))
 		refused, err = readIncomingMaterialUpgradeSource(
 			ctx,

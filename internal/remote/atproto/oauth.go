@@ -218,8 +218,12 @@ func (c *Client) Begin(ctx context.Context, handle string, requestedScopes, requ
 	if err != nil {
 		return nil, errors.New("cannot open loopback OAuth listener")
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := "http://127.0.0.1:" + strconv.Itoa(port) + "/callback"
+	address, asserted := listener.Addr().(*net.TCPAddr)
+	if !asserted {
+		_ = listener.Close()
+		return nil, errors.New("cannot read loopback OAuth listener address")
+	}
+	redirectURI := "http://127.0.0.1:" + strconv.Itoa(address.Port) + "/callback"
 	flow := &Flow{
 		client:      c,
 		identity:    identity,
@@ -776,7 +780,7 @@ func (c *Client) DeleteSession(ctx context.Context, did string) error {
 }
 
 var localSessionLocks = struct {
-	sync.Mutex
+	mu    sync.Mutex
 	locks map[string]chan struct{}
 }{locks: make(map[string]chan struct{})}
 
@@ -789,13 +793,13 @@ func (c *Client) acquireSessionLock(ctx context.Context, item string) (func() er
 }
 
 func localSessionLock(ctx context.Context, item string) (func() error, error) {
-	localSessionLocks.Lock()
+	localSessionLocks.mu.Lock()
 	lock := localSessionLocks.locks[item]
 	if lock == nil {
 		lock = make(chan struct{}, 1)
 		localSessionLocks.locks[item] = lock
 	}
-	localSessionLocks.Unlock()
+	localSessionLocks.mu.Unlock()
 	select {
 	case lock <- struct{}{}:
 		return func() error { <-lock; return nil }, nil

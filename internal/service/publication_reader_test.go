@@ -24,6 +24,7 @@ const publicationReaderBlobEndpoint = "com.atproto.sync.getBlob"
 
 type publicationReaderTransport struct {
 	*atprotoMaterialRepository
+
 	doCalls     int
 	streams     int
 	blobStreams int

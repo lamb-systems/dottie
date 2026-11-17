@@ -1078,7 +1078,12 @@ func publicationSignerKeyMatches(
 	envelope vault.Envelope,
 ) bool {
 	certificate, found := certificateForVaultSigner(predecessor.Certificates, envelope.DeviceID, envelope.KeyID)
-	return found && bytes.Equal(certificate.SigningPublicKey[:], signer.Public().(ed25519.PublicKey))
+	return found && signerKeyMatches(signer, certificate.SigningPublicKey[:])
+}
+
+func signerKeyMatches(signer ed25519.PrivateKey, publicKey []byte) bool {
+	public, asserted := signer.Public().(ed25519.PublicKey)
+	return asserted && bytes.Equal(publicKey, public)
 }
 
 func snapshotRecordForPublication(

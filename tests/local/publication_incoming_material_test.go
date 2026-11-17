@@ -216,8 +216,8 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	entry := preview.Targets[0].Entries[0]
 	require.Equal(
 		t,
-		entry.Key,
 		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		entry.Key,
 		"preview must identify the selected synthetic file",
 	)
 	require.Equal(t, syncengine.ActionUpload, entry.DecisionAction)

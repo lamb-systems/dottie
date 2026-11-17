@@ -1458,6 +1458,7 @@ func TestPublishMaterialRefusesObsoleteTokens(t *testing.T) {
 
 type materialCancelingTransport struct {
 	MaterialTransport
+
 	cancel context.CancelFunc
 }
 

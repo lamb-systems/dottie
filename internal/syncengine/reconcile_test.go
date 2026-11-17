@@ -1173,11 +1173,6 @@ func oracleFileDeleted(entry *model.Entry) bool {
 	return entry == nil || (entry.File != nil && entry.File.State == model.FileDeleted)
 }
 
-//go:fix inline
-func entryPtr(entry model.Entry) *model.Entry {
-	return new(entry)
-}
-
 func TestReconcileRejectsInvalidViews(t *testing.T) {
 	options := fileBinding(t)
 	valid := regular("config", "value")

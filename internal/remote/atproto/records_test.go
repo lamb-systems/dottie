@@ -149,6 +149,7 @@ func TestVaultLexiconBoundsMatchV02Constants(t *testing.T) {
 		assert.NotEmpty(t, properties[field], "numeric field %s must have a bound", field)
 		for _, property := range properties[field] {
 			assert.Equal(t, "integer", property["type"], "type for %s", field)
+			//nolint:testifylint // decoded JSON integer; the published bound must match exactly, not approximately
 			assert.Equal(t, float64(MaxRecordInteger), property["maximum"], "maximum for %s", field)
 		}
 	}

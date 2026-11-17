@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/lamb-systems/dottie/internal/model"
@@ -184,12 +185,7 @@ func pathWithin(root, candidate string) bool {
 	if relative == "." {
 		return true
 	}
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
-		if component == ".." {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(strings.Split(relative, string(filepath.Separator)), "..")
 }
 
 func targetSelector(target Target) string {

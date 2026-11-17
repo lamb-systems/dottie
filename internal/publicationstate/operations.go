@@ -1408,16 +1408,6 @@ func (s *Store) verifyAcceptedRecords(
 	return nil
 }
 
-func (s *Store) checkAcceptedCapacity(
-	ctx context.Context,
-	tx *sql.Tx,
-	records []validatedRecord,
-	eventBytes uint64,
-	stage Stage,
-) error {
-	return s.checkAcceptedCapacityWithReservation(ctx, tx, records, eventBytes, nil, stage)
-}
-
 func (s *Store) checkAcceptedCapacityWithReservation(
 	ctx context.Context,
 	tx queryer,

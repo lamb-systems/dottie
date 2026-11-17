@@ -117,6 +117,7 @@ func publicationGNOMESelectedRefs(selection publicationSelection) ([]SettingRef,
 
 type publicationGNOMEResolvePort struct {
 	SettingsPort
+
 	cancellation error
 }
 

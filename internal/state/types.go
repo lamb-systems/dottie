@@ -331,6 +331,7 @@ type RetentionDeclaration struct {
 
 type RetentionDeclarationRevision struct {
 	RetentionDeclaration
+
 	Revision int64
 }
 
@@ -342,6 +343,7 @@ type RetentionRecoveryPointMaterials struct {
 
 type RetentionInventoryPoint struct {
 	RetentionRecoveryPoint
+
 	InventoryComplete bool
 }
 

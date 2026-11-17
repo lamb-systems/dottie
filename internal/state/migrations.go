@@ -181,7 +181,7 @@ func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	for rows.Next() {
+	if rows.Next() {
 		values := make([]any, len(columns))
 		destinations := make([]any, len(columns))
 		for i := range values {

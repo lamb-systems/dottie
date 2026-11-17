@@ -1562,9 +1562,7 @@ func pdsRecordFailure(t *testing.T, provider, intendedPDS, criterion, evidence s
 		assert.NoError(t, err, "failure artifact write for %s: %v", criterion, err)
 		return
 	}
-	assert.True(
-		t,
-		false,
+	t.Fatalf(
 		"PDS criterion %s failed for %s; cloud release is held; failure artifact: %s",
 		criterion,
 		provider,

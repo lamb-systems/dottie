@@ -47,7 +47,6 @@ type atprotoMaterialRepository struct {
 	revision           atprototest.SignedRevision
 	records            map[atproto.RecordKey][]byte
 	blobs              map[string][]byte
-	calls              []string
 	doCalls            int
 	uploads            int
 	applies            int

@@ -100,6 +100,7 @@ func TestOAuthEndpointErrorCodeAllowList(t *testing.T) {
 
 type appliedThenFailStore struct {
 	*memoryStore
+
 	err   error
 	match func([]byte) bool
 }

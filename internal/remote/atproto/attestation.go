@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -133,7 +134,7 @@ func PublishAttestationFenced(
 	if err != nil {
 		return PublishResult{}, fmt.Errorf("%w: applyWrites request outcome is unknown", ErrAmbiguousTransport)
 	}
-	if status >= 500 {
+	if status >= http.StatusInternalServerError {
 		return PublishResult{}, fmt.Errorf("%w: applyWrites returned HTTP %d", ErrAmbiguousTransport, status)
 	}
 	if status >= 400 && status < 500 {

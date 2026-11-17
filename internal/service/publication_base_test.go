@@ -333,7 +333,7 @@ func TestEstablishLocalReconciliationBaseRefusesOmittedGNOMEObservationAndAccept
 	require.NoError(t, err)
 	require.NotNil(t, base)
 	assert.Equal(t, entries, base.entries)
-	assert.NotEqual(t, base.selection.target.GNOMEPolicy, nil)
+	assert.NotNil(t, base.selection.target.GNOMEPolicy)
 }
 
 func TestEstablishLocalReconciliationBaseRechecksFloorAfterCapture(t *testing.T) {

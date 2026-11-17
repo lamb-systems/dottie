@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -238,7 +239,11 @@ func (p *MemoryPDS) Do(
 			return errorResponse(400, "InvalidRequest")
 		}
 		collection := query.Get("collection")
-		records := make([]map[string]any, 0)
+		type listedRecord struct {
+			uri    string
+			record map[string]any
+		}
+		listed := make([]listedRecord, 0)
 		for _, record := range p.records {
 			if record.Collection != collection {
 				continue
@@ -252,15 +257,19 @@ func (p *MemoryPDS) Do(
 				return errorResponse(500, "InternalServerError")
 			}
 			uri := "at://" + p.did + "/" + record.Collection + "/" + record.RKey
-			records = append(
-				records,
-				map[string]any{"uri": uri, "cid": recordCID.String(), "value": jsonAPIValue(value)},
-			)
+			listed = append(listed, listedRecord{
+				uri:    uri,
+				record: map[string]any{"uri": uri, "cid": recordCID.String(), "value": jsonAPIValue(value)},
+			})
 		}
-		if len(records) > 4096 {
+		if len(listed) > 4096 {
 			return errorResponse(413, "TooManyRecords")
 		}
-		sort.Slice(records, func(i, j int) bool { return records[i]["uri"].(string) < records[j]["uri"].(string) })
+		sort.Slice(listed, func(i, j int) bool { return listed[i].uri < listed[j].uri })
+		records := make([]map[string]any, 0, len(listed))
+		for _, entry := range listed {
+			records = append(records, entry.record)
+		}
 		return jsonResponse(200, map[string]any{"records": records})
 	case "com.atproto.sync.listBlobs":
 		if method != "GET" || query.Get("did") != p.did || !validListLimit(query.Get("limit")) {
@@ -359,15 +368,17 @@ func (p *MemoryPDS) OpenStream(ctx context.Context, endpoint string, query url.V
 	switch endpoint {
 	case "com.atproto.sync.getRepo":
 		if query.Get("did") != p.did {
-			return 400, io.NopCloser(bytes.NewReader([]byte(`{"error":"InvalidRequest"}`))), nil
+			return http.StatusBadRequest, io.NopCloser(bytes.NewReader([]byte(`{"error":"InvalidRequest"}`))), nil
 		}
 		if len(p.current.CAR) > maxCARResponseBytes {
-			return 413, io.NopCloser(bytes.NewReader([]byte(`{"error":"RepoTooLarge"}`))), nil
+			return http.StatusRequestEntityTooLarge, io.NopCloser(
+				bytes.NewReader([]byte(`{"error":"RepoTooLarge"}`)),
+			), nil
 		}
-		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(p.current.CAR))), nil
+		return http.StatusOK, io.NopCloser(bytes.NewReader(bytes.Clone(p.current.CAR))), nil
 	case "com.atproto.sync.getBlob":
 		if query.Get("did") != p.did {
-			return 400, io.NopCloser(bytes.NewReader([]byte(`{"error":"InvalidRequest"}`))), nil
+			return http.StatusBadRequest, io.NopCloser(bytes.NewReader([]byte(`{"error":"InvalidRequest"}`))), nil
 		}
 		if p.hooks.GetBlobStatus != 0 {
 			return p.hooks.GetBlobStatus, io.NopCloser(bytes.NewReader([]byte(`{"error":"BlobUnavailable"}`))), nil
@@ -375,11 +386,11 @@ func (p *MemoryPDS) OpenStream(ctx context.Context, endpoint string, query url.V
 		blobCID := query.Get("cid")
 		data, exists := p.blobs[blobCID]
 		if !exists || !p.isLiveBlob(blobCID) && !p.exposed[blobCID] {
-			return 404, io.NopCloser(bytes.NewReader([]byte(`{"error":"BlobNotFound"}`))), nil
+			return http.StatusNotFound, io.NopCloser(bytes.NewReader([]byte(`{"error":"BlobNotFound"}`))), nil
 		}
-		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(data))), nil
+		return http.StatusOK, io.NopCloser(bytes.NewReader(bytes.Clone(data))), nil
 	default:
-		return 404, io.NopCloser(bytes.NewReader([]byte(`{"error":"NotFound"}`))), nil
+		return http.StatusNotFound, io.NopCloser(bytes.NewReader([]byte(`{"error":"NotFound"}`))), nil
 	}
 }
 
@@ -495,9 +506,9 @@ func (p *MemoryPDS) applyWrites(body []byte) (int, []byte, error) {
 	}
 	if p.hooks.DuplicateNextApplyWritesResponse {
 		p.hooks.DuplicateNextApplyWritesResponse = false
-		return 200, append(bytes.Clone(response), response...), nil
+		return http.StatusOK, append(bytes.Clone(response), response...), nil
 	}
-	return 200, response, nil
+	return http.StatusOK, response, nil
 }
 
 func (p *MemoryPDS) deleteRecord(body []byte) (int, []byte, error) {

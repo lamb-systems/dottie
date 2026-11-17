@@ -742,7 +742,7 @@ func publicationPreviewFileTombstoneForTest(targetID, path string) model.Entry {
 func publicationPreviewCountingCaptureForTest(calls *int) CapturePort {
 	return publicationCapturePortFunc(
 		func(ctx context.Context, target config.Target, path string) (files.Result, error) {
-			*calls = *calls + 1
+			*calls++
 			return (LocalFilesCapture{}).Capture(ctx, target, path)
 		},
 	)

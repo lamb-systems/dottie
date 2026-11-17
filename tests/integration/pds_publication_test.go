@@ -3,7 +3,6 @@ package integration
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
-	"github.com/lamb-systems/dottie/internal/remote/atproto/atprototest"
 )
 
 func TestCleanupPublicationLiveRecordsAcceptsRecordNotFound(t *testing.T) {
@@ -340,39 +338,6 @@ func livePublicationRepositoryPrecondition(
 	) + "; genesis requires an empty repository; a skipped gate is not provider evidence", nil
 }
 
-type publicationAuditRecordingTransport struct {
-	base     atproto.Transport
-	calls    []string
-	blobCIDs []string
-}
-
-func (transport *publicationAuditRecordingTransport) Do(
-	ctx context.Context,
-	method, endpoint string,
-	query url.Values,
-	body []byte,
-	contentType string,
-) (int, []byte, error) {
-	transport.calls = append(transport.calls, endpoint)
-	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
-}
-
-func (transport *publicationAuditRecordingTransport) OpenStream(
-	ctx context.Context,
-	endpoint string,
-	query url.Values,
-) (int, io.ReadCloser, error) {
-	transport.calls = append(transport.calls, endpoint)
-	if endpoint == "com.atproto.sync.getBlob" {
-		transport.blobCIDs = append(transport.blobCIDs, query.Get("cid"))
-	}
-	return transport.base.OpenStream(ctx, endpoint, query)
-}
-
-func publicationAuditRecordedEndpoints(transport *publicationAuditRecordingTransport) []string {
-	return append([]string(nil), transport.calls...)
-}
-
 type publicationCIDTracker struct {
 	base         atproto.Transport
 	uploaded     []string
@@ -531,109 +496,6 @@ func TestLivePublicationEvidencePersistsUploadedCIDsAndSuccessArtifact(t *testin
 	)
 	require.ErrorContains(t, err, "attempted before run manifest exists")
 	require.Zero(t, missingTransport.calls)
-}
-
-type publicationRevisionTransport struct {
-	base     atproto.Transport
-	revision atprototest.SignedRevision
-}
-
-func (transport publicationRevisionTransport) Do(
-	ctx context.Context,
-	method, endpoint string,
-	query url.Values,
-	body []byte,
-	contentType string,
-) (int, []byte, error) {
-	if endpoint == "com.atproto.sync.getLatestCommit" {
-		return 200, []byte(
-			fmt.Sprintf(`{"cid":%q,"rev":%q}`, transport.revision.CommitCID.String(), atprototest.RepositoryRevision),
-		), nil
-	}
-	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
-}
-
-func (transport publicationRevisionTransport) OpenStream(
-	ctx context.Context,
-	endpoint string,
-	query url.Values,
-) (int, io.ReadCloser, error) {
-	if endpoint == "com.atproto.sync.getRepo" {
-		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(transport.revision.CAR))), nil
-	}
-	return transport.base.OpenStream(ctx, endpoint, query)
-}
-
-type publicationMovingTransport struct {
-	base   atproto.Transport
-	first  atprototest.SignedRevision
-	second atprototest.SignedRevision
-	latest int
-	stream int
-}
-
-func (transport *publicationMovingTransport) Do(
-	ctx context.Context,
-	method, endpoint string,
-	query url.Values,
-	body []byte,
-	contentType string,
-) (int, []byte, error) {
-	if endpoint == "com.atproto.sync.getLatestCommit" {
-		transport.latest++
-		revision := transport.first
-		if transport.latest%2 == 0 {
-			revision = transport.second
-		}
-		encoded, err := json.Marshal(
-			map[string]string{"cid": revision.CommitCID.String(), "rev": atprototest.RepositoryRevision},
-		)
-		return 200, encoded, err
-	}
-	return transport.base.Do(ctx, method, endpoint, query, body, contentType)
-}
-
-func (transport *publicationMovingTransport) OpenStream(
-	ctx context.Context,
-	endpoint string,
-	query url.Values,
-) (int, io.ReadCloser, error) {
-	if endpoint == "com.atproto.sync.getRepo" {
-		transport.stream++
-		revision := transport.first
-		if transport.stream%2 == 0 {
-			revision = transport.second
-		}
-		return 200, io.NopCloser(bytes.NewReader(bytes.Clone(revision.CAR))), nil
-	}
-	return transport.base.OpenStream(ctx, endpoint, query)
-}
-
-func publicationAuditRandom(t *testing.T, size int) []byte {
-	t.Helper()
-	result := make([]byte, size)
-	_, err := rand.Read(result)
-	require.NoError(t, err)
-	return result
-}
-
-func newPublicationTestPDS(t *testing.T) *atprototest.MemoryPDS {
-	t.Helper()
-	key, err := atprototest.NewSigningKey()
-	require.NoError(t, err)
-	pds, err := atprototest.NewMemoryPDS(publicationAuditDID, key)
-	require.NoError(t, err)
-	return pds
-}
-
-func publicationCallCount(pds *atprototest.MemoryPDS, endpoint string) int {
-	count := 0
-	for _, call := range pds.Calls() {
-		if call == endpoint {
-			count++
-		}
-	}
-	return count
 }
 
 func containsString(values []string, value string) bool {

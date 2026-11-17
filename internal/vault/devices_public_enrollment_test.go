@@ -9,8 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func publicEnrollmentIntentForFixture(fixture devicesFixture) PublicEnrollmentIntent {
-	device := publicDeviceFromMaterial(fixture.newDevice)
+func publicEnrollmentIntentForFixture(t *testing.T, fixture devicesFixture) PublicEnrollmentIntent {
+	t.Helper()
+	device, err := publicDeviceFromMaterial(fixture.newDevice)
+	require.NoError(t, err)
 	return PublicEnrollmentIntent{
 		Vault:         fixture.bootstrap.Vault,
 		RootSigner:    fixture.root,
@@ -39,7 +41,7 @@ func publicEnrollmentIntentForFixture(fixture devicesFixture) PublicEnrollmentIn
 
 func TestPreparePublicEnrollmentUsesOnlyNewDevicePublicMaterial(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	intent := publicEnrollmentIntentForFixture(fixture)
+	intent := publicEnrollmentIntentForFixture(t, fixture)
 	transition, err := PreparePublicEnrollment(fixture.predecessor, intent)
 	require.NoError(t, err)
 	assert.Equal(t, fixture.transition, transition, "public-only enrollment prepares the same deterministic successor")
@@ -83,7 +85,7 @@ func TestPreparePublicEnrollmentRejectsInputsChangedAfterApproval(t *testing.T) 
 	}
 	for _, change := range changes {
 		t.Run(change.name, func(t *testing.T) {
-			intent := publicEnrollmentIntentForFixture(fixture)
+			intent := publicEnrollmentIntentForFixture(t, fixture)
 			change.change(&intent)
 			_, err := PreparePublicEnrollment(fixture.predecessor, intent)
 			assert.ErrorIs(t, err, change.expected)
@@ -102,7 +104,7 @@ func TestPreparePublicEnrollmentRejectsMalformedAndLowOrderRecipientKeys(t *test
 		{"malformed signing key", func(device *PublicDeviceInput) { device.SigningPublicKey = []byte{1, 2, 3} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			intent := publicEnrollmentIntentForFixture(fixture)
+			intent := publicEnrollmentIntentForFixture(t, fixture)
 			test.change(&intent.NewDevice)
 			intent.ApprovalFingerprint = EnrollmentTranscriptFingerprint(
 				intent.Vault,
@@ -129,7 +131,7 @@ func TestPreparePublicEnrollmentRejectsDuplicateIdentityAndRootRole(t *testing.T
 		{"root role", func(intent *PublicEnrollmentIntent) { intent.RequestedRole = RoleRoot }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			intent := publicEnrollmentIntentForFixture(fixture)
+			intent := publicEnrollmentIntentForFixture(t, fixture)
 			test.change(&intent)
 			intent.ApprovalFingerprint = EnrollmentTranscriptFingerprint(
 				intent.Vault,
@@ -147,12 +149,12 @@ func TestPreparePublicEnrollmentRejectsDuplicateIdentityAndRootRole(t *testing.T
 
 func TestPreparePublicEnrollmentRejectsNonRootAdministratorAndWrongSigningKey(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	intent := publicEnrollmentIntentForFixture(fixture)
+	intent := publicEnrollmentIntentForFixture(t, fixture)
 	intent.RootSigner = fixture.newDevice
 	_, err := PreparePublicEnrollment(fixture.predecessor, intent)
 	require.ErrorIs(t, err, ErrAuthorization)
 
-	intent = publicEnrollmentIntentForFixture(fixture)
+	intent = publicEnrollmentIntentForFixture(t, fixture)
 	intent.RootSigner.Signing = fixedSigningKey(77)
 	_, err = PreparePublicEnrollment(fixture.predecessor, intent)
 	assert.ErrorIs(t, err, ErrAuthorization)
@@ -160,7 +162,7 @@ func TestPreparePublicEnrollmentRejectsNonRootAdministratorAndWrongSigningKey(t 
 
 func TestPreparePublicEnrollmentRejectsInvalidPredecessorAndIncompleteRecipientSets(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	intent := publicEnrollmentIntentForFixture(fixture)
+	intent := publicEnrollmentIntentForFixture(t, fixture)
 	invalidPredecessor := fixture.predecessor
 	invalidPredecessor.Control = []byte("not a control")
 	_, err := PreparePublicEnrollment(invalidPredecessor, intent)
@@ -191,7 +193,7 @@ func TestPreparePublicEnrollmentRejectsInvalidPredecessorAndIncompleteRecipientS
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			intent := publicEnrollmentIntentForFixture(fixture)
+			intent := publicEnrollmentIntentForFixture(t, fixture)
 			test.change(&intent)
 			_, err := PreparePublicEnrollment(fixture.predecessor, intent)
 			assert.Error(t, err)
@@ -201,7 +203,7 @@ func TestPreparePublicEnrollmentRejectsInvalidPredecessorAndIncompleteRecipientS
 
 func TestPreparePublicEnrollmentTransitionStillRejectsTamperedCertificateAndCheckpoint(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	intent := publicEnrollmentIntentForFixture(fixture)
+	intent := publicEnrollmentIntentForFixture(t, fixture)
 	transition, err := PreparePublicEnrollment(fixture.predecessor, intent)
 	require.NoError(t, err)
 
@@ -220,7 +222,8 @@ func TestPreparePublicEnrollmentTransitionStillRejectsTamperedCertificateAndChec
 
 func TestPublicEnrollmentApprovalFingerprintBindsBothPublicKeys(t *testing.T) {
 	fixture := newDevicesFixture(t)
-	device := publicDeviceFromMaterial(fixture.newDevice)
+	device, err := publicDeviceFromMaterial(fixture.newDevice)
+	require.NoError(t, err)
 	base := EnrollmentTranscriptFingerprint(
 		fixture.bootstrap.Vault,
 		device.DeviceID,

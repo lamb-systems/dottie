@@ -52,9 +52,6 @@ type publicationPrivacyCanaries struct {
 	plaintext        []byte
 	credential       []byte
 	revisionTwo      []byte
-	absolutePath     []byte
-	accountDID       []byte
-	reviewAnchor     []byte
 	allCanaries      []publicationPrivacyCanary
 	materialCanaries []publicationPrivacyCanary
 }
@@ -279,13 +276,6 @@ func (fixture *publicationPrivacyFixture) publish(
 		preparation.Proposal.Confirmation,
 	)
 	return result, preparation, err
-}
-
-func (fixture *publicationPrivacyFixture) publishCandidatePayload(t *testing.T) []byte {
-	t.Helper()
-	_, preparation, err := fixture.prepareOnly(t)
-	require.NoError(t, err)
-	return bytes.Clone(preparation.Proposal.Candidate.Payload)
 }
 
 func (fixture *publicationPrivacyFixture) prepareOnly(

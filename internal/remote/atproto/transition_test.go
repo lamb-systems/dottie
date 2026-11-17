@@ -41,6 +41,7 @@ type candidateStageTransport struct {
 
 type signedCARFlowTransport struct {
 	*readTransport
+
 	t           *testing.T
 	records     map[RecordKey][]byte
 	commitKey   *atcrypto.PrivateKeyP256

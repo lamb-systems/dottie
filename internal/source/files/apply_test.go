@@ -147,6 +147,7 @@ func TestObserveFileBoundedRefusesGrowthDuringTheRead(t *testing.T) {
 
 type countingApplyFileSystem struct {
 	ApplyFileSystem
+
 	growth    int
 	read      int64
 	requested int
@@ -154,11 +155,13 @@ type countingApplyFileSystem struct {
 
 type countingApplyRoot struct {
 	ApplyRoot
+
 	filesystem *countingApplyFileSystem
 }
 
 type countingApplyFile struct {
 	ApplyFile
+
 	growth     int
 	filesystem *countingApplyFileSystem
 }
@@ -356,11 +359,13 @@ type preimageRaceFS struct {
 
 type preimageRaceRoot struct {
 	ApplyRoot
+
 	fs *preimageRaceFS
 }
 
 type preimageRaceFile struct {
 	ApplyFile
+
 	fs *preimageRaceFS
 }
 

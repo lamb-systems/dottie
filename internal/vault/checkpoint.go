@@ -473,8 +473,7 @@ func walkControlHistory(
 			}
 			return controlWalk{reached: true, links: links + 1}
 		}
-		key := string(nextCID)
-		next, ok := intermediates[key]
+		next, ok := intermediates[string(nextCID)]
 		if !ok {
 			result := unverifiableResult(
 				"missing-intermediate",

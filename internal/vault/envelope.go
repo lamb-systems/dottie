@@ -25,6 +25,9 @@ const (
 	MaxKeyIDBytes        = 255
 	MaxParentBytes       = 128
 	MaxPolicyObjectBytes = 64 << 10
+	// WrappedKeyBytes is the fixed size of one recipient's wrapped content key:
+	// 32 bytes of ephemeral X25519 public key plus a 16-byte Poly1305 tag.
+	WrappedKeyBytes = 48
 )
 
 var (
@@ -724,7 +727,7 @@ func validateEnvelopeFields(envelope Envelope) error {
 		return fmt.Errorf("%w: envelope", ErrLimit)
 	}
 	for index, recipient := range envelope.Recipients {
-		if len(recipient.KeyID) > MaxKeyIDBytes || len(recipient.WrappedKey) != 48 {
+		if len(recipient.KeyID) > MaxKeyIDBytes || len(recipient.WrappedKey) != WrappedKeyBytes {
 			return fmt.Errorf("%w: recipient", ErrRecipient)
 		}
 		if index > 0 && bytes.Compare(envelope.Recipients[index-1].KeyID, recipient.KeyID) >= 0 {
@@ -793,7 +796,7 @@ func scanEnvelope(data []byte) error {
 		if !wrapped.ok {
 			return wrapped.err
 		}
-		if wrapped.length != 48 {
+		if wrapped.length != WrappedKeyBytes {
 			return fmt.Errorf("%w: wrapped_key", ErrRecipient)
 		}
 	}

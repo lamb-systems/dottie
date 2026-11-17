@@ -199,6 +199,7 @@ func TestCaptureSpecialFilesAreSkippedWithoutOpening(t *testing.T) {
 
 type typedFileInfo struct {
 	os.FileInfo
+
 	mode os.FileMode
 }
 

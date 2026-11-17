@@ -143,8 +143,8 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	entry := preview.Targets[0].Entries[0]
 	require.Equal(
 		t,
-		entry.Key,
 		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		entry.Key,
 		"preview must identify the selected synthetic file",
 	)
 	require.Equal(t, syncengine.ActionUpload, entry.DecisionAction)
@@ -491,18 +491,18 @@ func requirePublicationMaterialCapture(
 	require.NotNil(t, observation.Entry)
 	require.Equal(
 		t,
-		observation.Identity,
 		(model.EntryKey{TargetID: publicationReconcileTargetID, Source: model.SourceFiles, FilePath: "settings.ini"}),
+		observation.Identity,
 		"local capture must identify the selected synthetic file",
 	)
 	require.Equal(
 		t,
-		observation.Entry.Identity(), observation.Identity,
+		observation.Identity, observation.Entry.Identity(),
 		"present capture identity must match its entry",
 	)
 	require.NotNil(t, observation.Entry.File)
 	require.Equal(t, model.FileRegular, observation.Entry.File.Kind)
-	require.Equal(t, observation.Entry.File.Path, "settings.ini")
+	require.Equal(t, "settings.ini", observation.Entry.File.Path)
 	require.True(
 		t,
 		bytes.Equal(expectedBytes, observation.Entry.File.Content),
@@ -593,7 +593,7 @@ func requirePublicationMaterialOwnedState(
 	expectedKey, err := publication.SequenceKey(state.floor.Sequence)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(expectedCID, state.floor.RecordCID))
-	require.Equal(t, state.floor.SnapshotKey, expectedKey)
+	require.Equal(t, expectedKey, state.floor.SnapshotKey)
 	require.Equal(t, expectedSnapshot.PublicationSeq, state.floor.Sequence)
 	require.Equal(t, expectedSnapshot.PublicationID, state.floor.PublicationID)
 	require.Equal(t, expectedSnapshot.Vault, state.floor.Binding.Vault)

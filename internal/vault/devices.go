@@ -83,6 +83,7 @@ type GenesisIntent struct {
 
 type Genesis struct {
 	BootstrapResult
+
 	Head         []byte
 	Snapshot     []byte
 	SnapshotCID  []byte
@@ -230,7 +231,10 @@ func Bootstrap(vaultName string, rootDevice DeviceMaterial) (BootstrapResult, er
 	if err := validateDeviceMaterial(rootDevice); err != nil {
 		return BootstrapResult{}, err
 	}
-	rootPublic := rootDevice.Signing.Public().(ed25519.PublicKey)
+	rootPublic, asserted := signingPublicKey(rootDevice.Signing)
+	if !asserted {
+		return BootstrapResult{}, fmt.Errorf("%w: device signing key", ErrFormat)
+	}
 	vaultID := deriveVaultID(vaultName, rootPublic)
 	anchor := sha256.Sum256(rootPublic)
 	rootRecipient := rootDevice.Recipient.PublicKey().Bytes()
@@ -546,11 +550,15 @@ func certificateForEnrollment(
 	if len(revocationRef) != 0 && len(revocationRef) > MaxParentBytes {
 		return nil, fmt.Errorf("%w: revocation reference", ErrFormat)
 	}
+	devicePublic, asserted := signingPublicKey(device.Signing)
+	if !asserted {
+		return nil, fmt.Errorf("%w: device signing key", ErrFormat)
+	}
 	var encryptionPublic [32]byte
 	copy(encryptionPublic[:], device.Recipient.PublicKey().Bytes())
 	certificate := Certificate{
 		Vault: vaultID, DeviceID: device.DeviceID, KeyID: bytes.Clone(device.KeyID),
-		SigningPublicKey:    [ed25519.PublicKeySize]byte(device.Signing.Public().(ed25519.PublicKey)),
+		SigningPublicKey:    [ed25519.PublicKeySize]byte(devicePublic),
 		EncryptionPublicKey: encryptionPublic, Role: role, CertEpoch: certEpoch, Issuer: rootDevice.DeviceID,
 		RevocationRef: nil,
 		Signer:        Signer{DeviceID: rootDevice.DeviceID, KeyID: bytes.Clone(rootDevice.KeyID)},
@@ -591,12 +599,16 @@ func certificateForPublicEnrollment(
 	return signCertificate(certificate, rootDevice.Signing)
 }
 
-func publicDeviceFromMaterial(material DeviceMaterial) PublicDeviceInput {
+func publicDeviceFromMaterial(material DeviceMaterial) (PublicDeviceInput, error) {
+	signingPublic, asserted := signingPublicKey(material.Signing)
+	if !asserted {
+		return PublicDeviceInput{}, fmt.Errorf("%w: device signing key", ErrFormat)
+	}
 	return PublicDeviceInput{
 		DeviceID: material.DeviceID, KeyID: bytes.Clone(material.KeyID),
-		SigningPublicKey:   bytes.Clone(material.Signing.Public().(ed25519.PublicKey)),
+		SigningPublicKey:   bytes.Clone(signingPublic),
 		RecipientPublicKey: bytes.Clone(material.Recipient.PublicKey().Bytes()),
-	}
+	}, nil
 }
 
 func clonePublicDeviceInput(device PublicDeviceInput) PublicDeviceInput {
@@ -648,7 +660,7 @@ func PrepareTransition(predecessor Predecessor, intent TransitionIntent) (Transi
 		if err := validateDeviceMaterial(*intent.NewDevice); err != nil {
 			return PublicDeviceInput{}, err
 		}
-		return publicDeviceFromMaterial(*intent.NewDevice), nil
+		return publicDeviceFromMaterial(*intent.NewDevice)
 	}, nil)
 }
 
@@ -742,7 +754,8 @@ func prepareEnrollmentTransition(
 	if !ok || rootCertificate.Role != RoleRoot || rootCertificate.Vault != oldPolicy.Vault {
 		return Transition{}, fmt.Errorf("%w: predecessor root", ErrAuthorization)
 	}
-	if !bytes.Equal(rootCertificate.SigningPublicKey[:], intent.Signer.Signing.Public().(ed25519.PublicKey)) ||
+	proposerPublic, asserted := signingPublicKey(intent.Signer.Signing)
+	if !asserted || !bytes.Equal(rootCertificate.SigningPublicKey[:], proposerPublic) ||
 		!bytes.Equal(rootCertificate.KeyID, intent.Signer.KeyID) {
 		return Transition{}, fmt.Errorf("%w: proposer key", ErrAuthorization)
 	}
@@ -950,7 +963,8 @@ func PreparePublication(predecessor Predecessor, intent PublicationIntent) (Publ
 	if err := validatePublicationRecipients(predecessor, policy); err != nil {
 		return Publication{}, err
 	}
-	if !bytes.Equal(signer.SigningPublicKey[:], intent.Signer.Signing.Public().(ed25519.PublicKey)) {
+	intentSignerPublic, asserted := signingPublicKey(intent.Signer.Signing)
+	if !asserted || !bytes.Equal(signer.SigningPublicKey[:], intentSignerPublic) {
 		return Publication{}, fmt.Errorf("%w: signer key", ErrPublicationAuthority)
 	}
 	currentHead, err := currentHeadForPublication(predecessor, policy, control)
@@ -1333,8 +1347,11 @@ func prepareRevocation(predecessor Predecessor, intent TransitionIntent) (Transi
 		return Transition{}, err
 	}
 	rootCertificate, found := oldCertificates[oldPolicy.Signer.DeviceID]
-	if !found || rootCertificate.Role != RoleRoot || rootCertificate.Vault != oldPolicy.Vault ||
-		!bytes.Equal(rootCertificate.SigningPublicKey[:], intent.Signer.Signing.Public().(ed25519.PublicKey)) ||
+	if !found || rootCertificate.Role != RoleRoot || rootCertificate.Vault != oldPolicy.Vault {
+		return Transition{}, fmt.Errorf("%w: proposer key", ErrAuthorization)
+	}
+	revocationProposerPublic, asserted := signingPublicKey(intent.Signer.Signing)
+	if !asserted || !bytes.Equal(rootCertificate.SigningPublicKey[:], revocationProposerPublic) ||
 		!bytes.Equal(rootCertificate.KeyID, intent.Signer.KeyID) {
 		return Transition{}, fmt.Errorf("%w: proposer key", ErrAuthorization)
 	}
@@ -2239,6 +2256,11 @@ func rawCID(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: CID digest", ErrFormat)
 	}
 	return cid.NewCidV1(cid.Raw, digest).Bytes(), nil
+}
+
+func signingPublicKey(signing ed25519.PrivateKey) (ed25519.PublicKey, bool) {
+	public, asserted := signing.Public().(ed25519.PublicKey)
+	return public, asserted
 }
 
 func validateDeviceMaterial(material DeviceMaterial) error {

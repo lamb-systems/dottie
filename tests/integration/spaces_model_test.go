@@ -380,7 +380,7 @@ func spacesInvariantViolations(model *spacesModel) []string {
 	for _, candidate := range model.committed {
 		committed = append(committed, candidate)
 	}
-	for left := range len(committed) {
+	for left := range committed {
 		for right := left + 1; right < len(committed); right++ {
 			if committed[left].sequence == committed[right].sequence &&
 				committed[left].parentCID == committed[right].parentCID &&
