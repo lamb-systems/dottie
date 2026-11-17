@@ -47,6 +47,8 @@ const (
 	pullReasonHead        = "head"
 )
 
+const publicationApplyConflictLimit = 20
+
 type pullFinding struct {
 	Kind   string
 	Reason string
@@ -368,6 +370,38 @@ type publicationStageRefusal interface {
 	Reason() string
 }
 
+type publicationConflictRefusal interface {
+	Conflicts() []service.PublicationApplyConflict
+}
+
+func writePublicationApplyConflicts(command *urfave.Command, err error) {
+	var refusal publicationConflictRefusal
+	if !errors.As(err, &refusal) {
+		return
+	}
+	conflicts := refusal.Conflicts()
+	if len(conflicts) == 0 {
+		return
+	}
+	shown := conflicts
+	if len(shown) > publicationApplyConflictLimit {
+		shown = shown[:publicationApplyConflictLimit]
+	}
+	writer := command.Root().ErrWriter
+	for _, conflict := range shown {
+		fmt.Fprintf(
+			writer,
+			"  %s  %s  %s\n",
+			escapeField(conflict.TargetID),
+			escapeField(conflict.Path),
+			escapeField(conflict.Shape),
+		)
+	}
+	if remaining := len(conflicts) - len(shown); remaining > 0 {
+		fmt.Fprintf(writer, "  and %d more conflicting entries\n", remaining)
+	}
+}
+
 type pullApplyPlanRequest struct {
 	Command        *urfave.Command
 	Binding        publicationstate.Binding
@@ -445,7 +479,7 @@ func preparePullApply(
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
-		return pullApplyPreparation{}, pullApplyRefusal(input.label(), err)
+		return pullApplyPreparation{}, pullApplyRefusal(input.Command, input.label(), err)
 	}
 	preparation.Request = request
 	preparation.Material = material
@@ -747,7 +781,7 @@ func pullApplyRemoteFailure(label string, err error) error {
 	)
 }
 
-func pullApplyRefusal(label string, err error) error {
+func pullApplyRefusal(command *urfave.Command, label string, err error) error {
 	var refusal publicationStageRefusal
 	if errors.As(err, &refusal) {
 		if refusal.Reason() == "backup_only" {
@@ -756,6 +790,7 @@ func pullApplyRefusal(label string, err error) error {
 				3,
 			)
 		}
+		writePublicationApplyConflicts(command, err)
 		return urfave.Exit(
 			label+" refused: the apply plan is unusable ("+escapeField(
 				refusal.Stage()+"/"+refusal.Reason(),
@@ -887,6 +922,7 @@ func pullApplyFailure(command *urfave.Command, label, output string, err error) 
 			4,
 		)
 	case errors.As(err, &refusal):
+		writePublicationApplyConflicts(command, err)
 		return urfave.Exit(
 			label+" refused: the apply was refused ("+escapeField(
 				refusal.Stage()+"/"+refusal.Reason(),

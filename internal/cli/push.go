@@ -27,6 +27,7 @@ type pushSession struct {
 type publicationPushSources struct {
 	Paths         platform.Paths
 	Binding       publicationstate.Binding
+	Vault         resolvedVault
 	Coordinator   *service.Coordinator
 	Reader        service.PublicationAcceptedSource
 	Transport     service.MaterialTransport
@@ -149,6 +150,9 @@ func runPushCommand(
 	defer ports.Close()
 	if ports.Binding.AccountDID != session.Session.DID {
 		return urfave.Exit("push refused: the publication binding does not match the authorized account", 3)
+	}
+	if err := writeResolvedVault(command, ports.Vault); err != nil {
+		return err
 	}
 	store, err := openPublicationPositionStore(ports.Paths.PublicationStateDir(), ports.Binding)
 	if err != nil {
@@ -320,7 +324,7 @@ func pushSourceFailure(err error) string {
 		return "push refused: " + errPublicationStoreUnsafe.Error() + "; it was left unchanged"
 	}
 	if errors.Is(err, service.ErrNoVaultSelection) || errors.Is(err, service.ErrAmbiguousVaultSelection) {
-		return "push refused: local vault selection is unavailable; pass --vault and --device-id"
+		return "push refused: local vault selection is unavailable; checked an explicit --vault, the recorded local vault selection and the local publication binding, and none resolves one vault for this account; pass --vault and --device-id, or run dottie pull --confirm to adopt the published position"
 	}
 	return "push refused: the local publication position, account identity or transport is unavailable"
 }
@@ -466,13 +470,9 @@ func productionPushSessionFactory(openKeyring accountKeyringFactory, env func(st
 
 func productionPushSourcesFactory(openKeyring accountKeyringFactory, env func(string) string) pushSourcesFactory {
 	return func(ctx context.Context, command *urfave.Command, session pushSession) (publicationPushSources, error) {
-		selection := service.VaultSelection{DeviceID: command.String("device-id")}
-		if command.IsSet("vault") {
-			vaultID, parseErr := parseVaultFingerprint(command.String("vault"))
-			if parseErr != nil {
-				return publicationPushSources{}, parseErr
-			}
-			selection.Vault = vaultID
+		selection, err := requestedVaultSelection(command)
+		if err != nil {
+			return publicationPushSources{}, err
 		}
 		return openPublicationPushSources(ctx, command, session, selection, openKeyring, env)
 	}
@@ -499,37 +499,37 @@ func openPublicationPushSources(
 		if err != nil {
 			return publicationPushSources{}, err
 		}
+		configuration := service.FileConfigPort{Paths: paths}
+		coordinator, err := service.NewCoordinator(service.Dependencies{
+			Config: configuration, State: store, Settings: manualGNOMESettings(), Paths: paths, Clock: time.Now,
+		})
+		if err != nil {
+			_ = store.Close()
+			return publicationPushSources{}, err
+		}
+		resolved, err := resolvePublicationSelection(ctx, coordinator, selection, directory, session.Session.DID)
+		if err != nil {
+			_ = store.Close()
+			return publicationPushSources{}, err
+		}
+		loaded, err := configuration.Load(ctx)
+		if err != nil {
+			_ = store.Close()
+			return publicationPushSources{}, err
+		}
+		if err := loaded.Validate(); err != nil {
+			_ = store.Close()
+			return publicationPushSources{}, err
+		}
 		keyring, err := openKeyring()
 		if err != nil {
 			_ = store.Close()
 			return publicationPushSources{}, err
 		}
 		closeResources := func() { _ = keyring.Close(); _ = store.Close() }
-		configuration := service.FileConfigPort{Paths: paths}
-		coordinator, err := service.NewCoordinator(service.Dependencies{
-			Config: configuration, State: store, Settings: manualGNOMESettings(), Paths: paths, Clock: time.Now,
-		})
-		if err != nil {
-			closeResources()
-			return publicationPushSources{}, err
-		}
-		selected, err := coordinator.ResolveSelection(ctx, selection)
-		if err != nil {
-			closeResources()
-			return publicationPushSources{}, err
-		}
-		loaded, err := configuration.Load(ctx)
-		if err != nil {
-			closeResources()
-			return publicationPushSources{}, err
-		}
-		if err := loaded.Validate(); err != nil {
-			closeResources()
-			return publicationPushSources{}, err
-		}
 		binding := publicationstate.Binding{
 			AccountDID: session.Session.DID, Backend: publicationstate.BackendPublicRepo,
-			Repository: "at://" + session.Session.DID, Vault: selected.Vault,
+			Repository: "at://" + session.Session.DID, Vault: resolved.Vault,
 		}
 		client, err := newAuthorizedAccountClient(keyring, env)
 		if err != nil {
@@ -585,7 +585,7 @@ func openPublicationPushSources(
 			return publicationPushSources{}, err
 		}
 		return publicationPushSources{
-			Paths: paths, Binding: binding, Coordinator: coordinator, Reader: reader,
+			Paths: paths, Binding: binding, Vault: resolved, Coordinator: coordinator, Reader: reader,
 			Transport: adapter, Reviews: configuration, Records: newPublicationProposalStore(directory),
 			Configuration: loaded, Close: closeResources,
 		}, nil

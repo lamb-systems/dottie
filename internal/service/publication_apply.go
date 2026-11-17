@@ -30,6 +30,9 @@ const (
 	publicationApplyDefaultFileMode  os.FileMode = 0o600
 	publicationApplySharedFileMode   os.FileMode = 0o644
 	publicationApplyMaxObservedBytes int64       = 8 << 20
+
+	publicationApplyConflictBothModified     = "both-modified"
+	publicationApplyConflictDeletedVsChanged = "deleted-vs-changed"
 )
 
 func publicationApplySupportedMode(mode uint32) (os.FileMode, bool) {
@@ -101,6 +104,7 @@ type publicationApplyError struct {
 	detail       string
 	entry        int64
 	cancellation error
+	conflicts    []PublicationApplyConflict
 }
 
 func (e *publicationApplyError) Error() string {
@@ -120,6 +124,8 @@ func (e *publicationApplyError) Is(target error) bool {
 
 func (e *publicationApplyError) Stage() string  { return string(e.stage) }
 func (e *publicationApplyError) Reason() string { return string(e.reason) }
+
+func (e *publicationApplyError) Conflicts() []PublicationApplyConflict { return e.conflicts }
 
 type PublicationApplyPhase string
 type PublicationApplyOperation string
@@ -161,6 +167,12 @@ type PublicationApplyPlanEntry struct {
 	Path      string
 	Operation PublicationApplyOperation
 	Size      uint64
+}
+
+type PublicationApplyConflict struct {
+	TargetID string
+	Path     string
+	Shape    string
 }
 
 type PublicationApplyEntry struct {
@@ -499,15 +511,19 @@ func planPublicationApply(
 				err,
 			)
 		}
+		conflicts := make([]PublicationApplyConflict, 0)
 		for _, decision := range plan.Decisions {
-			if decision.Action == syncengine.ActionConflict {
-				return nil, publicationApplyFailure(
-					ctx,
-					publicationApplyStagePlan,
-					publicationApplyReasonPlanConflict,
-					nil,
-				)
+			if decision.Action != syncengine.ActionConflict {
+				continue
 			}
+			conflicts = append(conflicts, PublicationApplyConflict{
+				TargetID: decision.Key.TargetID,
+				Path:     decision.Key.FilePath,
+				Shape:    publicationApplyConflictShape(decision),
+			})
+		}
+		if len(conflicts) != 0 {
+			return nil, publicationApplyConflictFailure(ctx, conflicts)
 		}
 		preview, err := syncengine.BuildPreview(plan, []model.Target{selection.portable}, captured.observations)
 		if err != nil {
@@ -985,6 +1001,49 @@ func publicationApplyUnsupportedMode(ctx context.Context, mode uint32) error {
 		refused.detail = fmt.Sprintf("mode %04o", mode)
 	}
 	return failure
+}
+
+func publicationApplyConflictFailure(ctx context.Context, conflicts []PublicationApplyConflict) error {
+	failure := publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonPlanConflict, nil)
+	var refused *publicationApplyError
+	if errors.As(failure, &refused) && refused.reason == publicationApplyReasonPlanConflict {
+		refused.conflicts = publicationApplySortedConflicts(conflicts)
+	}
+	return failure
+}
+
+func publicationApplySortedConflicts(conflicts []PublicationApplyConflict) []PublicationApplyConflict {
+	sorted := append([]PublicationApplyConflict(nil), conflicts...)
+	sort.Slice(sorted, func(left, right int) bool {
+		if sorted[left].TargetID != sorted[right].TargetID {
+			return sorted[left].TargetID < sorted[right].TargetID
+		}
+		if sorted[left].Path != sorted[right].Path {
+			return sorted[left].Path < sorted[right].Path
+		}
+		return sorted[left].Shape < sorted[right].Shape
+	})
+	return sorted
+}
+
+func publicationApplyConflictShape(decision syncengine.Decision) string {
+	if decision.Reason != syncengine.ReasonDivergence {
+		return string(decision.Reason)
+	}
+	switch {
+	case decision.States.Local == syncengine.ValuePresent && decision.States.Remote == syncengine.ValuePresent:
+		return publicationApplyConflictBothModified
+	case decision.States.Local == syncengine.ValuePresent && publicationApplyConflictDeleted(decision.States.Remote):
+		return publicationApplyConflictDeletedVsChanged
+	case publicationApplyConflictDeleted(decision.States.Local) && decision.States.Remote == syncengine.ValuePresent:
+		return publicationApplyConflictDeletedVsChanged
+	default:
+		return string(decision.Reason)
+	}
+}
+
+func publicationApplyConflictDeleted(state syncengine.ValueState) bool {
+	return state == syncengine.ValueKnownAbsent || state == syncengine.ValueTombstone
 }
 
 func publicationApplyFailure(

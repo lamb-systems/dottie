@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -286,26 +287,53 @@ func (fixture *pullTestFixture) payloads() map[uint64]model.Snapshot {
 	return map[uint64]model.Snapshot{fixture.record.PublicationSeq: fixture.snapshot}
 }
 
+func pullTestFileEntry(path, content string) model.Entry {
+	return model.Entry{
+		TargetID: "files",
+		File: &model.FileEntry{
+			Path:    path,
+			State:   model.FilePresent,
+			Kind:    model.FileRegular,
+			Content: []byte(content),
+			Mode:    0o600,
+		},
+	}
+}
+
+func pullTestFileTombstone(path string) model.Entry {
+	return model.Entry{TargetID: "files", File: &model.FileEntry{Path: path, State: model.FileDeleted}}
+}
+
+func (fixture *pullTestFixture) acceptSnapshot(t *testing.T, snapshot model.Snapshot) {
+	t.Helper()
+	packed, err := vault.Pack(snapshot)
+	require.NoError(t, err)
+	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, 0, nil)
+	fixture.payload = packed.Payload
+	fixture.snapshot = snapshot
+	fixture.block = block
+	fixture.record = record
+	fixture.head = pullTestHead(t, fixture.binding, block, record)
+	fixture.accept(t)
+}
+
 func (fixture *pullTestFixture) advancedView(
 	t *testing.T,
 	content string,
 ) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
 	t.Helper()
+	return fixture.viewFromEntries(t, []model.Entry{pullTestFileEntry("init.lua", content)})
+}
+
+func (fixture *pullTestFixture) viewFromEntries(
+	t *testing.T,
+	entries []model.Entry,
+) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
+	t.Helper()
 	snapshot := model.Snapshot{
 		Version: model.SnapshotVersion,
 		Targets: fixture.snapshot.Targets,
-		Entries: []model.Entry{
-			{
-				TargetID: "files",
-				File: &model.FileEntry{
-					Path:    "init.lua",
-					State:   model.FilePresent,
-					Kind:    model.FileRegular,
-					Content: []byte(content),
-					Mode:    0o600,
-				},
-			},
-		},
+		Entries: entries,
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
@@ -1556,6 +1584,209 @@ func TestPullSurfacesAnApplyLeaseRefusal(t *testing.T) {
 	accepted := fixture.acceptedFloor(t)
 	assert.Equal(t, before.Revision, accepted.Revision)
 	assert.Equal(t, before.RecordCID, accepted.RecordCID)
+}
+
+func runPullForConflictDetail(
+	t *testing.T,
+	fixture *pullTestFixture,
+	view publicationstate.SuppliedRepositoryView,
+	payloads map[uint64]model.Snapshot,
+) (int, string, string) {
+	t.Helper()
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	return code, stdout.String(), stderr.String()
+}
+
+func assertPullConflictDetailRedacted(t *testing.T, fixture *pullTestFixture, output string) {
+	t.Helper()
+	assert.NotContains(t, output, fixture.paths.Home, "the conflict detail printed an absolute path")
+	assert.NotContains(t, output, pullTestVaultHex(), "the conflict detail printed the vault")
+	assert.NotContains(t, output, pullTestDID, "the conflict detail printed the account DID")
+}
+
+func TestPullRefusesTwoConflictingEntriesAndNamesBothOfThem(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.acceptSnapshot(t, model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: fixture.snapshot.Targets,
+		Entries: []model.Entry{
+			pullTestFileEntry("extra.txt", pullTestBaseContent),
+			pullTestFileEntry("init.lua", pullTestBaseContent),
+		},
+	})
+	fixture.configure(t, "")
+	before := pullTestDirectoryState(t, fixture.paths.PublicationStateDir())
+	require.NoError(t, os.WriteFile(fixture.targetPath("extra.txt"), []byte("synthetic local extra"), 0o600))
+	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte("synthetic local init"), 0o600))
+	view, payloads := fixture.viewFromEntries(t, []model.Entry{
+		pullTestFileEntry("extra.txt", "synthetic remote extra"),
+		pullTestFileEntry("init.lua", pullTestRemoteContent),
+	})
+
+	code, stdout, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+	require.Equal(t, 3, code)
+	assert.Equal(
+		t,
+		"  files  extra.txt  both-modified\n  files  init.lua  both-modified\n"+
+			"dottie: pull refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+		stderr,
+	)
+	assertPullConflictDetailRedacted(t, fixture, stderr)
+	assert.NotContains(t, stdout, "confirmation:", "a conflicting pull offered an apply token")
+	assert.NotContains(t, stdout, "pull: applied", "a conflicting pull published an apply report")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, "synthetic local init", string(content), "a conflicting pull applied the plan")
+	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.PublicationStateDir()))
+	assert.Equal(t, uint64(1), fixture.acceptedFloor(t).Revision)
+}
+
+func TestPullConflictDetailNamesADeletedSideAgainstAChangedSide(t *testing.T) {
+	t.Run("local deletion", func(t *testing.T) {
+		fixture := newPullTestFixture(t)
+		fixture.accept(t)
+		fixture.configure(t, "")
+		view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+
+		code, _, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+		require.Equal(t, 3, code)
+		assert.Equal(
+			t,
+			"  files  init.lua  deleted-vs-changed\n"+
+				"dottie: pull refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+			stderr,
+		)
+		assertPullConflictDetailRedacted(t, fixture, stderr)
+	})
+	t.Run("remote deletion", func(t *testing.T) {
+		fixture := newPullTestFixture(t)
+		fixture.accept(t)
+		fixture.configure(t, "")
+		require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte("synthetic local edit"), 0o600))
+		view, payloads := fixture.viewFromEntries(t, []model.Entry{pullTestFileTombstone("init.lua")})
+
+		code, _, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+		require.Equal(t, 3, code)
+		assert.Equal(
+			t,
+			"  files  init.lua  deleted-vs-changed\n"+
+				"dottie: pull refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+			stderr,
+		)
+		assertPullConflictDetailRedacted(t, fixture, stderr)
+		content, err := os.ReadFile(fixture.targetPath("init.lua"))
+		require.NoError(t, err)
+		assert.Equal(t, "synthetic local edit", string(content), "a conflicting pull applied the plan")
+	})
+}
+
+func TestPullConflictDetailNamesAFirstUseConflictWithoutABase(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+
+	code, _, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+	require.Equal(t, 3, code)
+	assert.Equal(
+		t,
+		"  files  init.lua  base-missing\n"+
+			"dottie: pull refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+		stderr,
+	)
+	assertPullConflictDetailRedacted(t, fixture, stderr)
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content), "a conflicting first-use pull applied the plan")
+}
+
+func TestPullConflictDetailCapsTheListAndCountsTheRemainder(t *testing.T) {
+	const conflictCount = publicationApplyConflictLimit + 1
+	entries := make([]model.Entry, 0, conflictCount)
+	for index := range conflictCount {
+		path := fmt.Sprintf("conflict-%02d.txt", index)
+		entries = append(entries, pullTestFileEntry(path, "synthetic base "+path))
+	}
+	fixture := newPullTestFixture(t)
+	fixture.acceptSnapshot(t, model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: fixture.snapshot.Targets,
+		Entries: entries,
+	})
+	fixture.configure(t, "")
+	remote := make([]model.Entry, 0, conflictCount)
+	expected := make([]string, 0, publicationApplyConflictLimit+2)
+	for index := range conflictCount {
+		path := fmt.Sprintf("conflict-%02d.txt", index)
+		require.NoError(t, os.WriteFile(fixture.targetPath(path), []byte("synthetic local "+path), 0o600))
+		remote = append(remote, pullTestFileEntry(path, "synthetic remote "+path))
+		if index < publicationApplyConflictLimit {
+			expected = append(expected, "  files  "+path+"  both-modified")
+		}
+	}
+	expected = append(expected, "  and 1 more conflicting entries")
+	expected = append(
+		expected,
+		"dottie: pull refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed",
+	)
+	view, payloads := fixture.viewFromEntries(t, remote)
+
+	code, _, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+	require.Equal(t, 3, code)
+	assert.Equal(t, strings.Join(expected, "\n")+"\n", stderr)
+	assertPullConflictDetailRedacted(t, fixture, stderr)
+}
+
+func TestPullWithoutAConflictPrintsNoConflictDetail(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.advancedView(t, pullTestRemoteContent)
+
+	code, stdout, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+	require.Equal(t, 0, code, stderr)
+	assert.Empty(t, stderr)
+	assert.Contains(t, stdout, "apply: changes=1 unchanged=0\n")
+	assert.NotContains(t, stdout, "  files  ")
+}
+
+func TestPullPlanRefusalWithoutAConflictPrintsNoConflictDetail(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.viewFromEntries(t, []model.Entry{
+		{
+			TargetID: "files",
+			File: &model.FileEntry{
+				Path:    "init.lua",
+				State:   model.FilePresent,
+				Kind:    model.FileRegular,
+				Content: []byte(pullTestRemoteContent),
+				Mode:    0o640,
+			},
+		},
+	})
+
+	code, _, stderr := runPullForConflictDetail(t, fixture, view, payloads)
+
+	require.Equal(t, 3, code)
+	assert.Equal(
+		t,
+		"dottie: pull refused: the apply plan is unusable (apply-plan/mode_unsupported); nothing was changed\n",
+		stderr,
+	)
 }
 
 func (fixture *pullTestFixture) acceptedFloor(t *testing.T) publicationstate.Floor {

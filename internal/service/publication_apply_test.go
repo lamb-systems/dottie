@@ -20,6 +20,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
+	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
 type publicationApplyFixture struct {
@@ -1510,4 +1511,122 @@ func TestApplyPublicationRefusesOversizedRecoveryObservationWithoutReadingPastTh
 	assert.Equal(t, publicationApplyMaxObservedBytes+1, counter.read)
 	require.ErrorIs(t, fixture.journal.CheckAdmission(context.Background(), 1000), publicationstate.ErrContinuity)
 	assert.Equal(t, int64(1), fixture.journalRowCount(t))
+}
+
+func TestPublicationApplyConflictShapeNamesTheRecordedDecision(t *testing.T) {
+	cases := []struct {
+		name     string
+		reason   syncengine.Reason
+		local    syncengine.ValueState
+		remote   syncengine.ValueState
+		expected string
+	}{
+		{
+			name: "both sides modified", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValuePresent, remote: syncengine.ValuePresent,
+			expected: publicationApplyConflictBothModified,
+		},
+		{
+			name: "local deleted remote changed", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValueKnownAbsent, remote: syncengine.ValuePresent,
+			expected: publicationApplyConflictDeletedVsChanged,
+		},
+		{
+			name: "local changed remote deleted", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValuePresent, remote: syncengine.ValueTombstone,
+			expected: publicationApplyConflictDeletedVsChanged,
+		},
+		{
+			name: "unknown side keeps the reason", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValueUnknown, remote: syncengine.ValuePresent,
+			expected: string(syncengine.ReasonDivergence),
+		},
+		{
+			name: "untracked side keeps the reason", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValuePresent, remote: syncengine.ValueUntracked,
+			expected: string(syncengine.ReasonDivergence),
+		},
+		{
+			name: "two deleted sides keep the reason", reason: syncengine.ReasonDivergence,
+			local: syncengine.ValueTombstone, remote: syncengine.ValueKnownAbsent,
+			expected: string(syncengine.ReasonDivergence),
+		},
+		{
+			name: "first use has no base", reason: syncengine.ReasonBaseMissing,
+			local: syncengine.ValuePresent, remote: syncengine.ValuePresent,
+			expected: string(syncengine.ReasonBaseMissing),
+		},
+		{
+			name: "stale base keeps its reason", reason: syncengine.ReasonStaleBase,
+			local: syncengine.ValuePresent, remote: syncengine.ValuePresent,
+			expected: string(syncengine.ReasonStaleBase),
+		},
+		{
+			name: "structural keeps its reason", reason: syncengine.ReasonStructural,
+			local: syncengine.ValuePresent, remote: syncengine.ValuePresent,
+			expected: string(syncengine.ReasonStructural),
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			shape := publicationApplyConflictShape(syncengine.Decision{
+				Reason: test.reason,
+				States: syncengine.SideStates{Local: test.local, Remote: test.remote},
+			})
+			assert.Equal(t, test.expected, shape)
+		})
+	}
+}
+
+func TestPublicationApplySortedConflictsOrdersByTargetThenPath(t *testing.T) {
+	sorted := publicationApplySortedConflicts([]PublicationApplyConflict{
+		{TargetID: "files", Path: "zeta.ini", Shape: publicationApplyConflictBothModified},
+		{TargetID: "applied-files", Path: "beta.ini", Shape: string(syncengine.ReasonBaseMissing)},
+		{TargetID: "files", Path: "alpha.ini", Shape: publicationApplyConflictBothModified},
+		{TargetID: "files", Path: "alpha.ini", Shape: publicationApplyConflictDeletedVsChanged},
+	})
+	assert.Equal(t, []PublicationApplyConflict{
+		{TargetID: "applied-files", Path: "beta.ini", Shape: string(syncengine.ReasonBaseMissing)},
+		{TargetID: "files", Path: "alpha.ini", Shape: publicationApplyConflictBothModified},
+		{TargetID: "files", Path: "alpha.ini", Shape: publicationApplyConflictDeletedVsChanged},
+		{TargetID: "files", Path: "zeta.ini", Shape: publicationApplyConflictBothModified},
+	}, sorted)
+}
+
+func TestPlanPublicationApplyCarriesTheConflictingEntries(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "a.ini", "local a")
+	fixture.write(t, "b.ini", "local b")
+	base := fixture.targetSnapshot([]model.Entry{
+		publicationApplyModeEntry(fixture.target.ID, "a.ini", "base a", 0o600),
+		publicationApplyModeEntry(fixture.target.ID, "b.ini", "base b", 0o600),
+	})
+	remote := fixture.targetSnapshot([]model.Entry{
+		publicationApplyModeEntry(fixture.target.ID, "a.ini", "remote a", 0o600),
+		publicationApplyModeEntry(fixture.target.ID, "b.ini", "remote b", 0o600),
+	})
+
+	_, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
+
+	refused := requirePublicationApplyRefusal(t, err, "apply-plan", "plan_conflict")
+	assert.Equal(t, []PublicationApplyConflict{
+		{TargetID: fixture.target.ID, Path: "a.ini", Shape: publicationApplyConflictBothModified},
+		{TargetID: fixture.target.ID, Path: "b.ini", Shape: publicationApplyConflictBothModified},
+	}, refused.Conflicts())
+	assert.Equal(t, "local a", fixture.read(t, "a.ini"), "a conflicting plan changed a file")
+	assert.Equal(t, "local b", fixture.read(t, "b.ini"), "a conflicting plan changed a file")
+	fixture.assertNoJournalRows(t)
+}
+
+func TestPublicationApplyNonConflictRefusalCarriesNoConflictingEntries(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "local note")
+	request := fixture.request(fixture.local, fixture.targetSnapshot(nil), fixture.targetSnapshot(nil))
+	request.Vault = [32]byte{}
+
+	_, err := PlanPublicationApply(context.Background(), request)
+
+	refused := requirePublicationApplyRefusal(t, err, "apply", "request_invalid")
+	assert.Empty(t, refused.Conflicts())
+	fixture.assertNoJournalRows(t)
 }

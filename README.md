@@ -53,12 +53,18 @@ The retired commands are gone rather than deprecated: there is no kit generation
 ciphertext archive to export or validate, no retention sweep and no device administration surface.
 `position status` is the one publication-position read, and `status` remains local-only. `status` prints the
 locally recorded vault fingerprint and device id, so the recorded vault can be found without prior knowledge of it;
-when no selection is recorded it says so instead of printing a zero value. `pull` and `sync` resolve the vault they
+when no selection is recorded it says so instead of printing a zero value, and when the stored publication binding
+names a vault that no recorded selection names it prints that vault on its own `vault-adopted` line, so a home that
+joined a published position shows the vault it acts on without that vault being called recorded. `pull` and `sync`
+resolve the vault they
 act on without being told it: `--vault` is an override, then the stored publication binding, then the vault named by
 the account's published `vaultHeadV2` record at `self`, read through the same validated reader that reads the
 position. An account that publishes nothing refuses with a typed `no-publication` reason. A vault the command
 resolved rather than received is printed, so a fresh machine can join a published position without knowing its
-fingerprint first. `position status` resolves the vault from `--vault` or the stored binding only, because a
+fingerprint first. `push` resolves the vault it acts on from local evidence only: `--vault`, then the recorded local
+selection, then the stored publication binding when it belongs to the authorized account, and it refuses naming all
+three sources rather than contacting the provider to resolve one; a vault it adopted from the binding is printed.
+`position status` resolves the vault from `--vault` or the stored binding only, because a
 provider read would give that local inspection an account session and a network dependency it does not have.
 
 ## Target design

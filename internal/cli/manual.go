@@ -122,6 +122,13 @@ func renderManualStatus(status service.Status) string {
 	if len(status.Vaults) == 0 {
 		output.WriteString("no vault selection recorded\n")
 	}
+	if status.AdoptedVault != ([32]byte{}) && !recordedVault(status.Vaults, status.AdoptedVault) {
+		fmt.Fprintf(
+			&output,
+			"vault-adopted\t%s\tfrom=publication-binding\n",
+			escapeField(hex.EncodeToString(status.AdoptedVault[:])),
+		)
+	}
 	for _, target := range status.Targets {
 		fmt.Fprintf(
 			&output,
@@ -141,4 +148,13 @@ func renderManualStatus(status service.Status) string {
 		output.WriteString("no targets selected\n")
 	}
 	return output.String()
+}
+
+func recordedVault(selections []service.VaultSelection, vault [32]byte) bool {
+	for _, selection := range selections {
+		if selection.Vault == vault {
+			return true
+		}
+	}
+	return false
 }

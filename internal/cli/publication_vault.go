@@ -19,9 +19,45 @@ const (
 
 type pullVaultFactory func(context.Context, *urfave.Command, pushSession) ([32]byte, error)
 
+type vaultSelectionSource interface {
+	ResolveSelection(context.Context, service.VaultSelection) (service.VaultSelection, error)
+}
+
 type resolvedVault struct {
 	Vault  [32]byte
 	Origin string
+}
+
+func requestedVaultSelection(command *urfave.Command) (service.VaultSelection, error) {
+	selection := service.VaultSelection{DeviceID: command.String("device-id")}
+	if command.IsSet("vault") {
+		vaultID, err := parseVaultFingerprint(command.String("vault"))
+		if err != nil {
+			return service.VaultSelection{}, err
+		}
+		selection.Vault = vaultID
+	}
+	return selection, nil
+}
+
+func resolvePublicationSelection(
+	ctx context.Context,
+	selections vaultSelectionSource,
+	requested service.VaultSelection,
+	directory, accountDID string,
+) (resolvedVault, error) {
+	selected, err := selections.ResolveSelection(ctx, requested)
+	if err == nil {
+		return resolvedVault{Vault: selected.Vault}, nil
+	}
+	if !errors.Is(err, service.ErrNoVaultSelection) && !errors.Is(err, service.ErrAmbiguousVaultSelection) {
+		return resolvedVault{}, err
+	}
+	stored, bindingErr := publicationstate.ReadBinding(directory)
+	if bindingErr != nil || stored.Vault == ([32]byte{}) || stored.AccountDID != accountDID {
+		return resolvedVault{}, err
+	}
+	return resolvedVault{Vault: stored.Vault, Origin: pullVaultFromBinding}, nil
 }
 
 func resolvePublicationVault(

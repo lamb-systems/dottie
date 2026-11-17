@@ -2,7 +2,7 @@
 
 ## Manual coordinator workflows
 
-`dottie status` is local-only and writes nothing: it prints the recorded vault selection — `vault<TAB>HEX<TAB>device=ID` per recorded `(vault, device)` selection, or `no vault selection recorded` when none exists — then each selected target. It opens no provider connection, needs no account session and never opens the publication position store, so it stays usable offline and signed out. `dottie pull` is the only apply path: it inspects the v2 publication position and applies a reviewed, confirmed plan, described with the push and sync commands below; it never reconciles. Without a vault override, the coordinator commands that act on a selection require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed). Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
+`dottie status` is local-only and writes nothing: it prints the recorded vault selection — `vault<TAB>HEX<TAB>device=ID` per recorded `(vault, device)` selection, or `no vault selection recorded` when none exists — then each selected target. When the local publication binding names a vault that no recorded selection names, it also prints one `vault-adopted<TAB>HEX<TAB>from=publication-binding` line, so a home that joined a published position by `pull` shows the vault it acts on without that vault being reported as recorded. It opens no provider connection, needs no account session and never opens the provider, keyring or publication position store; the only publication file it reads is the stored binding, read-only, and an absent or unreadable binding is not an error for it, so it stays usable offline and signed out. `dottie pull` is the only apply path: it inspects the v2 publication position and applies a reviewed, confirmed plan, described with the push and sync commands below; it never reconciles. Without a vault override, the coordinator commands that act on a selection require exactly one local `(vault, device)` selection; otherwise they refuse and instruct the operator to pass `--vault` (and `--device-id` when needed), or, for `push`, to adopt the published position with a confirmed `pull`. Remote reads require a usable local account session; `--did` and `--handle` are mutually exclusive.
 
 `dottie recover` resolves interrupted journal entries without a remote session. There is no other write authority in this CLI: `preview` and `restore` were retired with the v1 read/apply path, so a v1 plan can no longer be inspected or applied from the command line.
 
@@ -71,7 +71,16 @@ the local capture plus the accepted position and the observed head, and prepares
 summary — target and entry counts, the accepted floor, the candidate record and payload CIDs and the
 review digests and revisions — and a `confirmation:` line holding the 32-byte store confirmation in hex.
 It publishes nothing and exits 3 so the operator can review. The summary never contains entry content,
-setting values, absolute paths or the vault fingerprint.
+setting values, absolute paths or the vault fingerprint. The vault the run acts on is resolved in one local order:
+an explicit `--vault`, then exactly one recorded `(vault, device)` selection, then the account's stored publication
+binding. The binding is used only when its account DID matches the authorized session, so a second home that joined a
+published position with a confirmed `pull` pushes to that vault without bootstrap or flags; a binding recorded for
+another account is not evidence about this one and is ignored. Vault resolution reads no provider, keyring or
+session; the account and provider work starts afterwards. When the binding resolved the vault, `push` prints
+`vault: HEX (resolved from the recorded binding)` before the review summary, and a `--vault` value is never echoed.
+When none of the three sources resolves a vault, `push` refuses before any submission with exit 3, naming all three
+sources it checked and the two ways forward: `--vault` with `--device-id`, or a confirmed `pull` to adopt the
+published position.
 
 `dottie push --did DID --confirm HEX` repeats the same preparation and compares the freshly computed
 confirmation with the supplied value. Equality publishes exactly that proposal and prints the accepted
@@ -130,7 +139,8 @@ bytes are unusable refuses with exit 3 naming its typed reason. Provisioning est
 first publication still needs the reviewed confirmation.
 
 `dottie sync [--did DID] [--vault HEX] [--confirm TOKEN]` is the reconciled path: it resolves the vault in the
-same order `pull` does, so a machine with no stored binding adopts the published vault and prints it; it prepares the pull half, prepares
+same order `pull` does, so a machine with no stored binding adopts the published vault and prints it, and its push half
+resolves the vault exactly as `push` does; it prepares the pull half, prepares
 the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
 binding, the pull plan digest, the staged accept state token, the observation digest, the provider view digest and
 the post-pull push identity (payload digest and size, review selection and approval digests with revisions).
@@ -188,6 +198,36 @@ a moved provider observation or a moved floor refuses. Acceptance is offered onl
 the local side is fully captured: a partial or unreadable capture refuses without a token. A `matches` finding with
 no changes offers nothing because the floor already names the observed position. Applying goes through the same journal, admission, apply lease, containment, captured preimage
 and backup-only refusals the engine enforces, and a backup-only selection always refuses to apply.
+
+Reconciliation never picks a side. When one or more entries conflict, `pull` and `sync` refuse with the single line
+`<command> refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed` and print one line per
+conflicting entry directly above it:
+
+```
+  <target-id>  <relative-path>  <shape>
+```
+
+The lines are ordered by target ID and then by relative path, and the list is capped at 20 entries: when the plan
+holds more, the last line is `  and N more conflicting entries`. The shape column reuses the decision's own reason
+token and splits only `divergence`, by which side holds which value:
+
+| Recorded reason | Local | Remote | Printed shape |
+| --- | --- | --- | --- |
+| `divergence` | present | present | `both-modified` |
+| `divergence` | known-absent or tombstone | present | `deleted-vs-changed` |
+| `divergence` | present | known-absent or tombstone | `deleted-vs-changed` |
+| `divergence` | any other state | any other state | `divergence` |
+| `base-missing` | — | — | `base-missing` |
+| `stale-base` | — | — | `stale-base` |
+| `structural` | — | — | `structural` |
+| any other recorded reason | — | — | the reason token |
+
+`divergence` is the fallback wherever the recorded states do not clearly identify one of the two split shapes, so a
+conflict this slice cannot label prints its reason token instead of a guess. `base-missing` is a first-use join with
+no accepted base, where both sides are present and different and there is no upstream history to compare against.
+The detail is reporting only: it names a target ID, a relative path and a shape, never an absolute path, digest,
+content, vault or account DID, and it changes nothing about the refusal — one line above it is the same exit 3, the
+same untouched journal, the same discarded proposal and the same missing apply.
 
 A confirmed run applies the plan first and accepts the material second, never one transaction for both. After a
 fully applied plan it re-validates that the accepted floor revision is still the one the plan used, then accepts

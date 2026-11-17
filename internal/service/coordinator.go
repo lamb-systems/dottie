@@ -11,6 +11,7 @@ import (
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
+	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/state"
 )
@@ -92,11 +93,23 @@ func (coordinator *Coordinator) Status(ctx context.Context) (Status, error) {
 	for _, selection := range selections {
 		result.Vaults = append(result.Vaults, VaultSelection{Vault: selection.Vault, DeviceID: selection.DeviceID})
 	}
+	result.AdoptedVault = coordinator.adoptedPublicationVault()
 	for _, target := range configuration.Targets {
 		result.Targets = append(result.Targets, latest[target.ID])
 	}
 	sort.Slice(result.Targets, func(i, j int) bool { return result.Targets[i].ID < result.Targets[j].ID })
 	return result, nil
+}
+
+func (coordinator *Coordinator) adoptedPublicationVault() [32]byte {
+	if coordinator.deps.Paths.StateHome == "" {
+		return [32]byte{}
+	}
+	binding, err := publicationstate.ReadBinding(coordinator.deps.Paths.PublicationStateDir())
+	if err != nil {
+		return [32]byte{}
+	}
+	return binding.Vault
 }
 
 func (coordinator *Coordinator) selectVault(ctx context.Context, requested VaultSelection) (VaultSelection, error) {

@@ -310,10 +310,14 @@ func TestTwoMachinePublicationConflictRefusesWithoutMutation(t *testing.T) {
 	var refused interface {
 		Stage() string
 		Reason() string
+		Conflicts() []service.PublicationApplyConflict
 	}
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, "apply-plan", refused.Stage())
 	assert.Equal(t, "plan_conflict", refused.Reason())
+	assert.Equal(t, []service.PublicationApplyConflict{
+		{TargetID: publicationTwoMachineTargetID, Path: publicationTwoMachineTrackedFile, Shape: "both-modified"},
+	}, refused.Conflicts())
 	assert.False(t, preparation.Applies)
 	assert.Equal(t, publicationTwoMachineConflictA, readPublicationTwoMachineFile(t, fixture.a))
 	assert.Equal(t, publicationTwoMachineConflictB, readPublicationTwoMachineFile(t, fixture.b))

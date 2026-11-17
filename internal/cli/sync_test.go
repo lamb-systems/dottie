@@ -863,7 +863,15 @@ func TestSyncRefusesAConflictAtPlanningBeforeAnyChange(t *testing.T) {
 		pullTestVaultHex(),
 	)
 	require.Equal(t, 3, code)
-	assert.Contains(t, stderr, "apply-plan/plan_conflict")
+	assert.Equal(
+		t,
+		"  files  a.txt  both-modified\n"+
+			"dottie: sync refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+		stderr,
+	)
+	assert.NotContains(t, stderr, fixture.paths.Home, "the conflict detail printed an absolute path")
+	assert.NotContains(t, stderr, pullTestVaultHex(), "the conflict detail printed the vault")
+	assert.NotContains(t, stderr, fixture.binding.AccountDID, "the conflict detail printed the account DID")
 	assert.NotContains(t, stdout, "confirmation:")
 	assert.Equal(
 		t,
@@ -871,6 +879,40 @@ func TestSyncRefusesAConflictAtPlanningBeforeAnyChange(t *testing.T) {
 		readSyncFile(t, fixture, "a.txt"),
 		"a conflicting sync applied the pull half",
 	)
+	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision)
+	uploads, sends := fixture.transport.counts()
+	assert.Zero(t, uploads)
+	assert.Zero(t, sends)
+	assert.Zero(t, fixture.proposalCount(t))
+}
+
+func TestSyncConflictDetailNamesADeletedLocalSideAgainstAChangedRemoteSide(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.seed(t, fixture.snapshotA(syncTestBaseA))
+	fixture.advance(t, fixture.snapshotA(syncTestRemoteA))
+	before := fixture.readFloor(t)
+
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
+
+	require.Equal(t, 3, code)
+	assert.Equal(
+		t,
+		"  files  a.txt  deleted-vs-changed\n"+
+			"dottie: sync refused: the apply plan is unusable (apply-plan/plan_conflict); nothing was changed\n",
+		stderr,
+	)
+	assert.NotContains(t, stderr, fixture.paths.Home, "the conflict detail printed an absolute path")
+	assert.NotContains(t, stderr, pullTestVaultHex(), "the conflict detail printed the vault")
+	assert.NotContains(t, stderr, fixture.binding.AccountDID, "the conflict detail printed the account DID")
+	assert.NotContains(t, stdout, "confirmation:")
 	assert.Equal(t, before.Revision, fixture.readFloor(t).Revision)
 	uploads, sends := fixture.transport.counts()
 	assert.Zero(t, uploads)

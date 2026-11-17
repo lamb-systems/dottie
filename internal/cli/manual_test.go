@@ -19,6 +19,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 )
@@ -128,6 +129,85 @@ func TestManualStatusPrintsAbsentVaultSelection(t *testing.T) {
 	require.Equal(t, 0, code, "exit code")
 	assert.Empty(t, stderr.String(), "stderr")
 	assert.Equal(t, "no vault selection recorded\nno targets selected\n", stdout.String(), "stdout")
+}
+
+func TestManualStatusPrintsTheAdoptedPublicationBindingVault(t *testing.T) {
+	store, paths := newManualStatusTestStore(t)
+	binding := publicationstate.Binding{
+		AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x5a},
+	}
+	binding.Repository = "at://" + binding.AccountDID
+	require.NoError(t, os.MkdirAll(paths.PublicationStateDir(), 0o700))
+	require.NoError(t, os.Chmod(paths.PublicationStateDir(), 0o700))
+	position, err := publicationstate.Open(paths.PublicationStateDir(), binding)
+	require.NoError(t, err)
+	require.NoError(t, position.Close())
+	factory := func() (*service.Coordinator, func(), error) {
+		coordinator, err := service.NewCoordinator(
+			service.Dependencies{Config: statusTestConfig{value: config.Default()}, State: store, Paths: paths},
+		)
+		return coordinator, func() {}, err
+	}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newManualCommand(&stdout, &stderr, &code, factory)
+	code = runManualCommandForTest(command, &code, "status")
+	require.Equal(t, 0, code, "exit code")
+	assert.Empty(t, stderr.String(), "stderr")
+	assert.Equal(
+		t,
+		"no vault selection recorded\nvault-adopted\t"+hex.EncodeToString(
+			binding.Vault[:],
+		)+"\tfrom=publication-binding\nno targets selected\n",
+		stdout.String(),
+		"stdout",
+	)
+	assert.NotContains(t, stdout.String(), binding.AccountDID, "stdout contains the account DID")
+}
+
+func TestManualStatusKeepsRecordedAndAdoptedVaultsDistinct(t *testing.T) {
+	recorded := service.VaultSelection{Vault: [32]byte{0x5b}, DeviceID: "synthetic-device"}
+	recordedLine := "vault\t" + hex.EncodeToString(recorded.Vault[:]) + "\tdevice=synthetic-device\n"
+	adopted := [32]byte{0x5c}
+	adoptedLine := "vault-adopted\t" + hex.EncodeToString(adopted[:]) + "\tfrom=publication-binding\n"
+	tests := []struct {
+		name   string
+		status service.Status
+		want   string
+	}{
+		{
+			name:   "recorded only",
+			status: service.Status{Vaults: []service.VaultSelection{recorded}},
+			want:   recordedLine + "no targets selected\n",
+		},
+		{
+			name:   "recorded and adopted agree",
+			status: service.Status{Vaults: []service.VaultSelection{recorded}, AdoptedVault: recorded.Vault},
+			want:   recordedLine + "no targets selected\n",
+		},
+		{
+			name:   "recorded and adopted differ",
+			status: service.Status{Vaults: []service.VaultSelection{recorded}, AdoptedVault: adopted},
+			want:   recordedLine + adoptedLine + "no targets selected\n",
+		},
+		{
+			name:   "adopted only",
+			status: service.Status{AdoptedVault: adopted},
+			want:   "no vault selection recorded\n" + adoptedLine + "no targets selected\n",
+		},
+		{
+			name:   "neither",
+			status: service.Status{},
+			want:   "no vault selection recorded\nno targets selected\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, renderManualStatus(test.status), "rendered status")
+		})
+	}
 }
 
 func TestStatusDispatchPassesNoSessionFactory(t *testing.T) {

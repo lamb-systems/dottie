@@ -17,7 +17,8 @@ membership in a signed commit, the head/snapshot chain, the payload CID and size
 format. Those checks establish repository-scoped authenticity and integrity, not global freshness or
 device authorization.
 
-`dottie push` resolves the recorded local vault selection and prepares a candidate under the same
+`dottie push` resolves the vault it acts on from local evidence — an explicit `--vault`, the recorded local vault
+selection, or the stored publication binding recorded for the same account — and prepares a candidate under the same
 account authority. It does not load a Dottie device key to publish. The consent, review, repair and
 accepted-floor checks around a publication remain mandatory, but they are local policy checks; the
 publication authority is the authenticated account session.

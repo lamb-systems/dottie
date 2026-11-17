@@ -117,8 +117,9 @@ const (
 )
 
 type Status struct {
-	Vaults  []VaultSelection
-	Targets []TargetStatus
+	Vaults       []VaultSelection
+	AdoptedVault [32]byte
+	Targets      []TargetStatus
 }
 
 type TargetStatus struct {
