@@ -184,6 +184,15 @@ func payloadBasenameFromCID(encoded []byte) (string, error) {
 }
 
 func (s *Store) inspectPayloadFile(name string, expected []byte, blob publication.BlobReference) ([]byte, error) {
+	return s.inspectCustodyObject(name, expected, blob, PayloadFormPacked)
+}
+
+func (s *Store) inspectCustodyObject(
+	name string,
+	expected []byte,
+	blob publication.BlobReference,
+	form PayloadForm,
+) ([]byte, error) {
 	if !validPayloadBasename(name) {
 		return nil, errors.New("invalid payload name")
 	}
@@ -191,7 +200,7 @@ func (s *Store) inspectPayloadFile(name string, expected []byte, blob publicatio
 	if err != nil {
 		return nil, err
 	}
-	data, readErr := readValidatedPayloadFD(fd, blob)
+	data, readErr := readCustodyPayloadFD(fd, blob, form)
 	closeErr := unix.Close(fd)
 	if readErr != nil {
 		return nil, readErr
@@ -205,7 +214,21 @@ func (s *Store) inspectPayloadFile(name string, expected []byte, blob publicatio
 	return data, nil
 }
 
-func readValidatedPayloadFD(fd int, blob publication.BlobReference) ([]byte, error) {
+func readCustodyPayloadFD(fd int, blob publication.BlobReference, form PayloadForm) ([]byte, error) {
+	data, err := readOwnedPayloadFD(fd, blob)
+	if err != nil {
+		return nil, err
+	}
+	if form == PayloadFormShowcase {
+		return data, nil
+	}
+	if _, err := publication.DecodePayload(data, blob); err != nil {
+		return nil, errCorruptPayloadObject
+	}
+	return data, nil
+}
+
+func readOwnedPayloadFD(fd int, blob publication.BlobReference) ([]byte, error) {
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, err
@@ -241,9 +264,6 @@ func readValidatedPayloadFD(fd int, blob publication.BlobReference) ([]byte, err
 	if err := publication.VerifyPayload(data, blob); err != nil {
 		return nil, errCorruptPayloadObject
 	}
-	if _, err := publication.DecodePayload(data, blob); err != nil {
-		return nil, errCorruptPayloadObject
-	}
 	return data, nil
 }
 
@@ -252,6 +272,7 @@ func (s *Store) writeAnonymousPayload(
 	payload []byte,
 	blob publication.BlobReference,
 	name string,
+	form PayloadForm,
 ) (result error) {
 	fd, err := s.custodyOps.openTemp(s.payloadFD, 0o600)
 	if err != nil {
@@ -294,7 +315,7 @@ func (s *Store) writeAnonymousPayload(
 	if err := s.syncCustodyFD(s.rootFD); err != nil {
 		return err
 	}
-	if _, err := readValidatedPayloadFD(fd, blob); err != nil {
+	if _, err := readCustodyPayloadFD(fd, blob, form); err != nil {
 		return err
 	}
 	return nil
@@ -312,7 +333,11 @@ func validPayloadBasename(name string) bool {
 	return err == nil && strings.ToLower(digest) == digest
 }
 
-func (s *Store) syncPayloadOwnership(name string, blob publication.BlobReference) (result []byte, resultErr error) {
+func (s *Store) syncPayloadOwnership(
+	name string,
+	blob publication.BlobReference,
+	form PayloadForm,
+) (result []byte, resultErr error) {
 	if !validPayloadBasename(name) {
 		return nil, errors.New("invalid payload name")
 	}
@@ -325,7 +350,7 @@ func (s *Store) syncPayloadOwnership(name string, blob publication.BlobReference
 			resultErr = closeErr
 		}
 	}()
-	data, err := readValidatedPayloadFD(fd, blob)
+	data, err := readCustodyPayloadFD(fd, blob, form)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +542,20 @@ func (s *Store) checkPayloadCapacityWithQueryer(
 }
 
 func validatePayloadForCustody(payload []byte, blob publication.BlobReference, name string) error {
+	if err := validateOwnedPayloadObject(payload, blob, name); err != nil {
+		return err
+	}
+	if _, err := publication.DecodePayload(payload, blob); err != nil {
+		return errInvalidPayloadInput
+	}
+	return nil
+}
+
+func validateShowcaseEntryForCustody(payload []byte, blob publication.BlobReference, name string) error {
+	return validateOwnedPayloadObject(payload, blob, name)
+}
+
+func validateOwnedPayloadObject(payload []byte, blob publication.BlobReference, name string) error {
 	if len(payload) == 0 || uint64(len(payload)) > publication.MaxBlobBytes || blob.Size == 0 ||
 		blob.Size > publication.MaxBlobBytes ||
 		uint64(len(payload)) != blob.Size ||
@@ -532,20 +571,53 @@ func validatePayloadForCustody(payload []byte, blob publication.BlobReference, n
 	if err := publication.VerifyPayload(payload, blob); err != nil {
 		return errInvalidPayloadInput
 	}
-	if _, err := publication.DecodePayload(payload, blob); err != nil {
-		return errInvalidPayloadInput
-	}
 	return nil
 }
 
-func (s *Store) persistCandidatePayload(ctx context.Context, candidate validatedCandidate) (string, []byte, error) {
-	return s.persistPayload(
+type stagedPayload struct {
+	path string
+	name string
+	blob publication.BlobReference
+}
+
+func (s *Store) persistCandidatePayloads(
+	ctx context.Context,
+	candidate validatedCandidate,
+) ([]stagedPayload, error) {
+	if candidate.form == PayloadFormShowcase {
+		staged := make([]stagedPayload, 0, len(candidate.entries))
+		for _, entry := range candidate.entries {
+			reference := publication.BlobReference{
+				CID:      bytes.Clone(entry.blob.CID),
+				Size:     entry.blob.Size,
+				MIMEType: entry.blob.MIMEType,
+			}
+			name, _, err := s.persistPayloadObject(
+				ctx,
+				s.conn,
+				entry.content,
+				reference,
+				payloadBasename(entry.content),
+				PayloadFormShowcase,
+			)
+			if err != nil {
+				return nil, err
+			}
+			staged = append(staged, stagedPayload{path: entry.path, name: name, blob: reference})
+		}
+		return staged, nil
+	}
+	name, _, err := s.persistPayload(
 		ctx,
 		s.conn,
 		candidate.payload,
 		attemptPayloadReference(candidate),
 		payloadBasename(candidate.payload),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return []stagedPayload{{name: name, blob: attemptPayloadReference(candidate)}}, nil
 }
 
 func (s *Store) persistPayload(
@@ -555,7 +627,22 @@ func (s *Store) persistPayload(
 	blob publication.BlobReference,
 	name string,
 ) (string, []byte, error) {
-	if err := validatePayloadForCustody(payload, blob, name); err != nil {
+	return s.persistPayloadObject(ctx, q, payload, blob, name, PayloadFormPacked)
+}
+
+func (s *Store) persistPayloadObject(
+	ctx context.Context,
+	q queryer,
+	payload []byte,
+	blob publication.BlobReference,
+	name string,
+	form PayloadForm,
+) (string, []byte, error) {
+	if form == PayloadFormShowcase {
+		if err := validateShowcaseEntryForCustody(payload, blob, name); err != nil {
+			return "", nil, err
+		}
+	} else if err := validatePayloadForCustody(payload, blob, name); err != nil {
 		return "", nil, err
 	}
 	if err := s.ensurePayloadDirectory(); err != nil {
@@ -570,7 +657,7 @@ func (s *Store) persistPayload(
 		if !ok || size <= 0 || uint64(size) != blob.Size || cataloguedName != name {
 			return "", nil, errStoredValue
 		}
-		if _, err := s.syncPayloadOwnership(name, blob); err != nil {
+		if _, err := s.syncPayloadOwnership(name, blob, form); err != nil {
 			return "", nil, err
 		}
 		return name, nil, nil
@@ -583,17 +670,17 @@ func (s *Store) persistPayload(
 	}
 	var existing unix.Stat_t
 	if err := unix.Fstatat(s.payloadFD, name, &existing, unix.AT_SYMLINK_NOFOLLOW); err == nil {
-		if _, err := s.syncPayloadOwnership(name, blob); err != nil {
+		if _, err := s.syncPayloadOwnership(name, blob, form); err != nil {
 			return "", nil, err
 		}
 		return name, nil, nil
 	} else if !errors.Is(err, unix.ENOENT) {
 		return "", nil, err
 	}
-	if err := s.writeAnonymousPayload(ctx, payload, blob, name); err != nil {
+	if err := s.writeAnonymousPayload(ctx, payload, blob, name, form); err != nil {
 		return "", nil, err
 	}
-	data, err := s.syncPayloadOwnership(name, blob)
+	data, err := s.syncPayloadOwnership(name, blob, form)
 	if err != nil {
 		return "", nil, err
 	}

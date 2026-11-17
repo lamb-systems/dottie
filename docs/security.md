@@ -40,6 +40,31 @@ CID at the provider. Dottie cannot delete that blob. Dottie itself never surface
 a publication that did not succeed: no command, log, error, report or archive surfaces them, and the
 accepted position does not advance. The residual is provider-side only.
 
+A showcase publication widens that residual to one blob per entry. Its snapshot record names each
+file's blob, so the upload sequence is one blob per entry followed by the record batch. A mid-upload
+failure or a rejected batch can therefore leave up to N unattached plaintext blobs at the provider,
+one per entry that was already uploaded, and Dottie still cannot delete them. The residual is bounded
+by the 64-entry manifest ceiling and the custody byte limit, it stays provider-side, and it does not
+license exposing candidate bytes locally: a showcase submission that did not succeed surfaces no
+entry content through any Dottie command, log, error, report or archive, and the accepted position
+does not advance. The local attempt remains the blocking, unresolved record of what may have been
+attempted.
+
+## Evidence behind a submission
+
+The two payload forms do not rest on the same evidence, and the difference is deliberate.
+
+- A packed submission trusts the caller's claim that the single payload upload happened. The store
+  records that the upload phase started and hands out the one blob; it cannot observe the provider.
+- A showcase submission requires the caller to name the entries it uploaded, exactly and in full:
+  same count, same order, same path, same CID, same size as the authenticated manifest in the
+  attempt core. The store refuses a partial, reordered, substituted or extended list, and it
+  corroborates the list against local custody first, so a caller cannot satisfy the gate by naming
+  entries it never staged. The refusal leaves the attempt in its upload-started, not-submitted state:
+  unresolved and blocking, never terminal.
+
+The showcase list is strictly more evidence than the packed path has, not a substitute for it.
+
 ## Public metadata visibility
 
 V2 typed repository records are public plaintext metadata. The published head and snapshot records

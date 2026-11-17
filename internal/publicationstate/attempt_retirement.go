@@ -42,9 +42,6 @@ func (s *Store) PrepareAbandon(
 	if err != nil {
 		return AbandonProposal{}, err
 	}
-	if err := requirePackedAttemptCore(stored.core, StageAbandon); err != nil {
-		return AbandonProposal{}, err
-	}
 	if stored.lifecycle == AttemptRetiredAbandoned || stored.lifecycle == AttemptRetiredSuccess {
 		return AbandonProposal{}, classified(ErrConsent, StageAbandon, ReasonTransition)
 	}
@@ -84,9 +81,6 @@ func (s *Store) AbandonAttempt(
 	}
 	stored, err := s.loadStoredAttempt(ctx, s.conn, id, StageAbandon)
 	if err != nil {
-		return Attempt{}, err
-	}
-	if err := requirePackedAttemptCore(stored.core, StageAbandon); err != nil {
 		return Attempt{}, err
 	}
 	if stored.lifecycle == AttemptRetiredAbandoned || stored.lifecycle == AttemptRetiredSuccess {

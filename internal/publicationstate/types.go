@@ -100,6 +100,7 @@ const (
 	ReasonClosed           Reason = "closed"
 	ReasonSchema           Reason = "schema"
 	ReasonPayloadForm      Reason = "payload_form"
+	ReasonUploadIncomplete Reason = "upload_incomplete"
 	ReasonCorrupt          Reason = "corrupt"
 	ReasonIO               Reason = "io"
 	ReasonCommitUnknown    Reason = "commit_unknown"

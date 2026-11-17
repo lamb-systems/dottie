@@ -785,10 +785,19 @@ func cloneMaterialView(view publicationstate.SuppliedRepositoryView) publication
 }
 
 func cloneMaterialCandidate(candidate publicationstate.CandidateInput) publicationstate.CandidateInput {
-	return publicationstate.CandidateInput{
+	cloned := publicationstate.CandidateInput{
 		SnapshotKey: candidate.SnapshotKey, SnapshotRecord: bytes.Clone(candidate.SnapshotRecord),
 		HeadRecord: bytes.Clone(candidate.HeadRecord), Payload: bytes.Clone(candidate.Payload),
 	}
+	if len(candidate.Entries) != 0 {
+		cloned.Entries = make([]publication.PayloadEntry, 0, len(candidate.Entries))
+		for _, entry := range candidate.Entries {
+			cloned.Entries = append(cloned.Entries, publication.PayloadEntry{
+				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: bytes.Clone(entry.Content),
+			})
+		}
+	}
+	return cloned
 }
 
 func materialProposalToken(

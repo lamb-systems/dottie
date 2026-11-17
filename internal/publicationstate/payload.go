@@ -3,6 +3,7 @@ package publicationstate
 import (
 	"bytes"
 	"errors"
+	"fmt"
 
 	"github.com/lamb-systems/dottie/internal/publication"
 )
@@ -69,8 +70,15 @@ func showcasePayloadOf(record publication.SnapshotRecord) *ShowcasePayload {
 }
 
 func validateShowcasePayload(payload *ShowcasePayload) error {
-	if payload == nil || len(payload.Entries) == 0 || len(payload.Entries) > publication.MaxSnapshotEntries {
+	if payload == nil || len(payload.Entries) == 0 {
 		return errors.New("showcase payload")
+	}
+	if len(payload.Entries) > publication.MaxSnapshotEntries {
+		return &showcaseCapacityError{
+			element: showcaseCapacityEntryCount,
+			have:    uint64(len(payload.Entries)),
+			limit:   publication.MaxSnapshotEntries,
+		}
 	}
 	for _, entry := range payload.Entries {
 		if entry.Path == "" || len(entry.Path) > publication.MaxEntryPathBytes || entry.Size == 0 ||
@@ -86,10 +94,18 @@ func validateShowcasePayloadCustody(payload *ShowcasePayload, limits AttemptLimi
 		return err
 	}
 	if uint64(len(payload.Entries)) > uint64(limits.ManagedObjects) {
-		return errShowcaseManagedObjects
+		return &showcaseCapacityError{
+			element: showcaseCapacityManagedObjects,
+			have:    uint64(len(payload.Entries)),
+			limit:   uint64(limits.ManagedObjects),
+		}
 	}
 	if payload.TotalBytes() > limits.CustodyBytes {
-		return errShowcaseCustodyBytes
+		return &showcaseCapacityError{
+			element: showcaseCapacityCustodyBytes,
+			have:    payload.TotalBytes(),
+			limit:   limits.CustodyBytes,
+		}
 	}
 	return nil
 }
@@ -173,14 +189,44 @@ func showcasePayloadUnsupported(stage Stage) error {
 	return classified(ErrUnsupported, stage, ReasonPayloadForm)
 }
 
+func attemptCoreForm(core attemptCoreWire) PayloadForm {
+	if core.Version == 2 {
+		return PayloadFormShowcase
+	}
+	return PayloadFormPacked
+}
+
 func requirePackedAttemptCore(core attemptCoreWire, stage Stage) error {
-	if core.Version != 1 || len(core.Entries) != 0 {
+	if attemptCoreForm(core) != PayloadFormPacked {
 		return showcasePayloadUnsupported(stage)
 	}
 	return nil
 }
 
-var (
-	errShowcaseManagedObjects = errors.New("showcase payload managed objects")
-	errShowcaseCustodyBytes   = errors.New("showcase payload custody bytes")
+const (
+	showcaseCapacityEntryCount     = "showcase entry count"
+	showcaseCapacityManagedObjects = "showcase managed objects"
+	showcaseCapacityCustodyBytes   = "showcase custody bytes"
 )
+
+type showcaseCapacityError struct {
+	element string
+	have    uint64
+	limit   uint64
+}
+
+func (e *showcaseCapacityError) Error() string {
+	return fmt.Sprintf(
+		"publication state: %s/%s/%s: %s: %d exceeds %d",
+		className(ErrLimit),
+		StageInput,
+		ReasonCapacity,
+		e.element,
+		e.have,
+		e.limit,
+	)
+}
+
+func (e *showcaseCapacityError) Unwrap() error {
+	return classified(ErrLimit, StageInput, ReasonCapacity)
+}

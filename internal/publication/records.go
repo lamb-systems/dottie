@@ -148,7 +148,7 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 			return nil, err
 		}
 		object["entries"] = entries
-		sizeLimit = maxShowcaseRecordBytes
+		sizeLimit = MaxShowcaseRecordBytes
 	} else {
 		blobCID, err := castCID(record.Blob.CID, cid.Raw, "blob.ref")
 		if err != nil {
@@ -496,10 +496,10 @@ func decodeSnapshotObject(encoded []byte) (map[string]any, error) {
 	if len(encoded) <= MaxRecordBytes {
 		return decodeObject(encoded)
 	}
-	if len(encoded) > maxShowcaseRecordBytes {
+	if len(encoded) > MaxShowcaseRecordBytes {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
-	object, err := decodeObjectLimit(encoded, maxShowcaseRecordBytes)
+	object, err := decodeObjectLimit(encoded, MaxShowcaseRecordBytes)
 	if err != nil {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}

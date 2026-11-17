@@ -31,9 +31,6 @@ func (s *Store) PrepareDispatch(
 	if err != nil {
 		return DispatchProposal{}, err
 	}
-	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
-		return DispatchProposal{}, err
-	}
 	if err := s.validateDispatchReview(ctx, s.conn, stored, kind, view, review, state, StageDispatch); err != nil {
 		return DispatchProposal{}, err
 	}
@@ -82,9 +79,6 @@ func (s *Store) BeginUpload(
 	}
 	stored, err := s.loadStoredAttempt(ctx, s.conn, id, StageDispatch)
 	if err != nil {
-		return UploadMaterial{}, err
-	}
-	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
 		return UploadMaterial{}, err
 	}
 	if err := s.validateDispatchReview(
@@ -165,11 +159,29 @@ func (s *Store) BeginUpload(
 		return UploadMaterial{}, err
 	}
 	s.attemptMutationRevision = nextMutation
-	return UploadMaterial{
-		AttemptID: id,
-		Payload:   bytes.Clone(candidate.Payload),
-		Blob:      blobReference(stored.core.SnapshotRecord),
-	}, nil
+	material := UploadMaterial{AttemptID: id}
+	if attemptCoreForm(stored.core) == PayloadFormShowcase {
+		record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
+		if err != nil || len(candidate.Entries) != len(record.Entries) {
+			return UploadMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+		}
+		material.Entries = make([]UploadEntry, 0, len(record.Entries))
+		for index, entry := range record.Entries {
+			material.Entries = append(material.Entries, UploadEntry{
+				Path: entry.Path,
+				Blob: publication.BlobReference{
+					CID:      bytes.Clone(entry.Blob.CID),
+					Size:     entry.Size,
+					MIMEType: entry.Blob.MIMEType,
+				},
+				Payload: bytes.Clone(candidate.Entries[index].Content),
+			})
+		}
+		return material, nil
+	}
+	material.Payload = bytes.Clone(candidate.Payload)
+	material.Blob = blobReference(stored.core.SnapshotRecord)
+	return material, nil
 }
 
 func (s *Store) BeginSubmission(
@@ -179,6 +191,30 @@ func (s *Store) BeginSubmission(
 	view SuppliedRepositoryView,
 	review LocalReviewContext,
 	confirmation [32]byte,
+) (SubmissionMaterial, error) {
+	return s.beginSubmission(ctx, id, expectedToken, view, review, confirmation, nil)
+}
+
+func (s *Store) BeginShowcaseSubmission(
+	ctx context.Context,
+	id [16]byte,
+	expectedToken [32]byte,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+	confirmation [32]byte,
+	uploaded []PayloadEntryReference,
+) (SubmissionMaterial, error) {
+	return s.beginSubmission(ctx, id, expectedToken, view, review, confirmation, uploaded)
+}
+
+func (s *Store) beginSubmission(
+	ctx context.Context,
+	id [16]byte,
+	expectedToken [32]byte,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+	confirmation [32]byte,
+	uploaded []PayloadEntryReference,
 ) (SubmissionMaterial, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,8 +232,9 @@ func (s *Store) BeginSubmission(
 	if err != nil {
 		return SubmissionMaterial{}, err
 	}
-	if err := requirePackedAttemptCore(stored.core, StageDispatch); err != nil {
-		return SubmissionMaterial{}, err
+	showcase := attemptCoreForm(stored.core) == PayloadFormShowcase
+	if showcase != (uploaded != nil) {
+		return SubmissionMaterial{}, showcasePayloadUnsupported(StageDispatch)
 	}
 	if err := s.validateDispatchReview(
 		ctx,
@@ -241,6 +278,15 @@ func (s *Store) BeginSubmission(
 	candidate, err := s.readCandidateUnlocked(ctx, stored, StageDispatch)
 	if err != nil {
 		return SubmissionMaterial{}, err
+	}
+	if showcase {
+		manifest, err := showcasePayloadFromWire(stored.core.Entries)
+		if err != nil {
+			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+		}
+		if !uploadedEntriesMatch(uploaded, manifest) {
+			return SubmissionMaterial{}, classified(ErrConsent, StageDispatch, ReasonUploadIncomplete)
+		}
 	}
 	if err := s.preflightSidecars(); err != nil {
 		return SubmissionMaterial{}, storageFailure(ctx, StageDispatch, err)
@@ -316,6 +362,14 @@ func (s *Store) BeginSubmission(
 		RequiresAtomicBatch:   true,
 		RequiresCreateExclude: true,
 		RequiresPolicyCheck:   s.binding.Backend == BackendSpaces,
+		PayloadForm:           attemptCoreForm(stored.core),
+	}
+	if showcase {
+		manifest, err := showcasePayloadFromWire(stored.core.Entries)
+		if err != nil {
+			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+		}
+		material.Entries = manifest.Entries
 	}
 	if len(stored.core.PredecessorCID) > 0 {
 		material.ExpectedPredecessor = &RecordReference{
@@ -325,6 +379,20 @@ func (s *Store) BeginSubmission(
 		}
 	}
 	return material, nil
+}
+
+func uploadedEntriesMatch(uploaded []PayloadEntryReference, manifest *ShowcasePayload) bool {
+	if manifest == nil || len(uploaded) != len(manifest.Entries) {
+		return false
+	}
+	for index, entry := range manifest.Entries {
+		supplied := uploaded[index]
+		if supplied.Path != entry.Path || supplied.Size != entry.Size ||
+			!bytes.Equal(supplied.CID, entry.CID) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) validateDispatchReview(
@@ -424,13 +492,64 @@ func samePolicy(left, right *Policy) bool {
 		bytes.Equal(left.Identity, right.Identity)
 }
 
+func (s *Store) readShowcaseCandidate(
+	ctx context.Context,
+	stored storedAttempt,
+	stage Stage,
+) (CandidateMaterial, error) {
+	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
+	if err != nil || payloadFormOf(record) != PayloadFormShowcase {
+		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if err := s.openPayloadDirectoryForRead(); err != nil {
+		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)
+	}
+	var id [16]byte
+	copy(id[:], stored.core.AttemptID)
+	material := CandidateMaterial{
+		AttemptID:      id,
+		SnapshotKey:    stored.core.SnapshotKey,
+		SnapshotRecord: bytes.Clone(stored.core.SnapshotRecord),
+		HeadRecord:     bytes.Clone(stored.core.HeadRecord),
+		Entries:        make([]publication.PayloadEntry, 0, len(record.Entries)),
+	}
+	for _, entry := range record.Entries {
+		var basename string
+		var sizeValue any
+		if err := s.conn.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", entry.Blob.CID).
+			Scan(&basename, &sizeValue); err != nil {
+			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		size, ok := rawInt64(sizeValue)
+		if !ok || size <= 0 || uint64(size) != entry.Size {
+			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		blob := publication.BlobReference{
+			CID:      bytes.Clone(entry.Blob.CID),
+			Size:     entry.Size,
+			MIMEType: entry.Blob.MIMEType,
+		}
+		content, err := s.inspectCustodyObject(basename, nil, blob, PayloadFormShowcase)
+		if err != nil {
+			return CandidateMaterial{}, classifyCandidateRead(err, stage)
+		}
+		material.Entries = append(material.Entries, publication.PayloadEntry{
+			Path:    entry.Path,
+			Mode:    entry.Mode,
+			Size:    entry.Size,
+			Content: content,
+		})
+	}
+	return material, nil
+}
+
 func (s *Store) readCandidateUnlocked(
 	ctx context.Context,
 	stored storedAttempt,
 	stage Stage,
 ) (CandidateMaterial, error) {
-	if err := requirePackedAttemptCore(stored.core, stage); err != nil {
-		return CandidateMaterial{}, err
+	if attemptCoreForm(stored.core) == PayloadFormShowcase {
+		return s.readShowcaseCandidate(ctx, stored, stage)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)

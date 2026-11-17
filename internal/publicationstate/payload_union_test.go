@@ -134,15 +134,24 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	for index := range int(tightened.ManagedObjects) + 1 {
 		tightenedEntries = append(tightenedEntries, entry(index, 1))
 	}
-	assert.Equal(
+	requireErrorMetadata(
 		t,
-		errShowcaseManagedObjects,
 		validateShowcasePayloadCustody(&ShowcasePayload{Entries: tightenedEntries}, tightened),
+		ErrLimit,
+		StageInput,
+		ReasonCapacity,
 	)
-	assert.Equal(
+	assert.Contains(
 		t,
-		errShowcaseManagedObjects,
+		validateShowcasePayloadCustody(&ShowcasePayload{Entries: tightenedEntries}, tightened).Error(),
+		"showcase managed objects: 9 exceeds 8",
+	)
+	requireErrorMetadata(
+		t,
 		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overObjectBound}, tightened),
+		ErrLimit,
+		StageInput,
+		ReasonCapacity,
 	)
 
 	overCustodyBytes := make([]PayloadEntryReference, 0, limits.ManagedObjects)
@@ -151,18 +160,27 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	}
 	aggregate := (&ShowcasePayload{Entries: overCustodyBytes}).TotalBytes()
 	require.Greater(t, aggregate, limits.CustodyBytes)
-	assert.Equal(
+	requireErrorMetadata(
 		t,
-		errShowcaseCustodyBytes,
 		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overCustodyBytes}, limits),
+		ErrLimit,
+		StageInput,
+		ReasonCapacity,
+	)
+	assert.Contains(
+		t,
+		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overCustodyBytes}, limits).Error(),
+		fmt.Sprintf("showcase custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
 	)
 
 	tooManyEntries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
 	for index := range publication.MaxSnapshotEntries + 1 {
 		tooManyEntries = append(tooManyEntries, entry(index, 1))
 	}
-	require.Error(t, validateShowcasePayloadCustody(&ShowcasePayload{Entries: tooManyEntries}, limits))
-	require.Error(t, validateShowcasePayload(&ShowcasePayload{Entries: tooManyEntries}))
+	tooMany := validateShowcasePayloadCustody(&ShowcasePayload{Entries: tooManyEntries}, limits)
+	requireErrorMetadata(t, tooMany, ErrLimit, StageInput, ReasonCapacity)
+	assert.Contains(t, tooMany.Error(), "showcase entry count: 65 exceeds 64")
+	require.ErrorIs(t, validateShowcasePayload(&ShowcasePayload{Entries: tooManyEntries}), ErrLimit)
 	require.Error(t, validateShowcasePayload(&ShowcasePayload{}))
 }
 
@@ -217,10 +235,11 @@ func TestShowcasePayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
 			Payload:        []byte("packed candidate payload"),
 		},
 		binding,
+		DefaultAttemptLimits(),
 	)
-	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
+	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
-	_, err = validateSuppliedRepositoryView(
+	view, err := validateSuppliedRepositoryView(
 		SuppliedRepositoryView{
 			Origin:          binding,
 			Scope:           ViewScopeWholeRepository,
@@ -232,7 +251,29 @@ func TestShowcasePayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
 		DefaultLimits(),
 		false,
 	)
-	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
+	require.NoError(t, err)
+	require.Len(t, view.blocks, 1)
+	assert.Equal(t, encoded, view.blocks[0].raw)
+
+	packedCID, err := publication.RawPayloadCID([]byte("packed head payload"))
+	require.NoError(t, err)
+	packedHead := head
+	packedHead.BlobCID = packedCID
+	packedHeadBytes, err := publication.EncodeHead(packedHead)
+	require.NoError(t, err)
+	_, err = validateSuppliedRepositoryView(
+		SuppliedRepositoryView{
+			Origin:          binding,
+			Scope:           ViewScopeWholeRepository,
+			SuppliedContext: SuppliedContext{RepositoryRevision: "r1", RepositoryDigest: []byte{1}},
+			Head:            packedHeadBytes,
+			Snapshots:       []SnapshotBlock{{Key: key, Raw: encoded}},
+		},
+		binding,
+		DefaultLimits(),
+		false,
+	)
+	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
 	requireErrorMetadata(
 		t,

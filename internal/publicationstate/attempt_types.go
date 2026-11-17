@@ -104,6 +104,7 @@ type CandidateInput struct {
 	SnapshotRecord []byte
 	HeadRecord     []byte
 	Payload        []byte
+	Entries        []publication.PayloadEntry
 }
 
 type AttemptProposal struct {
@@ -160,6 +161,7 @@ type CandidateMaterial struct {
 	HeadRecord     []byte
 	Payload        []byte
 	Blob           publication.BlobReference
+	Entries        []publication.PayloadEntry
 }
 
 type DispatchProposal struct {
@@ -169,10 +171,17 @@ type DispatchProposal struct {
 	Confirmation [32]byte
 }
 
+type UploadEntry struct {
+	Path    string
+	Blob    publication.BlobReference
+	Payload []byte
+}
+
 type UploadMaterial struct {
 	AttemptID [16]byte
 	Payload   []byte
 	Blob      publication.BlobReference
+	Entries   []UploadEntry
 }
 
 type SubmissionMaterial struct {
@@ -191,6 +200,8 @@ type SubmissionMaterial struct {
 	RequiresAtomicBatch   bool
 	RequiresCreateExclude bool
 	RequiresPolicyCheck   bool
+	PayloadForm           PayloadForm
+	Entries               []PayloadEntryReference
 }
 
 type AttemptResolution struct {

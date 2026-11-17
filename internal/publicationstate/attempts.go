@@ -70,12 +70,7 @@ func (s *Store) PrepareAttempt(
 	if err := s.checkAttemptAdmissionCapacity(ctx, s.conn); err != nil {
 		return AttemptProposal{}, err
 	}
-	if err := s.checkPayloadCapacity(
-		ctx,
-		payloadBasename(validated.payload),
-		uint64(len(validated.payload)),
-		false,
-	); err != nil {
+	if err := s.checkCandidatePayloadCapacity(ctx, validated, false); err != nil {
 		return AttemptProposal{}, classified(ErrLimit, StageAttempt, ReasonCapacity)
 	}
 	if err := s.checkUnusedAttemptID(ctx, s.conn, validated.id, StageAttempt); err != nil {
@@ -229,15 +224,10 @@ func (s *Store) CreateAttempt(
 	if !bytes.Equal(confirmation[:], wantConfirmation[:]) {
 		return Attempt{}, classified(ErrConsent, StageAttempt, ReasonConfirmation)
 	}
-	if err := s.checkPayloadCapacity(
-		ctx,
-		payloadBasename(validated.payload),
-		uint64(len(validated.payload)),
-		true,
-	); err != nil {
+	if err := s.checkCandidatePayloadCapacity(ctx, validated, true); err != nil {
 		return Attempt{}, classified(ErrLimit, StageAttempt, ReasonCapacity)
 	}
-	basename, _, err := s.persistCandidatePayload(ctx, validated)
+	staged, err := s.persistCandidatePayloads(ctx, validated)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Attempt{}, canceled(StageCustody, ctx.Err())
@@ -281,25 +271,27 @@ func (s *Store) CreateAttempt(
 		if err := s.checkAttemptCreatedEvent(coreBytes, validated.id, nextMutation, StageAttempt); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(
-			ctx,
-			"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
-			validated.blobCID,
-			int64(validated.snapshot.Blob.Size),
-			basename,
-			int64(validated.snapshot.Blob.Size),
-		); err != nil {
-			return classified(ErrStorage, StageAttempt, ReasonIO)
-		}
-		var existingName string
-		var existingSize any
-		if err := tx.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", validated.blobCID).
-			Scan(&existingName, &existingSize); err != nil {
-			return storageFailure(ctx, StageAttempt, err)
-		}
-		size, ok := rawInt64(existingSize)
-		if !ok || size <= 0 || uint64(size) != validated.snapshot.Blob.Size || existingName != basename {
-			return classified(ErrSchema, StageAttempt, ReasonCorrupt)
+		for _, object := range staged {
+			if _, err := tx.ExecContext(
+				ctx,
+				"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
+				object.blob.CID,
+				int64(object.blob.Size),
+				object.name,
+				int64(object.blob.Size),
+			); err != nil {
+				return classified(ErrStorage, StageAttempt, ReasonIO)
+			}
+			var existingName string
+			var existingSize any
+			if err := tx.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", object.blob.CID).
+				Scan(&existingName, &existingSize); err != nil {
+				return storageFailure(ctx, StageAttempt, err)
+			}
+			size, ok := rawInt64(existingSize)
+			if !ok || size <= 0 || uint64(size) != object.blob.Size || existingName != object.name {
+				return classified(ErrSchema, StageAttempt, ReasonCorrupt)
+			}
 		}
 		attemptDigest, err := makeAttemptStateDigest(
 			coreBytes,
@@ -337,13 +329,15 @@ func (s *Store) CreateAttempt(
 		); err != nil {
 			return classified(ErrStorage, StageAttempt, ReasonIO)
 		}
-		if _, err := tx.ExecContext(
-			ctx,
-			"INSERT INTO attempt_payload_refs(attempt_id,blob_cid) VALUES(?,?)",
-			validated.id[:],
-			validated.blobCID,
-		); err != nil {
-			return classified(ErrStorage, StageAttempt, ReasonIO)
+		if validated.form == PayloadFormPacked {
+			if _, err := tx.ExecContext(
+				ctx,
+				"INSERT INTO attempt_payload_refs(attempt_id,blob_cid) VALUES(?,?)",
+				validated.id[:],
+				validated.blobCID,
+			); err != nil {
+				return classified(ErrStorage, StageAttempt, ReasonIO)
+			}
 		}
 		if _, err := tx.ExecContext(
 			ctx,
@@ -428,6 +422,32 @@ func (s *Store) checkAttemptCreatedEvent(core []byte, id [16]byte, mutationRevis
 		return classified(ErrLimit, stage, ReasonCapacity)
 	}
 	return nil
+}
+
+func (s *Store) checkCandidatePayloadCapacity(
+	ctx context.Context,
+	candidate validatedCandidate,
+	createDirectory bool,
+) error {
+	if candidate.form == PayloadFormShowcase {
+		for _, entry := range candidate.entries {
+			if err := s.checkPayloadCapacity(
+				ctx,
+				payloadBasename(entry.content),
+				uint64(len(entry.content)),
+				createDirectory,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return s.checkPayloadCapacity(
+		ctx,
+		payloadBasename(candidate.payload),
+		uint64(len(candidate.payload)),
+		createDirectory,
+	)
 }
 
 func candidateDigest(
@@ -958,8 +978,8 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if err != nil {
 		return CandidateMaterial{}, err
 	}
-	if err := requirePackedAttemptCore(stored.core, StageCustody); err != nil {
-		return CandidateMaterial{}, err
+	if attemptCoreForm(stored.core) == PayloadFormShowcase {
+		return s.readShowcaseCandidate(ctx, stored, StageCustody)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, StageCustody)
@@ -1453,7 +1473,12 @@ func (s *Store) checkAttemptGraph(ctx context.Context, q queryer, stage Stage) e
 		active := attempt.lifecycle != AttemptRetiredAbandoned && attempt.lifecycle != AttemptRetiredSuccess
 		if active {
 			nonretired++
-			if activeCount != 1 || id != activeID || refCount != 1 || reservationCount != 1 || retainedRows != 0 {
+			wantedRefCount := int64(1)
+			if attemptCoreForm(attempt.core) == PayloadFormShowcase {
+				wantedRefCount = 0
+			}
+			if activeCount != 1 || id != activeID || refCount != wantedRefCount || reservationCount != 1 ||
+				retainedRows != 0 {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			if err := s.validateAttemptPayloadReference(ctx, q, attempt, stage); err != nil {
@@ -1931,8 +1956,8 @@ func (s *Store) validateAttemptPayloadReference(
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	if err := requirePackedAttemptCore(attempt.core, stage); err != nil {
-		return err
+	if attemptCoreForm(attempt.core) == PayloadFormShowcase {
+		return s.validateShowcaseAttemptPayloadReference(ctx, q, attempt, stage)
 	}
 	var refCIDValue, objectCIDValue, sizeValue, basenameValue any
 	if err := q.QueryRowContext(ctx, "SELECT attempt_payload_refs.blob_cid,payload_objects.blob_cid,payload_objects.size,payload_objects.basename FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", attempt.core.AttemptID).
@@ -1954,6 +1979,34 @@ func (s *Store) validateAttemptPayloadReference(
 		nameErr != nil ||
 		wantedName != basename {
 		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return nil
+}
+
+func (s *Store) validateShowcaseAttemptPayloadReference(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	stage Stage,
+) error {
+	showcase, err := showcasePayloadFromWire(attempt.core.Entries)
+	if err != nil {
+		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	for _, entry := range showcase.Entries {
+		var objectCIDValue, sizeValue, basenameValue any
+		if err := q.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", entry.CID).
+			Scan(&objectCIDValue, &sizeValue, &basenameValue); err != nil {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		objectCID, objectOK := rawBytes(objectCIDValue)
+		size, sizeOK := rawInt64(sizeValue)
+		basename, nameOK := basenameValue.(string)
+		wantedName, nameErr := payloadBasenameFromCID(entry.CID)
+		if !objectOK || !sizeOK || !nameOK || !bytes.Equal(objectCID, entry.CID) || size <= 0 ||
+			uint64(size) != entry.Size || nameErr != nil || basename != wantedName {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
 	}
 	return nil
 }

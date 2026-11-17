@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	MaxSnapshotEntries    = 64
-	MaxEntryPathBytes     = 1024
-	SnapshotEntryKindFile = "file"
+	MaxSnapshotEntries     = 64
+	MaxEntryPathBytes      = 1024
+	MaxShowcaseRecordBytes = 1 << 20
+	SnapshotEntryKindFile  = "file"
 
-	maxEntryModeBits       = 0o777
-	entryModePrivate       = 0o600
-	entryModeShared        = 0o644
-	maxShowcaseRecordBytes = 1 << 20
+	maxEntryModeBits = 0o777
+	entryModePrivate = 0o600
+	entryModeShared  = 0o644
 )
 
 var ErrShowcaseEntryUnsupported = errors.New("publication showcase entry unsupported")
