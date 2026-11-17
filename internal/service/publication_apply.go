@@ -277,6 +277,11 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 				reason: publicationApplyReasonIndeterminate,
 				entry:  resolution.Entry,
 			}
+		case publicationstate.JournalOutcomeApplied,
+			publicationstate.JournalOutcomeFailed,
+			publicationstate.JournalOutcomeRolledBack,
+			publicationstate.JournalOutcomeRollbackPending:
+			continue
 		}
 	}
 	if err := request.Journal.CheckAdmission(ctx, request.FloorRevision); err != nil {

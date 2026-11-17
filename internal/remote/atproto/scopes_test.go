@@ -82,7 +82,7 @@ func TestLegacyScopeSessionRefusesPublicationUseWithoutChangingStorage(t *testin
 		outbound := &countingRoundTripper{}
 		client, err := NewClient("https://dottie.example/client-metadata.json", store,
 			WithHTTPClient(&http.Client{Transport: outbound}),
-			WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errorsNewNotFound{} }),
+			WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, notFoundError{} }),
 		)
 		require.NoError(t, err)
 		session := legacyScopeSession(t)

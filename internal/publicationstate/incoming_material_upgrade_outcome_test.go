@@ -1158,6 +1158,8 @@ func incomingMaterialUpgradeOpenRequireReadAPIs(
 				abandonedID = attempt.ID
 			case AttemptMayHaveSubmitted:
 				activeID = attempt.ID
+			case AttemptPrepared, AttemptUploadStarted:
+				continue
 			}
 		}
 		require.NotEqual(t, [16]byte{}, genesisID)

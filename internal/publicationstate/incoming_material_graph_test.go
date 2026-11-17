@@ -596,9 +596,12 @@ func TestIncomingMaterialRefsUsesSuppliedTransaction(t *testing.T) {
 	first, second, third := incomingMaterialHistoricalLifecycle(t, store, f)
 
 	tx, restore := beginSharedCustodyTransaction(t, ctx, store)
-	_, err := store.conn.QueryContext(ctx, "SELECT 1")
+	rows, err := store.conn.QueryContext(ctx, "SELECT 1")
 	require.Error(t, err)
 	require.ErrorIs(t, err, sql.ErrConnDone)
+	if rows != nil {
+		require.NoError(t, rows.Err())
+	}
 	var original int64
 	require.NoError(t, tx.QueryRowContext(ctx, "SELECT 1").Scan(&original))
 	require.Equal(t, int64(1), original)

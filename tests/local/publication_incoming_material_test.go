@@ -366,7 +366,7 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		)
 		require.Equal(t, publicationstate.Floor{}, floor)
 		require.ErrorIs(t, err, publication.ErrPayload)
-		var violation *publication.Violation
+		var violation *publication.ViolationError
 		require.ErrorAs(t, err, &violation)
 		var stateError *publicationstate.Error
 		require.NotErrorAs(

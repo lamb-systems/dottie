@@ -97,7 +97,7 @@ func TestExpectedRefusalCheckpointCertPolicyRole(t *testing.T) {
 	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: supplied})
 	require.ErrorIs(t, err, ErrInvalidVerification,
 		"the checkpoint verifier must refuse a policy that demotes the anchored root")
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "supplied", refusal.Side)
 	assert.Equal(t, "policy-signer-role", refusal.Code)
@@ -127,7 +127,7 @@ func TestExpectedRefusalCheckpointSkippedPolicyChain(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrInvalidVerification,
 		"the checkpoint verifier must refuse a descendant whose policy chain skips an epoch")
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "supplied", refusal.Side)
 	assert.Equal(t, "policy-ancestry", refusal.Code)

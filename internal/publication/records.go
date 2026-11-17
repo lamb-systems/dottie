@@ -36,21 +36,21 @@ var (
 	ErrPayload       = errors.New("publication payload mismatch")
 )
 
-type Violation struct {
+type ViolationError struct {
 	cause  error
 	field  string
 	reason string
 }
 
-func (e *Violation) Error() string {
+func (e *ViolationError) Error() string {
 	return fmt.Sprintf("publication: %s: %s: %s", e.cause.Error(), e.field, e.reason)
 }
 
-func (e *Violation) Unwrap() error { return e.cause }
+func (e *ViolationError) Unwrap() error { return e.cause }
 
-func (e *Violation) Field() string { return e.field }
+func (e *ViolationError) Field() string { return e.field }
 
-func (e *Violation) Reason() string { return e.reason }
+func (e *ViolationError) Reason() string { return e.reason }
 
 type BlobReference struct {
 	CID      []byte
@@ -590,5 +590,5 @@ func allZero(value []byte) bool {
 }
 
 func violation(cause error, field, reason string) error {
-	return &Violation{cause: cause, field: field, reason: reason}
+	return &ViolationError{cause: cause, field: field, reason: reason}
 }

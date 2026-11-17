@@ -1184,104 +1184,17 @@ func predecessorFromRevision(
 	if err := verifyPredecessorAuthority(policyObject, controlObject, certificates, trustAnchor); err != nil {
 		return vault.Predecessor{}, err
 	}
-	var headCID []byte
-	var currentSnapshot []byte
 	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
-	if headProven, exists := revision.records[headKey]; exists {
-		headDecoded, err := DecodeRecord(headProven.Data)
-		if err != nil {
-			return vault.Predecessor{}, err
-		}
-		headRecord, ok := headDecoded.(HeadRecord)
-		if !ok {
-			return vault.Predecessor{}, fmt.Errorf("%w: head/self has wrong record type", ErrRecord)
-		}
-		headObject := headFromRecord(headRecord)
-		headBytes, err := vault.EncodeHead(headObject)
-		if err != nil {
-			return vault.Predecessor{}, err
-		}
-		if err := VerifyRecordBinding(headProven.Data, headBytes); err != nil {
-			return vault.Predecessor{}, err
-		}
-		if headObject.EpochSeq != controlObject.EpochSeq || headObject.PolicyDigest != controlObject.PolicyDigest ||
-			!bytes.Equal(headObject.BlobCID, headObject.SnapshotCID) {
-			return vault.Predecessor{}, fmt.Errorf("%w: current head does not match control", ErrRecord)
-		}
-		signerCertificate, exists := certificateForVaultSigner(
-			certificates,
-			headObject.Signer.DeviceID,
-			headObject.Signer.KeyID,
-		)
-		if !exists {
-			return vault.Predecessor{}, fmt.Errorf(
-				"%w: current head signer certificate is absent",
-				vault.ErrAuthorization,
-			)
-		}
-		if roleForDevice(policyObject.Roles, signerCertificate.DeviceID) != signerCertificate.Role ||
-			!rolePermitted(signerCertificate.Role, vault.RolePublisher) {
-			return vault.Predecessor{}, fmt.Errorf("%w: current head signer role", vault.ErrPublicationAuthority)
-		}
-		if err := verifyVaultObjectSignature(
-			headBytes,
-			"dottie/v1/sig-head",
-			headObject.Signature[:],
-			signerCertificate.SigningPublicKey[:],
-		); err != nil {
-			return vault.Predecessor{}, err
-		}
-		for key, proven := range revision.records {
-			if key.Collection != VaultSnapshotNSID {
-				continue
-			}
-			decoded, err := DecodeRecord(proven.Data)
-			if err != nil {
-				return vault.Predecessor{}, err
-			}
-			snapshot, ok := decoded.(SnapshotRecord)
-			if ok && bytes.Equal(cid.Cid(snapshot.Blob.Ref).Bytes(), headObject.SnapshotCID) {
-				if currentSnapshot != nil {
-					return vault.Predecessor{}, fmt.Errorf("%w: current snapshot is not unique", ErrRecord)
-				}
-				currentSnapshot = bytes.Clone(proven.Data)
-			}
-		}
-		if currentSnapshot == nil {
-			return vault.Predecessor{}, fmt.Errorf("%w: current snapshot record is absent", ErrUnprovenMembership)
-		}
-		snapshotDecoded, err := DecodeRecord(currentSnapshot)
-		if err != nil {
-			return vault.Predecessor{}, err
-		}
-		snapshotRecord, ok := snapshotDecoded.(SnapshotRecord)
-		if !ok {
-			return vault.Predecessor{}, fmt.Errorf("%w: current snapshot record has wrong type", ErrRecord)
-		}
-		snapshotSigner, exists := certificateForVaultSigner(
-			certificates,
-			snapshotRecord.SignerDeviceID,
-			snapshotRecord.SignerKeyID,
-		)
-		if !exists {
-			return vault.Predecessor{}, fmt.Errorf("%w: snapshot signer certificate is absent", vault.ErrAuthorization)
-		}
-		if err := VerifySnapshotRecordSignature(
-			snapshotRecord,
-			ed25519.PublicKey(snapshotSigner.SigningPublicKey[:]),
-		); err != nil {
-			return vault.Predecessor{}, err
-		}
-		if err := VerifyRecordContext(
-			currentSnapshot,
-			RecordContext{
-				Policy:      policyProven.Data,
-				Certificate: certificateData[certificateIdentity(snapshotRecord.SignerDeviceID, snapshotRecord.SignerKeyID)],
-			},
-		); err != nil {
-			return vault.Predecessor{}, err
-		}
-		headCID = bytes.Clone(headObject.SnapshotCID)
+	headCID, currentSnapshot, err := currentHeadEvidence(
+		revision,
+		policyProven.Data,
+		policyObject,
+		controlObject,
+		certificates,
+		certificateData,
+	)
+	if err != nil {
+		return vault.Predecessor{}, err
 	}
 	if len(headCID) == 0 && len(controlObject.HeadSnapshotCID) != 0 {
 		return vault.Predecessor{}, fmt.Errorf("%w: control and current head disagree", ErrRecord)
@@ -1370,6 +1283,118 @@ func predecessorFromRevision(
 		HeadCID: headCID, Control: controlBytes, Policy: policyBytes, Certificates: certificates,
 		TrustAnchor: trustAnchor,
 	}, nil
+}
+
+func currentHeadEvidence(
+	revision *Revision,
+	policyRecord []byte,
+	policyObject vault.Policy,
+	controlObject vault.Control,
+	certificates [][]byte,
+	certificateData map[string][]byte,
+) ([]byte, []byte, error) {
+	var headCID []byte
+	var currentSnapshot []byte
+	headKey := RecordKey{Collection: VaultHeadNSID, RKey: "self"}
+	headProven, exists := revision.records[headKey]
+	if !exists {
+		return nil, nil, nil
+	}
+	headDecoded, err := DecodeRecord(headProven.Data)
+	if err != nil {
+		return nil, nil, err
+	}
+	headRecord, ok := headDecoded.(HeadRecord)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: head/self has wrong record type", ErrRecord)
+	}
+	headObject := headFromRecord(headRecord)
+	headBytes, err := vault.EncodeHead(headObject)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := VerifyRecordBinding(headProven.Data, headBytes); err != nil {
+		return nil, nil, err
+	}
+	if headObject.EpochSeq != controlObject.EpochSeq || headObject.PolicyDigest != controlObject.PolicyDigest ||
+		!bytes.Equal(headObject.BlobCID, headObject.SnapshotCID) {
+		return nil, nil, fmt.Errorf("%w: current head does not match control", ErrRecord)
+	}
+	signerCertificate, exists := certificateForVaultSigner(
+		certificates,
+		headObject.Signer.DeviceID,
+		headObject.Signer.KeyID,
+	)
+	if !exists {
+		return nil, nil, fmt.Errorf(
+			"%w: current head signer certificate is absent",
+			vault.ErrAuthorization,
+		)
+	}
+	if roleForDevice(policyObject.Roles, signerCertificate.DeviceID) != signerCertificate.Role ||
+		!rolePermitted(signerCertificate.Role, vault.RolePublisher) {
+		return nil, nil, fmt.Errorf("%w: current head signer role", vault.ErrPublicationAuthority)
+	}
+	if err := verifyVaultObjectSignature(
+		headBytes,
+		"dottie/v1/sig-head",
+		headObject.Signature[:],
+		signerCertificate.SigningPublicKey[:],
+	); err != nil {
+		return nil, nil, err
+	}
+	for key, proven := range revision.records {
+		if key.Collection != VaultSnapshotNSID {
+			continue
+		}
+		decoded, err := DecodeRecord(proven.Data)
+		if err != nil {
+			return nil, nil, err
+		}
+		snapshot, ok := decoded.(SnapshotRecord)
+		if ok && bytes.Equal(cid.Cid(snapshot.Blob.Ref).Bytes(), headObject.SnapshotCID) {
+			if currentSnapshot != nil {
+				return nil, nil, fmt.Errorf("%w: current snapshot is not unique", ErrRecord)
+			}
+			currentSnapshot = bytes.Clone(proven.Data)
+		}
+	}
+	if currentSnapshot == nil {
+		return nil, nil, fmt.Errorf("%w: current snapshot record is absent", ErrUnprovenMembership)
+	}
+	snapshotDecoded, err := DecodeRecord(currentSnapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshotRecord, ok := snapshotDecoded.(SnapshotRecord)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: current snapshot record has wrong type", ErrRecord)
+	}
+	snapshotSigner, exists := certificateForVaultSigner(
+		certificates,
+		snapshotRecord.SignerDeviceID,
+		snapshotRecord.SignerKeyID,
+	)
+	if !exists {
+		return nil, nil, fmt.Errorf("%w: snapshot signer certificate is absent", vault.ErrAuthorization)
+	}
+	if err := VerifySnapshotRecordSignature(
+		snapshotRecord,
+		ed25519.PublicKey(snapshotSigner.SigningPublicKey[:]),
+	); err != nil {
+		return nil, nil, err
+	}
+	if err := VerifyRecordContext(
+		currentSnapshot,
+		RecordContext{
+			Policy:      policyRecord,
+			Certificate: certificateData[certificateIdentity(snapshotRecord.SignerDeviceID, snapshotRecord.SignerKeyID)],
+		},
+	); err != nil {
+		return nil, nil, err
+	}
+	headCID = bytes.Clone(headObject.SnapshotCID)
+	return headCID, currentSnapshot, nil
 }
 
 func verifyTransitionSnapshotEnvelope(

@@ -472,17 +472,17 @@ func applyPullPreparation(
 	input pullApplyPlanRequest,
 	preparation pullApplyPreparation,
 	output string,
-) (publicationstate.Floor, string, error) {
+) (string, error) {
 	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
 	if err != nil || current.Present != input.Present || current.Floor.Revision != input.Floor.Revision {
-		return publicationstate.Floor{}, output, urfave.Exit(
+		return output, urfave.Exit(
 			input.label()+" refused: the accepted floor changed after the apply plan was prepared; re-run dottie "+input.label(),
 			3,
 		)
 	}
 	journal, err := publicationstate.OpenJournal(preparation.Sources.Paths.PublicationStateDir())
 	if err != nil {
-		return publicationstate.Floor{}, output, urfave.Exit(
+		return output, urfave.Exit(
 			input.label()+" refused: the apply journal cannot be opened ("+escapeField(
 				pullStoreReason(err),
 			)+"); nothing was changed",
@@ -495,7 +495,7 @@ func applyPullPreparation(
 	request.ExpectedPlan = preparation.Plan.Digest
 	report, applyErr := service.ApplyPublication(ctx, request)
 	if applyErr != nil {
-		return publicationstate.Floor{}, output, pullApplyFailure(input.Command, input.label(), output, applyErr)
+		return output, pullApplyFailure(input.Command, input.label(), output, applyErr)
 	}
 	output += renderPullApplyReport(report)
 	accepted, acceptErr := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
@@ -505,7 +505,7 @@ func applyPullPreparation(
 		Observation: preparation.Observation, Payload: preparation.Material.Payload,
 	})
 	if acceptErr != nil {
-		return publicationstate.Floor{}, output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
+		return output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
 	}
 	output += fmt.Sprintf(
 		"floor: revision=%d generation=%d sequence=%d\n",
@@ -513,7 +513,7 @@ func applyPullPreparation(
 		accepted.Generation,
 		accepted.Sequence,
 	)
-	return accepted, output, nil
+	return output, nil
 }
 
 func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources pullApplySourcesFactory) error {
@@ -542,7 +542,7 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 			3,
 		)
 	}
-	_, output, err = applyPullPreparation(ctx, input, preparation, output)
+	output, err = applyPullPreparation(ctx, input, preparation, output)
 	if err != nil {
 		return err
 	}
@@ -771,6 +771,7 @@ func renderPullApplyPlan(plan service.PublicationApplyPlan) string {
 			fmt.Fprintf(&output, "apply: write %s size=%d\n", escapeField(entry.Path), entry.Size)
 		case service.PublicationApplyDelete:
 			fmt.Fprintf(&output, "apply: delete %s\n", escapeField(entry.Path))
+		case service.PublicationApplyUnchanged:
 		}
 	}
 	return output.String()

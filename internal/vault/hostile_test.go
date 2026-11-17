@@ -431,7 +431,7 @@ func TestVerifyControlStateRefusesCertificatePolicyRoleMismatch(t *testing.T) {
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, held)))
 	result, err := VerifyControlState(trustedContext, VerificationRequest{Supplied: supplied})
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "supplied", refusal.Side)
 	assert.Equal(t, "policy-signer-role", refusal.Code)
@@ -468,7 +468,7 @@ func TestVerifyControlStateRefusesSkippedPolicyChain(t *testing.T) {
 		trustedContext,
 		VerificationRequest{Supplied: two, Intermediates: []ControlEvidence{one}},
 	)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "supplied", refusal.Side)
 	assert.Equal(t, "policy-ancestry", refusal.Code)

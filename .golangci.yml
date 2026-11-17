@@ -328,11 +328,16 @@ linters:
       # though goconst points at an existing constant: the JSON key and
       # ReadStageRecord are different vocabularies that happen to share a
       # spelling, and substituting one for the other would be wrong.
+      #
+      # Each entry is a regular expression, not a literal: a wire key that
+      # contains a metacharacter has to be escaped for the entry to match it.
+      # `$type` as written never matched anything, because `$` anchors the end
+      # of the text; `^\$type$` is the literal key.
       ignore-string-values:
         - "string"
         - "true"
         - "false"
-        - "$type"
+        - '^\$type$'
         - "schemaVersion"
         - "outcome"
         - "table"
@@ -735,3 +740,68 @@ linters:
         text: 'SA1019:'
         path: 'internal/remote/atproto/(dpop|dpop_test|atprototest/revision)\.go|internal/vault/(envelope_test|snapshot)\.go'
 
+
+      # --- musttag: production types that only a test marshals. ---
+      #
+      # musttag reports a struct passed to encoding/json (here: in a test) whose
+      # fields carry no `json` tag, and it follows nested field types into the
+      # production packages. None of the types below is encoded as JSON in
+      # production: they are configuration, reconciliation and journal values
+      # with no wire format at all, or structs the CLI renders field by field.
+      # A tag is a compatibility promise about a wire format; tagging ~100
+      # fields that nothing serializes would invent a format and then freeze it.
+      # Each entry is scoped to one file and one finding text, and the finding
+      # it covers is named in its reason. If one of these types does acquire a
+      # JSON wire format, its entry must be deleted at the same time as the tags
+      # are added.
+      #
+      # publicationstate.Limits and publicationstate.AttemptLimits are decoded
+      # from the golden attempts-v2 fixture manifest, whose keys are their Go
+      # field names because the generator marshals them as-is.
+      - path: 'internal/publicationstate/incoming_material_upgrade_fixture_test\.go'
+        linters: [ musttag ]
+        text: 'should be annotated with the `json` tag'
+
+      # atproto.SessionStatus is marshaled only by TestSessionStatusContainsNoSecrets,
+      # which proves the status carries no secret text under the default encoding.
+      # `dottie account status` prints its fields individually.
+      - path: 'internal/remote/atproto/oauth_session_test\.go'
+        linters: [ musttag ]
+        text: 'should be annotated with the `json` tag'
+
+      # syncengine.Plan is marshaled only by TestReconcileDiagnosticRedactsPayload,
+      # to contrast the redacted diagnostic with a naive marshal of the plan. The
+      # emitted diagnostic type is tagged; Plan, Decision, SideStates,
+      # TargetBinding and FingerprintSet are not encoded anywhere.
+      - path: 'internal/syncengine/reconcile_test\.go'
+        linters: [ musttag ]
+        text: 'should be annotated with the `json` tag'
+
+      # service.PublicationProposalRecord is marshaled only to prove that no
+      # candidate bytes surface in its default encoding. It is persisted through
+      # the publication proposal store, never as JSON.
+      - path: 'tests/integration/publication_v2_privacy_test\.go'
+        linters: [ musttag ]
+        text: 'should be annotated with the `json` tag'
+
+      # publicationTwoMachineCrashRequest is a test-local handshake between this
+      # test and its re-executed child process. It has no tags of its own because
+      # its fields are platform.Paths and config.Config, the latter being
+      # toml-shaped; the two reports in this file (marshal of the request, decode
+      # in the child) are the same struct and one rule covers both.
+      - path: 'tests/local/publication_two_machine_test\.go'
+        linters: [ musttag ]
+        text: 'should be annotated with the `json` tag'
+
+      # --- usetesting: directories that must outlive the test. ---
+      #
+      # os.MkdirTemp is right at both sites because the directory is evidence
+      # whose path is reported to the operator: the committed-WAL artifact root
+      # is either the operator's DOTTIE_P17_B7_WAL_EVIDENCE_ROOT or a directory
+      # named in the test log, and the PDS failure artifact path is printed by
+      # t.Fatalf so the owner can read the artifact after the run. t.TempDir()
+      # cannot take a chosen root and deletes its directory when the test ends,
+      # which would destroy exactly what these calls are for.
+      - path: 'internal/publicationstate/incoming_material_schema_test\.go|internal/remote/atproto/fence_live_test\.go'
+        linters: [ usetesting ]
+        text: 'os\.MkdirTemp\(\) could be replaced by t\.TempDir\(\)'

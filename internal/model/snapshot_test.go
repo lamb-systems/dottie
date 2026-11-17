@@ -29,6 +29,7 @@ func fileEntry(targetID, path string, kind FileKind, state FileState) Entry {
 			entry.Content = []byte("data")
 		case FileSymlink:
 			entry.LinkTarget = "relative-target"
+		case FileDirectory:
 		}
 	}
 	return Entry{TargetID: targetID, File: &entry}

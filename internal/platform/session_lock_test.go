@@ -31,6 +31,8 @@ func TestSessionLockPathUsesRuntimeDirectoryWithoutStateHome(t *testing.T) {
 }
 
 func TestSessionLockPathRejectsInvalidRuntimeDirectory(t *testing.T) {
+	systemTemp := t.TempDir()
+	t.Setenv("TMPDIR", systemTemp)
 	env := func(name string) string {
 		if name == "XDG_RUNTIME_DIR" {
 			return "relative-runtime"
@@ -43,7 +45,7 @@ func TestSessionLockPathRejectsInvalidRuntimeDirectory(t *testing.T) {
 	if info, err := os.Stat(runtimeDir); err == nil && info.IsDir() {
 		assert.Equal(t, filepath.Join(runtimeDir, "dottie-session-"+uid+".lock"), path)
 	} else {
-		assert.Equal(t, filepath.Join(os.TempDir(), "dottie-session-"+uid+".lock"), path)
+		assert.Equal(t, filepath.Join(systemTemp, "dottie-session-"+uid+".lock"), path)
 	}
 }
 

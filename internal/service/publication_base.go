@@ -387,6 +387,8 @@ func publicationBaseLocalEntries(captured publicationCapture) ([]model.Entry, []
 			}
 		case model.ObservationUnknown:
 			unknown = append(unknown, observation.Identity)
+		case model.ObservationMissing, model.ObservationUntracked:
+			continue
 		}
 	}
 	return entries, unknown

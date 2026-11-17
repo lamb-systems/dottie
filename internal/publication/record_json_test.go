@@ -293,7 +293,7 @@ func assertRecordJSONSDKRoundTrip(t *testing.T, original, encoded []byte, expect
 func requireRecordJSONViolation(t *testing.T, err error, reason string) {
 	t.Helper()
 	require.ErrorIs(t, err, ErrRecordJSON)
-	var problem *Violation
+	var problem *ViolationError
 	require.ErrorAs(t, err, &problem)
 	assert.Equal(t, "record", problem.Field())
 	assert.Equal(t, reason, problem.Reason())

@@ -268,7 +268,7 @@ func TestVerifyControlStateRefusesSelfSuppliedAnchorAndCheckpoint(t *testing.T) 
 	_, err := VerifyControlState(nil, VerificationRequest{Supplied: artifact.Supplied})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidVerification)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "missing-trusted-context", refusal.Code)
 }
@@ -397,7 +397,7 @@ func TestVerifyControlStateRefusesDirectPolicyControlMismatch(t *testing.T) {
 	descendantContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
 	_, err = VerifyControlState(descendantContext, VerificationRequest{Supplied: directDescendant})
-	var descendantRefusal *VerificationRefusal
+	var descendantRefusal *VerificationRefusalError
 	require.ErrorAs(t, err, &descendantRefusal)
 	assert.Equal(t, "supplied", descendantRefusal.Side)
 	assert.Equal(t, "policy-ancestry", descendantRefusal.Code)
@@ -408,7 +408,7 @@ func TestVerifyControlStateRefusesDirectPolicyControlMismatch(t *testing.T) {
 	trustedContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, trustedContext.SetHeldCheckpoint(*checkpointHeld(t, directStale)))
 	_, err = VerifyControlState(trustedContext, VerificationRequest{Supplied: genesis})
-	var staleRefusal *VerificationRefusal
+	var staleRefusal *VerificationRefusalError
 	require.ErrorAs(t, err, &staleRefusal)
 	assert.Equal(t, "held", staleRefusal.Side)
 	assert.Equal(t, "policy-ancestry", staleRefusal.Code)
@@ -417,7 +417,7 @@ func TestVerifyControlStateRefusesDirectPolicyControlMismatch(t *testing.T) {
 	descendantContext = NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, descendantContext.SetHeldCheckpoint(*checkpointHeld(t, genesis)))
 	_, err = VerifyControlState(descendantContext, VerificationRequest{Supplied: epochGap})
-	var epochRefusal *VerificationRefusal
+	var epochRefusal *VerificationRefusalError
 	require.ErrorAs(t, err, &epochRefusal)
 	assert.Equal(t, "supplied", epochRefusal.Side)
 	assert.Equal(t, "policy-ancestry", epochRefusal.Code)
@@ -436,7 +436,7 @@ func TestVerifyControlStateRefusesDirectPolicyControlMismatch(t *testing.T) {
 	overflowContext := NewTrustedContext(fixture.vaultID, fixture.anchor)
 	require.NoError(t, overflowContext.SetHeldCheckpoint(*checkpointHeld(t, maximum)))
 	_, err = VerifyControlState(overflowContext, VerificationRequest{Supplied: successor})
-	var overflowRefusal *VerificationRefusal
+	var overflowRefusal *VerificationRefusalError
 	require.ErrorAs(t, err, &overflowRefusal)
 	assert.Equal(t, "supplied", overflowRefusal.Side)
 	assert.Equal(t, "policy-ancestry", overflowRefusal.Code)
@@ -457,7 +457,7 @@ func TestVerifyControlStateRefusesTerminalPolicyControlMismatch(t *testing.T) {
 	_, err = VerifyControlState(trustedContext, VerificationRequest{
 		Supplied: two, Intermediates: []ControlEvidence{one},
 	})
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "intermediate", refusal.Side)
 	assert.Equal(t, "invalid-intermediate", refusal.Code)
@@ -507,7 +507,7 @@ func TestVerifyControlStateInvalidSignatureCannotReachConsent(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidVerification)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "control-signature", refusal.Code)
 	_, err = AcceptUnverifiableConsent(VerificationResult{})
@@ -543,7 +543,7 @@ func TestVerifyControlStateRefusesInvalidIntermediate(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidVerification)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "invalid-intermediate", refusal.Code)
 }

@@ -156,14 +156,14 @@ func (s *memoryStore) Load(_ context.Context, name string) ([]byte, error) {
 	}
 	payload, ok := s.items[name]
 	if !ok {
-		return nil, errorsNewNotFound{}
+		return nil, notFoundError{}
 	}
 	return append([]byte(nil), payload...), nil
 }
 
-type errorsNewNotFound struct{}
+type notFoundError struct{}
 
-func (errorsNewNotFound) Error() string { return "not found" }
+func (notFoundError) Error() string { return "not found" }
 
 func (s *memoryStore) Delete(_ context.Context, name string) error {
 	s.mu.Lock()
@@ -222,7 +222,7 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *Client, *memoryStore) {
 		),
 		WithClock(func() time.Time { return time.Unix(1_700_000_123, 987654321) }),
 		WithRandom(&counterReader{}),
-		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, errorsNewNotFound{} }),
+		WithTXTLookup(func(context.Context, string) ([]string, error) { return nil, notFoundError{} }),
 	)
 	if err != nil {
 		require.NoError(t, err)

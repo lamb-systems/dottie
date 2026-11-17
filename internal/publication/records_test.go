@@ -1013,7 +1013,7 @@ func mustHash(t testing.TB, data []byte) multihash.Multihash {
 func requireViolation(t testing.TB, err, sentinel error, field, reason string) {
 	t.Helper()
 	require.ErrorIs(t, err, sentinel)
-	var actual *Violation
+	var actual *ViolationError
 	require.ErrorAs(t, err, &actual)
 	assert.Equal(t, field, actual.Field())
 	assert.Equal(t, reason, actual.Reason())

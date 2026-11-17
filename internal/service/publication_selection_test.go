@@ -472,9 +472,9 @@ func TestSelectPublicationTargetBoundsAllConfigStringsExcludesAndCategories(t *t
 	assertPublicationSelectionError(t, err, string(publicationSelectionReasonBounds))
 
 	configuration = cloneSelectionTestConfig(fixture.configuration)
-	categories := make([]string, matrix.MaxKeys)
-	for index := range categories {
-		categories[index] = fmt.Sprintf("category-%03d", index)
+	categories := make([]string, 0, matrix.MaxKeys+1)
+	for index := range matrix.MaxKeys {
+		categories = append(categories, fmt.Sprintf("category-%03d", index))
 	}
 	configuration.Targets = append(configuration.Targets, config.Target{
 		ID:     "unselected-gnome",

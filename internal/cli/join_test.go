@@ -215,7 +215,7 @@ func (gate *joinGate) bootstrap(t *testing.T, machine *joinGateMachine) string {
 	}
 	command := newAccountCommandWithFactories(&stdout, &stderr, func() (accountKeyring, error) {
 		return gate.keyring, nil
-	}, &code, accountSessionOptions{browser: func(string) error { return nil }, env: os.Getenv}, factory)
+	}, &code, accountSessionOptions{browser: func(context.Context, string) error { return nil }, env: os.Getenv}, factory)
 	ctx := context.Background()
 	if err := command.Run(
 		ctx,

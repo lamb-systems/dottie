@@ -136,7 +136,8 @@ func publicationGNOMERefsMatch(
 	selection publicationSelection,
 	expected []SettingRef,
 ) (bool, error) {
-	if ctx == nil || ctx.Err() != nil || !validPublicationGNOMESelectionWithoutRefs(selection) {
+	if !publicationGNOMEComparisonReady(ctx, selection) {
+		// A dead context or an unusable selection is a non-match state, not an error; the caller classifies it.
 		return false, nil
 	}
 	port := &publicationGNOMEResolvePort{SettingsPort: selection.context.settings}
@@ -146,6 +147,10 @@ func publicationGNOMERefsMatch(
 	}
 	validated, err := validatePublicationSettingRefs(selection.target.ID, resolved)
 	return err == nil && len(validated) == len(expected) && sameSettingRefs(validated, expected), nil
+}
+
+func publicationGNOMEComparisonReady(ctx context.Context, selection publicationSelection) bool {
+	return ctx != nil && ctx.Err() == nil && validPublicationGNOMESelectionWithoutRefs(selection)
 }
 
 func validPublicationGNOMESelectionWithoutRefs(selection publicationSelection) bool {

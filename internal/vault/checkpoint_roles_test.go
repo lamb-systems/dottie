@@ -17,7 +17,7 @@ func TestVerifyControlPositionEvidenceRequiresPolicySignerRoleBinding(t *testing
 
 	_, _, err = verifyControlPositionEvidence(fixture.vaultID, fixture.anchor, evidence)
 	require.Error(t, err)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, "policy-signer-role", refusal.Code)
 }

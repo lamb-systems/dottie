@@ -822,7 +822,7 @@ func TestSyncPullRefusalsStopEverythingBeforeAnyPublication(t *testing.T) {
 	t.Run("indeterminate provider read", func(t *testing.T) {
 		fixture := newSyncTestFixture(t, "")
 		fixture.confirmedScenario(t)
-		fixture.transport.viewErr = pullTestViewFailure{reason: "revision", cause: atproto.ErrAmbiguousTransport}
+		fixture.transport.viewErr = pullTestViewFailureError{reason: "revision", cause: atproto.ErrAmbiguousTransport}
 		code, stdout, stderr := runSyncForTest(
 			t,
 			fixture,

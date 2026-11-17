@@ -57,13 +57,18 @@ func (transport *publicationReaderTransport) OpenStream(
 	transport.blobStreams++
 	identifier, err := cid.Parse(query.Get("cid"))
 	if err != nil {
-		return 404, io.NopCloser(strings.NewReader(`{"error":"NotFound"}`)), nil
+		// A malformed CID is served like a missing blob: a 404 response, not a transport failure.
+		return publicationReaderBlobNotFound()
 	}
 	blob := transport.blob(identifier.Bytes())
 	if blob == nil {
-		return 404, io.NopCloser(strings.NewReader(`{"error":"NotFound"}`)), nil
+		return publicationReaderBlobNotFound()
 	}
 	return 200, io.NopCloser(bytes.NewReader(blob)), nil
+}
+
+func publicationReaderBlobNotFound() (int, io.ReadCloser, error) {
+	return 404, io.NopCloser(strings.NewReader(`{"error":"NotFound"}`)), nil
 }
 
 func (transport *publicationReaderTransport) storeBlob(t *testing.T, payload []byte) []byte {

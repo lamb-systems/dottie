@@ -115,9 +115,9 @@ func (dispatch *materialWriteDispatch) ready() bool {
 func (dispatch *materialWriteDispatch) send(
 	ctx context.Context,
 	transport MaterialTransport,
-) (MaterialWriteOutcome, error) {
+) error {
 	if !dispatch.ready() {
-		return MaterialWriteOutcome{}, publishMaterialFailure(
+		return publishMaterialFailure(
 			ctx,
 			publishMaterialStageSubmission,
 			publishMaterialReasonSubmission,
@@ -127,7 +127,7 @@ func (dispatch *materialWriteDispatch) send(
 	dispatch.sent = true
 	outcome, err := transport.SendWrites(ctx, dispatch.prepared)
 	if err != nil {
-		return MaterialWriteOutcome{}, publishMaterialFailure(
+		return publishMaterialFailure(
 			ctx,
 			publishMaterialStageSubmission,
 			publishMaterialReasonUnresolved,
@@ -135,14 +135,14 @@ func (dispatch *materialWriteDispatch) send(
 		)
 	}
 	if !outcome.Committed {
-		return MaterialWriteOutcome{}, publishMaterialFailure(
+		return publishMaterialFailure(
 			ctx,
 			publishMaterialStageSubmission,
 			publishMaterialReasonUnresolved,
 			nil,
 		)
 	}
-	return outcome, nil
+	return nil
 }
 
 type MaterialPublishRequest struct {
@@ -541,7 +541,7 @@ func (coordinator *Coordinator) PublishMaterial(
 			nil,
 		)
 	}
-	if _, err := dispatch.send(ctx, proposal.Transport); err != nil {
+	if err := dispatch.send(ctx, proposal.Transport); err != nil {
 		if !errors.Is(err, ErrMaterialSubmissionRejected) {
 			return MaterialPublishResult{Attempt: attempt}, err
 		}
@@ -1195,6 +1195,9 @@ func (coordinator *Coordinator) publicationPushRefusal(
 				}
 			}
 			return ErrPublicationProposalStale
+		default:
+			// Any other store reason is already the caller-visible refusal.
+			return err
 		}
 	}
 	return err

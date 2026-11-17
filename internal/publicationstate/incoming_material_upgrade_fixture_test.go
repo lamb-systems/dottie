@@ -1105,8 +1105,10 @@ func incomingMaterialUpgradeFixtureColumns(t *testing.T, ctx context.Context, q 
 	rows, err := q.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0")
 	require.NoError(t, err)
 	columns, columnsErr := rows.Columns()
+	rowsErr := rows.Err()
 	closeErr := rows.Close()
 	require.NoError(t, columnsErr)
+	require.NoError(t, rowsErr)
 	require.NoError(t, closeErr)
 	return columns
 }

@@ -2015,6 +2015,10 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 				_ = rows.Close()
 				return ErrVaultSelectionAmbiguous
 			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return err
+			}
 			if err := rows.Close(); err != nil {
 				return err
 			}

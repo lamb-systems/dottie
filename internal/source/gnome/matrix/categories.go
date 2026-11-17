@@ -80,7 +80,7 @@ var categoryMatrix = []Category{
 
 var (
 	matrixOnce sync.Once
-	matrixErr  error
+	errMatrix  error
 )
 
 func Categories() ([]Category, error) {
@@ -154,10 +154,10 @@ func SelectCategories(ids []string) ([]KeyRef, error) {
 
 func validatedCategories() ([]Category, error) {
 	matrixOnce.Do(func() {
-		matrixErr = validateCategoryMatrix(categoryMatrix)
+		errMatrix = validateCategoryMatrix(categoryMatrix)
 	})
-	if matrixErr != nil {
-		return nil, matrixErr
+	if errMatrix != nil {
+		return nil, errMatrix
 	}
 	return categoryMatrix, nil
 }

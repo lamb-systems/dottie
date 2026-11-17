@@ -282,6 +282,8 @@ func preserveTerminalOutcome(stored storedAttempt, next AttemptOutcome, evidence
 		if next != OutcomeRejected {
 			return classified(ErrContinuity, StageResolve, ReasonCorrupt)
 		}
+	case OutcomeNotSubmitted, OutcomeUnresolved, OutcomeAbsentUnresolved:
+		return nil
 	}
 	if !terminalEvidenceExtends(stored.terminal, evidence) {
 		return classified(ErrContinuity, StageResolve, ReasonCorrupt)

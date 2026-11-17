@@ -97,12 +97,7 @@ func cloneSchemaObjects(objects map[string]string) map[string]string {
 	return cloned
 }
 
-type schemaReader interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func checkSchemaVersion(ctx context.Context, conn schemaReader, version int) error {
+func checkSchemaVersion(ctx context.Context, conn queryer, version int) error {
 	var appID, actual int
 	if err := conn.QueryRowContext(ctx, "PRAGMA application_id").Scan(&appID); err != nil {
 		return err
@@ -139,7 +134,7 @@ func checkSchemaVersion(ctx context.Context, conn schemaReader, version int) err
 	return nil
 }
 
-func readSchemaObjects(ctx context.Context, conn schemaReader) (map[string]string, map[string]string, error) {
+func readSchemaObjects(ctx context.Context, conn queryer) (map[string]string, map[string]string, error) {
 	rows, err := conn.QueryContext(
 		ctx,
 		"SELECT name,type,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
@@ -168,7 +163,7 @@ func readSchemaObjects(ctx context.Context, conn schemaReader) (map[string]strin
 	return objects, definitions, nil
 }
 
-func readMetadataKeys(ctx context.Context, conn schemaReader) ([]string, error) {
+func readMetadataKeys(ctx context.Context, conn queryer) ([]string, error) {
 	rows, err := conn.QueryContext(ctx, "SELECT key FROM store_meta ORDER BY key")
 	if err != nil {
 		return nil, err

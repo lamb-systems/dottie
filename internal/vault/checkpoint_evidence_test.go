@@ -134,7 +134,7 @@ func assertControlPositionRefusalCodeForTrust(
 	t.Helper()
 	_, _, err := verifyControlPositionEvidence(vaultID, anchor, evidence)
 	require.Error(t, err)
-	var refusal *VerificationRefusal
+	var refusal *VerificationRefusalError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, code, refusal.Code)
 }

@@ -156,6 +156,8 @@ func (s *Store) validateAttemptEvidenceWire(
 				return errors.New("lost fence predecessor")
 			}
 		}
+	case OutcomeUnresolved:
+		return errors.New("unresolved outcome evidence")
 	case OutcomeRejected:
 		return errors.New("rejection evidence with a view")
 	case OutcomeNotSubmitted:

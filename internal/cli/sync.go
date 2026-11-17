@@ -629,7 +629,7 @@ func runSyncCommand(
 	}
 	pullApplied := preparation.applies()
 	if pullApplied {
-		_, output, err = applyPullPreparation(ctx, planRequest, preparation, output)
+		output, err = applyPullPreparation(ctx, planRequest, preparation, output)
 		if err != nil {
 			return err
 		}

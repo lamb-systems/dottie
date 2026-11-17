@@ -101,7 +101,7 @@ func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
 	return block
 }
 
-func (f fixture) observation(count int) Observation {
+func (f *fixture) observation(count int) Observation {
 	f.t.Helper()
 	require.Positive(f.t, count)
 	require.GreaterOrEqual(f.t, len(f.blocks), count)

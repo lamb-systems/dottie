@@ -1735,12 +1735,12 @@ func TestPublishMaterialDispatchConsumesPreparedWrites(t *testing.T) {
 	require.NoError(t, err)
 	dispatch := materialWriteDispatch{prepared: prepared}
 
-	_, err = dispatch.send(ctx, fixture.transport)
+	err = dispatch.send(ctx, fixture.transport)
 	require.NoError(t, err)
 	assert.Equal(t, 1, fixture.transport.sendCount())
 	assert.Equal(t, 1, fixture.transport.applyCount())
 
-	_, replayErr := dispatch.send(ctx, fixture.transport)
+	replayErr := dispatch.send(ctx, fixture.transport)
 	requireMaterialRefusal(t, replayErr, "submission", "submission_mismatch")
 	assert.Equal(t, 1, fixture.transport.sendCount())
 	assert.Equal(t, 1, fixture.transport.applyCount())

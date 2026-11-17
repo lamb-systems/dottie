@@ -214,7 +214,8 @@ func (c *Client) Begin(ctx context.Context, handle string, requestedScopes, requ
 	if err != nil {
 		return nil, errors.New("cannot generate DPoP key")
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, errors.New("cannot open loopback OAuth listener")
 	}
@@ -573,13 +574,11 @@ func (c *Client) doDPoP(
 		detail, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
 		_ = response.Body.Close()
 		response.Body = io.NopCloser(bytes.NewReader(detail))
-		if readErr != nil {
-			return response, nil
-		}
-		signal := strings.ToLower(response.Header.Get("WWW-Authenticate") + " " + string(detail))
-		challenge := strings.Contains(signal, "use_dpop_nonce") && response.Header.Get("DPoP-Nonce") != ""
-		if challenge && attempt == 0 {
-			continue
+		if readErr == nil {
+			signal := strings.ToLower(response.Header.Get("WWW-Authenticate") + " " + string(detail))
+			if strings.Contains(signal, "use_dpop_nonce") && response.Header.Get("DPoP-Nonce") != "" && attempt == 0 {
+				continue
+			}
 		}
 		return response, nil
 	}
@@ -702,7 +701,7 @@ func (c *Client) saveUsableSession(ctx context.Context, session *Session) error 
 }
 
 func (c *Client) LoadSessionStatus(ctx context.Context, did string) (SessionStatus, error) {
-	envelope, _, err := c.loadEnvelope(ctx, did)
+	envelope, err := c.loadEnvelope(ctx, did)
 	if err != nil {
 		return SessionStatus{}, err
 	}
@@ -713,25 +712,25 @@ func (c *Client) LoadSessionStatus(ctx context.Context, did string) (SessionStat
 	return status, nil
 }
 
-func (c *Client) loadEnvelope(ctx context.Context, did string) (sessionEnvelope, []byte, error) {
+func (c *Client) loadEnvelope(ctx context.Context, did string) (sessionEnvelope, error) {
 	if c.Store == nil || !validDID(did) {
-		return sessionEnvelope{}, nil, ErrSessionUnavailable
+		return sessionEnvelope{}, ErrSessionUnavailable
 	}
 	encoded, err := c.Store.Load(ctx, sessionItemName(c.ClientID, did))
 	if err != nil {
 		if errors.Is(err, platform.ErrKeyringLocked) || errors.Is(err, platform.ErrKeyringUnavailable) {
-			return sessionEnvelope{}, nil, err
+			return sessionEnvelope{}, err
 		}
 		if errors.Is(err, platform.ErrKeyringItemNotFound) {
-			return sessionEnvelope{}, nil, ErrSessionNotFound
+			return sessionEnvelope{}, ErrSessionNotFound
 		}
-		return sessionEnvelope{}, nil, ErrSessionUnavailable
+		return sessionEnvelope{}, ErrSessionUnavailable
 	}
 	var envelope sessionEnvelope
 	if json.Unmarshal(encoded, &envelope) != nil || envelope.Version != sessionEnvelopeVersion || envelope.DID != did {
-		return sessionEnvelope{}, nil, ErrSessionUnavailable
+		return sessionEnvelope{}, ErrSessionUnavailable
 	}
-	return envelope, append([]byte(nil), encoded...), nil
+	return envelope, nil
 }
 
 func sessionFromEnvelope(envelope sessionEnvelope) (*Session, error) {
@@ -759,7 +758,7 @@ func sessionFromEnvelope(envelope sessionEnvelope) (*Session, error) {
 }
 
 func (c *Client) LoadSession(ctx context.Context, did string) (*Session, error) {
-	envelope, _, err := c.loadEnvelope(ctx, did)
+	envelope, err := c.loadEnvelope(ctx, did)
 	if err != nil {
 		return nil, err
 	}
@@ -843,7 +842,7 @@ func (c *Client) Refresh(ctx context.Context, handle string, session *Session) (
 	if err := ctx.Err(); err != nil {
 		return nil, identity, authorizationContextError(err)
 	}
-	latestEnvelope, _, err := c.loadEnvelope(ctx, session.DID)
+	latestEnvelope, err := c.loadEnvelope(ctx, session.DID)
 	if err != nil {
 		return nil, identity, err
 	}
@@ -966,7 +965,7 @@ func (c *Client) Logout(ctx context.Context, did, handle string, session *Sessio
 		return LogoutResult{}, err
 	}
 	defer func() { _ = release() }()
-	latestEnvelope, _, err := c.loadEnvelope(ctx, did)
+	latestEnvelope, err := c.loadEnvelope(ctx, did)
 	if err != nil {
 		return LogoutResult{}, err
 	}

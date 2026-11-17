@@ -59,7 +59,7 @@ func (coordinator *Coordinator) composePublicationSnapshotWithLocal(
 			return model.Snapshot{}, nil, err
 		}
 		candidate.Targets = append(candidate.Targets, portable)
-		_, localEntries, unknown, untracked, coverage, err := coordinator.captureLocal(ctx, target)
+		_, localEntries, unknown, coverage, err := coordinator.captureLocal(ctx, target)
 		if err != nil {
 			return model.Snapshot{}, nil, err
 		}
@@ -70,7 +70,7 @@ func (coordinator *Coordinator) composePublicationSnapshotWithLocal(
 		if err != nil {
 			return model.Snapshot{}, nil, err
 		}
-		untracked = append(untracked, baseUntracked...)
+		untracked := baseUntracked
 		remoteEntries, remoteUntracked := remote(target)
 		untracked = append(untracked, remoteUntracked...)
 		binding, err := syncengine.NewTargetBinding(portable)

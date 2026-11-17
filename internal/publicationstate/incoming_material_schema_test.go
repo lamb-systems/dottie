@@ -3010,6 +3010,8 @@ type incomingMaterialWALRawObservation struct {
 
 var incomingMaterialWALRetainedStore *Store
 
+const incomingMaterialWALHelperSystemRootEnv = "DOTTIE_P17_B7_WAL_HELPER_SYSTEM_ROOT"
+
 func TestIncomingMaterialWALArtifactDirectory(t *testing.T) {
 	const key = "DOTTIE_P17_B7_WAL_EVIDENCE_ROOT"
 	original, originallySet := os.LookupEnv(key)
@@ -3019,6 +3021,7 @@ func TestIncomingMaterialWALArtifactDirectory(t *testing.T) {
 			name = "explicit root"
 		}
 		t.Run(name, func(t *testing.T) {
+			systemRoot := filepath.Dir(t.TempDir())
 			root := t.TempDir()
 			require.NoError(t, os.Chmod(root, 0o700))
 			t.Setenv(key, root)
@@ -3027,13 +3030,13 @@ func TestIncomingMaterialWALArtifactDirectory(t *testing.T) {
 			}
 			_, configured := os.LookupEnv(key)
 			require.Equal(t, explicit, configured)
-			directory, durable := incomingMaterialWALArtifactDirectory(t)
+			directory, durable := incomingMaterialWALArtifactDirectory(t, systemRoot)
 			require.Equal(t, explicit, durable)
 			require.NoError(t, checkPrivateDirectory(directory))
 			if explicit {
 				require.Equal(t, root, filepath.Dir(directory))
 			} else {
-				incomingMaterialWALRequireContainedDirectory(t, directory, filepath.Clean(os.TempDir()))
+				incomingMaterialWALRequireContainedDirectory(t, directory, systemRoot)
 			}
 		})
 		value, present := os.LookupEnv(key)
@@ -3045,8 +3048,11 @@ func TestIncomingMaterialWALArtifactDirectory(t *testing.T) {
 func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 	_, directorySet := os.LookupEnv("DOTTIE_P17_B7_WAL_HELPER_DIR")
 	_, receiptSet := os.LookupEnv("DOTTIE_P17_B7_WAL_HELPER_RECEIPT")
+	_, systemRootSet := os.LookupEnv(incomingMaterialWALHelperSystemRootEnv)
 	require.False(t, directorySet)
 	require.False(t, receiptSet)
+	require.False(t, systemRootSet)
+	systemRoot := filepath.Dir(t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	t.Cleanup(cancel)
 	assets := incomingMaterialUpgradeFixtureCopy(t)
@@ -3076,7 +3082,7 @@ func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 		payloadPath: filepath.Join(assets.root, image.Payloads[0].Path),
 		payloadHash: image.Payloads[0].SHA256,
 	}
-	incomingMaterialWALRequireContainedDirectory(t, directory, filepath.Clean(os.TempDir()))
+	incomingMaterialWALRequireContainedDirectory(t, directory, systemRoot)
 	before := publicationOpenSnapshotSource(t, ctx, input.database, 2)
 	require.Len(t, before.metadata, 7)
 	require.Len(t, before.typed, 15)
@@ -3096,7 +3102,7 @@ func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 	require.Equal(t, "d2e446ca0e728ac4af1835c2d4e65c4809fb17f19ef9729f0cc305b87b45f108", sourceRaw.SHA256)
 	require.GreaterOrEqual(t, len(sourceRaw.Data), 100)
 	require.Equal(t, uint32(2), binary.BigEndian.Uint32(sourceRaw.Data[60:64]))
-	artifactDirectory, durable := incomingMaterialWALArtifactDirectory(t)
+	artifactDirectory, durable := incomingMaterialWALArtifactDirectory(t, systemRoot)
 	t.Logf("committed-WAL artifacts: %s (durable=%t)", artifactDirectory, durable)
 	helperReceiptPath := filepath.Join(artifactDirectory, "helper-receipt.json")
 	executable, err := os.Executable()
@@ -3119,7 +3125,8 @@ func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 	)
 	for _, entry := range os.Environ() {
 		if strings.HasPrefix(entry, "DOTTIE_P17_B7_WAL_HELPER_DIR=") ||
-			strings.HasPrefix(entry, "DOTTIE_P17_B7_WAL_HELPER_RECEIPT=") {
+			strings.HasPrefix(entry, "DOTTIE_P17_B7_WAL_HELPER_RECEIPT=") ||
+			strings.HasPrefix(entry, incomingMaterialWALHelperSystemRootEnv+"=") {
 			continue
 		}
 		command.Env = append(command.Env, entry)
@@ -3128,6 +3135,7 @@ func TestIncomingMaterialSchema3CommittedWALProbe(t *testing.T) {
 		command.Env,
 		"DOTTIE_P17_B7_WAL_HELPER_DIR="+directory,
 		"DOTTIE_P17_B7_WAL_HELPER_RECEIPT="+helperReceiptPath,
+		incomingMaterialWALHelperSystemRootEnv+"="+systemRoot,
 	)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -3337,9 +3345,11 @@ func TestIncomingMaterialSchema3WALWriterHelper(t *testing.T) {
 	if !directorySet && !receiptSet {
 		return
 	}
+	systemRoot, systemRootSet := os.LookupEnv(incomingMaterialWALHelperSystemRootEnv)
 	require.True(t, directorySet)
 	require.True(t, receiptSet)
-	incomingMaterialWALRequireContainedDirectory(t, directory, filepath.Clean(os.TempDir()))
+	require.True(t, systemRootSet)
+	incomingMaterialWALRequireContainedDirectory(t, directory, systemRoot)
 	require.True(t, filepath.IsAbs(receiptPath))
 	require.Equal(t, filepath.Clean(receiptPath), receiptPath)
 	root, durable := os.LookupEnv("DOTTIE_P17_B7_WAL_EVIDENCE_ROOT")
@@ -3348,7 +3358,7 @@ func TestIncomingMaterialSchema3WALWriterHelper(t *testing.T) {
 		require.Equal(t, filepath.Clean(root), root)
 		require.NoError(t, checkPrivateDirectory(root))
 	} else {
-		root = filepath.Clean(os.TempDir())
+		root = systemRoot
 	}
 	incomingMaterialWALRequireContainedDirectory(t, filepath.Dir(receiptPath), root)
 	_, err := os.Lstat(receiptPath)
@@ -3427,7 +3437,7 @@ func TestIncomingMaterialSchema3WALWriterHelper(t *testing.T) {
 	incomingMaterialWALRetainedStore = store
 }
 
-func incomingMaterialWALArtifactDirectory(t *testing.T) (string, bool) {
+func incomingMaterialWALArtifactDirectory(t *testing.T, systemRoot string) (string, bool) {
 	t.Helper()
 	root, durable := os.LookupEnv("DOTTIE_P17_B7_WAL_EVIDENCE_ROOT")
 	var directory string
@@ -3439,7 +3449,7 @@ func incomingMaterialWALArtifactDirectory(t *testing.T) (string, bool) {
 		directory, err = os.MkdirTemp(root, "committed-wal-")
 		require.NoError(t, err)
 	} else {
-		root = filepath.Clean(os.TempDir())
+		root = systemRoot
 		directory = t.TempDir()
 		require.NoError(t, os.Chmod(directory, 0o700))
 	}

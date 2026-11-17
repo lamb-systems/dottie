@@ -67,7 +67,7 @@ func NewTrustedContext(vaultID, trustAnchor [32]byte) *TrustedContext {
 
 func (context *TrustedContext) SetHeldCheckpoint(evidence ControlEvidence) error {
 	if context == nil || !context.initialized {
-		return &VerificationRefusal{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
+		return &VerificationRefusalError{Side: "context", Code: "missing-trusted-context", Err: ErrAuthorization}
 	}
 	context.held = &ControlEvidence{
 		Control:      bytes.Clone(evidence.Control),
@@ -96,7 +96,7 @@ type verificationProof struct {
 	validityPassed   bool
 }
 
-type VerificationRefusal struct {
+type VerificationRefusalError struct {
 	Side  string
 	Code  string
 	Check string
@@ -104,14 +104,14 @@ type VerificationRefusal struct {
 	Err   error
 }
 
-func (r *VerificationRefusal) Error() string {
+func (r *VerificationRefusalError) Error() string {
 	if len(r.CID) > 0 {
 		return fmt.Sprintf("%v: %s %s at %x", ErrInvalidVerification, r.Side, r.Code, r.CID)
 	}
 	return fmt.Sprintf("%v: %s %s", ErrInvalidVerification, r.Side, r.Code)
 }
 
-func (r *VerificationRefusal) Unwrap() []error {
+func (r *VerificationRefusalError) Unwrap() []error {
 	return []error{ErrInvalidVerification, r.Err}
 }
 
@@ -121,14 +121,14 @@ func verifyControlPositionEvidence(
 ) (authenticatedControlPosition, []byte, error) {
 	control, err := DecodeControl(evidence.Control)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "decode-control",
 			Err:  err,
 		}
 	}
 	if control.Vault != vaultID {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "wrong-vault",
 			Err:  ErrAuthorization,
@@ -136,14 +136,14 @@ func verifyControlPositionEvidence(
 	}
 	policy, err := DecodePolicy(evidence.Policy)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "decode-policy",
 			Err:  err,
 		}
 	}
 	if policy.Vault != vaultID || policy.EpochSeq != control.EpochSeq {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-vault-or-epoch",
 			Err:  ErrAuthorization,
@@ -151,7 +151,7 @@ func verifyControlPositionEvidence(
 	}
 	policyDigest, err := ComputePolicyDigest(evidence.Policy)
 	if err != nil || policyDigest != control.PolicyDigest {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-digest",
 			Err:  ErrAuthorization,
@@ -166,7 +166,7 @@ func verifyControlPositionEvidence(
 	}
 	policySigner, err := resolveTrustedCertificate(policy.Signer.DeviceID, policy.Signer.KeyID, request)
 	if err != nil || policySigner.Role != RoleRoot {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-signer-chain",
 			Err:  ErrAuthorization,
@@ -174,7 +174,7 @@ func verifyControlPositionEvidence(
 	}
 	policyPrefix, err := encodePolicyPrefix(policy)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-encoding",
 			Err:  err,
@@ -186,7 +186,7 @@ func verifyControlPositionEvidence(
 		policy.Signature[:],
 		policySigner.SigningPublicKey[:],
 	); err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-signature",
 			Err:  err,
@@ -194,14 +194,14 @@ func verifyControlPositionEvidence(
 	}
 	policySignerRole, policySignerRoleExists := policyRole(policy, policySigner.DeviceID)
 	if !policySignerRoleExists || policySignerRole != policySigner.Role {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "policy",
 			Code: "policy-signer-role",
 			Err:  ErrAuthorization,
 		}
 	}
 	if policy.Signer.DeviceID != control.Signer.DeviceID || !bytes.Equal(policy.Signer.KeyID, control.Signer.KeyID) {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "signer-mismatch",
 			Err:  ErrAuthorization,
@@ -209,7 +209,7 @@ func verifyControlPositionEvidence(
 	}
 	controlSigner, err := resolveTrustedCertificate(control.Signer.DeviceID, control.Signer.KeyID, request)
 	if err != nil || controlSigner.Role != RoleRoot {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "control-signer-chain",
 			Err:  ErrAuthorization,
@@ -217,7 +217,7 @@ func verifyControlPositionEvidence(
 	}
 	controlPrefix, err := encodeControlPrefix(control)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "control-encoding",
 			Err:  err,
@@ -229,7 +229,7 @@ func verifyControlPositionEvidence(
 		control.Signature[:],
 		controlSigner.SigningPublicKey[:],
 	); err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "control-signature",
 			Err:  err,
@@ -237,7 +237,7 @@ func verifyControlPositionEvidence(
 	}
 	controlSignerRole, controlSignerRoleExists := policyRole(policy, controlSigner.DeviceID)
 	if !controlSignerRoleExists || controlSignerRole != controlSigner.Role {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
 			Side: "control",
 			Code: "control-signer-role",
 			Err:  ErrAuthorization,
@@ -245,7 +245,11 @@ func verifyControlPositionEvidence(
 	}
 	controlCID, err := rawCID(evidence.Control)
 	if err != nil {
-		return authenticatedControlPosition{}, nil, &VerificationRefusal{Side: "control", Code: "control-cid", Err: err}
+		return authenticatedControlPosition{}, nil, &VerificationRefusalError{
+			Side: "control",
+			Code: "control-cid",
+			Err:  err,
+		}
 	}
 	return authenticatedControlPosition{control: control, policy: policy, policyDigest: policyDigest}, controlCID, nil
 }
@@ -255,7 +259,7 @@ func authenticateVerificationPositions(
 	request VerificationRequest,
 ) (authenticatedControlPosition, []byte, *authenticatedControlPosition, []byte, error) {
 	if context == nil || !context.initialized {
-		return authenticatedControlPosition{}, nil, nil, nil, &VerificationRefusal{
+		return authenticatedControlPosition{}, nil, nil, nil, &VerificationRefusalError{
 			Side: "context",
 			Code: "missing-trusted-context",
 			Err:  ErrAuthorization,
@@ -298,7 +302,7 @@ func authenticateCheckpointIntermediates(
 }
 
 func refusalForSide(err error, side string, encoded ...[]byte) error {
-	if refusal, ok := errors.AsType[*VerificationRefusal](err); ok {
+	if refusal, ok := errors.AsType[*VerificationRefusalError](err); ok {
 		copyOf := *refusal
 		copyOf.Side = side
 		if side == "intermediate" {
@@ -310,7 +314,7 @@ func refusalForSide(err error, side string, encoded ...[]byte) error {
 		}
 		return &copyOf
 	}
-	return &VerificationRefusal{Side: side, Code: "invalid-evidence", Err: err}
+	return &VerificationRefusalError{Side: side, Code: "invalid-evidence", Err: err}
 }
 
 func compareDirectAuthenticatedControls(
@@ -433,7 +437,7 @@ func checkMirroredControlEdge(
 	if predecessor.control.EpochSeq == ^uint64(0) || predecessor.control.EpochSeq+1 != successor.control.EpochSeq ||
 		successor.policy.PrevPolicyDigest != predecessor.policyDigest {
 		if side == "intermediate" {
-			return &VerificationRefusal{
+			return &VerificationRefusalError{
 				Side:  side,
 				Code:  "invalid-intermediate",
 				Check: "policy-ancestry",
@@ -441,7 +445,7 @@ func checkMirroredControlEdge(
 				Err:   ErrAuthorization,
 			}
 		}
-		return &VerificationRefusal{
+		return &VerificationRefusalError{
 			Side: side,
 			Code: "policy-ancestry",
 			CID:  bytes.Clone(successorCID),

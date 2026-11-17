@@ -36,8 +36,8 @@ func FuzzRecordToJSON(f *testing.F) {
 			cause := errors.Unwrap(validationErr)
 			require.Error(t, cause)
 			require.ErrorIs(t, err, cause)
-			var expected *Violation
-			var actual *Violation
+			var expected *ViolationError
+			var actual *ViolationError
 			require.ErrorAs(t, validationErr, &expected)
 			require.ErrorAs(t, err, &actual)
 			require.Equal(t, expected.Field(), actual.Field())

@@ -345,7 +345,7 @@ func TestApplyFilesystemDoesNotFallbackAfterRenameError(t *testing.T) {
 	var applyError *ApplyError
 	require.ErrorAs(t, err, &applyError)
 	assert.Equal(t, ApplyStageRename, applyError.Stage)
-	require.ErrorIs(t, err, syscallEXDEV)
+	require.ErrorIs(t, err, errEXDEV)
 	assert.Equal(t, []byte("before"), readFileForApplyTest(t, path))
 }
 
@@ -430,7 +430,7 @@ type renameFailureRoot struct {
 	ApplyRoot
 }
 
-var syscallEXDEV = syscall.EXDEV
+var errEXDEV = syscall.EXDEV
 
 func (f *renameFailureFS) Lstat(path string) (os.FileInfo, error) {
 	return f.base.Lstat(path)
@@ -445,5 +445,5 @@ func (f *renameFailureFS) OpenRoot(path string) (ApplyRoot, error) {
 }
 
 func (r renameFailureRoot) Rename(_, _ string) error {
-	return syscallEXDEV
+	return errEXDEV
 }

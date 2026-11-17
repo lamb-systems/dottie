@@ -159,15 +159,22 @@ func runPushCommand(
 	if err != nil {
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	}
-	retained, err := selectPublicationProposal(records, ports.Binding, command.IsSet("confirm"), confirmation)
+	selected, selectedFound, err := selectPublicationProposal(
+		records,
+		ports.Binding,
+		command.IsSet("confirm"),
+		confirmation,
+	)
 	if err != nil {
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	}
+	var retained *service.PublicationProposalRecord
 	publicationID := [16]byte{}
-	if retained != nil {
-		publicationID = retained.PublicationID
+	if selectedFound {
+		retained = &selected
+		publicationID = selected.PublicationID
 	}
-	if !command.IsSet("confirm") && retained == nil {
+	if !command.IsSet("confirm") && !selectedFound {
 		if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
 			return urfave.Exit("push refused: a fresh publication identity is unavailable", 3)
 		}
@@ -253,7 +260,7 @@ func selectPublicationProposal(
 	binding publicationstate.Binding,
 	confirmed bool,
 	_ [32]byte,
-) (*service.PublicationProposalRecord, error) {
+) (service.PublicationProposalRecord, bool, error) {
 	if confirmed {
 		var retained *service.PublicationProposalRecord
 		matches := 0
@@ -269,17 +276,17 @@ func selectPublicationProposal(
 			}
 			matches++
 			if matches > 1 {
-				return nil, service.ErrPublicationProposal
+				return service.PublicationProposalRecord{}, false, service.ErrPublicationProposal
 			}
 			retained = &records[index]
 		}
 		if retained == nil {
 			if consumed > 0 {
-				return nil, service.ErrPublicationProposalConsumed
+				return service.PublicationProposalRecord{}, false, service.ErrPublicationProposalConsumed
 			}
-			return nil, service.ErrPublicationProposalAbsent
+			return service.PublicationProposalRecord{}, false, service.ErrPublicationProposalAbsent
 		}
-		return retained, nil
+		return *retained, true, nil
 	}
 	candidates := make([]service.PublicationProposalRecord, 0, len(records))
 	for _, record := range records {
@@ -292,13 +299,12 @@ func selectPublicationProposal(
 		candidates = append(candidates, record)
 	}
 	if len(candidates) == 0 {
-		return nil, nil
+		return service.PublicationProposalRecord{}, false, nil
 	}
 	if len(candidates) > 1 {
-		return nil, service.ErrPublicationProposal
+		return service.PublicationProposalRecord{}, false, service.ErrPublicationProposal
 	}
-	retained := candidates[0]
-	return &retained, nil
+	return candidates[0], true, nil
 }
 
 func pushScopeRefusal(err error, did string) string {
@@ -397,6 +403,9 @@ func pushMaterialStatus(err error) service.StatusState {
 			publicationstate.ReasonTransition:
 			return service.StatusRejected
 		case publicationstate.ReasonCommitUnknown:
+			return service.StatusUnavailable
+		default:
+			// Every other store reason leaves the outcome indeterminate: re-run.
 			return service.StatusUnavailable
 		}
 	}

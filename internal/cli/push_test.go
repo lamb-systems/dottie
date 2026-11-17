@@ -1017,13 +1017,13 @@ func TestPublicationProposalStoreRoundTripsTheRetainedRecord(t *testing.T) {
 	assert.Empty(t, remaining)
 }
 
-type syntheticStoreFailure struct {
+type syntheticStoreFailureError struct {
 	reason publicationstate.Reason
 }
 
-func (failure syntheticStoreFailure) Error() string { return "synthetic store failure" }
+func (failure syntheticStoreFailureError) Error() string { return "synthetic store failure" }
 
-func (failure syntheticStoreFailure) Reason() publicationstate.Reason { return failure.reason }
+func (failure syntheticStoreFailureError) Reason() publicationstate.Reason { return failure.reason }
 
 func TestPushMaterialStatusSeparatesRefusalsFromIndeterminateOutcomes(t *testing.T) {
 	assert.Equal(t, service.StatusCommitted, pushMaterialStatus(nil))
@@ -1043,12 +1043,12 @@ func TestPushMaterialStatusSeparatesRefusalsFromIndeterminateOutcomes(t *testing
 	assert.Equal(
 		t,
 		service.StatusRejected,
-		pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonConfirmation}),
+		pushMaterialStatus(syntheticStoreFailureError{reason: publicationstate.ReasonConfirmation}),
 	)
 	assert.Equal(
 		t,
 		service.StatusUnavailable,
-		pushMaterialStatus(syntheticStoreFailure{reason: publicationstate.ReasonCommitUnknown}),
+		pushMaterialStatus(syntheticStoreFailureError{reason: publicationstate.ReasonCommitUnknown}),
 	)
 	assert.Equal(t, service.StatusUnavailable, pushMaterialStatus(errors.New("transport is unavailable")))
 }
@@ -1236,18 +1236,19 @@ func TestSelectPublicationProposalIgnoresConsumedRecords(t *testing.T) {
 	consumed := service.PublicationProposalRecord{Binding: binding, Consumed: true, PublicationID: [16]byte{1}}
 	live := service.PublicationProposalRecord{Binding: binding, PublicationID: [16]byte{2}}
 
-	selected, err := selectPublicationProposal(
+	selected, found, err := selectPublicationProposal(
 		[]service.PublicationProposalRecord{consumed, live},
 		binding,
 		true,
 		[32]byte{},
 	)
 	require.NoError(t, err)
-	require.NotNil(t, selected)
+	require.True(t, found)
 	assert.Equal(t, [16]byte{2}, selected.PublicationID, "the live proposal must be selected beside a consumed one")
 
-	_, err = selectPublicationProposal([]service.PublicationProposalRecord{consumed}, binding, true, [32]byte{})
-	assert.ErrorIs(t, err, service.ErrPublicationProposalConsumed)
+	_, found, err = selectPublicationProposal([]service.PublicationProposalRecord{consumed}, binding, true, [32]byte{})
+	require.ErrorIs(t, err, service.ErrPublicationProposalConsumed)
+	assert.False(t, found)
 }
 
 func publicationStateEntries(t *testing.T, directory string) []string {

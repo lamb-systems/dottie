@@ -11,7 +11,7 @@ head's snapshot and payload CIDs), and `$link` only for the snapshot blob's type
 parent is `{"$bytes":""}`.
 
 Initial canonical record-validation errors pass through unchanged. Post-validation conversion failures use
-`ErrRecordJSON` and closed `Violation` field/reason metadata: `encoding`, `size_limit`,
+`ErrRecordJSON` and closed `ViolationError` field/reason metadata: `encoding`, `size_limit`,
 `reconstruction`, `cid_mismatch` or `byte_mismatch`. The byte comparison follows the CID comparison
 and is a redundant defense against a hash collision; it is not independently covered by a changed-
 record test. Output is deterministic and detached, but is not a canonical-JSON signing format.

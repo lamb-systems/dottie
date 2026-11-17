@@ -21,7 +21,7 @@ const accountClientID = "https://dottie.lamb.systems/client-metadata.json"
 
 type accountSessionOptions struct {
 	oauthOptions []atproto.ClientOption
-	browser      func(string) error
+	browser      func(context.Context, string) error
 	env          func(string) string
 	sessionLock  atproto.SessionLockFunc
 }
@@ -93,7 +93,7 @@ func accountSessionCommands(openKeyring accountKeyringFactory, options accountSe
 				return err
 			}
 			if !command.Bool("no-browser") {
-				if err := options.browser(flow.AuthorizationURL()); err != nil {
+				if err := options.browser(ctx, flow.AuthorizationURL()); err != nil {
 					fmt.Fprintln(
 						command.Root().ErrWriter,
 						"dottie: could not open a browser; use the authorization URL printed above",
@@ -285,8 +285,8 @@ func accountLoginTimeout(value string) (time.Duration, error) {
 	return timeout, nil
 }
 
-func openAuthorizationURL(value string) error {
-	command := exec.Command("xdg-open", value)
+func openAuthorizationURL(ctx context.Context, value string) error {
+	command := exec.CommandContext(context.WithoutCancel(ctx), "xdg-open", value)
 	if err := command.Start(); err != nil {
 		return err
 	}

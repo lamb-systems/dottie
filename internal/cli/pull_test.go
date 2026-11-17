@@ -91,16 +91,16 @@ func (reader *pullTestReader) count() int {
 	return reader.reads
 }
 
-type pullTestViewFailure struct {
+type pullTestViewFailureError struct {
 	reason string
 	cause  error
 }
 
-func (failure pullTestViewFailure) Error() string { return "synthetic provider view failure" }
+func (failure pullTestViewFailureError) Error() string { return "synthetic provider view failure" }
 
-func (failure pullTestViewFailure) Unwrap() error { return failure.cause }
+func (failure pullTestViewFailureError) Unwrap() error { return failure.cause }
 
-func (failure pullTestViewFailure) Reason() string { return failure.reason }
+func (failure pullTestViewFailureError) Reason() string { return failure.reason }
 
 type pullTestFixture struct {
 	paths    platform.Paths
@@ -1011,7 +1011,7 @@ func TestPullRefusesAPositionStoreBoundToAnotherVault(t *testing.T) {
 func TestPullReportsAnAmbiguousProviderReadAsIndeterminate(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.accept(t)
-	reader := &pullTestReader{err: pullTestViewFailure{reason: "revision", cause: atproto.ErrAmbiguousTransport}}
+	reader := &pullTestReader{err: pullTestViewFailureError{reason: "revision", cause: atproto.ErrAmbiguousTransport}}
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
@@ -1024,7 +1024,7 @@ func TestPullReportsAnAmbiguousProviderReadAsIndeterminate(t *testing.T) {
 func TestPullRefusesAProviderViewItCannotValidate(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.accept(t)
-	reader := &pullTestReader{err: pullTestViewFailure{reason: "chain"}}
+	reader := &pullTestReader{err: pullTestViewFailureError{reason: "chain"}}
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
@@ -1311,14 +1311,14 @@ func (fixture *pullTestFixture) acceptedFloor(t *testing.T) publicationstate.Flo
 	return floor
 }
 
-type pullTestStageRefusal struct {
+type pullTestStageRefusalError struct {
 	stage  string
 	reason string
 }
 
-func (refusal pullTestStageRefusal) Error() string  { return "synthetic accept refusal" }
-func (refusal pullTestStageRefusal) Stage() string  { return refusal.stage }
-func (refusal pullTestStageRefusal) Reason() string { return refusal.reason }
+func (refusal pullTestStageRefusalError) Error() string  { return "synthetic accept refusal" }
+func (refusal pullTestStageRefusalError) Stage() string  { return refusal.stage }
+func (refusal pullTestStageRefusalError) Reason() string { return refusal.reason }
 
 func TestPullAdvancesTheAcceptedFloorAfterAConfirmedApply(t *testing.T) {
 	fixture := newPullTestFixture(t)
@@ -1468,7 +1468,7 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 		command,
 		"pull",
 		report,
-		pullTestStageRefusal{stage: "accept-material", reason: "stale"},
+		pullTestStageRefusalError{stage: "accept-material", reason: "stale"},
 	)
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, refused, &exitError)
@@ -1485,7 +1485,10 @@ func TestPullRendersAnAcceptRefusalAsAppliedButNotAccepted(t *testing.T) {
 }
 
 func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
-	moved := pullAcceptStagingFailure("pull", pullTestStageRefusal{stage: "accept-position", reason: "revision_moved"})
+	moved := pullAcceptStagingFailure(
+		"pull",
+		pullTestStageRefusalError{stage: "accept-position", reason: "revision_moved"},
+	)
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, moved, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
@@ -1493,7 +1496,7 @@ func TestPullRefusesAStagingRefusalBeforeApplyingAnything(t *testing.T) {
 
 	refused := pullAcceptStagingFailure(
 		"pull",
-		pullTestStageRefusal{stage: "accept-prepare", reason: "proposal_refused"},
+		pullTestStageRefusalError{stage: "accept-prepare", reason: "proposal_refused"},
 	)
 	require.ErrorAs(t, refused, &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())

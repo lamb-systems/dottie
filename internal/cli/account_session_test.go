@@ -290,7 +290,7 @@ func cliSessionOptions(fake *cliOAuthFake) accountSessionOptions {
 				func(context.Context, string) ([]string, error) { return nil, errors.New("not found") },
 			),
 		},
-		browser:     func(string) error { return fake.sendCallback() },
+		browser:     func(context.Context, string) error { return fake.sendCallback() },
 		env:         os.Getenv,
 		sessionLock: func(context.Context, string) (func() error, error) { return func() error { return nil }, nil },
 	}
@@ -354,7 +354,7 @@ func TestAccountLoginNoBrowserAndBrowserFailureStillComplete(t *testing.T) {
 			keyring := newMemoryOAuthKeyring()
 			options := cliSessionOptions(fake)
 			browserCalls := 0
-			options.browser = func(string) error {
+			options.browser = func(context.Context, string) error {
 				browserCalls++
 				if test.browserResult != nil {
 					if err := fake.sendCallback(); err != nil {
@@ -365,7 +365,7 @@ func TestAccountLoginNoBrowserAndBrowserFailureStillComplete(t *testing.T) {
 				return fake.sendCallback()
 			}
 			if !test.wantBrowser {
-				options.browser = func(string) error { browserCalls++; return nil }
+				options.browser = func(context.Context, string) error { browserCalls++; return nil }
 				callbackDone := make(chan error, 1)
 				go func() {
 					<-fake.parReady
@@ -423,7 +423,7 @@ func TestAccountLoginTimeoutExitsWithoutSession(t *testing.T) {
 	fake := newCLIOAuthFake(t)
 	keyring := newMemoryOAuthKeyring()
 	options := cliSessionOptions(fake)
-	options.browser = func(string) error { return nil }
+	options.browser = func(context.Context, string) error { return nil }
 	var stdout, stderr bytes.Buffer
 	code := runAccountWithSession(
 		[]string{"login", "--handle", accountTestHandle, "--no-browser", "--timeout", "1s"},

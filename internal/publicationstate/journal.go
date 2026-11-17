@@ -1289,7 +1289,7 @@ func initializeJournalSchema(ctx context.Context, conn *sql.Conn, rootFD int) er
 	return nil
 }
 
-func checkJournalSchemaVersion(ctx context.Context, conn schemaReader) error {
+func checkJournalSchemaVersion(ctx context.Context, conn queryer) error {
 	var appID, version int
 	if err := conn.QueryRowContext(ctx, "PRAGMA application_id").Scan(&appID); err != nil {
 		return err
