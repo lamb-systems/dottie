@@ -449,7 +449,6 @@ func uploadPDSBlob(t *testing.T, pds *MemoryPDS, data []byte) atdata.Blob {
 func TestMemoryPDSCanonicalizedBlobMIMETypeMustMatchTheRecordBlob(t *testing.T) {
 	ctx := context.Background()
 	pds := newMemoryPDS(t)
-	pds.SetHooks(MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
 	archive := memoryPDSTarArchive(t)
 
 	blob := uploadPDSBlob(t, pds, archive)
@@ -492,33 +491,52 @@ func TestMemoryPDSCanonicalizedBlobMIMETypeMustMatchTheRecordBlob(t *testing.T) 
 	assert.True(t, pds.BlobIsLive(blob.Ref.CID().String()))
 }
 
-func TestMemoryPDSKeepsTheDeclaredBlobMIMETypeWithoutCanonicalization(t *testing.T) {
+func TestMemoryPDSReportsTheStoredArchiveMediaTypeAndRefusesAMismatchedDescriptor(t *testing.T) {
 	ctx := context.Background()
 	pds := newMemoryPDS(t)
 	archive := memoryPDSTarArchive(t)
 
 	blob := uploadPDSBlob(t, pds, archive)
-	assert.Equal(t, "application/octet-stream", blob.MimeType)
+	assert.Equal(t, "application/x-tar", blob.MimeType)
 
-	value, err := json.Marshal(
+	mismatched, err := json.Marshal(
+		map[string]any{
+			"$type": "systems.example.blobRecord",
+			"blob":  atdata.Blob{Ref: blob.Ref, MimeType: "application/octet-stream", Size: blob.Size},
+		},
+	)
+	require.NoError(t, err)
+	status, body, applyErr := applyPDSRecord(
+		ctx,
+		pds,
+		pds.CurrentRevision().CommitCID.String(),
+		"create",
+		"systems.example.blobRecord",
+		"mismatched",
+		mismatched,
+	)
+	require.NoError(t, applyErr)
+	require.Equal(t, 400, status, string(body))
+
+	matched, err := json.Marshal(
 		map[string]any{
 			"$type": "systems.example.blobRecord",
 			"blob":  atdata.Blob{Ref: blob.Ref, MimeType: "application/x-tar", Size: blob.Size},
 		},
 	)
 	require.NoError(t, err)
-	status, body, err := applyPDSRecord(
+	status, body, applyErr = applyPDSRecord(
 		ctx,
 		pds,
 		pds.CurrentRevision().CommitCID.String(),
 		"create",
 		"systems.example.blobRecord",
-		"unchecked",
-		value,
+		"matched",
+		matched,
 	)
-	require.NoError(t, err)
+	require.NoError(t, applyErr)
 	require.Equal(t, 200, status, string(body))
-	_, exists := pds.Record("systems.example.blobRecord", "unchecked")
+	_, exists := pds.Record("systems.example.blobRecord", "matched")
 	assert.True(t, exists)
 }
 

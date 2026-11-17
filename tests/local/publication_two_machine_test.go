@@ -341,7 +341,6 @@ func newPublicationTwoMachineFixture(t *testing.T) *publicationTwoMachineFixture
 	require.NoError(t, err)
 	pds, err := atprototest.NewMemoryPDS(publicationTwoMachineDID, key)
 	require.NoError(t, err)
-	pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
 	method := pds.VerificationMethod()
 	reader := atproto.RevisionReader{
 		Transport: pds, DIDDocumentID: publicationTwoMachineDID,

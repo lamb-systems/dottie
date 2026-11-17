@@ -665,10 +665,36 @@ The Linux `gsettings` two-machine gate that drove one shared `atprototest.Memory
 genesis, ordinary publication, enrollment and revocation compositions was deleted with the retired v1
 read/preview/restore command surface. `atprototest.MemoryPDS` and the real `VaultReader` are still
 exercised by the single-machine coordinator and CLI suites; no two-machine run covers them any more, and
-reinstating one on the v2 apply path is an open follow-up. `MemoryPDS` models a real provider's blob
-canonicalisation only behind the `MemoryPDSHooks.CanonicalizeBlobMIMEType` hook, which the v2
-publication suites enable: with it on, `uploadBlob` reports the media type it derives from the stored
-bytes (a USTAR archive is `application/x-tar`) and `applyWrites` refuses a record whose blob descriptor
-declares anything else with `400 InvalidMimeType`. With it off the double keeps its older, more
-permissive single `application/octet-stream` answer so the legacy v1 suites still describe v1 behaviour. Full CLI-binary acceptance remains deferred to
+reinstating one on the v2 apply path is an open follow-up. `MemoryPDS` always models a real provider's blob
+canonicalisation: `uploadBlob` reports the media type it derives from the stored bytes (a USTAR archive
+is `application/x-tar`) and `applyWrites` refuses a record whose blob descriptor declares anything else
+with `400 InvalidMimeType`. There is no switch; the measured note below records why the previous gate
+was redundant rather than protective. Full CLI-binary acceptance remains deferred to
 a later CLI acceptance.
+
+## MemoryPDS media-type handling (measured, gate removed)
+
+`atprototest.MemoryPDS` always canonicalises a stored blob's media type from its bytes on `uploadBlob`
+(a USTAR archive is `application/x-tar`), and `applyWrites` refuses a record whose blob descriptor
+declares anything else with `400 InvalidMimeType`. There is no switch. This models what a real provider
+does, and it is the behaviour that exposed the v2 defect class: a record declaring a media type the
+provider never reported for the bytes it holds, which is how the packed USTAR payload was once described
+as `application/octet-stream` before the snapshot record declared `application/x-tar`.
+
+The behaviour was previously behind `MemoryPDSHooks.CanonicalizeBlobMIMEType`, on the expectation that
+ungating would break legacy v1 flows uploading that same tar payload as `application/octet-stream`. That
+expectation was measured at `36dd010` by making the behaviour unconditional in a scratch copy and running
+the full suite: it produced **one** failure across the eighteen packages with test files, and that failure
+was the gate's own counterpart assertion. No v1 suite could notice either answer, because the v1 provider
+seam in this tree is `publicationTestIO.StageCandidate` (a fake that always answers
+`application/octet-stream`) and a v1 upload payload is a sealed DTE envelope rather than a USTAR archive,
+so canonicalising it returns `application/octet-stream` anyway. Nothing else asserts the double's upload
+answer: the record codecs, publication state and vault decode locally, and the
+tar-declaring-`application/octet-stream` legacy record shape reaches them only through
+`legacySnapshotBlobMIMEType` on the decode side.
+
+The gate was redundant rather than protective, so it is gone. The counterpart assertion was replaced by
+`TestMemoryPDSReportsTheStoredArchiveMediaTypeAndRefusesAMismatchedDescriptor`, which pins what matters:
+the archive is reported as `application/x-tar`, a record declaring `application/octet-stream` for it is
+refused with 400, and a record declaring the canonical type is accepted. A v1 suite ported onto a
+`MemoryPDS` seam would now be held to the same provider behaviour the v2 suites are.

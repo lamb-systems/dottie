@@ -51,7 +51,6 @@ type MemoryPDSHooks struct {
 	RejectNextApplyWritesAfterBlobProcessingCode   string
 	RejectNextApplyWritesAfterBlobProcessingStatus int
 	GetBlobStatus                                  int
-	CanonicalizeBlobMIMEType                       bool
 }
 
 type MemoryPDS struct {
@@ -324,10 +323,8 @@ func (p *MemoryPDS) Do(
 			return errorResponse(400, "InvalidBlob")
 		}
 		p.blobs[blob.CID.String()] = bytes.Clone(body)
-		if p.hooks.CanonicalizeBlobMIMEType {
-			blob.Reference.MimeType = canonicalBlobMIMEType(body)
-			p.blobMIMETypes[blob.CID.String()] = blob.Reference.MimeType
-		}
+		blob.Reference.MimeType = canonicalBlobMIMEType(body)
+		p.blobMIMETypes[blob.CID.String()] = blob.Reference.MimeType
 		return jsonResponse(200, map[string]any{"blob": blob.Reference})
 	case "com.atproto.repo.applyWrites":
 		if method != "POST" || contentType != "application/json" {

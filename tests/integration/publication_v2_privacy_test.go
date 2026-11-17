@@ -160,7 +160,6 @@ func newPublicationPrivacyFixture(
 	require.NoError(t, err)
 	pds, err := atprototest.NewMemoryPDS(publicationPrivacyDID, repositoryKey)
 	require.NoError(t, err)
-	pds.SetHooks(atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true})
 	var transport atproto.Transport = pds
 	if control != nil {
 		transport = publicationPrivacyLeakingTransport{base: pds, control: *control}
@@ -471,7 +470,6 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
 		fixture.pds.SetHooks(
 			atprototest.MemoryPDSHooks{
-				CanonicalizeBlobMIMEType:   true,
 				RejectNextUploadBlobStatus: 413,
 				RejectNextUploadBlobCode:   "BlobTooLarge",
 			},
@@ -499,7 +497,6 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
 		fixture.pds.SetHooks(
 			atprototest.MemoryPDSHooks{
-				CanonicalizeBlobMIMEType:    true,
 				RejectNextApplyWritesStatus: 400,
 				RejectNextApplyWritesCode:   "InvalidRecord",
 			},
@@ -558,7 +555,7 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
 		fixture.pds.SetHooks(
-			atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, RejectNextApplyWritesAfterBlobProcessing: true},
+			atprototest.MemoryPDSHooks{RejectNextApplyWritesAfterBlobProcessing: true},
 		)
 
 		result, candidatePayload, err := fixture.publishRejected(t)
@@ -601,7 +598,7 @@ func TestPublicationV2PrivacyGate(t *testing.T) {
 		trackedPath := fixture.writeTrackedFile(t, publicationPrivacyFileContent(nonce))
 		canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
 		fixture.pds.SetHooks(
-			atprototest.MemoryPDSHooks{CanonicalizeBlobMIMEType: true, LoseNextApplyWritesResponse: true},
+			atprototest.MemoryPDSHooks{LoseNextApplyWritesResponse: true},
 		)
 
 		result, _, err := fixture.publish(t)
