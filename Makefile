@@ -5,7 +5,7 @@ override GIO_MIN_VERSION := 2.40
 GOTOOLCHAIN ?= local
 export GOTOOLCHAIN CC PKG_CONFIG
 
-.PHONY: build test test-race vet fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race known-defects acceptance
+.PHONY: build test test-race vet lint fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race known-defects acceptance
 
 FUZZ_TIME ?= 30s
 FUZZ_SMOKE_TIME ?= 5s
@@ -21,6 +21,9 @@ test-race:
 
 vet:
 	$(GO) vet ./...
+
+lint:
+	golangci-lint run
 
 fmt:
 	gofmt -w cmd internal
