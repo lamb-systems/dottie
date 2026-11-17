@@ -290,6 +290,20 @@ func (fixture *syncTestFixture) seed(
 	return block, record
 }
 
+func (fixture *syncTestFixture) publishOnly(t *testing.T, snapshot model.Snapshot) {
+	t.Helper()
+	packed, err := vault.Pack(snapshot)
+	require.NoError(t, err)
+	block, record := syncTestRecord(t, fixture.binding, packed.Payload, 0, nil)
+	head := syncTestHead(t, fixture.binding, block, record)
+	fixture.transport.mu.Lock()
+	fixture.transport.blocks[block.Key] = bytes.Clone(block.Raw)
+	fixture.transport.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	fixture.transport.head = head
+	fixture.transport.context = pushTestContext(0)
+	fixture.transport.mu.Unlock()
+}
+
 func (fixture *syncTestFixture) advance(
 	t *testing.T,
 	snapshot model.Snapshot,
@@ -528,6 +542,33 @@ func runSyncForTestWithDIDs(
 	return exitCode, stdout.String(), stderr.String()
 }
 
+func (fixture *syncTestFixture) runPull(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	fixture.setEnvironment(t)
+	var stdout, stderr bytes.Buffer
+	exitCode := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return fixture.session(), nil }
+	remotes := func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error) {
+		return pullRemote{Reader: fixture.transport, Blob: fixture.blob, Close: func() {}}, nil
+	}
+	command := newPullCommand(
+		&stdout,
+		&stderr,
+		&exitCode,
+		sessions,
+		remotes,
+		fixture.pullVaults,
+		productionPullApplySourcesFactory(os.Getenv),
+		pushTestDIDs(fixture.binding.AccountDID),
+		os.Getenv,
+	)
+	ctx := context.Background()
+	if err := command.Run(ctx, append([]string{"dottie", "pull"}, args...)); err != nil && exitCode == 0 {
+		command.ExitErrHandler(ctx, command, err)
+	}
+	return exitCode, stdout.String(), stderr.String()
+}
+
 func syncTestToken(t *testing.T, output string) string {
 	t.Helper()
 	match := regexp.MustCompile(`(?m)^confirmation: ([0-9a-f]{64})$`).FindStringSubmatch(output)
@@ -540,6 +581,77 @@ func (fixture *syncTestFixture) confirmedScenario(t *testing.T) {
 	fixture.seed(t, fixture.snapshotA(syncTestBaseA))
 	fixture.advance(t, fixture.snapshotA(syncTestRemoteA))
 	fixture.writeLocal(t, syncTestBaseA, syncTestLocalB)
+}
+
+func TestSyncRefusesANewcomerUntilAConfirmedPullEstablishesTheFloor(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.publishOnly(t, fixture.snapshotA(syncTestBaseA))
+	fixture.writeLocal(t, syncTestBaseA, syncTestBaseB)
+
+	code, stdout, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stdout, "pull: unreadable (position_absent)")
+	assert.Contains(t, stderr, "sync needs an accepted publication floor to reconcile against")
+	assert.Contains(t, stderr, "run dottie pull --confirm first")
+	assert.Contains(t, stderr, "then run dottie sync")
+
+	code, stdout, stderr = fixture.runPull(t, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	token := syncTestToken(t, stdout)
+	code, _, stderr = fixture.runPull(
+		t,
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
+	require.Equal(t, 0, code, stderr)
+	floor := fixture.readFloor(t)
+	assert.Equal(t, uint64(1), floor.Revision)
+	assert.Equal(t, uint64(0), floor.Sequence)
+	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"))
+	assert.Equal(t, syncTestBaseB, readSyncFile(t, fixture, "b.txt"))
+	fixture.writeLocal(t, syncTestBaseA, syncTestLocalB)
+
+	code, stdout, stderr = runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: matches")
+	assert.Contains(t, stdout, "apply: changes=0")
+	token = syncTestToken(t, stdout)
+	code, confirmed, stderr := runSyncForTest(
+		t,
+		fixture,
+		syncTestHooks{},
+		"--did",
+		fixture.binding.AccountDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, confirmed, "push: committed")
+	uploads, sends := fixture.transport.counts()
+	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 1, sends)
 }
 
 func TestSyncUnconfirmedPrintsBothHalvesAndChangesNothing(t *testing.T) {
@@ -1311,7 +1423,7 @@ func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 	)
 	assert.Equal(
 		t,
-		"dottie: sync refused: the local position store cannot be inspected read-only; nothing was changed\n",
+		"dottie: sync refused: sync needs an accepted publication floor to reconcile against; run dottie pull --confirm first to accept the published position, then run dottie sync; nothing was changed\n",
 		stderr.String(),
 	)
 }

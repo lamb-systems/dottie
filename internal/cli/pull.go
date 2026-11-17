@@ -73,9 +73,11 @@ type pullApplySources struct {
 type pullApplySourcesFactory func(context.Context, *urfave.Command, publicationstate.Binding) (pullApplySources, error)
 
 type pullApplyMaterial struct {
-	Base    model.Snapshot
-	Remote  model.Snapshot
-	Payload []byte
+	Base      model.Snapshot
+	Remote    model.Snapshot
+	Payload   []byte
+	RecordCID []byte
+	Sequence  uint64
 }
 
 var (
@@ -264,6 +266,7 @@ func runPullCommand(
 	planRequest := pullApplyPlanRequest{
 		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
+		AcceptPosition: !inspection.Present || finding.Kind == pullFindingDiverges,
 	}
 	return runPullApply(ctx, planRequest, applySources)
 }
@@ -366,17 +369,18 @@ type publicationStageRefusal interface {
 }
 
 type pullApplyPlanRequest struct {
-	Command      *urfave.Command
-	Binding      publicationstate.Binding
-	Vault        [32]byte
-	Floor        publicationstate.Floor
-	Present      bool
-	View         publicationstate.SuppliedRepositoryView
-	Remote       pullRemote
-	Confirmation [32]byte
-	Confirmed    bool
-	RemoteOnly   bool
-	Label        string
+	Command        *urfave.Command
+	Binding        publicationstate.Binding
+	Vault          [32]byte
+	Floor          publicationstate.Floor
+	Present        bool
+	View           publicationstate.SuppliedRepositoryView
+	Remote         pullRemote
+	Confirmation   [32]byte
+	Confirmed      bool
+	RemoteOnly     bool
+	AcceptPosition bool
+	Label          string
 }
 
 func (input pullApplyPlanRequest) label() string {
@@ -394,10 +398,11 @@ type pullApplyPreparation struct {
 	Observation publicationstate.Observation
 	Staged      service.PublicationAcceptProposal
 	Token       [32]byte
+	AcceptOnly  bool
 }
 
 func (preparation pullApplyPreparation) applies() bool {
-	return preparation.Staged.StateToken != ([32]byte{})
+	return !preparation.AcceptOnly && preparation.Staged.StateToken != ([32]byte{})
 }
 
 func preparePullApply(
@@ -445,10 +450,31 @@ func preparePullApply(
 	preparation.Request = request
 	preparation.Material = material
 	preparation.Plan = plan
+	observation := pullApplyObservation(input.View)
 	if plan.Changes == 0 {
+		if !input.AcceptPosition {
+			return preparation, nil
+		}
+		staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
+			Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
+			FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
+		})
+		if err != nil {
+			return pullApplyPreparation{}, pullAcceptPositionStagingFailure(input.label(), err)
+		}
+		preparation.Observation = observation
+		preparation.Staged = staged
+		preparation.AcceptOnly = true
+		preparation.Token = pullAcceptPositionConfirmationToken(
+			input.Binding,
+			input.Floor.Revision,
+			input.Present,
+			material.RecordCID,
+			material.Sequence,
+			staged.ObservationDigest,
+		)
 		return preparation, nil
 	}
-	observation := pullApplyObservation(input.View)
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
 		FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
@@ -524,6 +550,9 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 	if len(preparation.Sources.Configuration.Targets) == 0 {
 		return nil
 	}
+	if preparation.AcceptOnly {
+		return runPullAcceptPosition(ctx, input, preparation)
+	}
 	if !preparation.applies() {
 		return nil
 	}
@@ -550,6 +579,66 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return urfave.Exit(input.label()+" applied changes but its result could not be written", 4)
 	}
 	return nil
+}
+
+func runPullAcceptPosition(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation) error {
+	output := renderPullAcceptPosition(preparation.Plan, preparation.Material)
+	output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
+	if !input.Confirmed {
+		output += fmt.Sprintf(
+			"pull: acceptance only; nothing was applied; repeat with --confirm %x\n",
+			preparation.Token,
+		)
+		return writeCommandOutput(input.Command, output)
+	}
+	if preparation.Token != input.Confirmation {
+		if writeErr := writeCommandOutput(input.Command, output); writeErr != nil {
+			return writeErr
+		}
+		return urfave.Exit(
+			"pull refused: the reviewed acceptance is stale or bound to a different observation; nothing was changed",
+			3,
+		)
+	}
+	output, err := acceptPullPosition(ctx, input, preparation, output)
+	if err != nil {
+		return err
+	}
+	if err := writeCommandOutput(input.Command, output); err != nil {
+		return urfave.Exit("pull accepted the position but its result could not be written", 4)
+	}
+	return nil
+}
+
+func acceptPullPosition(
+	ctx context.Context,
+	input pullApplyPlanRequest,
+	preparation pullApplyPreparation,
+	output string,
+) (string, error) {
+	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
+	if err != nil || current.Present != input.Present || current.Floor.Revision != input.Floor.Revision {
+		return output, urfave.Exit(
+			"pull refused: the accepted floor changed after the acceptance was prepared; re-run dottie pull",
+			3,
+		)
+	}
+	accepted, acceptErr := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
+		Directory: preparation.Sources.Paths.PublicationStateDir(), Binding: input.Binding,
+		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
+		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
+		Observation: preparation.Observation, Payload: preparation.Material.Payload,
+	})
+	if acceptErr != nil {
+		return output, pullAcceptPositionFailure(input.Command, output, acceptErr)
+	}
+	output += fmt.Sprintf(
+		"floor: revision=%d generation=%d sequence=%d\n",
+		accepted.Revision,
+		accepted.Generation,
+		accepted.Sequence,
+	)
+	return output, nil
 }
 
 func pullApplyRoots(configuration config.Config, paths platform.Paths) (map[string]string, error) {
@@ -585,6 +674,10 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
+	recordCID, err := publication.RecordCID(view.Snapshots[len(view.Snapshots)-1].Raw)
+	if err != nil {
+		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
+	}
 	payload, err := remote.Blob(ctx, terminal)
 	if err != nil {
 		return pullApplyMaterial{}, err
@@ -595,9 +688,11 @@ func pullApplySnapshots(
 	}
 	if !present {
 		return pullApplyMaterial{
-			Base:    model.Snapshot{Version: model.SnapshotVersion},
-			Remote:  remoteSnapshot,
-			Payload: payload,
+			Base:      model.Snapshot{Version: model.SnapshotVersion},
+			Remote:    remoteSnapshot,
+			Payload:   payload,
+			RecordCID: recordCID,
+			Sequence:  terminal.PublicationSeq,
 		}, nil
 	}
 	if floor.Sequence >= uint64(len(view.Snapshots)) {
@@ -622,7 +717,13 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	return pullApplyMaterial{Base: base, Remote: remoteSnapshot, Payload: payload}, nil
+	return pullApplyMaterial{
+		Base:      base,
+		Remote:    remoteSnapshot,
+		Payload:   payload,
+		RecordCID: recordCID,
+		Sequence:  terminal.PublicationSeq,
+	}, nil
 }
 
 func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicationstate.Observation {
@@ -682,6 +783,57 @@ func pullAcceptStagingFailure(label string, err error) error {
 		)
 	}
 	return urfave.Exit(label+" refused: the applied material cannot be staged for accept; nothing was changed", 3)
+}
+
+func pullAcceptPositionStagingFailure(label string, err error) error {
+	var refusal publicationStageRefusal
+	if errors.As(err, &refusal) {
+		if refusal.Reason() == "revision_moved" {
+			return urfave.Exit(
+				label+" refused: the accepted floor changed after the reconciliation was prepared; re-run dottie "+label,
+				3,
+			)
+		}
+		return urfave.Exit(
+			label+" refused: the verified position cannot be staged for acceptance ("+escapeField(
+				refusal.Stage()+"/"+refusal.Reason(),
+			)+"); nothing was changed",
+			3,
+		)
+	}
+	return urfave.Exit(
+		label+" refused: the verified position cannot be staged for acceptance; nothing was changed",
+		3,
+	)
+}
+
+func pullAcceptPositionFailure(command *urfave.Command, output string, err error) error {
+	var refusal publicationStageRefusal
+	detail := "accept"
+	if errors.As(err, &refusal) {
+		detail = refusal.Stage() + "/" + refusal.Reason()
+	}
+	output += "pull: not accepted (" + escapeField(detail) + ")\n"
+	if writeErr := writeCommandOutput(command, output); writeErr != nil {
+		return writeErr
+	}
+	unproven := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	var storeFailure *publicationstate.Error
+	if errors.As(err, &storeFailure) && storeFailure.Class() == publicationstate.ErrStorage {
+		unproven = true
+	}
+	if unproven {
+		return urfave.Exit(
+			"pull did not complete: the accepted floor is not confirmed ("+escapeField(
+				detail,
+			)+"); re-run dottie pull",
+			4,
+		)
+	}
+	return urfave.Exit(
+		"pull did not complete: the accepted floor is unchanged ("+escapeField(detail)+"); re-run dottie pull",
+		3,
+	)
 }
 
 func pullAcceptFailure(command *urfave.Command, label, output string, err error) error {
@@ -777,6 +929,14 @@ func renderPullApplyPlan(plan service.PublicationApplyPlan) string {
 	return output.String()
 }
 
+func renderPullAcceptPosition(plan service.PublicationApplyPlan, material pullApplyMaterial) string {
+	return fmt.Sprintf(
+		"pull: reconciled changes=0 unchanged=%d; the published position sequence=%d can be adopted without writing files\n",
+		len(plan.Entries)-plan.Changes,
+		material.Sequence,
+	)
+}
+
 func renderPullApplyReport(report service.PublicationApplyReport) string {
 	return fmt.Sprintf(
 		"pull: applied changes=%d unchanged=%d bytes=%d\n",
@@ -806,6 +966,45 @@ func pullApplyConfirmationToken(
 	_, _ = digest.Write(binding.Vault[:])
 	_, _ = digest.Write(plan[:])
 	_, _ = digest.Write(stateToken[:])
+	_, _ = digest.Write(observationDigest[:])
+	var token [32]byte
+	copy(token[:], digest.Sum(nil))
+	return token
+}
+
+func pullAcceptPositionConfirmationToken(
+	binding publicationstate.Binding,
+	floorRevision uint64,
+	present bool,
+	recordCID []byte,
+	sequence uint64,
+	observationDigest [32]byte,
+) [32]byte {
+	digest := sha256.New()
+	var length [4]byte
+	writeField := func(value string) {
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	var scratch [8]byte
+	writeField("dottie/pull-accept-position/v1")
+	writeField(binding.AccountDID)
+	writeField(string(binding.Backend))
+	writeField(binding.Repository)
+	_, _ = digest.Write(binding.Vault[:])
+	binary.BigEndian.PutUint64(scratch[:], floorRevision)
+	_, _ = digest.Write(scratch[:])
+	if present {
+		_, _ = digest.Write([]byte{1})
+	} else {
+		_, _ = digest.Write([]byte{0})
+	}
+	binary.BigEndian.PutUint32(length[:], uint32(len(recordCID)))
+	_, _ = digest.Write(length[:])
+	_, _ = digest.Write(recordCID)
+	binary.BigEndian.PutUint64(scratch[:], sequence)
+	_, _ = digest.Write(scratch[:])
 	_, _ = digest.Write(observationDigest[:])
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))

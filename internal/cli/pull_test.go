@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"syscall"
 	"testing"
 
 	urfave "github.com/urfave/cli/v3"
@@ -332,6 +333,50 @@ func (fixture *pullTestFixture) writeBaseFile(t *testing.T) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.targetPath("init.lua")), 0o700))
 	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte(pullTestBaseContent), 0o600))
+}
+
+func (fixture *pullTestFixture) unselectedTargetView(
+	t *testing.T,
+	content string,
+) (publicationstate.SuppliedRepositoryView, map[uint64]model.Snapshot) {
+	t.Helper()
+	snapshot := fixture.snapshot
+	snapshot.Targets = append(append([]model.Target(nil), fixture.snapshot.Targets...), model.Target{
+		ID:            "other",
+		Source:        model.SourceFiles,
+		SourceVersion: model.SourceVersion,
+		Root:          &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+	})
+	snapshot.Entries = append(append([]model.Entry(nil), fixture.snapshot.Entries...), model.Entry{
+		TargetID: "other",
+		File: &model.FileEntry{
+			Path:    "note.txt",
+			State:   model.FilePresent,
+			Kind:    model.FileRegular,
+			Content: []byte(content),
+			Mode:    0o600,
+		},
+	})
+	packed, err := vault.Pack(snapshot)
+	require.NoError(t, err)
+	parent, err := publication.RecordCID(fixture.block.Raw)
+	require.NoError(t, err)
+	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, fixture.record.PublicationSeq+1, parent)
+	view := publicationstate.SuppliedRepositoryView{
+		Origin:          fixture.binding,
+		Scope:           publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: fixture.context,
+		Head:            pullTestHead(t, fixture.binding, block, record),
+		Snapshots: []publicationstate.SnapshotBlock{
+			{Key: fixture.block.Key, Raw: bytes.Clone(fixture.block.Raw)},
+			block,
+		},
+	}
+	payloads := map[uint64]model.Snapshot{
+		fixture.record.PublicationSeq: fixture.snapshot,
+		record.PublicationSeq:         snapshot,
+	}
+	return view, payloads
 }
 
 func (fixture *pullTestFixture) configure(t *testing.T, mode config.Mode) {
@@ -1155,6 +1200,218 @@ func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *t
 	otherAccount.Repository = "at://" + otherAccount.AccountDID
 	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation))
 	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation))
+}
+
+func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t *testing.T) {
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
+	binding.Repository = "at://" + pullTestDID
+	recordCID := []byte{0x01, 0x02, 0x03}
+	observation := sha256.Sum256([]byte("observed position"))
+	token := pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation)
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 4, true, recordCID, 7, observation),
+		"the token does not bind the floor revision",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 3, false, recordCID, 7, observation),
+		"the token does not bind first use versus advance",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 3, true, []byte{0x01, 0x02, 0x04}, 7, observation),
+		"the token does not bind the observed record",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 8, observation),
+		"the token does not bind the observed sequence",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, sha256.Sum256([]byte("moved observation"))),
+		"the token does not bind the observation digest",
+	)
+	otherVault := binding
+	otherVault.Vault = [32]byte{0x63}
+	assert.NotEqual(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(otherVault, 3, true, recordCID, 7, observation),
+		"the token does not bind the vault",
+	)
+	assert.Equal(t, token, pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation))
+}
+
+func TestPullOffersAcceptanceForANewcomerWhoseFilesAlreadyMatch(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	before := pullTestDirectoryState(t, fixture.paths.Home)
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "pull: first-use\n")
+	assert.Contains(t, stdout.String(), "the published position sequence=0 can be adopted without writing files")
+	assert.Contains(t, stdout.String(), "acceptance only; nothing was applied")
+	token := pullTestConfirmation(t, stdout.String())
+	assert.Equal(
+		t,
+		before,
+		pullTestDirectoryState(t, fixture.paths.Home),
+		"the unconfirmed acceptance wrote a local file",
+	)
+	store := fixture.openStore(t)
+	_, present, err := store.Load(context.Background())
+	require.NoError(t, err)
+	assert.False(t, present, "the unconfirmed acceptance created a floor")
+	require.NoError(t, store.Close())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "can be adopted without writing files")
+	assert.Equal(
+		t,
+		before,
+		pullTestDirectoryState(t, fixture.paths.Home),
+		"the confirmed acceptance wrote a local file",
+	)
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, fixture.record.PublicationSeq, accepted.Sequence)
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf(
+			"floor: revision=%d generation=%d sequence=%d\n",
+			accepted.Revision,
+			accepted.Generation,
+			accepted.Sequence,
+		),
+	)
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Equal(t, "pull: matches\n", stdout.String())
+}
+
+func TestPullAdvancesAStrandedFloorWhenThePublicationOnlyChangesUnselectedTargets(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.accept(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	before := fixture.acceptedFloor(t)
+	view, payloads := fixture.unselectedTargetView(t, "synthetic unselected position")
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	assert.Contains(t, stdout.String(), "pull: diverges (record_cid)\n")
+	assert.Contains(t, stdout.String(), "can be adopted without writing files")
+	token := pullTestConfirmation(t, stdout.String())
+	assert.Equal(t, before.Revision, fixture.acceptedFloor(t).Revision, "the unconfirmed acceptance advanced the floor")
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 0, code, stderr.String())
+	accepted := fixture.acceptedFloor(t)
+	assert.Equal(t, before.Revision+1, accepted.Revision)
+	assert.Equal(t, before.Sequence+1, accepted.Sequence)
+	assert.Contains(
+		t,
+		stdout.String(),
+		fmt.Sprintf(
+			"floor: revision=%d generation=%d sequence=%d\n",
+			accepted.Revision,
+			accepted.Generation,
+			accepted.Sequence,
+		),
+	)
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
+}
+
+func TestPullRefusesAnAcceptanceTokenForAChangedPublication(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	view, payloads := fixture.unselectedTargetView(t, "synthetic first published position")
+	reader := &pullTestReader{view: view, payloads: payloads}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+
+	changedView, changedPayloads := fixture.unselectedTargetView(t, "synthetic changed published position")
+	reader = &pullTestReader{view: changedView, payloads: changedPayloads}
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "the reviewed acceptance is stale or bound to a different observation")
+	assert.NotContains(t, stdout.String(), "floor: revision=")
+	store := fixture.openStore(t)
+	_, present, err := store.Load(context.Background())
+	require.NoError(t, err)
+	assert.False(t, present, "a stale acceptance token created a floor")
+	require.NoError(t, store.Close())
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content), "a stale acceptance token wrote a local file")
+}
+
+func TestPullRefusesAcceptanceWhenTheLocalCaptureIsIncomplete(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+	fixture.writeBaseFile(t)
+	require.NoError(t, syscall.Mkfifo(fixture.targetPath("pipe"), 0o600))
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code)
+	assert.Contains(t, stderr.String(), "capture_incomplete")
+	assert.NotContains(t, stdout.String(), "confirmation:")
+	assert.NotContains(t, stdout.String(), "can be adopted without writing files")
+	store := fixture.openStore(t)
+	_, present, err := store.Load(context.Background())
+	require.NoError(t, err)
+	assert.False(t, present, "an incomplete capture created a floor")
+	require.NoError(t, store.Close())
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
 }
 
 func TestPullPrintsTheApplyPlanAndAppliesOnlyThePreparedToken(t *testing.T) {

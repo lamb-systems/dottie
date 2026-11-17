@@ -134,7 +134,9 @@ same order `pull` does, so a machine with no stored binding adopts the published
 the push candidate from the post-pull state, prints both and one `confirmation:` token that binds the selection
 binding, the pull plan digest, the staged accept state token, the observation digest, the provider view digest and
 the post-pull push identity (payload digest and size, review selection and approval digests with revisions).
-Without `--confirm` it prints and changes nothing. With a matching token it applies and accepts the pull half, then
+A newcomer must complete a confirmed `pull` before `sync`: `sync` reconciles two directions and needs an accepted
+floor to reconcile against, so with no accepted floor it refuses and names `dottie pull --confirm` followed by
+`dottie sync`; `sync` itself creates no position store. Without `--confirm` it prints and changes nothing. With a matching token it applies and accepts the pull half, then
 recomposes the push snapshot from the actual post-pull state and requires the digest set to equal what was printed
 before it prepares and submits the push attempt. A pull refusal stops everything before any publication; a push
 refusal after a successful pull leaves the files applied and the floor advanced, exits 4 and never partially
@@ -173,18 +175,29 @@ non-empty plan is printed with a `confirmation:` token, and `--confirm TOKEN` re
 apply it. Before printing, `pull` stages the acceptance for the material the plan was built from and binds the
 selection binding, the plan digest, the staged acceptance state token and the observation digest into the token, so
 a changed plan, a different vault, a moved provider observation or a moved local position refuses instead of
-applying or accepting something that was not shown. An empty plan and an `absent` position apply and accept
-nothing and exit 0. Applying goes through the same journal, admission, apply lease, containment, captured preimage
+applying or accepting something that was not shown. An `absent` position applies and accepts nothing and exits 0;
+a `matches` finding with no changes prints only the finding.
+
+When the complete reconciliation has no file changes and the floor does not already name the provider's terminal
+record (`first-use` or `diverges`), `pull` offers observation-bound acceptance instead of an apply. The unconfirmed
+run prints the finding, then a line stating that the published position can be adopted without writing files, and a
+`confirmation:` token; it creates no floor. `--confirm TOKEN` stages only the acceptance and creates or advances
+the accepted floor without applying anything. The token binds the selection binding, the floor revision and the
+first-use/advance mode, the observed record CID and sequence, and the observation digest, so a changed publication,
+a moved provider observation or a moved floor refuses. Acceptance is offered only after reconciliation completes and
+the local side is fully captured: a partial or unreadable capture refuses without a token. A `matches` finding with
+no changes offers nothing because the floor already names the observed position. Applying goes through the same journal, admission, apply lease, containment, captured preimage
 and backup-only refusals the engine enforces, and a backup-only selection always refuses to apply.
 
 A confirmed run applies the plan first and accepts the material second, never one transaction for both. After a
 fully applied plan it re-validates that the accepted floor revision is still the one the plan used, then accepts
 the applied material into the position store with mode `advance` when a floor exists and `first-use` only when the
 store reports none; a replacement floor is never offered by `pull`. The first-use case is a newcomer joining a
-published vault: the plan is composed against a missing base, so every provider entry is a download, and the
-accepted floor is established at the provider's terminal record only by the confirmed run. An unconfirmed
-newcomer run provisions the store and prints the plan and token, and it accepts nothing, so `position status`
-still reports `position: empty`. The run prints the new `floor:` revision, so
+published vault: when the local selection differs, the plan is composed against a missing base, so every provider
+entry is a download, and the accepted floor is established at the provider's terminal record only by the confirmed
+run. When the local selection already equals the published snapshot, the zero-change acceptance path establishes
+the floor without applying. An unconfirmed newcomer run provisions the store and prints the plan or acceptance
+token, and it accepts nothing, so `position status` still reports `position: empty`. The run prints the new `floor:` revision, so
 the next `pull` reports `matches` instead of re-planning the same apply. A refusal at accept leaves the applied
 files and the unchanged floor behind, prints `pull: applied but not accepted` with the typed reason and exits 3; an
 accept whose outcome cannot be proven exits 4 without claiming success. Exit 2 is usage, exit 3 is a local refusal

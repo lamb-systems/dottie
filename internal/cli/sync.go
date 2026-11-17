@@ -549,10 +549,13 @@ func runSyncCommand(
 	}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
+		if publicationPositionAbsent(err) {
+			return syncNewcomerRefusal(command, pullStoreReason(err))
+		}
 		return syncUnreadableExit(command, pullStoreReason(err))
 	}
 	if !inspection.Present {
-		return syncUnreadableExit(command, pullReasonFloorAbsent)
+		return syncNewcomerRefusal(command, pullReasonFloorAbsent)
 	}
 	remote, err := remotes(ctx, command, session, binding)
 	if err != nil {
@@ -1102,6 +1105,19 @@ func syncRemoteFailure(err error) string {
 
 func syncUnreadableExit(command *urfave.Command, reason string) error {
 	return unreadablePositionExit(command, "sync", reason)
+}
+
+func syncNewcomerRefusal(command *urfave.Command, reason string) error {
+	if err := writeCommandOutput(
+		command,
+		renderPullFinding(pullFinding{Kind: pullFindingUnreadable, Reason: reason}),
+	); err != nil {
+		return err
+	}
+	return urfave.Exit(
+		"sync refused: sync needs an accepted publication floor to reconcile against; run dottie pull --confirm first to accept the published position, then run dottie sync; nothing was changed",
+		3,
+	)
 }
 
 func syncFindingExit(command *urfave.Command, finding pullFinding) error {
