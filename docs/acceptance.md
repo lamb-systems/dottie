@@ -85,4 +85,39 @@ encrypted-v1 exposure was ciphertext, and no v2 profile change re-introduces an 
 Owner acceptance of this residual is what permits the plaintext v2 write path to be implemented. It does
 not authorize any live provider run, which still requires explicit disposable-account authorization.
 
+## Live v2 publication run (2026-11-16)
+
+Run by the owner against a disposable account (`dottiethrowaway.bsky.social`) in disposable homes with synthetic
+content. It is the first observation of the v2 path against a real provider; it is not a re-run of the 2026-11-05
+milestone, which described the retired v1 path.
+
+Observed, in one session:
+
+- `account login` granting `atproto`, `blob:application/octet-stream`, and `repo:systems.lamb.dottie.vaultHead`,
+  `vaultSnapshot`, `vaultPolicy`, `vaultControl`, `vaultCertificate`, `vaultCheckpoint`, `vaultAttestation`,
+  `vaultHeadV2` and `vaultSnapshotV2`.
+- `account bootstrap` refusing a used repository, then succeeding once the preflight was narrowed to "no existing
+  Dottie publication"; it wrote no repository record and recorded only the local vault selection.
+- `push` preparing a retained proposal, printing its confirmation, and `push --confirm` publishing it:
+  `floor: revision=1 generation=1 sequence=0`, `push: committed`.
+- `pull` reporting `pull: matches` against that publication, and a subsequent `push` reporting `push: no-op`.
+- A fresh home resolving the vault from the published `vaultHeadV2` record instead of requiring `--vault`, and
+  planning a first-use join of two files without applying anything until confirmed.
+
+What the run proved: the blob upload, the record batch, the view validation, the accepted-floor readback and the
+consent token all behave against a real PDS as the in-memory provider models them, once six provider-behaviour
+differences were corrected (blob media-type canonicalisation, the record's declared media type, the record-batch
+rejection classification, the preflight's emptiness rule, first-use provisioning of the position store, and selection
+of a retained proposal alongside a consumed one).
+
+What it did not prove, and must not be read as proving:
+
+- The confirmed first-use join was not observed end to end on a second machine; the plan was, the apply was not.
+- It says nothing about power-loss durability, provider-side at-most-once effects, hidden provider logs, or
+  server-side retention.
+- Provider blobs cannot be deleted. Rejected attempts uploaded real payloads that remain retrievable by CID while
+  unreferenced, which is the residual above in practice, not a theoretical case.
+- One account, one day, synthetic content. A skipped or single observation is not a general claim about provider
+  behaviour.
+
 The owner must record explicit acceptance of these boundaries, every matrix result, and the residual limits before real user data is used. Until that acceptance is recorded, do not use Dottie with real dotfiles or preferences.
