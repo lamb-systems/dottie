@@ -393,6 +393,8 @@ func TestApplyPublicationResolvesInterruptedMutationWithoutRewriting(t *testing.
 func TestApplyPublicationRefusesAdmissionWhileALiveRowExists(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "done")
+	postimage := publicationstate.ObservedJournalFile([]byte("done"))
+	postimage.Mode = 0o600
 	entry, err := fixture.journal.BeginJournal(context.Background(), publicationstate.JournalIntent{
 		Vault:           fixture.vault,
 		Operation:       "apply",
@@ -401,7 +403,7 @@ func TestApplyPublicationRefusesAdmissionWhileALiveRowExists(t *testing.T) {
 		Anchor: fixture.anchor(
 			t,
 		),
-		Postimage:         publicationstate.ObservedJournalFile([]byte("done")),
+		Postimage:         postimage,
 		SeenFloorRevision: 2,
 	})
 	require.NoError(t, err)
@@ -1069,10 +1071,13 @@ func TestApplyPublicationJournalRowCountSeesTerminalRows(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.write(t, "note.ini", "done")
 	preimage := publicationstate.ObservedJournalFile([]byte("done"))
+	preimage.Mode = 0o600
+	postimage := publicationstate.ObservedJournalFile([]byte("next"))
+	postimage.Mode = 0o600
 	entry, err := fixture.journal.BeginJournal(context.Background(), publicationstate.JournalIntent{
 		Vault: fixture.vault, Operation: "apply", DestinationDir: fixture.root, DestinationPath: "note.ini",
 		Anchor: fixture.anchor(t), Preimage: &preimage, PreimageBytes: []byte("done"),
-		Postimage: publicationstate.ObservedJournalFile([]byte("next")), SeenFloorRevision: 2,
+		Postimage: postimage, SeenFloorRevision: 2,
 	})
 	require.NoError(t, err)
 	resolutions := fixture.resolutions(t)
@@ -1181,6 +1186,86 @@ func TestApplyPublicationAppliesModeOnlyDivergence(t *testing.T) {
 			assert.Equal(t, testCase.declared.Perm(), info.Mode().Perm())
 		})
 	}
+}
+
+func TestApplyPublicationModeOnlyInterruptionResolvesFromJournaledMode(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "same")
+	require.NoError(t, os.Chmod(fixture.path("note.ini"), 0o644))
+	base := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o644)},
+	)
+	remote := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o600)},
+	)
+	request := fixture.request(fixture.local, base, remote)
+	request.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {
+		if phase == PublicationApplyJournaled {
+			return errors.New("synthetic stop before mode mutation")
+		}
+		return nil
+	}
+
+	report, err := ApplyPublication(context.Background(), request)
+	require.Error(t, err)
+	assert.Equal(t, 0, report.Applied)
+	require.Equal(t, int64(1), fixture.journalRowCount(t))
+
+	resolutions := fixture.resolutions(t)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, publicationstate.JournalOutcomeFailed, resolutions[0].Outcome)
+	info, err := os.Lstat(fixture.path("note.ini"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+}
+
+func TestApplyPublicationDetectsAModeChangedAfterMutation(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "same")
+	require.NoError(t, os.Chmod(fixture.path("note.ini"), 0o644))
+	base := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o644)},
+	)
+	remote := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "same", 0o600)},
+	)
+	request := fixture.request(fixture.local, base, remote)
+	request.Barrier = func(phase PublicationApplyPhase, _ publicationstate.JournalEntry) error {
+		if phase == PublicationApplyMutated {
+			return os.Chmod(fixture.path("note.ini"), 0o644)
+		}
+		return nil
+	}
+
+	report, err := ApplyPublication(context.Background(), request)
+	require.ErrorIs(t, err, publicationstate.ErrInvalid)
+	assert.Equal(t, 0, report.Applied)
+	require.NotNil(t, report.Stopped)
+	assert.Equal(t, publicationstate.JournalStateIndeterminate, report.Stopped.State)
+}
+
+func TestApplyPublicationPlanDigestBindsTheDeclaredMode(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	remote := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", 0o600)},
+	)
+	plan, err := PlanPublicationApply(
+		context.Background(),
+		fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.Changes)
+
+	changed := fixture.targetSnapshot(
+		[]model.Entry{publicationApplyModeEntry(fixture.target.ID, "note.ini", "after", 0o644)},
+	)
+	request := fixture.request(fixture.local, fixture.emptySnapshot(), changed)
+	request.ExpectedPlan = plan.Digest
+	report, err := ApplyPublication(context.Background(), request)
+	requirePublicationApplyRefusal(t, err, "apply-plan", "confirmation_mismatch")
+	assert.Equal(t, 0, report.Applied)
+	assert.NoFileExists(t, fixture.path("note.ini"))
+	fixture.assertNoJournalRows(t)
 }
 
 func TestApplyPublicationRefusesUnsupportedDeclaredModes(t *testing.T) {

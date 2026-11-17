@@ -2,9 +2,10 @@
 
 **Decision: accepted by the owner on 2026-11-05.** The owner reviewed this evidence matrix, including
 its distinction between synthetic and live rows, and accepted the milestone with the residual
-limits below. Real-data use of this build is permitted under those limits. Acceptance does not
-remove the limits. A future change that invalidates a row must not assume
-this acceptance still applies.
+limits below. Real-data use of the retired v1 build this decision covered was permitted under those
+limits; that permission does not carry into the v2 tree, whose use awaits the explicit decision
+recorded at the end of this document. Acceptance does not remove the limits. A future change that
+invalidates a row must not assume this acceptance still applies.
 
 > **Retirement note, added 2026-11-15 (v1 kit retirement).** `recover`, `export`, `import`, `prune`,
 > `history`, `devices list`, `devices enroll`, `devices revoke`, `account enroll`, `account import-bundle`,

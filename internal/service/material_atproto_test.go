@@ -818,6 +818,33 @@ func TestMaterialATProtoRecordsProviderExposureOnRejectedBatch(t *testing.T) {
 	assert.Equal(t, publicationstate.ReasonCandidateMissing, custody.Reason())
 }
 
+func TestMaterialATProtoUnrecognisedProviderCodeStaysBlockingAndHidden(t *testing.T) {
+	ctx := context.Background()
+	fixture := newATProtoMaterialFixture(t)
+	canary := "PRIVATE_CANDIDATE_123"
+	fixture.repository.rejectNextApply(422, canary)
+	proposal := fixture.prepare(t)
+
+	result, err := fixture.coordinator.PublishMaterial(ctx, proposal, proposal.Confirmation)
+	requireMaterialRefusal(t, err, "submission", "submission_unresolved")
+	require.NotErrorIs(t, err, ErrMaterialSubmissionRejected)
+	var refusal *atprotoMaterialError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, "dispatch_rejected:422:unrecognized", refusal.Reason())
+	assert.NotContains(t, err.Error(), canary)
+	assert.NotContains(t, refusal.Reason(), canary)
+
+	attempt, loadErr := fixture.store.LoadAttempt(ctx, proposal.Proposal.AttemptID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, publicationstate.OutcomeUnresolved, attempt.Outcome)
+	assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, attempt.Lifecycle)
+	assert.Equal(t, result.Attempt.ID, attempt.ID)
+	_, active, activeErr := fixture.store.ActiveAttempt(ctx)
+	require.NoError(t, activeErr)
+	assert.True(t, active, "an unrecognised provider code retired the blocking attempt")
+	assert.Equal(t, 1, fixture.repository.applyCount())
+}
+
 func TestMaterialATProtoResolvesAmbiguousDispatchWithoutRetry(t *testing.T) {
 	ctx := context.Background()
 	fixture := newATProtoMaterialFixture(t)

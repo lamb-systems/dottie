@@ -68,11 +68,12 @@ through the v2 profile. An account can hold only one published Dottie vault beca
 that already holds one.
 
 This tree has no cross-machine recovery path and no offline anchor: recovering a vault on another machine without a
-live PDS is not supported, bootstrap mints no recovery kit, and nothing Dottie writes can restore data without a
-surviving device key. Authenticity is repo-scoped through the account's own AT Protocol repository; Dottie adds no
-vault signature over a published position. V2 publication through push, pull and sync is the only publication
-path; bootstrap provisions no publication state, so the first pull provisions the position store from the position
-the account publishes.
+live PDS is not supported, bootstrap mints no recovery kit, and no Dottie device key can restore data the provider or
+account no longer makes available. V2 pull reads the published plaintext snapshot with the account session, so
+losing every Dottie device key is not by itself loss of that published data; losing account access is. Authenticity
+is repo-scoped through the account's own AT Protocol repository; Dottie adds no vault signature over a published
+position. V2 publication through push, pull and sync is the only publication path; bootstrap provisions no
+publication state, so the first pull provisions the position store from the position the account publishes.
 
 See README.md for build instructions and current status.
 `

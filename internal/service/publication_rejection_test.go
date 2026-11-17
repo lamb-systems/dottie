@@ -24,6 +24,8 @@ func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.
 		"no error field":    {status: 400, response: []byte(`{"message":"synthetic refusal"}`)},
 		"unsafe error name": {status: 400, response: []byte(`{"error":"not a code"}`)},
 		"oversized name":    {status: 400, response: []byte(`{"error":"` + strings.Repeat("A", 65) + `"}`)},
+		"unknown code":      {status: 422, response: []byte(`{"error":"SomethingElse"}`)},
+		"unknown auth code": {status: 400, response: []byte(`{"error":"AuthRequired"}`)},
 		"foreign account":   {status: 401, response: []byte(`{"error":"AuthRequired"}`)},
 		"forbidden":         {status: 403, response: []byte(`{"error":"AuthRequired"}`)},
 		"server fault":      {status: 500, response: []byte(`{"error":"QuotaExceeded"}`)},
@@ -67,27 +69,22 @@ func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.
 			response: []byte(`{"error":"RequestTooLarge"}`),
 			class:    atproto.ErrPublicationBatchTooLarge,
 		},
-		"fence lost": {status: 409, response: []byte(`{"error":"InvalidSwap"}`), class: atproto.ErrFenceLost},
-		"auth required": {
+		"invalid request": {
 			status:   400,
-			response: []byte(`{"error":"AuthRequired"}`),
+			response: []byte(`{"error":"InvalidRequest"}`),
 			class:    atproto.ErrBatchRejected,
 		},
-		"unrecognised code": {
+		"invalid record": {
 			status:   400,
 			response: []byte(`{"error":"InvalidRecord"}`),
 			class:    atproto.ErrBatchRejected,
 		},
-		"provider rejection": {
+		"invalid mime type": {
 			status:   400,
-			response: []byte(`{"error":"ApplyWritesRejected"}`),
+			response: []byte(`{"error":"InvalidMimeType"}`),
 			class:    atproto.ErrBatchRejected,
 		},
-		"untyped list": {
-			status:   422,
-			response: []byte(`{"error":"SomethingElse"}`),
-			class:    atproto.ErrBatchRejected,
-		},
+		"fence lost": {status: 409, response: []byte(`{"error":"InvalidSwap"}`), class: atproto.ErrFenceLost},
 	}
 	for name, value := range definite {
 		t.Run(name, func(t *testing.T) {
@@ -108,6 +105,22 @@ func TestATProtoMaterialApplyStatusMarksOnlyADefiniteProviderRefusal(t *testing.
 		"dispatch_rejected:400:InvalidRecord",
 		atprotoMaterialDispatchReason(400, []byte(`{"error":"InvalidRecord"}`)),
 	)
+	assert.Equal(
+		t,
+		"dispatch_rejected:422:unrecognized",
+		atprotoMaterialDispatchReason(422, []byte(`{"error":"SomethingElse"}`)),
+	)
+}
+
+func TestATProtoMaterialUnrecognisedProviderCodeCannotDiscloseCandidateText(t *testing.T) {
+	canary := "PRIVATE_CANDIDATE_123"
+	reason := atprotoMaterialDispatchReason(422, []byte(`{"error":"`+canary+`"}`))
+	assert.Equal(t, "dispatch_rejected:422:unrecognized", reason)
+	assert.NotContains(t, reason, canary)
+
+	failure := atprotoMaterialApplyStatus(422, []byte(`{"error":"`+canary+`"}`))
+	require.NotErrorIs(t, failure, ErrMaterialSubmissionRejected)
+	assert.NotContains(t, failure.Error(), canary)
 }
 
 func TestDefiniteSubmissionRejectionRetiresTheAttemptAndAmbiguityDoesNot(t *testing.T) {
@@ -125,6 +138,12 @@ func TestDefiniteSubmissionRejectionRetiresTheAttemptAndAmbiguityDoesNot(t *test
 		},
 		"ambiguous outcome": {
 			failure:   errors.Join(atproto.ErrAmbiguousTransport, atproto.ErrCandidateMayBeDisclosed),
+			outcome:   publicationstate.OutcomeUnresolved,
+			lifecycle: publicationstate.AttemptMayHaveSubmitted,
+			blocking:  true,
+		},
+		"unrecognised provider code": {
+			failure:   atprotoMaterialApplyStatus(422, []byte(`{"error":"SomethingElse"}`)),
 			outcome:   publicationstate.OutcomeUnresolved,
 			lifecycle: publicationstate.AttemptMayHaveSubmitted,
 			blocking:  true,

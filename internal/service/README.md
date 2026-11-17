@@ -119,8 +119,11 @@ of the same value refuses typed without dispatching, and a transport error canno
 transport error or an ambiguous outcome returns a typed unresolved result with no retry, no
 abandonment, no finalization and no rollback claim; a later explicit `ResolveAttempt` and
 `FinalizeAttempt` classify the outcome. A definite provider refusal is the one exception, and the
-adapter decides it: a 4xx `applyWrites` answer that carries a recognised provider error code and is not
-401/403 means the batch was not committed. That path retires the attempt through `RejectAttempt` with the
+adapter decides it: a 4xx `applyWrites` answer that carries a code from the closed pre-commit refusal
+allowlist (`InvalidRequest`, `InvalidRecord`, `InvalidMimeType`, `InvalidSwap`, `QuotaExceeded`,
+`StorageQuotaExceeded`, `RateLimitExceeded`, `PayloadTooLarge`, `RequestTooLarge`) and is not 401/403 means
+the batch was not committed. An unknown code never becomes a definite refusal and its text is rendered only
+as the fixed `unrecognized` label. That path retires the attempt through `RejectAttempt` with the
 terminal `provider-rejected` outcome, keeps `ErrCandidateMayBeDisclosed` attached because the uploaded blob
 may still be retrievable by CID, and returns a typed `submission`/`submission_rejected` result that still
 reports the provider status and code. A 5xx, a transport error, an unparseable body, an unrecognised code

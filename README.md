@@ -15,13 +15,15 @@ state or the keyring and prints none, and `internal/vault` no longer creates, pa
 material, kit-signed checkpoints or export archives. Bootstrap also writes no repository record at
 all: the v1 genesis record set is deleted and the first `push` publishes the vault. Cross-machine
 recovery without a live PDS is not supported and is not planned; v2 publication replaces it.
-Real-data use is permitted under the residual limits in
-[`docs/acceptance.md`](docs/acceptance.md): no global freshness, one published vault per account, and
-provider-held records that cannot be deleted. The plaintext profile adds one disclosed residual: the
-packed snapshot is uploaded before its record batch, so a rejected or ambiguous batch can leave an
-unattached plaintext blob retrievable at the provider. Dottie never surfaces candidate bytes for a
-publication that did not succeed. The live gates in that document ran against a disposable account on
-2026-11-05 and describe the retired v1 path; they are historical evidence, not coverage of this tree.**
+Real-data use of this v2 tree awaits an explicit owner acceptance decision recording the v2 evidence
+and residuals; [`docs/acceptance.md`](docs/acceptance.md) withholds that permission until it is
+recorded. The 2026-11-05 acceptance covers only the retired v1 path, and the 2026-11-16 v2 live run
+did not observe the confirmed first-use join end to end on a second machine; that gap remains visible
+in the acceptance document. The open limits are no global freshness, one published vault per account,
+provider-held records that cannot be deleted, and one disclosed plaintext residual: the packed
+snapshot is uploaded before its record batch, so a rejected or ambiguous batch can leave an unattached
+plaintext blob retrievable at the provider. Dottie never surfaces candidate bytes for a publication
+that did not succeed.**
 Use `dottie account login`, `status` and `logout` for account authorization;
 OAuth sessions and device keys remain in the desktop Secret Service keyring. Config v2
 persists GNOME category approval, resolved-key digest and matrix version; version-1 GNOME

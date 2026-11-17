@@ -752,28 +752,34 @@ func atprotoMaterialCommitReference(response []byte) error {
 	return atprotoMaterialCommitCID(identifier)
 }
 
-func atprotoMaterialDispatchReason(status int, response []byte) string {
-	code := atprotoMaterialProviderCode(response)
-	if code == "" {
-		return fmt.Sprintf("dispatch_rejected:%d", status)
-	}
-	return fmt.Sprintf("dispatch_rejected:%d:%s", status, code)
+var atprotoMaterialRefusalCodes = map[string]struct{}{
+	"InvalidRequest":       {},
+	"InvalidRecord":        {},
+	"InvalidMimeType":      {},
+	"InvalidSwap":          {},
+	"QuotaExceeded":        {},
+	"StorageQuotaExceeded": {},
+	"RateLimitExceeded":    {},
+	"PayloadTooLarge":      {},
+	"RequestTooLarge":      {},
 }
 
-func atprotoMaterialProviderCode(body []byte) string {
+func atprotoMaterialDispatchReason(status int, response []byte) string {
+	if code := atprotoMaterialRefusalCode(response); code != "" {
+		return fmt.Sprintf("dispatch_rejected:%d:%s", status, code)
+	}
+	return fmt.Sprintf("dispatch_rejected:%d:unrecognized", status)
+}
+
+func atprotoMaterialRefusalCode(body []byte) string {
 	var response struct {
 		Error string `json:"error"`
 	}
-	if json.Unmarshal(body, &response) != nil || response.Error == "" || len(response.Error) > 64 {
+	if json.Unmarshal(body, &response) != nil {
 		return ""
 	}
-	for _, character := range response.Error {
-		switch {
-		case character >= 'A' && character <= 'Z', character >= 'a' && character <= 'z',
-			character >= '0' && character <= '9', character == '_':
-		default:
-			return ""
-		}
+	if _, ok := atprotoMaterialRefusalCodes[response.Error]; !ok {
+		return ""
 	}
 	return response.Error
 }
@@ -790,26 +796,7 @@ func atprotoMaterialDefiniteRejection(status int, response []byte) bool {
 	if status < 400 || status >= 500 || status == 401 || status == 403 {
 		return false
 	}
-	return atprotoMaterialXRPCErrorName(response) != ""
-}
-
-func atprotoMaterialXRPCErrorName(body []byte) string {
-	var response struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(body, &response) != nil {
-		return ""
-	}
-	name := response.Error
-	if len(name) == 0 || len(name) > 64 {
-		return ""
-	}
-	for _, r := range name {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
-			return ""
-		}
-	}
-	return name
+	return atprotoMaterialRefusalCode(response) != ""
 }
 
 func atprotoMaterialApplyRejection(status int, response []byte) error {
@@ -878,7 +865,10 @@ func atprotoMaterialSafeCode(body []byte) string {
 		return ""
 	}
 	switch response.Error {
-	case "InvalidSwap",
+	case "InvalidRequest",
+		"InvalidRecord",
+		"InvalidMimeType",
+		"InvalidSwap",
 		"QuotaExceeded",
 		"StorageQuotaExceeded",
 		"RateLimitExceeded",

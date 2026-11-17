@@ -608,13 +608,38 @@ func writeUnresolvedAttemptHint(command *urfave.Command, directory string) {
 		writer,
 		"dottie: the local state cannot prove whether that attempt published a record; its provider outcome is unknown",
 	)
+	rows, err := publicationstate.LiveJournalRows(directory)
+	if err != nil || rows > 0 {
+		fmt.Fprintln(writer, "dottie: live apply journal rows remain in that directory")
+		fmt.Fprintln(
+			writer,
+			"dottie: do not delete it: journal.db and its apply backups hold the only copies of the preimage for those rows",
+		)
+		fmt.Fprintln(
+			writer,
+			"dottie: resolve those journal rows first with dottie pull and its recovery steps, then re-run dottie push",
+		)
+		fmt.Fprintln(
+			writer,
+			"dottie: deleting it would also destroy the pending review, the accepted position and the attempt history held there",
+		)
+		fmt.Fprintln(
+			writer,
+			"dottie: this is local, not provider, surgery: resetting local state retracts nothing at the provider and does not prove whether that attempt published a record",
+		)
+		return
+	}
 	fmt.Fprintln(
 		writer,
 		"dottie: local, not provider, surgery: deleting that directory clears the blocking attempt and retracts nothing at the provider",
 	)
 	fmt.Fprintln(
 		writer,
-		"dottie: it discards the pending review, the accepted position and the attempt history held there",
+		"dottie: it destroys the pending review, the accepted position, the attempt history, journal.db and every apply backup stored there",
+	)
+	fmt.Fprintln(
+		writer,
+		"dottie: no live apply journal row is recorded there, so this discards no retained preimage",
 	)
 	fmt.Fprintln(
 		writer,

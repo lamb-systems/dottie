@@ -97,20 +97,28 @@ queued/starved/fence-lost/unavailable outcomes, and a rendering failure after a 
 which is stated as committed on stderr).
 
 A provider answer that definitely refuses the submission is reported as a refusal, not as an unknown
-outcome. AT Protocol `applyWrites` is atomic, so a 4xx answer carrying a recognised provider error code
-(other than 401/403) means no record was written: `push` prints `push: rejected` with
+outcome. AT Protocol `applyWrites` is atomic, so a 4xx answer carrying a code from the closed pre-commit
+refusal allowlist (`InvalidRequest`, `InvalidRecord`, `InvalidMimeType`, `InvalidSwap`, `QuotaExceeded`,
+`StorageQuotaExceeded`, `RateLimitExceeded`, `PayloadTooLarge`, `RequestTooLarge`), other than 401/403,
+means no record was written: `push` prints `push: rejected` with
 `stage=submission`, `reason=submission_rejected` and `provider=dispatch_rejected:<status>:<code>`, states
 that the candidate payload may still be retrievable by CID, retires the local attempt so the next review is
 not blocked, and exits 4. Nothing is retried; the next plain `dottie push` prints a fresh review. A 5xx, a
 transport error, an unparseable body, an unrecognised code and 401/403 stay indeterminate and are reported
-as such without retiring anything.
+as `push: unavailable` with the fixed `provider=dispatch_rejected:<status>:unrecognized` label; an
+unrecognised provider code is never rendered and nothing is retired. The definite refusal path also exits 4,
+as a refusal that wrote no record but may already have disclosed the uploaded payload.
 
 An attempt that is still unresolved past submission blocks preparation. `push` then prints the local state
-directory, states that the local state cannot prove whether that attempt published a record, and gives the
-local recovery: deleting that directory clears the blocking attempt, retracts nothing at the provider,
-discards the pending review, the accepted position and the attempt history held there, and is followed by
-`dottie pull` to re-record the provider position and then `dottie push` to review again. This is local, not
-provider, surgery, and the refusal exits 3.
+directory and states that the local state cannot prove whether that attempt published a record. It then
+branches on the apply journal. With no live journal row, it explains that deleting the directory clears the
+blocking attempt and retracts nothing at the provider, but destroys the pending review, the accepted position,
+the attempt history, `journal.db` and every apply backup stored there, and is followed by `dottie pull` to
+re-record the provider position and then `dottie push` to review again. With any live journal row it refuses
+to recommend deletion: `journal.db` and its apply backups hold the only copies of those preimages, so it says
+to resolve the rows first with `dottie pull`, and warns that deleting the directory would also destroy the
+pending review, accepted position and attempt history while proving nothing at the provider. This is local,
+not provider, surgery, and the refusal exits 3.
 A queued or indeterminate publication is never reported as success. `push` provisions the v2 position store on
 first use: when `$XDG_STATE_HOME/dottie/publication-state` is absent it creates the directory and any parent with
 mode `0700`, verifies the mode afterwards, and opens the store for the binding derived from the session DID and

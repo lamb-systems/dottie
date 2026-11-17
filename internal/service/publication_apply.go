@@ -356,6 +356,9 @@ func publicationApplyPlanDigest(operations []publicationApplyOperation) [32]byte
 		_, _ = digest.Write(operation.post.Digest[:])
 		binary.BigEndian.PutUint64(scratch[:], operation.post.Size)
 		_, _ = digest.Write(scratch[:])
+		var postMode [4]byte
+		binary.BigEndian.PutUint32(postMode[:], operation.post.Mode)
+		_, _ = digest.Write(postMode[:])
 		if operation.captured.present {
 			_, _ = digest.Write([]byte{1})
 			_, _ = digest.Write(operation.captured.digest[:])
@@ -592,6 +595,7 @@ func publicationApplyOperationFor(
 		operation.content = append([]byte(nil), entry.File.Content...)
 		operation.mode = declared
 		operation.post = publicationstate.ObservedJournalFile(operation.content)
+		operation.post.Mode = uint32(declared.Perm())
 	case syncengine.ActionDeleteLocal:
 		if selection.mode == config.BackupOnly {
 			return publicationApplyOperation{}, publicationApplyFailure(
@@ -787,6 +791,7 @@ func applyPublicationOperation(
 		Present: true,
 		Digest:  operation.captured.digest,
 		Size:    uint64(len(observed.Data)),
+		Mode:    operation.captured.mode,
 	}
 	intent := publicationstate.JournalIntent{
 		Vault:             request.Vault,
@@ -949,6 +954,7 @@ func publicationApplyObserved(observation files.ApplyObservation) publicationsta
 		Present: true,
 		Digest:  sha256.Sum256(observation.Data),
 		Size:    uint64(len(observation.Data)),
+		Mode:    observation.Mode,
 	}
 }
 

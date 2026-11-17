@@ -321,9 +321,10 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 }
 
 type schemaProbe struct {
-	initial    bool
-	recognized bool
-	version    int
+	initial     bool
+	recognized  bool
+	version     int
+	application int
 }
 
 func schemaOrStorageError(ctx context.Context, stage Stage, err error) error {

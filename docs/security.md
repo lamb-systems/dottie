@@ -1,468 +1,182 @@
 # Security model
 
-Dottie's security model separates protections from exclusions and measured limits from assumptions.
-Use those boundaries to decide whether to trust the tool with your configuration.
+Dottie's current security model is an account-authorized plaintext publication model. The v1
+envelope, device-role, checkpoint, retention and archive material recorded later in this document is
+historical: it is not a present protection and no current command exercises it. Use the current
+boundaries below to decide whether to publish configuration with this tree.
+
+## Current v2 access model
+
+A v2 snapshot is a packed plaintext record set published in the account's own AT Protocol
+repository. Dottie does not add a client-side confidentiality layer over that payload.
+
+A fresh-machine `dottie pull` resolves the publication, fetches and decodes the packed plaintext
+blob, and can apply it using the account session and the published `vaultHeadV2` record. It does not
+load a Dottie device key. The reader verifies account identity, publication scopes, record
+membership in a signed commit, the head/snapshot chain, the payload CID and size, and the payload
+format. Those checks establish repository-scoped authenticity and integrity, not global freshness or
+device authorization.
+
+`dottie push` resolves the recorded local vault selection and prepares a candidate under the same
+account authority. It does not load a Dottie device key to publish. The consent, review, repair and
+accepted-floor checks around a publication remain mandatory, but they are local policy checks; the
+publication authority is the authenticated account session.
+
+Consequences:
+
+- Losing every Dottie device key is not, by itself, loss of access to the published plaintext
+  position. The account session can retrieve it.
+- Holding a Dottie device key does not add publication authority on the v2 path, and losing one does
+  not remove it.
+- The account session is the confidentiality and availability authority for the published copy.
+  Losing account access, or losing provider-held data, is the data-loss boundary.
+- Repository signatures establish account repository authority. They do not establish which Dottie
+  device or authenticated session authored a record.
+
+The plaintext provider residual is unchanged. The packed payload is uploaded before the record batch,
+so a rejected or ambiguous batch can leave an unattached plaintext blob that remains retrievable by
+CID at the provider. Dottie cannot delete that blob. Dottie itself never surfaces candidate bytes for
+a publication that did not succeed: no command, log, error, report or archive surfaces them, and the
+accepted position does not advance. The residual is provider-side only and is recorded in
+[`docs/acceptance.md`](acceptance.md).
 
 ## Public metadata visibility
 
-Vault records are encrypted at the snapshot-envelope layer, but their typed repository records are
-public plaintext. The synthetic tests assert this recursive key inventory:
+V2 typed repository records are public plaintext metadata. The published head and snapshot records
+disclose the vault and publication identifiers, sequence, parent and CIDs; the payload itself is
+plaintext. Do not publish configuration you are unwilling to place in the account repository and
+provider storage.
 
-| Record type | Allowed recursive keys |
-| --- | --- |
-| `vaultSnapshot` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.publicationId`, `$.epochSeq`, `$.policyDigest`, `$.parent`, `$.blob`, `$.signerDeviceId`, `$.signerKeyId`, `$.envelopeSignatureDigest`, `$.signature`, `$.blob.$type`, `$.blob.ref`, `$.blob.mimeType`, `$.blob.size`, `$.blob.ref.$link` |
-| `vaultHead` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.policyDigest`, `$.snapshotCid`, `$.blobCid`, `$.publicationCount`, `$.prevHeadCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
-| `vaultControl` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.policyDigest`, `$.headSnapshotCid`, `$.revoked`, `$.prevControlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.revoked[].deviceId`, `$.revoked[].certEpoch` |
-| `vaultPolicy` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.epochSeq`, `$.roles`, `$.recipients`, `$.policyRetentionFloor`, `$.retainedRecoveryPoints`, `$.maxPublications`, `$.maxEpochAge`, `$.recoveryAnchor`, `$.prevPolicyDigest`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.roles[].deviceId`, `$.roles[].role`, `$.recipients[].deviceId`, `$.recipients[].keyId`, `$.recipients[].publicKey` |
-| `vaultCertificate` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.deviceId`, `$.keyId`, `$.signingPublicKey`, `$.encryptionPublicKey`, `$.role`, `$.certEpoch`, `$.issuer`, `$.revocationRef`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
-| `vaultCheckpoint` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.snapshotCid`, `$.epochSeq`, `$.policyDigest`, `$.anchor`, `$.controlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature` |
-| `vaultAttestation` | `$.$type`, `$.schemaVersion`, `$.vault`, `$.deviceId`, `$.policyDigest`, `$.retentionFloor`, `$.retainedRecoveryPoints`, `$.recoveryPoints`, `$.controlCid`, `$.signerDeviceId`, `$.signerKeyId`, `$.signature`, `$.recoveryPoints[].epoch`, `$.recoveryPoints[].snapshotCid` |
+Dottie has no log facility. Routine status, read, push, pull, sync and position output omits file
+contents, setting values, private keys, session material, relative entry locators and absolute
+home/config/cache/data/temp roots. The account DID appears only in the resolved-session line that a
+run without `--did` prints. Provider error text is reduced to a closed refusal-code allowlist and a
+fixed unknown label before it can reach output.
 
-These record fields disclose vault and publication identifiers, epochs and counts, policy and control
-digests, device labels, key identifiers and public keys, signatures, CIDs, recipient roles and recovery
-positions. Device ids are user-supplied labels published in plaintext and must be treated as public.
-Records carry no timestamps. Repository revision `rev` and commit identity/CID are separately visible
-repository metadata; server-side request timing is separate metadata as well. The recursive inventory
-test fails if any unlisted key is added.
-
-Dottie has no log facility; the CLI/coordinator reports routine output.
-Routine status, read, push, history, export, recovery, device and administrative output omits relative
-entry locators. The retired v1 candidate/restore consent surfaces, which showed per-file relative paths,
-no longer exist: `pull` prints counts and findings, not entry locators. Retention-prune
-output may show local payload/backup references; any absolute reference is confined to the state
-directory. All these renderers must exclude file contents, setting values, private keys, session material and
-absolute home/config/cache/data/temp roots.
-
-A client cannot observe hosted provider logs or server-side storage; neither is covered by local
-renderer or synthetic repository tests.
-
-During an owner-authorized read-only observation on a disposable identity,
-`com.atproto.sync.listBlobs` required an authenticated request, while
-`com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were public. The observation is specific to
-that disposable identity; it is not a protocol guarantee. The observed provider enumerated only live blobs,
-so the live retained set is unobservable; enumeration must not be presented as retained bytes. These
-observations do not establish provider compatibility.
+A client cannot observe hosted provider logs or server-side storage. An owner-authorized read-only
+observation on a disposable identity found that `com.atproto.sync.listBlobs` required an
+authenticated request, while `com.atproto.repo.listRecords` and `com.atproto.sync.getBlob` were
+public. That observation is specific to that identity and is not a protocol guarantee.
 
 ## Authenticity and recovery boundary
 
 Authenticity is repo-scoped through AT Protocol account authority. A Dottie record set is authentic
-because it lives in the account's own repository, signed by that account's repository key, and was
-written by an authenticated session. Dottie adds no vault signature over a published position and no
-offline anchor: there is no recovery kit, no kit-signed checkpoint and no export archive in this tree,
-and no command mints, reads or stores such material. A reader can verify that a record set is
-authentic for the account; it cannot verify that a position was authorized offline, and it has no
-client-side claim of global freshness. Records and blobs placed on a provider cannot be deleted by
-Dottie; the plaintext publication profile uploads its packed payload before its record batch, and
-that unattached-blob residual is unchanged and accepted in `docs/acceptance.md`.
+for an account because it lives in that account's repository, is signed by that account's repository
+key, and was written by an authenticated session. Dottie adds no vault signature over a published
+position and no offline anchor. A reader can verify membership and integrity at a provider-asserted
+commit; it cannot prove the commit is current or that the provider withheld nothing.
 
-Losing every device key means losing the ability to decrypt or publish; no offline secret can
-restore it. Retention and manual pruning were retired with the v1 product and have no command here.
+There is no cross-machine recovery path that works without a live PDS and account access. There is no
+recovery kit and no export archive in this tree, and no command mints, reads or stores one. Losing
+account access or provider-held data can therefore lose the published position; losing Dottie device
+keys alone does not.
 
-## Present and target, stated separately
-
-| Capability | Present | Target |
-| --- | --- | --- |
-| Directory selection and consent | yes, `targets` and preset onboarding | — |
-| Filesystem capture with containment | yes, `status`, `pull`, `push`, `sync` | — |
-| Bounded snapshots | yes, encrypted envelopes | — |
-| OAuth account authorization and local session management | yes, `account login`, `status`, `logout`; live providers not tested | live provider validation |
-| Blob lifecycle and fenced publication | yes, `push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
-| Per-object device signatures | yes, in the genesis seal composition; live provider not tested | live provider validation |
-| Device roles, revocation, epochs | yes, in `account bootstrap` and the vault transition API; no CLI administration surface | live provider validation |
-| Repo-scoped authenticity | yes, AT Protocol account authority; no vault signature, no offline anchor, no recovery kit | live provider validation |
-| Vault export and import | no; the archive primitives and their CLI commands were retired | not planned |
-| Remote vault sync | yes, `pull`/`push`/`sync` through the coordinator; synthetic in-memory provider only | live provider validation |
-| Retention and manual pruning | no; the retention surface was retired with the v1 product | not planned |
-| GNOME settings capture and apply | selected-key capture and the category matrix are wired to CLI targets; settings apply has no production path since the v1 restore command was retired; real desktop not validated | real desktop validation (R03) |
-
-The opt-in GNOME boundary reads only explicitly selected keys and never copies a dconf database
-wholesale. Its library-level settings apply adapter uses the journaled schema/path/key identity, observes only
-user overrides, canonicalizes present values against the schema key, and synchronizes GSettings after Set or
-Reset before read-back. A fixed-path schema accepts only its resolved schema path; a relocatable schema uses
-the explicit journaled path. This synchronization is backend completion, not filesystem `fsync`, and it does
-not prove durability across a crash. `g_settings_sync` has no deadline; a stalled backend can delay
-cancellation or recovery. Setting values remain plaintext in the local journal/backup while retained; pruning
-an eligible setting backup clears the stored value fields in the same transaction. Capture and apply are wired
-to CLI targets in the tagged `gsettings` build; builds without that tag expose no settings backend. The default backend
-refuses memory and any backend outside the persistent keyfile/dconf allowlist; synthetic native tests use
-temporary homes and isolated keyfile data, not real preferences.
-
-Setting preimages and postimages in the local journal and rollback backups are plaintext while retained. They
-follow the existing bounded rollback-material and backup-retention policy; backup pruning removes the
-associated retained journal values. This library boundary does not change account authority or grant remote
-configuration access to local settings.
-
-The CLI exposes target and preset onboarding, `status`, `pull`, `push`, `sync`, `position status`
-and the `account` commands. Account commands manage OAuth authorization, local device keys and the
-one-time genesis bootstrap; they do not capture target data by themselves. All application-data
-mutations route through the coordinator and its journal; the CLI does not edit application state or
-target configuration directly. Bootstrap records trusted selection, checkpoint and evidence through
-the coordinator's single state store. This local metadata cannot authorize application data or apply.
-
-Offline end-to-end demonstrations use disposable synthetic data, in-memory AT Protocol fixtures and temporary homes. Separately authorized live gates exist for publication privacy, archive export/validation and the two-home restore milestone. The restore milestone uses an existing authenticated Dottie vault and never invokes genesis; it refuses an absent or unreadable vault and refuses a current snapshot with any application entries. It writes only synthetic content and enrollment records to an allowlisted disposable account and does not delete records or blobs. Each live gate skips by default; a skipped gate is not provider evidence. Hosted provider logs and server-side retention remain unobservable. The live gates have run against the disposable identity and their artifacts are retained in `docs/acceptance.md`, which records each row's evidence kind and residual limit. The owner accepted that matrix on 2026-11-05, so real-data use is permitted only under those limits: no client-side claim of global freshness is made, one account can hold one published vault, and records and plaintext payloads placed on a provider cannot be deleted by Dottie.
+Local state is plaintext on disk. The publication position database, the apply journal, journal
+preimage backups and captured payloads are readable by anyone who can read the state directory. Local
+filesystem access is equivalent to reading that material. The OAuth session and device keys live in
+Secret Service, which protects a key at rest, not a running process.
 
 ## Authorities
 
-Two authorities grant power: the account and the local device keys. Neither substitutes for the other.
+**Account authority** is the only v2 publication authority. It is the OAuth session: discovery, PKCE,
+PAR, DPoP, `iss` and `sub` binding, strict scope enforcement, and one atomic Secret Service envelope.
+It grants repository access and nothing else. `account login`, `status` and `logout` operate on that
+authorization; they do not capture or sync target data.
 
-**Account authority** is the OAuth session: discovery, PKCE, PAR, DPoP, `iss` and `sub` binding, strict
-scope enforcement, and one atomic Secret Service envelope. It grants repository access and nothing else.
-`account login`, `status` and `logout` operate on that authorization; they do not capture or sync target data.
-
-**Device authority** is a root-signed certificate naming a signing key, a recipient key, a role and the
-epoch at enrollment. Root, publisher and restore-only are distinct. Bootstrap and the vault transition
-API prove these bindings synthetically; there is no CLI administration surface and no live-provider run.
+**Device authority was a v1 concept.** `account bootstrap` still mints and stores local device keys
+for the recorded local vault identity, but on the current v2 path those keys are not required to read
+or publish a position. V1 device certificates, root/publisher/restore-only roles, epochs, revocation
+and device-signed checkpoints are historical material, described below.
 
 There is no recovery authority. Nothing offline can authorize a root replacement, sign a position or
-restore data: content and publication both require a surviving device key, and losing every device key
-is data loss. Genesis checkpoints are signed by the root device, and their `policy.recoveryAnchor` field
-is published as all zeros because no offline anchor exists.
+restore data. Genesis checkpoints and their recovery anchors, where they still appear in historical
+documentation, are not part of the current path.
 
 ## Bootstrap custody and local identity
 
-`account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)` requires a signed-in account. Before minting device keys or local state, it authenticates a repository revision and refuses, with exit 3, an account whose repository already holds a Dottie publication: a record in the v2 `vaultSnapshotV2`/`vaultHeadV2` collections or in any retired v1 `vault*` collection. Records from other applications, including `app.bsky.actor.profile` and third-party collections, are allowed, so an account that any other app has already used can still be bootstrapped. Bootstrap writes no repository record: it derives the vault identity from the vault name and the freshly minted root key, stores the root device keys in Secret Service, and records the local vault selection. The first `push` is the only publication of that vault, through the v2 packed-plaintext profile. This is a hard product boundary: one account can hold one published Dottie vault because bootstrap refuses an account that already holds one. Multi-vault selection means only locally recorded vaults, not multiple published vaults on one account.
+`account bootstrap --vault-name NAME --device-id ID (--did DID | --handle HANDLE)` requires a
+signed-in account. Before minting device keys or local state, it authenticates a repository revision
+and refuses, with exit 3, an account whose repository already holds a Dottie publication: a record in
+the v2 `vaultSnapshotV2`/`vaultHeadV2` collections or in any retired v1 `vault*` collection. Records
+from other applications do not block bootstrap. Bootstrap writes no repository record: it derives the
+vault identity from the vault name and the freshly minted root key, stores the root device keys in
+Secret Service, and records the local vault selection. The first `push` is the only publication of
+that vault, through the v2 packed-plaintext profile. An account can hold only one published Dottie
+vault because bootstrap refuses an account that already holds one. Multi-vault selection means only
+locally recorded vaults, not multiple published vaults on one account.
 
-Bootstrap mints no secret for offline use, prints none and flushes none. A keyring or local selection failure exits 3 with `bootstrap: not-recorded`, deletes the pending device keys best-effort and publishes nothing, because nothing was sent to the provider. Because the local vault identity is derived from fresh device keys, repeating bootstrap with fresh keys derives a second local vault identity; the account holds no Dottie publication until one is published, and multi-vault selection then requires `--vault` and `--device-id`.
+Bootstrap mints no secret for offline use, prints none and flushes none. A keyring or local selection
+failure exits 3 with `bootstrap: not-recorded`, deletes the pending device keys best-effort and
+publishes nothing, because nothing was sent to the provider. Because the local vault identity is
+derived from fresh device keys, repeating bootstrap with fresh keys derives a second local vault
+identity; the account holds no Dottie publication until one is published, and multi-vault selection
+then requires `--vault` and `--device-id`.
 
-Bootstrap knows nothing about the publication position store. `push` and `pull` provision an absent `publication-state` directory on first use, creating it and any parent with mode `0700` and opening the store for the binding derived from the account session and the resolved vault; provisioning establishes no accepted floor and applies nothing. Provisioning is for absence only: an existing directory that is not a private `0700` non-symlink directory owned by the current user refuses `push` before any provider call, and a store whose binding, schema, lifetime lock or bytes are unusable refuses with its typed reason instead of being recreated or repaired.
+## Historical v1 material
 
-`pull` and `sync` resolve the vault they act on in one order: an explicit `--vault`, then the stored publication binding, then the `vaultHeadV2` record the account publishes at `self`. The provider step runs only after the session, publication-scope and account checks, through the same DID-document-bound repository read that validates a position, and requires the head record to be proven present in the signed commit, to round-trip to its proven CID and to decode canonically. The vault it names is not trusted on its own: the command binds it and reads the whole position under that binding, which refuses a head, snapshot or chain that does not match the adopted vault. An explicit or recorded vault is never replaced by the provider, so a stored binding that names a different vault than the published head refuses `pull: unreadable (vault)` rather than adopting either side, and an account that publishes no head refuses `pull: no-publication` with exit 3 and provisions nothing. Adoption establishes a local identity, not a publication: the confirmed newcomer run still applies nothing and accepts no floor before `--confirm`, and the accepted floor is created only by that confirmed run. Because the provider step needs an account session, `position status` keeps its local-only contract and still requires `--vault` when no binding is recorded. The retired `account finalize` re-read the v1 `vaultCheckpoint` record with the retained device keys to record local trust after a verified publication; bootstrap no longer writes that record, so finalize has no object to verify and was retired with it. The trust property it protected is maintained by the v2 paths instead: `push` advances the accepted floor only after a verified read-back resolves the attempt, and `pull --confirm` accepts the applied position only after the apply journal completes. A repository that holds the retired v1 collections (`systems.lamb.dottie.vaultHead`, `vaultControl`, `vaultSnapshot`, `vaultPolicy`, `vaultCertificate`, `vaultCheckpoint`, `vaultAttestation`) is still refused as `legacy_profile` before any v2 read or write; no v1-bootstrapped account exists, and no migration path is offered.
+The following are retained only as history and must not be read as protections supplied by this
+tree:
 
-The bootstrap and publication paths have hermetic memory-PDS coverage, including an end-to-end CLI gate that drives `account bootstrap`, `push` and `pull` through the command entry points: it bootstraps a synthetic account, publishes through v2 from one home, and has a second home with no `publication-state` directory join that position with `pull --confirm`, both with the vault given and, without any vault argument, by adopting the vault the account publishes. Live bootstrap and provider compatibility remain separately authorized validation.
+- Encrypted snapshot envelopes, epoch content keys and recipient wraps.
+- Device certificates, root/publisher/restore-only roles, revocation and epoch authority.
+- Device-signed genesis authority, kit-signed checkpoints and the offline `recoveryAnchor`.
+- Retained recovery-point inventories, retention floors and pruning rules.
+- Export/import archives and provider-independent recovery.
+- The recursive v1 record-key inventory and its per-record signature fields.
 
-## Account session lifecycle
+The v1 commands that served them were retired, and v1 records still block bootstrap or are refused as
+`legacy_profile`. No v2 command supplies envelope encryption, device-key-gated content, signed genesis
+authority or offline recovery.
 
-Login discovers the handle, DID, PDS and authorization server, requests PKCE with PAR, and requires the
-canonical `atproto` plus seven vault `repo:` scopes and `blob:application/octet-stream` grant. The refresh
-token and DPoP private key are stored together in one Secret Service item; access tokens, authorization
-codes and DPoP nonces are not persisted. A locked or unavailable keyring is a hard failure with no file
-fallback. Endpoint errors expose only HTTP status and an allow-listed OAuth error code; descriptions and raw
-provider bodies are never surfaced.
-
-Refresh runs under a per-session advisory lock and reloads the envelope while holding that lock. It replaces
-the usable envelope with a secret-free `refresh-pending` marker before sending the refresh request. Once stored, the marker
-rules out reusing the old token: every failure after it and before the final save, including a
-transport error with no observed write notification, a lost response or a cancellation after dispatch, leaves
-the marker. A final save that applies but loses its reply leaves the new usable envelope, never the consumed
-token, but the command still reports the persistence outcome as uncertain because durability is unconfirmed. A
-pending session cannot be refreshed again and requires login. This deliberately fails closed because an absent
-write notification does not prove the request was not sent. Cancellation before the marker stores nothing;
-cancellation after dispatch and before the final save may consume the old token and requires login. Cancellation
-during the final save is a persistence-uncertainty case: the new usable envelope may be present, so run status
-before logging in again. Pending local synchronization work is not opened or modified by account commands.
-
-A login cancellation before persistence is attempted stores nothing. A keyring persistence failure or
-cancellation during the save attempt is reported as uncertain, not as "nothing was stored": a lost reply can
-follow an applied write, so the CLI points to status and local logout instead. Once the token response has been
-received, a cancellation may consume the authorization code even though no session is stored.
-
-The runtime lock is selected from `XDG_RUNTIME_DIR`, `/run/user/<uid>`, then the OS temporary directory; it is
-not under `XDG_STATE_HOME`. It coordinates cooperating Dottie processes in the same login session, not manual
-keyring edits, non-cooperating clients or a process deliberately given a different runtime directory. A locked
-or unavailable keyring and an interrupted refresh are reported with recovery guidance, while status itself is
-offline when addressed by DID and never exposes a token.
-
-Local logout takes a DID and deletes its item without decoding it, so corrupt, unknown-version and pending
-items can be removed offline. Remote logout requires a usable session and a validated discovery-advertised
-revocation endpoint. It sends a DPoP proof without an access token, retries a nonce challenge once, and deletes
-the local item only after a 2xx. The result means **revocation request accepted by the authorization server**,
-not that every access token or other device session has been globally invalidated; issued access tokens may
-remain valid until expiry. If the provider accepts the request but local deletion fails, both outcomes are
-reported and the item remains for local cleanup.
-
-`AuthMethod` checks a discovered PDS HTTPS origin before resource use after a refresh. If a changed PDS origin
-is discovered while refreshing (including an `invalid_token` retry), it refuses to retry the resource request
-through the stale auth method. An auth method constructed from stale discovery can still send a currently
-valid access token to the old PDS before it learns of relocation; callers own discovery freshness. No live
-authorization, refresh or revocation test was run for this implementation.
-
-## What the transport guarantees
-
-A verified revision proves membership of records at a commit the provider asserted. It does not prove who
-wrote them, what policy applied, or that the commit is current.
-
-`VaultReader` authenticates one control edge over caller-supplied history and joins later observations to the
-control CID durably recorded by this device. A same-epoch re-read must preserve the exact control CID, and an
-epoch advance must name the stored control as its predecessor; a changed same-epoch control returns
-`ErrVaultPublicationControlReplacement`. The first observation has no older local floor, and an epoch advance
-that skips the stored control fails closed. A held checkpoint remains the independent recovery anchor.
-
-Measurements of the publication fence on two providers show that a stale writer loses with a structured
-error instead of silently overwriting. Whether a provider can accept two identical batches and produce two effects is
-**unproven**, because the measurement could not distinguish one commit from two by final membership.
-
-Publication preparation enforces `max_publications` before evaluating age. With a trusted clock, it compares
-against the persisted epoch first-seen time and returns `ErrEpochRotationRequired` at the age threshold. With no
-clock, the age trigger is not evaluated and the returned `Publication.AgeTriggerStatus` is
-`PublicationAgeTriggerNotEvaluatedNoTrustedClock`; the count trigger alone applies. Refusing solely because a
-legitimate caller supplied no clock would block a publication whose available count trigger permits it.
-
-The fence does not protect bytes already uploaded, because the upload precedes the fenced commit that would
-reject them.
-
-## Publication retries (P05 library boundary)
-
-`PublishWithRetry` is a transport-library API for ordinary publications; it is not wired into the CLI or
-`internal/syncengine`. `CommitPublication` remains a one-attempt primitive, and administrative
-`CommitTransition` remains resolve-only. Retry defaults are three observation/write cycles, a 250 ms base
-delay, a 5 s cap and 10 s maximum elapsed time. These are unmeasured code defaults, not provider tuning.
-
-The durable logical identity is the snapshot marker plus its locally computed expected DAG-CBOR record CID.
-Every retry operation first reads a current verified revision. A matching marker and expected record CID is
-committed only when the proven head's `snapshotCid` and `blobCid` bind the requested sealed snapshot; a
-marker with another CID is ID reuse, and a matching marker no longer bound by the head is superseded. A
-terminal historical `committed` row is not current success. Versioned retry dispositions persist ambiguous,
-rejected, quota, rate-limited, upload-size, batch-size and fence-lost outcomes before attempt status updates;
-the terminal `committed` outcome itself is authoritative. Only an ambiguous disposition plus a fully verified
-current absence permits another write; missing or unknown disposition fails closed. Quota, rate-limit and
-auth/offline conditions remain queued; an HTTP 401/403 is an auth hold recorded as ambiguous/queued and may be
-retried only after renewal and a verified current absence, never as a data rejection. Exhausted repeated
-ambiguous absence is starved; unverifiable reads are unavailable; invalid swap is fence-lost;
-policy/size/definitive rejection is rejected. A committed result has nil error only with current marker/head
-evidence. If a definitive disposition or terminal status cannot be persisted, the invocation returns
-`ErrPublicationState` and does not retry; a later restart can only see the last durable ambiguous row, so a
-lost classification is indistinguishable from a timeout and remains a documented limit.
-
-The restart guarantee is conditional on the caller re-supplying the same sealed publication and marker.
-P05 does not persist candidate bytes or provide an outbox; candidate ownership remains with the caller until
-P06/B03. Every eligible attempt uploads the same bytes and therefore the same content CID. This can restore
-availability when a temporary upload expired, but is not a privacy repair and does not undo a measured
-post-rejection disclosure window. An explicit expired/missing-blob 4xx at apply time is a definitive
-other-rejection, not a retry trigger; re-upload availability comes from ambiguous/restart retry cycles. A
-provider-side upload 413 is treated as possible disclosure and rejected; a local pre-upload size refusal is
-not. Pending quota/rate work is reported as queued but cannot be resumed automatically until the
-outbox/workflow integration exists. Same-marker serialization is process-local for `PublishWithRetry`,
-`CommitPublication` and `ResolvePublicationAttempt`; the state database lock coordinates only its own store access;
-it is not a distributed marker lock. The concrete authentication method's serialization is
-context-cancelable, so a publication operation's bounded context also bounds waiting behind another request.
-Underlying transport errors are reduced to fixed classifications before they reach returned errors or durable
-attempt evidence; arbitrary provider text is not propagated. The retrier proves its marker/head observation,
-not global freshness or the provider's at-most-one-effect behavior.
-
-## Measured limits
-
-These limits come from live runs on two hosting categories.
-
-- A batch rejected after blob processing leaves its candidate anonymously retrievable by exact bytes. A
-  never-referenced control blob stays unreachable, so the negative result is meaningful.
-- A rejected candidate was reachable at one minute and at five minutes. The end of that window has not been
-  measured and nothing here bounds it. These are the historical fence work/F05 rejected-candidate observations;
-  the checked-in harness's long referenceability schedule has not been run, and it measures a different
-  property.
-- A lost response cannot be distinguished from a request that was never sent without a re-read.
-- Advertised blob ceilings differ: 300 MiB on one provider, 100 MiB on another. Neither is a tested
-  rejection boundary. The entryway advertises no limit at all; only the resolved PDS does.
-- `applyWrites` latency differed by roughly five times at n=50, which is exploratory rather than
-  decision-grade.
-
-## Threats
+## Threats and residual risks
 
 **A malicious provider** controls what it serves and keeps. It can withhold records, serve a stale but
-correctly signed state, and retain blobs. Checkpoints reject a state below a held checkpoint and reject
-ancestry that does not reach it. They cannot detect a provider that withholds newer history after the
-checkpoint, which is an equivocation and availability limit rather than rollback. A provider colluding with
-a revoked keyholder can reference temporary blobs outside our writes.
+correctly signed state, and retain blobs. Dottie has no independent freshness anchor, so it cannot
+detect a coherent older revision. A provider colluding with a revoked v1 keyholder could reference
+temporary blobs outside our writes.
 
-**A revoked device** keeps whatever keys it already had. Revocation stops it publishing; it does not make
-ciphertext it can already decrypt unreadable, and no client-side protocol can.
+**An attacker with account credentials** controls remote storage and can read the plaintext
+publication. Account credentials are the publication authority on the v2 path.
 
-**A stolen device key** acts as that device until revocation lands. A root device key can issue
-certificates and sign a successor position; a stolen publisher key forges publications for its epoch.
-Nothing offline can re-root the vault, because no offline anchor exists.
+**An attacker with an offline, read-only copy of the filesystem** reaches the position database, the
+configuration, captured payloads, the apply journal and its plaintext backups. It does not reach the
+session token or the device keys, which live in Secret Service.
 
-**An attacker with account credentials but no device key** still controls remote storage: it can delete,
-corrupt, withhold and replace records and blobs. It must not decrypt protected plaintext
-or forge content that passes signature and policy checks as an authorized publication. Availability of
-the remote copy is lost in either case.
+**A lost or stolen device key** does not by itself disclose or unlock the v2 plaintext publication.
+V1 envelopes it could already decrypt remain decryptable by whoever holds those epoch keys, but that
+is historical material.
 
-**An attacker with an offline, read-only copy of the filesystem** reaches the state database, the
-configuration, captured payloads and the local journal, which are plaintext on disk today. It does not reach
-the session token or the vault keys, which live in Secret Service.
-
-Secret Service protects a key at rest, not a running process. An attacker who can read process memory,
-a dump, swap, or replace a binary in the writable path is inside the session and is not excluded by
-this row. Treating the two attackers as equivalent would obscure this limit.
-
-## Retention and deletion limits
-
-Retention declarations are stored per vault and device with the policy digest, declared floor, and retained
-recovery points. Each point carries its own authenticated `(epoch, snapshot CID, policy digest, control CID)`
-position and is verified independently; the held checkpoint point is retained exactly and never replaced by a
-later same-epoch publication. Later epochs add their latest authenticated snapshot, capped by the policy's
-retained-point count; admission is refused at the cap rather than evicting material. A below-policy floor is
-recorded and surfaced as a confidentiality-compromise signal rather than refused. Re-declarations preserve the
-previous declaration and its digest so the change remains visible.
-
-The coordinator is the production producer. On a verified read or successful publication read-back it caches
-the exact CID-matching envelope body for every retained point in the durable payload store (never plaintext,
-never the keys), verifies that the decoded envelope's parent equals the point's signed head predecessor, and
-records the point and its associations atomically. A point stays incomplete if any required body is missing,
-unavailable or fails verification, and pruning refuses; absence is never an empty complete inventory.
-Authentication evidence in the position tables carries policy, control, head, certificates and signed
-checkpoint positions but no snapshot ciphertext. Journal rollback backups are bound to their point when they
-are created and associated in the same transaction; a new backup demotes the point to incomplete until the
-next refresh re-verifies the closure.
-
-A position is recorded once its record, envelope and blob authenticate, which happens before the snapshot
-payload is unpacked. A validly signed snapshot whose payload cannot be unpacked therefore leaves authenticated
-position evidence and lineage history while applying nothing locally, and it stays unusable until a later
-publication supersedes it. Validating the payload first would instead leave no evidence for an authenticated
-remote position, which would weaken export lineage, so the current ordering is deliberate.
-
-The automatic journal age prune runs during recovery and rollback and consults the same point associations.
-Backup eligibility is explicit on both prune paths: a backup bound to a currently retained point is protected
-at every age; one bound to an evicted point below the boundary whose association is present is eligible after
-the usual terminal/age and revalidation checks; a bound row whose association is missing, and a migrated
-legacy-unbound row, are ineligible. A backup is therefore never prunable before association.
-
-Pruning deletes a payload only when its recovery-point epoch is known and strictly below the oldest retained
-recovery-point boundary, it is not associated with any retained recovery point, and it is unreferenced by
-applied bases, outbound intents, conflicts and non-prunable journal backups. Material tied to any retained
-point in any subject is protected at every age, and material at or above the boundary is not eligible. A
-candidate with no classifiable recovery-point epoch is reported as unclassified and preserved. Plan and apply
-re-read and re-hash every referenced file, so a stale completion marker cannot authorize deletion. The
-dry-run plan lists each candidate's epoch and the rules that made it eligible or protected.
-
-The boundary must be the oldest retained point and match a stored checkpoint's epoch, snapshot CID, policy
-digest and control CID. The observed live head must be later than that boundary. The checkpoint pins the
-boundary but does not prove that every remote blob is present; this local inventory is not a claim that the
-snapshot is reconstructable. The live-head observation also fails closed when no head epoch has been observed
-locally.
-
-Two floors are reported. The recovery floor is the oldest epoch with a complete inventory and authorizes
-pruning. The confidentiality floor is the oldest epoch with any known surviving retained material, including
-protected backups and undeleted evicted bodies. When holdings are known, the signed attestation floor is the
-confidentiality floor, never a compliant-looking recovery floor. The current wire schema cannot carry an
-unknown status, so attestation building and coordinator publication refuse unknown or incomplete inventory
-instead of signing a compliant claim. The policy count bounds selected epochs, not total disk use: storage can
-grow until a confirmed prune succeeds, and migrated legacy rows are intentionally never age-pruned.
-
-Dottie has no content-key store. Callers supply publication content keys and nonces; they are used and discarded.
-Retained recovery-point payloads are the exact encrypted envelope bodies (ciphertext), while applied bases, journal
-preimages/postimages and rollback backups remain plaintext in the local state store. Local filesystem access is
-therefore equivalent to reading the plaintext material, and it can also copy the ciphertext envelopes. A device's
-X25519 private key can still unwrap archived wrappers for epochs where it was a recipient, so pruning locally held
-bytes does not revoke a secret someone already kept.
+- Disclosed plaintext remains readable indefinitely by whoever holds it.
+- A candidate uploaded before a rejected or ambiguous record batch remains retrievable by CID; the end
+  of that window is unmeasured.
+- Global freshness is not provided. The only remote claim is membership at a provider-asserted commit.
+- Provider-side at-most-once effects, hidden provider logs and server-side retention are unobservable.
 
 ## Freshness-unverified inspection policy
 
-Authenticated content and global freshness are distinct. If freshness/currency cannot be verified against a local checkpoint, an apply refuses in the publication-apply path; no risk flag or consent bypass grants apply authority. A freshness-unverified inspection path may report a position, but it does not mutate target data, advance the checkpoint or create an apply journal. Invalid signatures, wrong keys and failed policy checks remain unconditional refusals.
+Authenticated content and global freshness are distinct. If freshness cannot be verified against a
+local position, an apply refuses in the publication-apply path; no risk flag or consent bypass grants
+apply authority. A freshness-unverified inspection path may report a position, but it does not mutate
+target data or create an apply journal. Invalid signatures, wrong keys and failed policy checks remain
+unconditional refusals.
 
 ## First use
 
-A device with no prior local state has no local checkpoint, so the anchor it trusts comes from a
-verified empty-repository genesis that it published itself, and any later read resolves certificate
-chains to that anchor. Nothing offline supplies trust: there is no kit checkpoint to import and no
-archive to validate.
-
-Regaining authorization is not regaining data. Dottie cannot retrieve bytes the provider no longer
-holds, and losing every device key is data loss with no offline substitute.
-
-## Residual risks
-
-- Disclosed ciphertext stays readable indefinitely by whoever holds that epoch key.
-- A candidate uploaded during a concurrent revocation is readable by the pre-revocation recipient set. The
-  staging interval can be narrowed; the decryption capability cannot be revoked retroactively.
-- A revoked or offline device that ignores its deletion obligation retains access to what it held.
-- The end of the post-rejection disclosure window is unmeasured.
-- Global freshness is not provided. The only remote claim is membership at a provider-asserted commit.
+A device with no prior local state has no local accepted floor. A fresh `pull` may adopt the vault the
+account publishes, but it applies nothing and accepts no floor before `--confirm`. The confirmed run
+establishes the first accepted position from the account-authorized publication; it does not need a
+surviving Dottie device key. Regaining authorization is not regaining data: Dottie cannot retrieve
+bytes the provider or account no longer makes available.
 
 ## Stored secrets
 
 | Secret | Where it lives | Lifetime | If stolen |
 | --- | --- | --- | --- |
-| OAuth session and refresh token | Secret Service, one atomic envelope | until logout or reauthorization | writes and deletes repository records; cannot decrypt vault content |
-| Device signing key (Ed25519) | Secret Service | until the device is revoked | forges publications accepted as that device, until revocation lands |
-| Device recipient key (X25519) | Secret Service | until the device is revoked; **not** erased by epoch rotation | unwraps every epoch ever wrapped to that device, including keys deleted locally |
-| Epoch content key | caller-supplied process memory; not persisted by Dottie | used to seal and discarded by the caller | decrypts snapshots under that epoch while held |
-| Local state and captured payloads | filesystem | until deleted | plaintext configuration, as in the filesystem row above |
+| OAuth session and refresh token | Secret Service, one atomic envelope | until logout or reauthorization | reads, writes and deletes the account repository, including the plaintext publication |
+| Device signing key (Ed25519) | Secret Service | until local deletion or keyring loss | historical v1 publication authority; not a v2 read or write gate |
+| Device recipient key (X25519) | Secret Service | until local deletion or keyring loss | unwraps historical v1 envelopes ever wrapped to that device |
+| Local state, journal backups and captured payloads | filesystem | until deleted | plaintext configuration and retained preimages |
 
-For the recipient key, revoking a device stops it publishing but does not take away its ability to unwrap
-ciphertext already wrapped to it.
-
-## Adversarial corpus
-
-ADR 014 and ADR 015 define the target contract. The adversarial corpus attacks the vault authorization and
-decoder paths with runtime constructors in `internal/vault/hostile_test.go` and
-`internal/remote/atproto/hostile_reader_test.go`; the case matrix and each case's first mandatory check live
-in those files as the `caseMatrix` table. The export-archive cases were removed with the export primitives
-themselves. Every finding recorded by that corpus is closed, its tagged refusal tests remain in the frozen
-inventories, and the security gate passes.
-
-Case 1a now refuses the head/envelope parent mismatch with `ErrReadHeadEnvelopeLinkage` on both observed and
-empty observation stores. Its refusal tests assert hostile fields on decoded inputs, not plaintext or a result
-returned alongside an error.
-
-### Proven refusals
-
-The reader and the vault library refuse the following inputs; each test names the sentinel and stage:
-
-- a snapshot with no membership in a valid revision, before any blob fetch (`ErrReadRecordMissing`);
-- a restore-only device that signs a snapshot (`ErrReadRecordContext`, field `role`);
-- a revoked device's envelope at its successor epoch (`ErrReadVaultAuthentication`);
-- a successor policy signed by a root the predecessor never authorized (`ErrReadVaultAuthentication`);
-- an epoch-mixed object, an epoch-1 envelope under an epoch-2 record (`ErrReadRecordBinding`, field `epochSeq`);
-- a current policy naming an unrelated predecessor (`ErrReadRecordContext`, field `prevPolicyDigest`);
-- opening a recipient the policy does not name (`ErrRecipient`).
-
-### Closed defect gate
-
-`make known-defects` passes with every tagged refusal test intact, every remaining matrix row at
-`new-refusal`, both package registries empty, and `TestCaseSecurityGateIsClosed` passing. The matrix and
-frozen inventories remain the record of each case and its refusal test; the two export-archive cases were
-deleted with the export primitives.
-
-| Package | Closed case IDs |
-| --- | --- |
-| `internal/remote/atproto` | 1a, 3b, 3c, 5b, 5c, 10, 11, 18 |
-| `internal/vault` | 1b, 13, 14, 15, 19, 20 |
-
-Checkpoint verification joins signer certificates to the policy role for the policy/control authorization
-checks. It also checks every derivable control predecessor edge: the predecessor epoch must advance by exactly
-one without uint64 overflow, and the successor policy's `PrevPolicyDigest` must equal the predecessor policy
-digest. This covers direct descendant and stale shortcuts, each supplied walk link including its terminal
-target, and every edge examined before `conflicting` can be returned. Each control position is authenticated
-with its matching policy evidence; missing predecessor policy evidence remains unverifiable rather than being
-treated as a proven edge.
-
-### Recipient-wrap guarantees
-
-`SealPrepared` requires the policy evidence and enforces exact `(KeyID, PublicKey)` pairs against its
-recipients; substitution, omission, extra and duplicate pairs are refused with `ErrRecipient`. It
-also requires the prepared vault, epoch and policy digest to match that policy. Production transition
-and publication preparation pass their current or successor policy directly to this primitive.
-`SealAuthorized` performs the signer-role checks and delegates sealing with that policy.
-
-`VaultReader` separately enforces equality of the envelope's recipient key-ID set with policy,
-returning `ErrReadRecipientSet` whether or not a device key was supplied. This is defence in depth;
-the wire format carries no recipient public key (`envelope.go:93-98`), so reader set validation alone
-cannot prove which public key built another recipient's wrap. `TestRogueWrapDisclosesContentKeyOutsideReader`
-and `TestRogueWrapUnderPolicyKeyIDStillDisclosesContentKey` now prove the hostile wraps are refused by
-the production sealing primitive. The earlier framing of recipient substitution as an accepted residual
-risk was wrong.
-
-### Integrity of ingested CAR blocks
-
-Content integrity of a repository CAR — block bytes against their CIDs, and record bytes against the MST membership
-CID — is provided by the pinned `go-car` reader used by repository loading (`CarReader.Next` recomputes each block's
-CID and refuses a mismatch), together with the blockstore being keyed by the CIDs the MST names. Dottie does not
-duplicate those recomputations: a local check after that reader would be unreachable, because the reader refuses
-first. The dependency is covered end to end by the corrupted-CAR tests, so a future parser upgrade that stops
-verifying fails a test rather than silently weakening ingestion. If the parser is replaced, restore the local
-recomputations deliberately.
-
-### Undetectable limits
-
-- A coherent, correctly signed, older revision is undetectable without an independent freshness floor. Global
-  freshness is not provided; the only remote claim is membership at a provider-asserted commit.
-- `max_epoch_age` is a **local rotation trigger, not a validity rule** (ADR 014:148-164). It is a local-clock
-  trigger persisted in state, and a device treats the trigger as met when its state is lost. A reader that
-  accepts an old epoch is therefore correct, and no refusal case is claimed for epoch age. This is separate
-  from `max_publications` and `max_epoch_age` *numeric range* (ADR 014:158-159), which the vault wire decoder
-  now refuses with `ErrLimit` when the bounds are out of range (case 20).
-- `ATProtoTransitionIO.ReadCurrent` enforces publication count, head and control ancestry, predecessor
-  authentication, and verification of the referenced snapshot envelope — including its parent linkage, signer
-  agreement and signature under the epoch-authorized certificate. It does not enforce the policy
-  `max_publications` bound (P04): a transition read can observe a head above the policy maximum, and the
-  publication path is where that bound is refused.
-- Availability: withheld blobs and refused reads are `unavailable`, not a rollback signal.
+Local logout deletes a session item without decoding it, so corrupt, unknown-version and pending items
+can be removed offline. Remote logout means the authorization server accepted a revocation request,
+not that every issued access token or other device session has been invalidated.

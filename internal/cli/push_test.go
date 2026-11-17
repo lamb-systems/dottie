@@ -1051,6 +1051,20 @@ func TestPushMaterialStatusSeparatesRefusalsFromIndeterminateOutcomes(t *testing
 		pushMaterialStatus(syntheticStoreFailureError{reason: publicationstate.ReasonCommitUnknown}),
 	)
 	assert.Equal(t, service.StatusUnavailable, pushMaterialStatus(errors.New("transport is unavailable")))
+	assert.Equal(
+		t,
+		service.StatusUnavailable,
+		pushMaterialStatus(publicationStageTestError{
+			stage: "submission", reason: "submission_unresolved",
+			cause: errors.Join(
+				atproto.ErrBatchRejected,
+				atproto.ErrCandidateMayBeDisclosed,
+				cliProviderTestError{
+					class: service.ErrATProtoMaterialProvider, reason: "dispatch_rejected:422:unrecognized",
+				},
+			),
+		}),
+	)
 }
 
 func TestPushReportsACommittedPublicationWhoseOutputFailed(t *testing.T) {
@@ -1124,6 +1138,43 @@ type cliProviderTestError struct {
 func (e cliProviderTestError) Error() string  { return "synthetic provider failure" }
 func (e cliProviderTestError) Class() error   { return e.class }
 func (e cliProviderTestError) Reason() string { return e.reason }
+
+func TestPushUnrecognisedProviderCodeStaysUnavailableAndHidesProviderText(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	prepared := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
+	code = runPushForTest(prepared, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code)
+	confirmation := confirmationFromOutput(t, stdout.String())
+
+	canary := "PRIVATE_CANDIDATE_123"
+	fixture.transport.sendErr = errors.Join(
+		atproto.ErrBatchRejected,
+		atproto.ErrCandidateMayBeDisclosed,
+		cliProviderTestError{
+			class: service.ErrATProtoMaterialProvider, reason: "dispatch_rejected:422:unrecognized",
+		},
+		errors.New(canary),
+	)
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	refused := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
+	code = runPushForTest(refused, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
+	require.Equal(t, 4, code, stderr.String())
+	assert.Contains(t, stdout.String(), "push: unavailable")
+	assert.Contains(t, stdout.String(), "provider=dispatch_rejected:422:unrecognized")
+	assert.NotContains(t, stdout.String(), canary)
+	assert.NotContains(t, stderr.String(), canary)
+	assert.NotContains(t, publicationFailureDetail(fixture.transport.sendErr), canary)
+	_, active := fixture.localActiveAttempt(t)
+	assert.True(t, active, "an unrecognised provider code retired the blocking attempt")
+}
 
 func pushTestDefiniteRejection() error {
 	return fmt.Errorf("wrapped: %w", errors.Join(
@@ -1217,13 +1268,63 @@ func TestPushReportsLocalRecoveryForAnAmbiguousSubmissionOutcome(t *testing.T) {
 	assert.Contains(t, hint, "local state: ")
 	assert.Contains(t, hint, "deleting that directory clears the blocking attempt")
 	assert.Contains(t, hint, "retracts nothing at the provider")
-	assert.Contains(t, hint, "discards the pending review")
+	assert.Contains(t, hint, "destroys the pending review")
+	assert.Contains(t, hint, "journal.db and every apply backup")
+	assert.Contains(t, hint, "no live apply journal row is recorded there")
 	assert.Contains(t, hint, "after deleting it, run dottie pull")
 	assert.Contains(t, hint, "already active")
 	_, active := fixture.localActiveAttempt(t)
 	assert.True(t, active, "the ambiguous attempt was retired without evidence")
 	_, sends := fixture.transport.counts()
 	assert.Equal(t, 1, sends, "the blocked review dispatched writes")
+}
+
+func TestUnresolvedAttemptHintRefusesDeletionWhileLiveJournalRowsExist(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, os.Chmod(directory, 0o700))
+	journal, err := publicationstate.OpenJournal(directory)
+	require.NoError(t, err)
+	_, err = journal.BeginJournal(context.Background(), publicationstate.JournalIntent{
+		Vault:             [32]byte{0x01},
+		Operation:         "apply",
+		DestinationDir:    directory,
+		DestinationPath:   "note.ini",
+		Anchor:            publicationstate.JournalAnchor{Path: directory, Device: 1, Inode: 1},
+		Postimage:         publicationstate.ObservedJournalFile([]byte("after")),
+		SeenFloorRevision: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, journal.Close())
+
+	var stderr bytes.Buffer
+	command := &urfave.Command{Writer: &bytes.Buffer{}, ErrWriter: &stderr}
+	writeUnresolvedAttemptHint(command, directory)
+	hint := stderr.String()
+	assert.Contains(t, hint, "live apply journal rows remain in that directory")
+	assert.Contains(t, hint, "do not delete it")
+	assert.Contains(t, hint, "hold the only copies of the preimage for those rows")
+	assert.Contains(t, hint, "resolve those journal rows first")
+	assert.Contains(
+		t,
+		hint,
+		"deleting it would also destroy the pending review, the accepted position and the attempt history",
+	)
+	assert.NotContains(t, hint, "deleting that directory clears the blocking attempt")
+	assert.NotContains(t, hint, "after deleting it")
+}
+
+func TestUnresolvedAttemptHintNamesDestructionWhenNoLiveJournalRowsExist(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, os.Chmod(directory, 0o700))
+
+	var stderr bytes.Buffer
+	command := &urfave.Command{Writer: &bytes.Buffer{}, ErrWriter: &stderr}
+	writeUnresolvedAttemptHint(command, directory)
+	hint := stderr.String()
+	assert.Contains(t, hint, "deleting that directory clears the blocking attempt")
+	assert.Contains(t, hint, "journal.db and every apply backup stored there")
+	assert.Contains(t, hint, "no live apply journal row is recorded there")
+	assert.NotContains(t, hint, "do not delete it")
 }
 
 func TestSelectPublicationProposalIgnoresConsumedRecords(t *testing.T) {

@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	journalSchemaVersion        = 1
+	journalSchemaVersion        = 2
 	journalMaxBackupBytes int64 = 8 << 20
 	journalMaxTotalBytes  int64 = 256 << 20
 	journalMaxEntries           = 4096
@@ -53,7 +53,7 @@ const (
 
 const (
 	journalBackupsStatement = "CREATE TABLE backups (digest BLOB PRIMARY KEY, size INTEGER NOT NULL, data BLOB NOT NULL)"
-	journalEntriesStatement = "CREATE TABLE journal (entry INTEGER PRIMARY KEY, vault BLOB NOT NULL, operation TEXT NOT NULL, stage TEXT NOT NULL, state TEXT NOT NULL, destination_dir BLOB NOT NULL, destination_path TEXT NOT NULL, anchor_path BLOB NOT NULL, anchor_device INTEGER NOT NULL, anchor_inode INTEGER NOT NULL, preimage_digest BLOB, preimage_size INTEGER, postimage_digest BLOB, postimage_size INTEGER, backup_digest BLOB REFERENCES backups(digest), seen_floor_revision INTEGER NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL)"
+	journalEntriesStatement = "CREATE TABLE journal (entry INTEGER PRIMARY KEY, vault BLOB NOT NULL, operation TEXT NOT NULL, stage TEXT NOT NULL, state TEXT NOT NULL, destination_dir BLOB NOT NULL, destination_path TEXT NOT NULL, anchor_path BLOB NOT NULL, anchor_device INTEGER NOT NULL, anchor_inode INTEGER NOT NULL, preimage_digest BLOB, preimage_size INTEGER, preimage_mode INTEGER, postimage_digest BLOB, postimage_size INTEGER, postimage_mode INTEGER, backup_digest BLOB REFERENCES backups(digest), seen_floor_revision INTEGER NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL)"
 	journalLiveStatement    = "CREATE INDEX journal_live ON journal(state, stage)"
 )
 
@@ -99,6 +99,7 @@ type ObservedFile struct {
 	Present bool
 	Digest  [32]byte
 	Size    uint64
+	Mode    uint32
 }
 
 type JournalAnchor struct {
@@ -251,6 +252,9 @@ func OpenJournal(directory string) (*Journal, error) {
 		return nil, storageFailure(context.Background(), StageJournalOpen, err)
 	}
 	if !probe.initial && !probe.recognized {
+		if probe.application == journalApplicationID && probe.version < journalSchemaVersion {
+			return nil, classified(ErrSchema, StageJournalOpen, ReasonUpgradeRequired)
+		}
 		return nil, classified(ErrSchema, StageJournalOpen, ReasonSchema)
 	}
 	db, err := sql.Open("sqlite", dbDSN(databasePath, false))
@@ -357,6 +361,41 @@ func (j *Journal) EntryCount(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+func LiveJournalRows(directory string) (int64, error) {
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return 0, classified(ErrInvalid, StageJournal, ReasonBinding)
+	}
+	databasePath := filepath.Join(directory, journalDatabaseName)
+	info, err := os.Lstat(databasePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, classified(ErrStorage, StageJournal, ReasonIO)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return 0, classified(ErrInvalid, StageJournal, ReasonBinding)
+	}
+	db, err := sql.Open("sqlite", dbDSN(databasePath, true))
+	if err != nil {
+		return 0, classified(ErrStorage, StageJournal, ReasonIO)
+	}
+	defer func() { _ = db.Close() }()
+	count, err := queryInt64(
+		context.Background(),
+		db,
+		"SELECT count(*) FROM journal WHERE state=? OR state=? OR (state=? AND stage=?)",
+		string(JournalStatePending),
+		string(JournalStateIndeterminate),
+		string(JournalStateApplied),
+		string(JournalStageRollbackPending),
+	)
+	if err != nil {
+		return 0, classified(ErrStorage, StageJournal, ReasonIO)
+	}
+	return count, nil
+}
+
 func (j *Journal) checkContext(ctx context.Context, stage Stage) error {
 	if err := ctx.Err(); err != nil {
 		return canceled(stage, err)
@@ -449,19 +488,21 @@ func (j *Journal) BeginJournal(ctx context.Context, intent JournalIntent) (Journ
 			}
 		}
 		now := time.Now().Unix()
-		var preimageDigest, preimageSize, backupDigest, postimageDigest, postimageSize any
+		var preimageDigest, preimageSize, preimageMode, backupDigest, postimageDigest, postimageSize, postimageMode any
 		if intent.Preimage != nil {
 			preimageDigest = intent.Preimage.Digest[:]
 			preimageSize = int64(intent.Preimage.Size)
+			preimageMode = int64(intent.Preimage.Mode)
 			backupDigest = intent.Preimage.Digest[:]
 		}
 		if intent.Postimage.Present {
 			postimageDigest = intent.Postimage.Digest[:]
 			postimageSize = int64(intent.Postimage.Size)
+			postimageMode = int64(intent.Postimage.Mode)
 		}
 		result, err := tx.ExecContext(
 			ctx,
-			"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,preimage_mode,postimage_digest,postimage_size,postimage_mode,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 			intent.Vault[:],
 			intent.Operation,
 			string(JournalStageApplyPending),
@@ -473,8 +514,10 @@ func (j *Journal) BeginJournal(ctx context.Context, intent JournalIntent) (Journ
 			intent.Anchor.Inode,
 			preimageDigest,
 			preimageSize,
+			preimageMode,
 			postimageDigest,
 			postimageSize,
+			postimageMode,
 			backupDigest,
 			int64(intent.SeenFloorRevision),
 			now,
@@ -865,7 +908,7 @@ func (j *Journal) liveEntries(ctx context.Context) ([]JournalEntry, error) {
 	return entries, nil
 }
 
-const journalEntryColumns = "entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated"
+const journalEntryColumns = "entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,preimage_mode,postimage_digest,postimage_size,postimage_mode,backup_digest,seen_floor_revision,created,updated"
 
 func readJournalEntry(ctx context.Context, tx *sql.Tx, entry int64) (JournalEntry, error) {
 	row := tx.QueryRowContext(ctx, "SELECT "+journalEntryColumns+" FROM journal WHERE entry=?", entry)
@@ -883,6 +926,7 @@ func scanJournalEntry(source interface{ Scan(...any) error }) (JournalEntry, err
 	var entryValue, vaultValue, operationValue, stageValue, stateValue, directoryValue, pathValue, anchorValue any
 	var anchorDeviceValue, anchorInodeValue any
 	var preimageDigestValue, preimageSizeValue, postimageDigestValue, postimageSizeValue, backupDigestValue any
+	var preimageModeValue, postimageModeValue any
 	var seenValue, createdValue, updatedValue any
 	if err := source.Scan(
 		&entryValue,
@@ -897,8 +941,10 @@ func scanJournalEntry(source interface{ Scan(...any) error }) (JournalEntry, err
 		&anchorInodeValue,
 		&preimageDigestValue,
 		&preimageSizeValue,
+		&preimageModeValue,
 		&postimageDigestValue,
 		&postimageSizeValue,
+		&postimageModeValue,
 		&backupDigestValue,
 		&seenValue,
 		&createdValue,
@@ -966,20 +1012,26 @@ func scanJournalEntry(source interface{ Scan(...any) error }) (JournalEntry, err
 	}
 	if preimagePresent {
 		preimageSize, sizeOK := rawInt64(preimageSizeValue)
-		if !sizeOK || preimageSize < 0 {
+		preimageMode, modeOK := rawInt64(preimageModeValue)
+		if !sizeOK || preimageSize < 0 || !modeOK || !journalModeValid(preimageMode) {
 			return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 		}
-		read.Preimage = &ObservedFile{Present: true, Digest: preimageDigest, Size: uint64(preimageSize)}
-	} else if preimageSizeValue != nil {
+		read.Preimage = &ObservedFile{
+			Present: true, Digest: preimageDigest, Size: uint64(preimageSize), Mode: uint32(preimageMode),
+		}
+	} else if preimageSizeValue != nil || preimageModeValue != nil {
 		return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
 	if postimagePresent {
 		postimageSize, sizeOK := rawInt64(postimageSizeValue)
-		if !sizeOK || postimageSize < 0 {
+		postimageMode, modeOK := rawInt64(postimageModeValue)
+		if !sizeOK || postimageSize < 0 || !modeOK || !journalModeValid(postimageMode) {
 			return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 		}
-		read.Postimage = ObservedFile{Present: true, Digest: postimageDigest, Size: uint64(postimageSize)}
-	} else if postimageSizeValue != nil {
+		read.Postimage = ObservedFile{
+			Present: true, Digest: postimageDigest, Size: uint64(postimageSize), Mode: uint32(postimageMode),
+		}
+	} else if postimageSizeValue != nil || postimageModeValue != nil {
 		return JournalEntry{}, classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}
 	if backupPresent {
@@ -1112,19 +1164,24 @@ func validateJournalIntent(intent JournalIntent) error {
 
 func validateObservedFile(observed ObservedFile, stage Stage) error {
 	if !observed.Present {
-		if observed.Digest != ([32]byte{}) || observed.Size != 0 {
+		if observed.Digest != ([32]byte{}) || observed.Size != 0 || observed.Mode != 0 {
 			return classified(ErrInvalid, stage, ReasonJournalObservation)
 		}
 		return nil
 	}
-	if observed.Digest == ([32]byte{}) {
+	if observed.Digest == ([32]byte{}) || !journalModeValid(int64(observed.Mode)) {
 		return classified(ErrInvalid, stage, ReasonJournalObservation)
 	}
 	return nil
 }
 
+func journalModeValid(mode int64) bool {
+	return mode >= 0 && mode <= 0o777
+}
+
 func observedFileMatches(expected, observed ObservedFile) bool {
-	return expected.Present == observed.Present && expected.Digest == observed.Digest && expected.Size == observed.Size
+	return expected.Present == observed.Present && expected.Digest == observed.Digest &&
+		expected.Size == observed.Size && expected.Mode == observed.Mode
 }
 
 func observedPreimageMatches(preimage *ObservedFile, observed ObservedFile) bool {
@@ -1251,7 +1308,7 @@ func probeJournalSchema(path string) (schemaProbe, error) {
 			}
 		}
 	}
-	return schemaProbe{recognized: recognized, version: version}, nil
+	return schemaProbe{recognized: recognized, version: version, application: appID}, nil
 }
 
 func initializeJournalSchema(ctx context.Context, conn *sql.Conn, rootFD int) error {

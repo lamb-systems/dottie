@@ -182,7 +182,7 @@ func TestJournalOpenRefusesUnsafeForeignAndFutureStores(t *testing.T) {
 	futurePath := filepath.Join(futureDirectory, journalDatabaseName)
 	rewrite, err := sql.Open("sqlite", dbDSN(futurePath, false))
 	require.NoError(t, err)
-	_, err = rewrite.ExecContext(ctx, "PRAGMA user_version=2")
+	_, err = rewrite.ExecContext(ctx, "PRAGMA user_version=3")
 	require.NoError(t, err)
 	require.NoError(t, rewrite.Close())
 	_, err = OpenJournal(futureDirectory)
@@ -190,6 +190,20 @@ func TestJournalOpenRefusesUnsafeForeignAndFutureStores(t *testing.T) {
 	info, statErr = os.Stat(futurePath)
 	require.NoError(t, statErr)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	oldDirectory := t.TempDir()
+	require.NoError(t, os.Chmod(oldDirectory, 0o700))
+	previous, err := OpenJournal(oldDirectory)
+	require.NoError(t, err)
+	require.NoError(t, previous.Close())
+	oldPath := filepath.Join(oldDirectory, journalDatabaseName)
+	rewrite, err = sql.Open("sqlite", dbDSN(oldPath, false))
+	require.NoError(t, err)
+	_, err = rewrite.ExecContext(ctx, "PRAGMA user_version=1")
+	require.NoError(t, err)
+	require.NoError(t, rewrite.Close())
+	_, err = OpenJournal(oldDirectory)
+	requireJournalError(t, err, ErrSchema, StageJournalOpen, ReasonUpgradeRequired)
 
 	held, heldDirectory := newJournal(t)
 	_, err = OpenJournal(heldDirectory)
@@ -215,7 +229,7 @@ func TestJournalSchemaAndFileModes(t *testing.T) {
 	version, versionOK := rawInt64(versionValue)
 	require.True(t, versionOK)
 	assert.Equal(t, int64(journalApplicationID), application)
-	assert.Equal(t, int64(1), version)
+	assert.Equal(t, int64(2), version)
 
 	objects, err := queryJournalObjects(ctx, journal)
 	require.NoError(t, err)
@@ -764,6 +778,48 @@ func TestJournalDeleteIntentBeginsWithoutAPostimage(t *testing.T) {
 	assert.Equal(t, preimage, retained)
 }
 
+func postimageModeArg(digest any) any {
+	if digest == nil {
+		return nil
+	}
+	return int64(0)
+}
+
+func TestJournalModeOnlyChangeResolvesByImageMode(t *testing.T) {
+	postimage := ObservedJournalFile([]byte("same"))
+	postimage.Mode = 0o600
+	preimage := ObservedJournalFile([]byte("same"))
+	preimage.Mode = 0o644
+	intent := journalTestIntent([]byte("same"), []byte("same"), 4)
+	intent.Preimage = &preimage
+	intent.PreimageBytes = []byte("same")
+	intent.Postimage = postimage
+
+	t.Run("postimage mode applied", func(t *testing.T) {
+		journal, _ := newJournal(t)
+		entry, err := journal.BeginJournal(context.Background(), intent)
+		require.NoError(t, err)
+		resolutions, err := journal.ResolveInterrupted(context.Background(), func(JournalEntry) (ObservedFile, error) {
+			return postimage, nil
+		})
+		require.NoError(t, err)
+		require.Len(t, resolutions, 1)
+		assert.Equal(t, JournalResolution{Entry: entry.Entry, Outcome: JournalOutcomeApplied}, resolutions[0])
+	})
+
+	t.Run("preimage mode failed", func(t *testing.T) {
+		journal, _ := newJournal(t)
+		entry, err := journal.BeginJournal(context.Background(), intent)
+		require.NoError(t, err)
+		resolutions, err := journal.ResolveInterrupted(context.Background(), func(JournalEntry) (ObservedFile, error) {
+			return preimage, nil
+		})
+		require.NoError(t, err)
+		require.Len(t, resolutions, 1)
+		assert.Equal(t, JournalResolution{Entry: entry.Entry, Outcome: JournalOutcomeFailed}, resolutions[0])
+	})
+}
+
 func TestJournalDeleteCompletionRequiresObservedAbsence(t *testing.T) {
 	ctx := context.Background()
 	journal, _ := newJournal(t)
@@ -850,7 +906,7 @@ func TestJournalEntryBoundRefusesBeforeWriting(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := tx.PrepareContext(
 		ctx,
-		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,preimage_mode,postimage_digest,postimage_size,postimage_mode,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 	)
 	require.NoError(t, err)
 	vault := journalTestVault()
@@ -869,8 +925,10 @@ func TestJournalEntryBoundRefusesBeforeWriting(t *testing.T) {
 			7,
 			nil,
 			nil,
+			nil,
 			digest[:],
 			8,
+			int64(0),
 			nil,
 			0,
 			1,
@@ -1032,7 +1090,7 @@ func journalInsertRawEntry(
 	vault := journalTestVault()
 	result, err := journal.conn.ExecContext(
 		ctx,
-		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,postimage_digest,postimage_size,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"INSERT INTO journal(entry,vault,operation,stage,state,destination_dir,destination_path,anchor_path,anchor_device,anchor_inode,preimage_digest,preimage_size,preimage_mode,postimage_digest,postimage_size,postimage_mode,backup_digest,seen_floor_revision,created,updated) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		vault[:],
 		"apply",
 		string(JournalStageApplyPending),
@@ -1044,8 +1102,10 @@ func journalInsertRawEntry(
 		7,
 		nil,
 		nil,
+		nil,
 		postimageDigest,
 		postimageSize,
+		postimageModeArg(postimageDigest),
 		nil,
 		0,
 		1,
