@@ -127,11 +127,22 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	require.NoError(t, validateShowcasePayloadCustody(&ShowcasePayload{Entries: atObjectBound}, limits))
 	assert.Equal(t, uint32(64), (&ShowcasePayload{Entries: atObjectBound}).EntryCount())
 
-	overObjectBound := append(append([]PayloadEntryReference{}, atObjectBound...), entry(64, 1))
+	overObjectBound := append([]PayloadEntryReference{}, atObjectBound...)
+	tightened := limits
+	tightened.ManagedObjects = 8
+	tightenedEntries := make([]PayloadEntryReference, 0, tightened.ManagedObjects+1)
+	for index := range int(tightened.ManagedObjects) + 1 {
+		tightenedEntries = append(tightenedEntries, entry(index, 1))
+	}
 	assert.Equal(
 		t,
 		errShowcaseManagedObjects,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overObjectBound}, limits),
+		validateShowcasePayloadCustody(&ShowcasePayload{Entries: tightenedEntries}, tightened),
+	)
+	assert.Equal(
+		t,
+		errShowcaseManagedObjects,
+		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overObjectBound}, tightened),
 	)
 
 	overCustodyBytes := make([]PayloadEntryReference, 0, limits.ManagedObjects)

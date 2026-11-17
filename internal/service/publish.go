@@ -142,21 +142,21 @@ func identitySortKey(identity model.EntryKey) string {
 func formatEntryIdentities(identities []model.EntryKey) string {
 	parts := make([]string, 0, len(identities))
 	for _, identity := range identities {
-		if identity.Source == model.SourceFiles {
-			parts = append(parts, fmt.Sprintf("%s/%s:%s", identity.TargetID, identity.Source, identity.FilePath))
-		} else {
-			parts = append(
-				parts,
-				fmt.Sprintf(
-					"%s/%s:%s:%s:%s",
-					identity.TargetID,
-					identity.Source,
-					identity.SchemaID,
-					identity.SettingsPath,
-					identity.SettingKey,
-				),
-			)
-		}
+		parts = append(parts, formatEntryIdentity(identity))
 	}
 	return fmt.Sprintf("%v", parts)
+}
+
+func formatEntryIdentity(identity model.EntryKey) string {
+	if identity.Source == model.SourceFiles {
+		return fmt.Sprintf("%s/%s:%s", identity.TargetID, identity.Source, identity.FilePath)
+	}
+	return fmt.Sprintf(
+		"%s/%s:%s:%s:%s",
+		identity.TargetID,
+		identity.Source,
+		identity.SchemaID,
+		identity.SettingsPath,
+		identity.SettingKey,
+	)
 }

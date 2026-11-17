@@ -2,6 +2,7 @@ package publication
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -324,6 +325,76 @@ func TestShowcaseEntriesRefuseUnrepresentableSnapshotContent(t *testing.T) {
 	empty, err := SnapshotEntries(model.Snapshot{Version: model.SnapshotVersion})
 	assert.Nil(t, empty)
 	requireViolation(t, err, ErrShowcaseEntryUnsupported, "entries", "empty")
+}
+
+func TestShowcaseEntriesNameTheUnrepresentableEntry(t *testing.T) {
+	cases := []struct {
+		name   string
+		entry  model.Entry
+		field  string
+		reason string
+	}{
+		{name: "setting entry", entry: model.Entry{
+			TargetID: "gnome",
+			Setting: &model.SettingEntry{
+				SchemaID: "org.gnome.desktop.interface",
+				Path:     "/org/gnome/desktop/interface/",
+				Key:      "color-scheme",
+				State:    model.SettingPresent,
+				Value:    &model.VariantValue{Type: "s", Text: "prefer-dark"},
+			},
+		}, field: "entries.setting", reason: "unsupported"},
+		{name: "symlink entry", entry: model.Entry{
+			TargetID: "files",
+			File: &model.FileEntry{
+				Path: "lua/current", State: model.FilePresent, Kind: model.FileSymlink, LinkTarget: "../shared",
+			},
+		}, field: "entries.symlink", reason: "unsupported"},
+		{name: "directory entry", entry: model.Entry{
+			TargetID: "files",
+			File:     &model.FileEntry{Path: "lua", State: model.FilePresent, Kind: model.FileDirectory},
+		}, field: "entries.directory", reason: "unsupported"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			entries, err := SnapshotEntries(model.Snapshot{
+				Version: model.SnapshotVersion,
+				Entries: []model.Entry{test.entry},
+			})
+			assert.Nil(t, entries)
+			requireViolation(t, err, ErrShowcaseEntryUnsupported, test.field, test.reason)
+			named, ok := errors.AsType[*ShowcaseEntryError](err)
+			require.True(t, ok, "refusal does not name the entry")
+			assert.Equal(t, test.entry.Identity(), named.Entry)
+			assert.Equal(t, test.field, named.Field)
+			assert.Equal(t, test.reason, named.Reason)
+		})
+	}
+}
+
+func TestShowcaseEntriesRefuseAManifestPastSixtyFourEntries(t *testing.T) {
+	assert.Equal(t, 64, MaxSnapshotEntries)
+	atBound := make([]model.Entry, 0, MaxSnapshotEntries)
+	for index := range MaxSnapshotEntries {
+		atBound = append(atBound, model.Entry{TargetID: "files", File: &model.FileEntry{
+			Path: fmt.Sprintf("file-%03d.lua", index), State: model.FilePresent, Kind: model.FileRegular,
+			Content: []byte("canary"), Mode: 0o600,
+		}})
+	}
+	entries, err := SnapshotEntries(model.Snapshot{Version: model.SnapshotVersion, Entries: atBound})
+	require.NoError(t, err)
+	assert.Len(t, entries, MaxSnapshotEntries)
+
+	pastBound := append(
+		append([]model.Entry{}, atBound...),
+		model.Entry{TargetID: "files", File: &model.FileEntry{
+			Path: "file-999.lua", State: model.FilePresent, Kind: model.FileRegular,
+			Content: []byte("canary"), Mode: 0o600,
+		}},
+	)
+	entries, err = SnapshotEntries(model.Snapshot{Version: model.SnapshotVersion, Entries: pastBound})
+	assert.Nil(t, entries)
+	requireViolation(t, err, ErrShowcaseEntryUnsupported, "entries", "count")
 }
 
 func TestShowcaseEntriesSortRegularFilesIntoARecord(t *testing.T) {

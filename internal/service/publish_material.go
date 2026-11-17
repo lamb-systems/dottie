@@ -1036,6 +1036,9 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
+	if err := checkShowcasePublication(request.Configuration, snapshot); err != nil {
+		return PublicationPushPreparation{}, err
+	}
 	counts := PublicationPushPreparation{
 		Present: present,
 		Floor:   floor,

@@ -2,11 +2,17 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lamb-systems/dottie/internal/config"
+	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
@@ -163,4 +169,165 @@ func TestMaterialWriteBatchRefusesAShowcaseCandidate(t *testing.T) {
 	)
 	assert.Equal(t, MaterialWriteBatch{}, batch)
 	requireShowcaseRefusal(t, err, publication.ErrShowcasePayload)
+}
+
+func newShowcasePushFixture(t *testing.T) *publicationPushFixture {
+	t.Helper()
+	fixture := newPublicationPushFixture(t)
+	fixture.configuration.Targets[0].Showcase = true
+	return fixture
+}
+
+func requireShowcasePlanRefusal(t *testing.T, err error) *showcasePublicationError {
+	t.Helper()
+	require.ErrorIs(t, err, ErrShowcasePublication)
+	refusal, ok := errors.AsType[*showcasePublicationError](err)
+	require.True(t, ok, "showcase refusal is not typed")
+	return refusal
+}
+
+func requireNoShowcaseWorkStaged(t *testing.T, fixture *publicationPushFixture) {
+	t.Helper()
+	ctx := context.Background()
+	assert.Zero(t, fixture.transport.uploadCount(), "upload count")
+	assert.Zero(t, fixture.transport.prepareCount(), "prepared write count")
+	assert.Zero(t, fixture.transport.sendCount(), "sent write count")
+	_, active, err := fixture.store.ActiveAttempt(ctx)
+	require.NoError(t, err)
+	assert.False(t, active, "showcase refusal staged an attempt")
+	_, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	assert.False(t, present, "showcase refusal staged a floor")
+	_, issued := fixture.records.has(fixture.publicationID)
+	assert.False(t, issued, "showcase refusal retained a proposal")
+}
+
+func TestShowcasePublicationPlanningRefusesASettingsEntryNamingIt(t *testing.T) {
+	configuration := config.Config{
+		Version: config.Version,
+		Targets: []config.Target{
+			{
+				ID: "files", Source: model.SourceFiles, Mode: config.BackupOnly, Showcase: true,
+				Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+			{
+				ID: "gnome", Source: model.SourceGNOME, Mode: config.BackupOnly,
+				GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending},
+			},
+		},
+	}
+	require.NoError(t, configuration.Validate())
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{
+			{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+			{ID: "gnome", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+		},
+		Entries: []model.Entry{
+			{TargetID: "files", File: &model.FileEntry{
+				Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular,
+				Content: []byte("synthetic showcase payload"), Mode: 0o600,
+			}},
+			{TargetID: "gnome", Setting: &model.SettingEntry{
+				SchemaID: "org.gnome.desktop.interface",
+				Path:     "/org/gnome/desktop/interface/",
+				Key:      "color-scheme",
+				State:    model.SettingPresent,
+				Value:    &model.VariantValue{Type: "s", Text: "prefer-dark"},
+			}},
+		},
+	}
+
+	err := checkShowcasePublication(configuration, snapshot)
+	assert.Contains(
+		t,
+		err.Error(),
+		"gnome/gnome:org.gnome.desktop.interface:/org/gnome/desktop/interface/:color-scheme",
+	)
+	refusal := requireShowcasePlanRefusal(t, err)
+	assert.Equal(t, model.EntryKey{
+		TargetID: "gnome", Source: model.SourceGNOME, SchemaID: "org.gnome.desktop.interface",
+		SettingsPath: "/org/gnome/desktop/interface/", SettingKey: "color-scheme",
+	}, refusal.entry)
+	assert.Equal(t, "entries.setting: unsupported", refusal.detail)
+}
+
+func TestShowcasePublicationPlanningRefusesAnEmptyManifest(t *testing.T) {
+	configuration := config.Config{
+		Version: config.Version,
+		Targets: []config.Target{{
+			ID: "files", Source: model.SourceFiles, Mode: config.BackupOnly, Showcase: true,
+			Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+	}
+	require.NoError(t, configuration.Validate())
+
+	err := checkShowcasePublication(configuration, model.Snapshot{Version: model.SnapshotVersion})
+	assert.Contains(t, err.Error(), "cannot be represented as a showcase manifest")
+	refusal := requireShowcasePlanRefusal(t, err)
+	assert.Equal(t, showcasePublicationReasonSnapshot, refusal.reason)
+	assert.Equal(t, "entries: empty", refusal.detail)
+	require.ErrorIs(t, err, publication.ErrShowcaseEntryUnsupported)
+}
+
+func TestPreparePublicationPushRefusesAShowcaseTargetWithADirectoryBeforeAnyUpload(t *testing.T) {
+	ctx := context.Background()
+	fixture := newShowcasePushFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "config", "lua"), 0o700))
+	require.NoError(t, os.Chmod(filepath.Join(fixture.paths.Home, "config", "lua"), 0o700))
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(fixture.paths.Home, "config", "lua", "options.lua"), []byte("options"), 0o600),
+	)
+
+	_, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+	assert.Contains(t, err.Error(), "files/files:lua cannot be represented as a showcase entry")
+	refusal := requireShowcasePlanRefusal(t, err)
+	assert.Equal(t, model.EntryKey{TargetID: "files", Source: model.SourceFiles, FilePath: "lua"}, refusal.entry)
+	assert.Equal(t, "entries.directory: unsupported", refusal.detail)
+	requireNoShowcaseWorkStaged(t, fixture)
+}
+
+func TestPreparePublicationPushRefusesAShowcaseTargetBeyondTheEntryLimit(t *testing.T) {
+	ctx := context.Background()
+	fixture := newShowcasePushFixture(t)
+	for index := range publication.MaxSnapshotEntries {
+		path := filepath.Join(fixture.paths.Home, "config", fmt.Sprintf("file-%03d.lua", index))
+		require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("synthetic %d", index)), 0o600))
+	}
+
+	_, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+	assert.Contains(t, err.Error(), "65 entries exceed the 64-entry limit of a showcase publication")
+	refusal := requireShowcasePlanRefusal(t, err)
+	assert.Equal(t, publication.MaxSnapshotEntries+1, refusal.count)
+	assert.Equal(t, publication.MaxSnapshotEntries, refusal.limit)
+	requireNoShowcaseWorkStaged(t, fixture)
+}
+
+func TestPreparePublicationPushRefusesToPackAShowcaseTarget(t *testing.T) {
+	ctx := context.Background()
+	fixture := newShowcasePushFixture(t)
+
+	_, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+	assert.Contains(t, err.Error(), "publishing a showcase payload is not available in this build")
+	assert.NotContains(t, err.Error(), "packed")
+	requireShowcasePlanRefusal(t, err)
+	requireNoShowcaseWorkStaged(t, fixture)
+}
+
+func TestPreparePublicationPushKeepsPackingTargetsWithoutTheOptIn(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushFixture(t)
+
+	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+	require.NoError(t, err)
+	assert.False(t, preparation.NoOp)
+	assert.Equal(t, 1, preparation.Targets)
+	assert.Equal(t, 1, preparation.Entries)
+	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormPacked, record.PayloadForm())
 }

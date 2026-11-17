@@ -288,6 +288,34 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 	}
 }
 
+func TestShowcaseTargetRoundTripsThroughTheConfigFile(t *testing.T) {
+	paths := testPaths(t)
+	configuration := Default()
+	target := filesTarget("config", model.RootHome, "config", model.SelectionDirectory)
+	target.Showcase = true
+	configuration.Targets = []Target{target}
+	require.NoError(t, configuration.Validate())
+	assert.True(t, configuration.HasShowcaseTarget(), "HasShowcaseTarget")
+	assert.False(t, Default().HasShowcaseTarget(), "absent opt-in")
+	seedConfig(t, paths, configuration)
+
+	loaded, err := Load(paths)
+	require.NoError(t, err)
+	require.Len(t, loaded.Targets, 1)
+	assert.True(t, loaded.Targets[0].Showcase, "round trip lost the showcase opt-in")
+}
+
+func TestShowcaseTargetRequiresAFilesSource(t *testing.T) {
+	configuration := Default()
+	configuration.Targets = []Target{{
+		ID: "desktop", Source: model.SourceGNOME, Showcase: true,
+		GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending},
+	}}
+	err := configuration.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "showcase publications require a files target")
+}
+
 func TestUpdateLoadPermissionsAndCanonicalExcludes(t *testing.T) {
 	paths := testPaths(t)
 	require.NoError(t, os.Mkdir(paths.AppConfigDir(), 0o755))

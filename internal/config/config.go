@@ -39,6 +39,7 @@ type Target struct {
 	ID          string           `toml:"id"`
 	Source      model.SourceKind `toml:"source"`
 	Mode        Mode             `toml:"mode,omitempty"`
+	Showcase    bool             `toml:"showcase,omitempty"`
 	Root        *Root            `toml:"root,omitempty"`
 	GNOMEPolicy *GNOMEPolicy     `toml:"gnome_policy,omitempty"`
 }
@@ -99,6 +100,9 @@ func validateTarget(target Target, version uint32) error {
 	if err := portable.Validate(); err != nil {
 		return err
 	}
+	if target.Showcase && target.Source != model.SourceFiles {
+		return errors.New("showcase publications require a files target")
+	}
 	if !validModeOrEmpty(target.Mode) {
 		return errors.New("invalid mode")
 	}
@@ -114,6 +118,15 @@ func validateTarget(target Target, version uint32) error {
 		}
 	}
 	return nil
+}
+
+func (c Config) HasShowcaseTarget() bool {
+	for _, target := range c.Targets {
+		if target.Showcase {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) Target(id string) (Target, bool) {

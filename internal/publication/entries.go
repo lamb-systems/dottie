@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	MaxSnapshotEntries    = 512
+	MaxSnapshotEntries    = 64
 	MaxEntryPathBytes     = 1024
 	SnapshotEntryKindFile = "file"
 
@@ -24,6 +24,21 @@ const (
 )
 
 var ErrShowcaseEntryUnsupported = errors.New("publication showcase entry unsupported")
+
+type ShowcaseEntryError struct {
+	Entry  model.EntryKey
+	Field  string
+	Reason string
+	cause  error
+}
+
+func (e *ShowcaseEntryError) Error() string {
+	return "publication showcase entry: " + e.Field + ": " + e.Reason
+}
+
+func (e *ShowcaseEntryError) Is(target error) bool { return target == ErrShowcaseEntryUnsupported }
+
+func (e *ShowcaseEntryError) Unwrap() error { return e.cause }
 
 type SnapshotEntry struct {
 	Path string
@@ -38,7 +53,7 @@ func SnapshotEntries(snapshot model.Snapshot) ([]SnapshotEntry, error) {
 	for _, entry := range snapshot.Entries {
 		representable, err := snapshotEntry(entry)
 		if err != nil {
-			return nil, err
+			return nil, showcaseEntryViolationFor(entry, err)
 		}
 		entries = append(entries, representable)
 	}
@@ -281,4 +296,14 @@ func showcaseEntryViolation(err error) error {
 		return violation(ErrShowcaseEntryUnsupported, violationErr.Field(), violationErr.Reason())
 	}
 	return err
+}
+
+func showcaseEntryViolationFor(entry model.Entry, err error) error {
+	violationErr, ok := errors.AsType[*ViolationError](err)
+	if !ok {
+		return err
+	}
+	return &ShowcaseEntryError{
+		Entry: entry.Identity(), Field: violationErr.Field(), Reason: violationErr.Reason(), cause: err,
+	}
 }
