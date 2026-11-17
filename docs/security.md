@@ -17,8 +17,8 @@ membership in a signed commit, the head/snapshot chain, the payload CID and size
 format. Those checks establish repository-scoped authenticity and integrity, not global freshness or
 device authorization.
 
-`dottie push` resolves the vault it acts on from local evidence — an explicit `--vault`, the recorded local vault
-selection, or the stored publication binding recorded for the same account — and prepares a candidate under the same
+`dottie push` resolves the vault it acts on from local evidence: an explicit `--vault`, the recorded local vault
+selection, or the stored publication binding recorded for the same account. It prepares a candidate under the same
 account authority. It does not load a Dottie device key to publish. The consent, review, repair and
 accepted-floor checks around a publication remain mandatory, but they are local policy checks; the
 publication authority is the authenticated account session.
@@ -115,19 +115,10 @@ then requires `--vault` and `--device-id`.
 
 ## Historical v1 material
 
-The following are retained only as history and must not be read as protections supplied by this
-tree:
-
-- Encrypted snapshot envelopes, epoch content keys and recipient wraps.
-- Device certificates, root/publisher/restore-only roles, revocation and epoch authority.
-- Device-signed genesis authority, kit-signed checkpoints and the offline `recoveryAnchor`.
-- Retained recovery-point inventories, retention floors and pruning rules.
-- Export/import archives and provider-independent recovery.
-- The recursive v1 record-key inventory and its per-record signature fields.
-
-The v1 commands that served them were retired, and v1 records still block bootstrap or are refused as
-`legacy_profile`. No v2 command supplies envelope encryption, device-key-gated content, signed genesis
-authority or offline recovery.
+None of this is a protection in this tree: encrypted snapshot envelopes, epoch content keys,
+device certificates and roles, revocation authority, signed genesis, kit-signed checkpoints,
+offline anchors, retention floors, export archives and the v1 record-key inventory. The commands
+that served them are gone, and a repository holding those records is refused as `legacy_profile`.
 
 ## Threats and residual risks
 

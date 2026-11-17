@@ -24,7 +24,7 @@ func TestRun(t *testing.T) {
 			name: "help",
 			args: []string{"help"},
 			code: 0,
-			out:  "See README.md for build instructions and current status.",
+			out:  "See README.md for build instructions, docs/ for the trust model and acceptance record.",
 		},
 		{name: "help flag", args: []string{"--help"}, code: 0, out: "Usage:"},
 		{name: "short help", args: []string{"-h"}, code: 0, out: "Usage:"},

@@ -1,6 +1,8 @@
 # Development guidance
 
-- Start with README.md and the relevant component's README.
+- Start with README.md, then docs/security.md for the trust model and docs/acceptance.md for what has
+  actually been measured. Component directories carry no README of their own; put design notes in
+  docs/, not beside the code.
 - This is a scaffold. Do not describe unimplemented features or placeholder
   component directories as working functionality.
 - Keep repository documentation focused on product behavior, architecture and
@@ -30,6 +32,6 @@
 - Run make check, make test-race and make build for executable Go changes.
   Distinguish actual tests from unimplemented or skipped integration coverage.
 - Do not add source comments unless absolutely necessary. Put explanations in
-  the relevant component README.
+  docs/, not in a component README that no longer exists.
 - Leave staging and commits to the user. Do not commit or push.
 - Do not change accounts, enable services or publish without explicit approval.
