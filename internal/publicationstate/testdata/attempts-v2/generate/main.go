@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
@@ -31,25 +32,28 @@ import (
 )
 
 const (
-	imageName                 = "pending-genesis"
-	rowsName                  = "pending-genesis-rows.json"
-	inputsName                = "pending-genesis-inputs.json"
-	mixedImageName            = "mixed"
-	mixedRowsName             = "mixed-rows.json"
-	mixedInputsName           = "mixed-inputs.json"
-	manifestName              = "manifest.json"
-	manifestPendingName       = "manifest.pending"
-	baselineCommit            = "f5387d6a5fd3a9f6902e6fa8cea271aec24fba26"
-	baselineArchiveSHA256     = "c1fb2a175051fcc899149549ce15e1e35eaa59cd62d1ded2d46a0f71b4e8d4be"
-	storageProfile            = "systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"
-	baselinePinnedSourceFiles = 466
-	maxTableRows              = int64(10000)
-	maxCellBytes              = 16 << 20
-	maxJSONBytes              = 32 << 20
-	maxOutputBytes            = int64(64 << 20)
-	sqliteApplicationID       = int64(0x44545032)
-	payloadDirectoryName      = "payloads"
-	payloadFileSuffix         = ".payload"
+	imageName            = "pending-genesis"
+	rowsName             = "pending-genesis-rows.json"
+	inputsName           = "pending-genesis-inputs.json"
+	mixedImageName       = "mixed"
+	mixedRowsName        = "mixed-rows.json"
+	mixedInputsName      = "mixed-inputs.json"
+	manifestName         = "manifest.json"
+	manifestPendingName  = "manifest.pending"
+	generatorPath        = "internal/publicationstate/testdata/attempts-v2/generate"
+	storageProfile       = "systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"
+	maxTableRows         = int64(10000)
+	maxCellBytes         = 16 << 20
+	maxJSONBytes         = 32 << 20
+	maxOutputBytes       = int64(64 << 20)
+	sqliteApplicationID  = int64(0x44545032)
+	payloadDirectoryName = "payloads"
+	payloadFileSuffix    = ".payload"
+)
+
+var (
+	pendingDatabaseIdentity = [32]byte{0x61, 0xe4, 0x38, 0xc8, 0x7e, 0x51, 0x65, 0xa7, 0x21, 0x8e, 0x18, 0xa9, 0xaa, 0xad, 0x2c, 0x65, 0x1f, 0x0d, 0x3a, 0x09, 0x5a, 0xdc, 0x90, 0xac, 0xc5, 0x85, 0x8a, 0x89, 0x73, 0x52, 0x2c, 0x17}
+	mixedDatabaseIdentity   = [32]byte{0x96, 0xe9, 0xea, 0xf5, 0x93, 0x8c, 0x94, 0x44, 0x76, 0x32, 0x84, 0x15, 0xab, 0x4c, 0x13, 0x9e, 0xd8, 0x83, 0x1f, 0x1f, 0xb1, 0x29, 0x16, 0x5c, 0xe5, 0x0c, 0x56, 0x78, 0xc5, 0x5d, 0xe8, 0x57}
 )
 
 type columnSpec struct {
@@ -86,6 +90,7 @@ var tableSpecs = []tableSpec{
 	{Name: "attempt_payload_refs", DDL: "CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))", Columns: []columnSpec{{"attempt_id", "BLOB"}, {"blob_cid", "BLOB"}}, OrderBy: "attempt_id"},
 	{Name: "retained_publications", DDL: "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)", Columns: []columnSpec{{"record_cid", "BLOB"}, {"attempt_id", "BLOB"}, {"sequence", "INTEGER"}, {"blob_cid", "BLOB"}, {"size", "INTEGER"}, {"accepted_revision", "INTEGER"}}, OrderBy: "record_cid"},
 	{Name: "attempt_reservations", DDL: "CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)", Columns: []columnSpec{{"attempt_id", "BLOB"}, {"metadata_bytes", "INTEGER"}, {"accepted_bytes", "INTEGER"}, {"accepted_records", "INTEGER"}, {"accepted_events", "INTEGER"}, {"retained_points", "INTEGER"}}, OrderBy: "attempt_id"},
+	{Name: "accepted_material_refs", DDL: "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))", Columns: []columnSpec{{"accepted_revision", "INTEGER"}, {"record_cid", "BLOB"}, {"blob_cid", "BLOB"}}, OrderBy: "accepted_revision"},
 }
 
 var indexSpecs = []schemaObjectSpec{
@@ -253,16 +258,15 @@ type tableCount struct {
 type manifest struct {
 	FormatVersion int             `json:"formatVersion"`
 	Coverage      string          `json:"coverage"`
-	Baseline      baselineValue   `json:"baseline"`
+	Provenance    provenanceValue `json:"provenance"`
 	Images        []imageManifest `json:"images"`
 	Files         []fileEntry     `json:"files"`
 }
 
-type baselineValue struct {
-	ExpectedCommit        string `json:"expectedCommit"`
-	PinnedSourceFiles     int    `json:"pinnedSourceFiles"`
-	SourceArchiveSHA256   string `json:"sourceArchiveSHA256"`
-	ProvenanceDisposition string `json:"provenanceDisposition"`
+type provenanceValue struct {
+	Generator          string `json:"generator"`
+	StoreSchemaVersion int64  `json:"storeSchemaVersion"`
+	ApplicationID      int64  `json:"applicationId"`
 }
 
 func main() {
@@ -354,6 +358,18 @@ func run(outputRoot string) (resultErr error) {
 	}
 	ownedStore = pendingStore
 	storeOwned = true
+	if err := closeStore(); err != nil {
+		return err
+	}
+	if err := seedDatabaseIdentity(pendingDirectory, pendingDatabaseIdentity); err != nil {
+		return err
+	}
+	pendingStore, err = publicationstate.OpenWithOptions(pendingDirectory, binding, options)
+	if err != nil {
+		return errors.New("could not reopen the seeded pending publication store")
+	}
+	ownedStore = pendingStore
+	storeOwned = true
 	initialFloor, present, err := pendingStore.Load(ctx)
 	if err != nil || present || !isZeroFloor(initialFloor) {
 		return errors.New("fresh pending store did not begin without a floor")
@@ -429,6 +445,18 @@ func run(outputRoot string) (resultErr error) {
 	mixedStore, err := publicationstate.OpenWithOptions(mixedDirectory, binding, options)
 	if err != nil {
 		return errors.New("could not open fresh mixed publication store")
+	}
+	ownedStore = mixedStore
+	storeOwned = true
+	if err := closeStore(); err != nil {
+		return err
+	}
+	if err := seedDatabaseIdentity(mixedDirectory, mixedDatabaseIdentity); err != nil {
+		return err
+	}
+	mixedStore, err = publicationstate.OpenWithOptions(mixedDirectory, binding, options)
+	if err != nil {
+		return errors.New("could not reopen the seeded mixed publication store")
 	}
 	ownedStore = mixedStore
 	storeOwned = true
@@ -632,13 +660,14 @@ func run(outputRoot string) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	provenance, err := currentBuildProvenance(pendingInventory, mixedInventory)
+	if err != nil {
+		return err
+	}
 	outputManifest := manifest{
-		FormatVersion: 1, Coverage: "two-image-schema-2",
-		Baseline: baselineValue{
-			ExpectedCommit: baselineCommit, PinnedSourceFiles: baselinePinnedSourceFiles, SourceArchiveSHA256: baselineArchiveSHA256,
-			ProvenanceDisposition: "intended-baseline; linked-source provenance must be verified externally",
-		},
-		Images: []imageManifest{pendingImage, mixedImage}, Files: files,
+		FormatVersion: 1, Coverage: "two-image-current-schema",
+		Provenance: provenance,
+		Images:     []imageManifest{pendingImage, mixedImage}, Files: files,
 	}
 	manifestJSON, err := marshalJSON(outputManifest)
 	if err != nil || len(manifestJSON) == 0 || len(manifestJSON) > maxJSONBytes {
@@ -2844,8 +2873,8 @@ func inspectDatabase(path string) (rowInventory, error) {
 	if err := db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&userVersion); err != nil {
 		return rowInventory{}, errors.New("database schema version read failed")
 	}
-	if applicationID != sqliteApplicationID || userVersion != 2 {
-		return rowInventory{}, errors.New("database is not the expected schema-2 store")
+	if applicationID != sqliteApplicationID || userVersion != 3 {
+		return rowInventory{}, errors.New("database is not the current store schema")
 	}
 	objects, err := readSchemaObjects(db)
 	if err != nil {
@@ -2934,13 +2963,13 @@ func readSchemaObjects(db *sql.DB) ([]schemaObject, error) {
 	for _, spec := range tableSpecs {
 		object, ok := actual[spec.Name]
 		if !ok || object.Kind != "table" || strings.TrimSpace(object.SQL) != spec.DDL {
-			return nil, errors.New("table definition differs from schema 2")
+			return nil, errors.New("table definition differs from the current schema")
 		}
 	}
 	for _, spec := range indexSpecs {
 		object, ok := actual[spec.Name]
 		if !ok || object.Kind != spec.Kind || strings.TrimSpace(object.SQL) != spec.SQL {
-			return nil, errors.New("index definition differs from schema 2")
+			return nil, errors.New("index definition differs from the current schema")
 		}
 	}
 	return objects, nil
@@ -2961,7 +2990,7 @@ func readMetadataKeys(db *sql.DB) ([]string, error) {
 		}
 		keys = append(keys, key)
 		if len(keys) > 7 {
-			resultErr = errors.New("metadata key count exceeds schema 2")
+			resultErr = errors.New("metadata key count exceeds the current schema")
 			break
 		}
 	}
@@ -3057,8 +3086,8 @@ func encodeCell(value any) (rawCell, int, error) {
 }
 
 func validateInventoryShape(inventory rowInventory) error {
-	if inventory.FormatVersion != 1 || len(inventory.Tables) != len(tableSpecs) || len(inventory.SchemaObjects) != len(tableSpecs)+len(indexSpecs) || inventory.UserVersion != 2 || inventory.ApplicationID != sqliteApplicationID || !equalStrings(inventory.MetadataKeys, []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}) {
-		return errors.New("schema-2 inventory shape differs")
+	if inventory.FormatVersion != 1 || len(inventory.Tables) != len(tableSpecs) || len(inventory.SchemaObjects) != len(tableSpecs)+len(indexSpecs) || inventory.UserVersion != 3 || inventory.ApplicationID != sqliteApplicationID || !equalStrings(inventory.MetadataKeys, []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}) {
+		return errors.New("inventory shape differs from the current schema")
 	}
 	expectedObjects := make(map[string]schemaObject, len(tableSpecs)+len(indexSpecs))
 	for _, spec := range tableSpecs {
@@ -3070,21 +3099,21 @@ func validateInventoryShape(inventory rowInventory) error {
 	for _, object := range inventory.SchemaObjects {
 		expected, exists := expectedObjects[object.Name]
 		if !exists || object.Kind != expected.Kind || strings.TrimSpace(object.SQL) != expected.SQL {
-			return errors.New("schema-2 schema object differs")
+			return errors.New("schema object differs from the current schema")
 		}
 		delete(expectedObjects, object.Name)
 	}
 	if len(expectedObjects) != 0 {
-		return errors.New("schema-2 schema object set is incomplete")
+		return errors.New("schema object set is incomplete")
 	}
 	for tableIndex, spec := range tableSpecs {
 		table := inventory.Tables[tableIndex]
 		if table.Name != spec.Name || strings.TrimSpace(table.DDL) != spec.DDL || !reflect.DeepEqual(table.Columns, spec.Columns) || table.RowCount < 0 || table.RowCount > maxTableRows || int64(len(table.Rows)) != table.RowCount {
-			return errors.New("schema-2 table shape differs")
+			return errors.New("table shape differs from the current schema")
 		}
 		for _, row := range table.Rows {
 			if len(row) != len(spec.Columns) {
-				return errors.New("schema-2 row column count differs")
+				return errors.New("row column count differs")
 			}
 			for columnIndex, cell := range row {
 				wantType := map[string]string{"TEXT": "text-base64", "BLOB": "blob-base64", "INTEGER": "integer"}[spec.Columns[columnIndex].Type]
@@ -3092,10 +3121,10 @@ func validateInventoryShape(inventory rowInventory) error {
 					if (spec.Name == "accepted_events" && columnIndex == 4) || (spec.Name == "publication_attempts" && (columnIndex == 9 || columnIndex == 10)) {
 						continue
 					}
-					return errors.New("schema-2 non-null column is null")
+					return errors.New("non-null column is null")
 				}
 				if wantType == "" || cell.Type != wantType {
-					return errors.New("schema-2 cell type differs from declared column")
+					return errors.New("cell type differs from declared column")
 				}
 			}
 		}
@@ -3427,11 +3456,12 @@ func validateMixedRows(inventory rowInventory, state mixedLifecycleState) error 
 		"pending_genesis": 0, "attempt_events": 15, "attempt_evidence": 5,
 		"payload_objects": 3, "attempt_payload_refs": 1,
 		"retained_publications": 1, "attempt_reservations": 1,
+		"accepted_material_refs": 0,
 	}
 	for _, table := range inventory.Tables {
 		count, ok := wantedCounts[table.Name]
 		if !ok || table.RowCount != count || int64(len(table.Rows)) != count {
-			return errors.New("mixed schema-2 table count differs")
+			return errors.New("mixed table count differs")
 		}
 	}
 	binding := state.Binding
@@ -4073,11 +4103,12 @@ func validatePendingRows(inventory rowInventory, binding publicationstate.Bindin
 		"pending_genesis": 1, "attempt_events": 1, "attempt_evidence": 0,
 		"payload_objects": 1, "attempt_payload_refs": 1,
 		"retained_publications": 0, "attempt_reservations": 1,
+		"accepted_material_refs": 0,
 	}
 	for _, table := range inventory.Tables {
 		count, ok := wantedCounts[table.Name]
 		if !ok || table.RowCount != count || int64(len(table.Rows)) != count {
-			return errors.New("schema-2 table contents do not match pending genesis")
+			return errors.New("table contents do not match pending genesis")
 		}
 	}
 	attempts := tableByName(inventory, "publication_attempts")
@@ -4256,7 +4287,7 @@ func makeReplayInputs(binding publicationstate.Binding, suppliedContext publicat
 			ApprovalRevision:  review.ApprovalRevision,
 		},
 		APISequence: []string{
-			"OpenWithOptions(default schema-2 options)",
+			"OpenWithOptions(default options)",
 			"Load(no accepted floor)",
 			"PrepareAttempt(genesis)",
 			"CreateAttempt(prepared; no dispatch or submission)",
@@ -4822,7 +4853,7 @@ func validateCombinedCoverage(pending, mixed rowInventory) error {
 		pendingTable := pending.Tables[index]
 		mixedTable := mixed.Tables[index]
 		if pendingTable.Name != spec.Name || mixedTable.Name != spec.Name || (pendingTable.RowCount == 0 && mixedTable.RowCount == 0) {
-			return errors.New("combined table coverage is incomplete")
+			return fmt.Errorf("combined table coverage is incomplete for %s", spec.Name)
 		}
 		if pendingTable.RowCount > math.MaxInt64-pendingTotal || mixedTable.RowCount > math.MaxInt64-mixedTotal {
 			return errors.New("combined row count overflows")
@@ -6513,4 +6544,43 @@ func makeMixedReplayInputs(state mixedLifecycleState, options publicationstate.O
 	}
 	_ = encoded
 	return result, nil
+}
+
+func seedDatabaseIdentity(directory string, identity [32]byte) error {
+	path := filepath.Join(directory, "publication.db")
+	if err := verifyPrivateFile(path); err != nil {
+		return errors.New("fresh database file is unsafe")
+	}
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
+	if err != nil {
+		return errors.New("seeded database open failed")
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(context.Background(), "UPDATE store_meta SET value=? WHERE key='database_id'", identity[:]); err != nil {
+		_ = db.Close()
+		return errors.New("database identity update failed")
+	}
+	if _, err := db.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		_ = db.Close()
+		return errors.New("database identity checkpoint failed")
+	}
+	if err := db.Close(); err != nil {
+		return errors.New("seeded database close failed")
+	}
+	if err := verifyPrivateFile(path); err != nil {
+		return errors.New("seeded database file is unsafe")
+	}
+	return nil
+}
+
+func currentBuildProvenance(pending, mixed rowInventory) (provenanceValue, error) {
+	if pending.UserVersion != mixed.UserVersion || pending.ApplicationID != mixed.ApplicationID {
+		return provenanceValue{}, errors.New("images disagree on the store build they were produced by")
+	}
+	return provenanceValue{
+		Generator:          generatorPath,
+		StoreSchemaVersion: pending.UserVersion,
+		ApplicationID:      pending.ApplicationID,
+	}, nil
 }
