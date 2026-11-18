@@ -488,15 +488,15 @@ func publicationReaderMalformedPayload(t *testing.T) []byte {
 	return malformed
 }
 
-type publicationReaderShowcaseFile struct {
+type publicationReaderManifestFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-func (fixture *publicationReaderFixture) showcasePublication(
+func (fixture *publicationReaderFixture) manifestPublication(
 	t *testing.T,
-	files ...publicationReaderShowcaseFile,
+	files ...publicationReaderManifestFile,
 ) (publication.SnapshotRecord, map[string][]byte) {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
@@ -553,17 +553,17 @@ func (fixture *publicationReaderFixture) substituteBlob(content, substitute []by
 	fixture.transport.mu.Unlock()
 }
 
-func fixtureShowcaseFiles() []publicationReaderShowcaseFile {
-	return []publicationReaderShowcaseFile{
-		{path: "init.lua", mode: 0o600, content: []byte("synthetic showcase init")},
-		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic showcase options")},
+func fixtureManifestFiles() []publicationReaderManifestFile {
+	return []publicationReaderManifestFile{
+		{path: "init.lua", mode: 0o600, content: []byte("synthetic manifest init")},
+		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic manifest options")},
 	}
 }
 
-func TestPublicationReaderReadsAShowcasePublicationWithVerifiedEntries(t *testing.T) {
+func TestPublicationReaderReadsAManifestPublicationWithVerifiedEntries(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	fixture.showcasePublication(t, fixtureShowcaseFiles()...)
+	fixture.manifestPublication(t, fixtureManifestFiles()...)
 
 	view, err := fixture.reader.ReadView(ctx)
 	require.NoError(t, err)
@@ -575,77 +575,77 @@ func TestPublicationReaderReadsAShowcasePublicationWithVerifiedEntries(t *testin
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, view.Head, accepted.View.Head)
-	assert.Equal(t, publication.PayloadFormShowcase, accepted.Payload.Form)
+	assert.Equal(t, publication.PayloadFormManifest, accepted.Payload.Form)
 	assert.Equal(t, model.Snapshot{}, accepted.Payload.Snapshot)
 	require.Len(t, accepted.Payload.Entries, 2)
 	assert.Equal(t, "init.lua", accepted.Payload.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), accepted.Payload.Entries[0].Mode)
-	assert.Equal(t, []byte("synthetic showcase init"), accepted.Payload.Entries[0].Content)
+	assert.Equal(t, []byte("synthetic manifest init"), accepted.Payload.Entries[0].Content)
 	assert.Equal(t, "lua/config/options.lua", accepted.Payload.Entries[1].Path)
 	assert.Equal(t, uint32(0o644), accepted.Payload.Entries[1].Mode)
-	assert.Equal(t, []byte("synthetic showcase options"), accepted.Payload.Entries[1].Content)
-	assert.Equal(t, uint64(len("synthetic showcase init")), accepted.Payload.Entries[0].Size)
-	assert.Equal(t, uint64(len("synthetic showcase options")), accepted.Payload.Entries[1].Size)
+	assert.Equal(t, []byte("synthetic manifest options"), accepted.Payload.Entries[1].Content)
+	assert.Equal(t, uint64(len("synthetic manifest init")), accepted.Payload.Entries[0].Size)
+	assert.Equal(t, uint64(len("synthetic manifest options")), accepted.Payload.Entries[1].Size)
 	assert.Equal(t, 2, fixture.transport.blobStreams)
 
 	snapshot, err := accepted.Payload.PackedSnapshot()
 	assert.Equal(t, model.Snapshot{}, snapshot)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
 }
 
-func TestPublicationReaderRefusesAMissingShowcaseEntryBlobNamingThePath(t *testing.T) {
+func TestPublicationReaderRefusesAMissingManifestEntryBlobNamingThePath(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	files := fixtureShowcaseFiles()
-	fixture.showcasePublication(t, files...)
+	files := fixtureManifestFiles()
+	fixture.manifestPublication(t, files...)
 	fixture.forgetBlob(files[1].content)
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched showcase payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched manifest payload was exposed")
 	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
 	require.ErrorIs(t, err, atproto.ErrReadBlobMissing)
-	var refusal *publication.ShowcasePayloadError
+	var refusal *publication.ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[1].path, refusal.EntryPath())
-	assert.Equal(t, publication.ShowcaseReasonUnavailable, refusal.Reason)
+	assert.Equal(t, publication.ManifestReasonUnavailable, refusal.Reason)
 	assert.Contains(t, err.Error(), files[1].path)
 	assert.Equal(t, 2, fixture.transport.blobStreams, "the reader kept fetching after the refused entry")
 }
 
-func TestPublicationReaderRefusesAMismatchedShowcaseEntryNamingThePath(t *testing.T) {
+func TestPublicationReaderRefusesAMismatchedManifestEntryNamingThePath(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	files := fixtureShowcaseFiles()
-	fixture.showcasePublication(t, files...)
+	files := fixtureManifestFiles()
+	fixture.manifestPublication(t, files...)
 	fixture.substituteBlob(files[1].content, files[1].content[:len(files[1].content)-1])
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched showcase payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched manifest payload was exposed")
 	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
 	require.ErrorIs(t, err, atproto.ErrReadBlobTruncated)
-	var refusal *publication.ShowcasePayloadError
+	var refusal *publication.ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[1].path, refusal.EntryPath())
 	assert.Contains(t, err.Error(), files[1].path)
 }
 
-func TestPublicationReaderRefusesAShowcasePayloadWithAPartiallyAvailableEntrySet(t *testing.T) {
+func TestPublicationReaderRefusesAManifestPayloadWithAPartiallyAvailableEntrySet(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
 	files := append(
-		fixtureShowcaseFiles(),
-		publicationReaderShowcaseFile{path: "lua/plugin/showcase.lua", mode: 0o600, content: []byte("showcase plugin")},
+		fixtureManifestFiles(),
+		publicationReaderManifestFile{path: "lua/plugin/manifest.lua", mode: 0o600, content: []byte("manifest plugin")},
 	)
-	fixture.showcasePublication(t, files...)
+	fixture.manifestPublication(t, files...)
 	fixture.forgetBlob(files[2].content)
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "an incomplete showcase payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "an incomplete manifest payload was exposed")
 	assert.Empty(t, accepted.Payload.Entries)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
-	var refusal *publication.ShowcasePayloadError
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	var refusal *publication.ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[2].path, refusal.EntryPath())
 	assert.Equal(t, 3, fixture.transport.blobStreams)

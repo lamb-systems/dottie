@@ -13,7 +13,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-type showcaseAttemptFixture struct {
+type manifestAttemptFixture struct {
 	binding Binding
 	raw     []byte
 	head    []byte
@@ -21,12 +21,12 @@ type showcaseAttemptFixture struct {
 	entries []publication.PayloadEntry
 }
 
-func newShowcaseAttemptFixture(t *testing.T, paths []string) showcaseAttemptFixture {
+func newManifestAttemptFixture(t *testing.T, paths []string) manifestAttemptFixture {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(paths))
 	supplied := make([]publication.PayloadEntry, 0, len(paths))
 	for _, path := range paths {
-		content := []byte("synthetic showcase entry for " + path)
+		content := []byte("synthetic manifest entry for " + path)
 		cid, err := publication.RawPayloadCID(content)
 		require.NoError(t, err)
 		entries = append(entries, publication.SnapshotEntry{
@@ -64,7 +64,7 @@ func newShowcaseAttemptFixture(t *testing.T, paths []string) showcaseAttemptFixt
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(0)
 	require.NoError(t, err)
-	return showcaseAttemptFixture{
+	return manifestAttemptFixture{
 		binding: binding,
 		raw:     raw,
 		head:    head,
@@ -73,7 +73,7 @@ func newShowcaseAttemptFixture(t *testing.T, paths []string) showcaseAttemptFixt
 	}
 }
 
-func (f showcaseAttemptFixture) view() SuppliedRepositoryView {
+func (f manifestAttemptFixture) view() SuppliedRepositoryView {
 	return SuppliedRepositoryView{
 		Origin:          f.binding,
 		Scope:           ViewScopeWholeRepository,
@@ -81,7 +81,7 @@ func (f showcaseAttemptFixture) view() SuppliedRepositoryView {
 	}
 }
 
-func (f showcaseAttemptFixture) candidate() CandidateInput {
+func (f manifestAttemptFixture) candidate() CandidateInput {
 	entries := make([]publication.PayloadEntry, 0, len(f.entries))
 	for _, entry := range f.entries {
 		entries = append(entries, publication.PayloadEntry{
@@ -96,7 +96,7 @@ func (f showcaseAttemptFixture) candidate() CandidateInput {
 	}
 }
 
-func (f showcaseAttemptFixture) references() []PayloadEntryReference {
+func (f manifestAttemptFixture) references() []PayloadEntryReference {
 	references := make([]PayloadEntryReference, 0, len(f.entries))
 	for _, entry := range f.entries {
 		cid, err := publication.RawPayloadCID(entry.Content)
@@ -110,14 +110,14 @@ func (f showcaseAttemptFixture) references() []PayloadEntryReference {
 	return references
 }
 
-func showcaseFixture(t *testing.T) showcaseAttemptFixture {
-	return newShowcaseAttemptFixture(t, []string{"init.lua", "lua/config/options.lua", "lua/plugin/init.lua"})
+func manifestFixture(t *testing.T) manifestAttemptFixture {
+	return newManifestAttemptFixture(t, []string{"init.lua", "lua/config/options.lua", "lua/plugin/init.lua"})
 }
 
-func stageShowcaseAttempt(
+func stageManifestAttempt(
 	t *testing.T,
 	store *Store,
-	f showcaseAttemptFixture,
+	f manifestAttemptFixture,
 	view SuppliedRepositoryView,
 	review LocalReviewContext,
 ) Attempt {
@@ -137,13 +137,13 @@ func stageShowcaseAttempt(
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
-	require.NotNil(t, attempt.Showcase)
+	require.NotNil(t, attempt.Manifest)
 	assert.Nil(t, attempt.BlobCID)
 	assert.Equal(t, uint64(0), attempt.BlobSize)
 	return attempt
 }
 
-func beginShowcaseUpload(
+func beginManifestUpload(
 	t *testing.T,
 	store *Store,
 	attempt Attempt,
@@ -165,15 +165,15 @@ func beginShowcaseUpload(
 	return material
 }
 
-func TestShowcaseAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
+func TestManifestAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
-	require.Len(t, attempt.Showcase.Entries, 3)
+	attempt := stageManifestAttempt(t, store, f, view, review)
+	require.Len(t, attempt.Manifest.Entries, 3)
 
 	for _, entry := range f.entries {
 		info, err := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename(entry.Content)))
@@ -196,7 +196,7 @@ func TestShowcaseAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 		assert.Equal(t, entry.Content, staged.Entries[index].Content)
 	}
 
-	upload := beginShowcaseUpload(t, store, attempt, view, review)
+	upload := beginManifestUpload(t, store, attempt, view, review)
 	assert.Empty(t, upload.Payload)
 	assert.Empty(t, upload.Blob.CID)
 	require.Len(t, upload.Entries, 3)
@@ -215,7 +215,7 @@ func TestShowcaseAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	submission, err := store.BeginShowcaseSubmission(
+	submission, err := store.BeginManifestSubmission(
 		ctx,
 		attempt.ID,
 		submissionProposal.StateToken,
@@ -225,7 +225,7 @@ func TestShowcaseAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 		f.references(),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormShowcase, submission.PayloadForm)
+	assert.Equal(t, PayloadFormManifest, submission.PayloadForm)
 	assert.Equal(t, f.references(), submission.Entries)
 	assert.Equal(t, f.raw, submission.SnapshotRecord)
 	assert.Equal(t, f.head, submission.HeadRecord)
@@ -274,9 +274,9 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	assert.Equal(t, uint64(len(candidate.Payload)), proposal.CandidateBlobSize)
 	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, empty, review, proposal.Confirmation)
 	require.NoError(t, err)
-	assert.Nil(t, attempt.Showcase)
+	assert.Nil(t, attempt.Manifest)
 
-	upload := beginShowcasePackedUpload(t, store, attempt, empty, review)
+	upload := beginManifestPackedUpload(t, store, attempt, empty, review)
 	assert.Empty(t, upload.Entries)
 	assert.Equal(t, candidate.Payload, upload.Payload)
 	assert.NotEmpty(t, upload.Blob.CID)
@@ -296,7 +296,7 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	assert.Empty(t, submission.Entries)
 }
 
-func beginShowcasePackedUpload(
+func beginManifestPackedUpload(
 	t *testing.T,
 	store *Store,
 	attempt Attempt,
@@ -318,15 +318,15 @@ func beginShowcasePackedUpload(
 	return material
 }
 
-func TestShowcaseSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
+func TestManifestSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
-	beginShowcaseUpload(t, store, attempt, view, review)
+	attempt := stageManifestAttempt(t, store, f, view, review)
+	beginManifestUpload(t, store, attempt, view, review)
 
 	references := f.references()
 	partial := [][]PayloadEntryReference{
@@ -342,7 +342,7 @@ func TestShowcaseSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	for index, uploaded := range partial {
 		proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 		require.NoError(t, err)
-		_, err = store.BeginShowcaseSubmission(
+		_, err = store.BeginManifestSubmission(
 			ctx,
 			attempt.ID,
 			proposal.StateToken,
@@ -375,7 +375,7 @@ func TestShowcaseSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	)
 	requireErrorMetadata(t, err, ErrUnsupported, StageDispatch, ReasonPayloadForm)
 
-	submitted, err := store.BeginShowcaseSubmission(
+	submitted, err := store.BeginManifestSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -385,24 +385,24 @@ func TestShowcaseSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 		references,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormShowcase, submitted.PayloadForm)
+	assert.Equal(t, PayloadFormManifest, submitted.PayloadForm)
 	after, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptMayHaveSubmitted, after.Lifecycle)
 }
 
-func TestShowcaseAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
+func TestManifestAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
-	beginShowcaseUpload(t, store, attempt, view, review)
+	attempt := stageManifestAttempt(t, store, f, view, review)
+	beginManifestUpload(t, store, attempt, view, review)
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginShowcaseSubmission(
+	_, err = store.BeginManifestSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -426,15 +426,15 @@ func TestShowcaseAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
 	assert.Equal(t, 0, retained)
 }
 
-func TestShowcaseAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T) {
+func TestManifestAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
-	upload := beginShowcaseUpload(t, store, attempt, view, review)
+	attempt := stageManifestAttempt(t, store, f, view, review)
+	upload := beginManifestUpload(t, store, attempt, view, review)
 	require.Len(t, upload.Entries, 3)
 
 	failed, err := store.LoadAttempt(ctx, attempt.ID)
@@ -447,7 +447,7 @@ func TestShowcaseAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T
 
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginShowcaseSubmission(
+	_, err = store.BeginManifestSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -475,14 +475,14 @@ func TestShowcaseAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T
 	assert.False(t, present)
 }
 
-func TestShowcaseCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T) {
+func TestManifestCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
+	attempt := stageManifestAttempt(t, store, f, view, review)
 
 	target := f.entries[1]
 	path := filepath.Join(directory, payloadDirectoryName, payloadBasename(target.Content))
@@ -500,13 +500,13 @@ func TestShowcaseCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T
 	cid, err := publication.RawPayloadCID(original)
 	require.NoError(t, err)
 	name := payloadBasename(original)
-	require.NoError(t, validateShowcaseEntryForCustody(original, publication.BlobReference{
+	require.NoError(t, validateManifestEntryForCustody(original, publication.BlobReference{
 		CID: cid, Size: uint64(len(original)), MIMEType: publication.BlobMIMEType,
 	}, name))
-	require.ErrorIs(t, validateShowcaseEntryForCustody(original, publication.BlobReference{
+	require.ErrorIs(t, validateManifestEntryForCustody(original, publication.BlobReference{
 		CID: f.entries[0].Content, Size: uint64(len(original)),
 	}, name), errInvalidPayloadInput)
-	require.ErrorIs(t, validateShowcaseEntryForCustody(original, publication.BlobReference{
+	require.ErrorIs(t, validateManifestEntryForCustody(original, publication.BlobReference{
 		CID: cid, Size: uint64(len(original)) + 1,
 	}, name), errInvalidPayloadInput)
 
@@ -518,7 +518,7 @@ func TestShowcaseCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T
 	}
 }
 
-func TestShowcaseEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
+func TestManifestEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	f := newFixture(t, BackendPublicRepo)
 	cid, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
@@ -526,7 +526,7 @@ func TestShowcaseEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 		CID: cid, Size: uint64(len(f.payload)), MIMEType: publication.SnapshotBlobMIMEType,
 	}
 	require.NoError(t, validatePayloadForCustody(f.payload, blob, payloadBasename(f.payload)))
-	require.NoError(t, validateShowcaseEntryForCustody(f.payload, blob, payloadBasename(f.payload)))
+	require.NoError(t, validateManifestEntryForCustody(f.payload, blob, payloadBasename(f.payload)))
 
 	plain := []byte("synthetic plain entry")
 	plainCID, err := publication.RawPayloadCID(plain)
@@ -534,7 +534,7 @@ func TestShowcaseEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	plainBlob := publication.BlobReference{
 		CID: plainCID, Size: uint64(len(plain)), MIMEType: publication.BlobMIMEType,
 	}
-	require.NoError(t, validateShowcaseEntryForCustody(plain, plainBlob, payloadBasename(plain)))
+	require.NoError(t, validateManifestEntryForCustody(plain, plainBlob, payloadBasename(plain)))
 	require.ErrorIs(
 		t,
 		validatePayloadForCustody(plain, plainBlob, payloadBasename(plain)),
@@ -542,18 +542,18 @@ func TestShowcaseEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	)
 }
 
-func TestShowcaseAttemptRefusesFinalizationOfTheSingleBlobFloor(t *testing.T) {
+func TestManifestAttemptRefusesFinalizationOfTheSingleBlobFloor(t *testing.T) {
 	ctx := context.Background()
-	f := showcaseFixture(t)
+	f := manifestFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageShowcaseAttempt(t, store, f, view, review)
-	beginShowcaseUpload(t, store, attempt, view, review)
+	attempt := stageManifestAttempt(t, store, f, view, review)
+	beginManifestUpload(t, store, attempt, view, review)
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginShowcaseSubmission(
+	_, err = store.BeginManifestSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -575,8 +575,8 @@ func TestShowcaseAttemptRefusesFinalizationOfTheSingleBlobFloor(t *testing.T) {
 	assert.True(t, present)
 }
 
-func TestShowcaseCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
-	f := showcaseFixture(t)
+func TestManifestCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
+	f := manifestFixture(t)
 	binding := f.binding
 	limits := DefaultAttemptLimits()
 
@@ -600,7 +600,7 @@ func TestShowcaseCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
 	packedMaterial := f.candidate()
-	packedMaterial.Payload = []byte("packed payload supplied for a showcase record")
+	packedMaterial.Payload = []byte("packed payload supplied for a manifest record")
 	_, err = validateCandidateInput(packedMaterial, binding, limits)
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
@@ -608,10 +608,10 @@ func TestShowcaseCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
 	tightened.ManagedObjects = 2
 	_, err = validateCandidateInput(f.candidate(), binding, tightened)
 	requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, err.Error(), "showcase managed objects: 3 exceeds 2")
+	assert.Contains(t, err.Error(), "manifest managed objects: 3 exceeds 2")
 }
 
-func TestShowcaseEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing.T) {
+func TestManifestEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing.T) {
 	limits := DefaultAttemptLimits()
 	entries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
 	for index := range publication.MaxSnapshotEntries + 1 {
@@ -621,8 +621,8 @@ func TestShowcaseEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing
 			Size: 1,
 		})
 	}
-	err := validateShowcasePayloadCustody(&ShowcasePayload{Entries: entries}, limits)
+	err := validateManifestPayloadCustody(&ManifestPayload{Entries: entries}, limits)
 	requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, err.Error(), "showcase entry count: 65 exceeds 64")
+	assert.Contains(t, err.Error(), "manifest entry count: 65 exceeds 64")
 	assert.Equal(t, uint32(64), limits.ManagedObjects)
 }

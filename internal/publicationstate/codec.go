@@ -278,13 +278,13 @@ func floorCoreToWire(f Floor) floorCoreWire {
 		RecordCID:         bytes.Clone(f.RecordCID),
 		BlobCID:           bytes.Clone(f.BlobCID),
 		BlobSize:          f.BlobSize,
-		Entries:           showcasePayloadToWire(f.Showcase),
+		Entries:           manifestPayloadToWire(f.Manifest),
 		ObservationDigest: bytes.Clone(f.ObservationDigest[:]),
 	}
 }
 
 func floorWireVersion(f Floor) uint32 {
-	if f.Showcase != nil {
+	if f.Manifest != nil {
 		return 2
 	}
 	return 1
@@ -353,7 +353,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 		!validText(w.Provenance) {
 		return Floor{}, errors.New("invalid floor")
 	}
-	var showcase *ShowcasePayload
+	var manifest *ManifestPayload
 	switch w.Version {
 	case 1:
 		if len(w.BlobCID) == 0 || w.BlobSize == 0 || len(w.Entries) != 0 {
@@ -363,7 +363,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 		if len(w.BlobCID) != 0 || w.BlobSize != 0 || len(w.Entries) == 0 {
 			return Floor{}, errors.New("invalid floor")
 		}
-		showcase, err = showcasePayloadFromWire(w.Entries)
+		manifest, err = manifestPayloadFromWire(w.Entries)
 		if err != nil {
 			return Floor{}, errors.New("invalid floor")
 		}
@@ -390,7 +390,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	floor.RecordCID = bytes.Clone(w.RecordCID)
 	floor.BlobCID = bytes.Clone(w.BlobCID)
 	floor.BlobSize = w.BlobSize
-	floor.Showcase = showcase
+	floor.Manifest = manifest
 	return floor, nil
 }
 

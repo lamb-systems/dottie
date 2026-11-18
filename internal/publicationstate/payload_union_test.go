@@ -11,7 +11,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-func TestStoredAttemptWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.T) {
+func TestStoredAttemptWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T) {
 	packed := attemptCoreWire{
 		Version:               1,
 		AttemptID:             bytes.Repeat([]byte{1}, 16),
@@ -42,12 +42,12 @@ func TestStoredAttemptWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, encodedPacked, reencodedPacked)
 
-	showcase := packed
-	showcase.Version = 2
-	showcase.BlobCID = nil
-	showcase.BlobSize = 0
-	showcase.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}
-	encodedShowcase, err := encodeAttemptCore(showcase)
+	manifest := packed
+	manifest.Version = 2
+	manifest.BlobCID = nil
+	manifest.BlobSize = 0
+	manifest.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}
+	encodedManifest, err := encodeAttemptCore(manifest)
 	require.NoError(t, err)
 	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
 	assert.Equal(
@@ -57,15 +57,15 @@ func TestStoredAttemptWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.
 				`ssorKey":"","predecessorRecord":null,"predecessorCid":null,"snapshotKey":"","snapshotRecord":null,"snapshotCid":"Aw==","headRecord":null,"headCid":"BA==","entries":[{"path":"init.lua","cid":"BQ==","size":9}],"initialContext":{"repositoryRevision":"","repositoryDigest":null,"pol`+
 				`icy":null},"initialViewDigest":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","review":{"selectionDigest":null,"selectionRevision":0,"approvalDigest":null,"approvalRevision":0},"candidateConfirmation":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=","reservedCompletionBytes":0}`,
 		),
-		encodedShowcase,
+		encodedManifest,
 	)
-	decodedShowcase, err := decodeAttemptCore(encodedShowcase)
+	decodedManifest, err := decodeAttemptCore(encodedManifest)
 	require.NoError(t, err)
-	assert.Equal(t, showcase, decodedShowcase)
-	assert.Equal(t, []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}, decodedShowcase.Entries)
+	assert.Equal(t, manifest, decodedManifest)
+	assert.Equal(t, []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}, decodedManifest.Entries)
 }
 
-func TestStoredFloorWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.T) {
+func TestStoredFloorWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T) {
 	packed := payloadUnionFloor(t)
 	encodedPacked, err := encodeFloor(packed)
 	require.NoError(t, err)
@@ -82,15 +82,15 @@ func TestStoredFloorWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.T)
 	decodedPacked, err := decodeFloor(encodedPacked)
 	require.NoError(t, err)
 	assert.Equal(t, packed, decodedPacked)
-	assert.Nil(t, decodedPacked.Showcase)
+	assert.Nil(t, decodedPacked.Manifest)
 
-	showcase := packed
-	showcase.BlobCID = nil
-	showcase.BlobSize = 0
-	showcase.Showcase = &ShowcasePayload{
+	manifest := packed
+	manifest.BlobCID = nil
+	manifest.BlobSize = 0
+	manifest.Manifest = &ManifestPayload{
 		Entries: []PayloadEntryReference{{Path: "init.lua", CID: []byte{4}, Size: 5}},
 	}
-	encodedShowcase, err := encodeFloor(showcase)
+	encodedManifest, err := encodeFloor(manifest)
 	require.NoError(t, err)
 	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
 	assert.Equal(
@@ -100,18 +100,18 @@ func TestStoredFloorWireKeepsPackedGoldenAndCarriesShowcaseEntries(t *testing.T)
 				`AAAAAAAAAAAAAAAAAAAAAAAAAAAA=","profile":"systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"},"suppliedContext":{"repositoryRevision":"r","repositoryDigest":"AQ==","policy":null},"head":"Ag==","snapshotKey":"0000000000000001","se`+
 				`quence":1,"publicationId":"AgAAAAAAAAAAAAAAAAAAAA==","recordCid":"Aw==","entries":[{"path":"init.lua","cid":"BA==","size":5}],"observationDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","acceptedEventDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`,
 		),
-		encodedShowcase,
+		encodedManifest,
 	)
-	decodedShowcase, err := decodeFloor(encodedShowcase)
+	decodedManifest, err := decodeFloor(encodedManifest)
 	require.NoError(t, err)
-	require.NotNil(t, decodedShowcase.Showcase)
-	assert.Equal(t, showcase.Showcase.Entries, decodedShowcase.Showcase.Entries)
-	assert.Nil(t, decodedShowcase.BlobCID)
-	assert.Equal(t, uint64(0), decodedShowcase.BlobSize)
-	require.NoError(t, validateFloorPayload(decodedShowcase))
+	require.NotNil(t, decodedManifest.Manifest)
+	assert.Equal(t, manifest.Manifest.Entries, decodedManifest.Manifest.Entries)
+	assert.Nil(t, decodedManifest.BlobCID)
+	assert.Equal(t, uint64(0), decodedManifest.BlobSize)
+	require.NoError(t, validateFloorPayload(decodedManifest))
 }
 
-func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) {
+func TestManifestPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) {
 	limits := DefaultAttemptLimits()
 	assert.Equal(t, uint32(64), limits.ManagedObjects)
 	assert.Equal(t, uint64(1610612736), limits.CustodyBytes)
@@ -124,8 +124,8 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	for index := range int(limits.ManagedObjects) {
 		atObjectBound = append(atObjectBound, entry(index, 1))
 	}
-	require.NoError(t, validateShowcasePayloadCustody(&ShowcasePayload{Entries: atObjectBound}, limits))
-	assert.Equal(t, uint32(64), (&ShowcasePayload{Entries: atObjectBound}).EntryCount())
+	require.NoError(t, validateManifestPayloadCustody(&ManifestPayload{Entries: atObjectBound}, limits))
+	assert.Equal(t, uint32(64), (&ManifestPayload{Entries: atObjectBound}).EntryCount())
 
 	overObjectBound := append([]PayloadEntryReference{}, atObjectBound...)
 	tightened := limits
@@ -136,19 +136,19 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	}
 	requireErrorMetadata(
 		t,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: tightenedEntries}, tightened),
+		validateManifestPayloadCustody(&ManifestPayload{Entries: tightenedEntries}, tightened),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
 	)
 	assert.Contains(
 		t,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: tightenedEntries}, tightened).Error(),
-		"showcase managed objects: 9 exceeds 8",
+		validateManifestPayloadCustody(&ManifestPayload{Entries: tightenedEntries}, tightened).Error(),
+		"manifest managed objects: 9 exceeds 8",
 	)
 	requireErrorMetadata(
 		t,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overObjectBound}, tightened),
+		validateManifestPayloadCustody(&ManifestPayload{Entries: overObjectBound}, tightened),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
@@ -158,37 +158,37 @@ func TestShowcasePayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	for index := range int(limits.ManagedObjects) {
 		overCustodyBytes = append(overCustodyBytes, entry(index, 30_000_000))
 	}
-	aggregate := (&ShowcasePayload{Entries: overCustodyBytes}).TotalBytes()
+	aggregate := (&ManifestPayload{Entries: overCustodyBytes}).TotalBytes()
 	require.Greater(t, aggregate, limits.CustodyBytes)
 	requireErrorMetadata(
 		t,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overCustodyBytes}, limits),
+		validateManifestPayloadCustody(&ManifestPayload{Entries: overCustodyBytes}, limits),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
 	)
 	assert.Contains(
 		t,
-		validateShowcasePayloadCustody(&ShowcasePayload{Entries: overCustodyBytes}, limits).Error(),
-		fmt.Sprintf("showcase custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
+		validateManifestPayloadCustody(&ManifestPayload{Entries: overCustodyBytes}, limits).Error(),
+		fmt.Sprintf("manifest custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
 	)
 
 	tooManyEntries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
 	for index := range publication.MaxSnapshotEntries + 1 {
 		tooManyEntries = append(tooManyEntries, entry(index, 1))
 	}
-	tooMany := validateShowcasePayloadCustody(&ShowcasePayload{Entries: tooManyEntries}, limits)
+	tooMany := validateManifestPayloadCustody(&ManifestPayload{Entries: tooManyEntries}, limits)
 	requireErrorMetadata(t, tooMany, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, tooMany.Error(), "showcase entry count: 65 exceeds 64")
-	require.ErrorIs(t, validateShowcasePayload(&ShowcasePayload{Entries: tooManyEntries}), ErrLimit)
-	require.Error(t, validateShowcasePayload(&ShowcasePayload{}))
+	assert.Contains(t, tooMany.Error(), "manifest entry count: 65 exceeds 64")
+	require.ErrorIs(t, validateManifestPayload(&ManifestPayload{Entries: tooManyEntries}), ErrLimit)
+	require.Error(t, validateManifestPayload(&ManifestPayload{}))
 }
 
-func TestShowcaseAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
-	snapshot, encoded := payloadUnionShowcaseSnapshot(t)
+func TestManifestAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
+	snapshot, encoded := payloadUnionManifestSnapshot(t)
 	core := attemptCoreWire{
 		Version:        attemptCoreVersion(snapshot),
-		Entries:        showcasePayloadToWire(showcasePayloadOf(snapshot)),
+		Entries:        manifestPayloadToWire(manifestPayloadOf(snapshot)),
 		SnapshotRecord: encoded,
 		SnapshotCID:    mustPayloadUnionRecordCID(t, encoded),
 	}
@@ -206,13 +206,13 @@ func TestShowcaseAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
 	require.Error(t, validateAttemptCorePayload(packedForm, snapshot, DefaultAttemptLimits()))
 
 	projected := projectAttempt(core, AttemptPrepared, OutcomeNotSubmitted, "", 1, AvailabilityUnchecked)
-	require.NotNil(t, projected.Showcase)
-	assert.Equal(t, uint32(2), projected.Showcase.EntryCount())
+	require.NotNil(t, projected.Manifest)
+	assert.Equal(t, uint32(2), projected.Manifest.EntryCount())
 	assert.Nil(t, projected.BlobCID)
 }
 
-func TestShowcasePayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
-	snapshot, encoded := payloadUnionShowcaseSnapshot(t)
+func TestManifestPayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
+	snapshot, encoded := payloadUnionManifestSnapshot(t)
 	key, err := publication.SequenceKey(snapshot.PublicationSeq)
 	require.NoError(t, err)
 	head := publication.HeadRecord{
@@ -291,15 +291,15 @@ func TestShowcasePayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
 	)
 }
 
-func TestShowcaseEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
-	snapshot, _ := payloadUnionShowcaseSnapshot(t)
-	showcaseHead := publication.HeadRecord{
+func TestManifestEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
+	snapshot, _ := payloadUnionManifestSnapshot(t)
+	manifestHead := publication.HeadRecord{
 		SchemaVersion:  publication.SchemaVersion,
 		Vault:          snapshot.Vault,
 		PublicationSeq: snapshot.PublicationSeq,
 	}
-	require.NoError(t, headPayloadMatchesRecord(showcaseHead, snapshot))
-	packedHead := showcaseHead
+	require.NoError(t, headPayloadMatchesRecord(manifestHead, snapshot))
+	packedHead := manifestHead
 	packedHead.BlobCID = []byte{9}
 	require.Error(t, headPayloadMatchesRecord(packedHead, snapshot))
 
@@ -319,7 +319,7 @@ func TestShowcaseEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
 	require.NoError(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
 	packedHeader.BlobCID = []byte{8}
 	require.Error(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
-	require.Error(t, headPayloadMatchesRecord(showcaseHead, packedSnapshot))
+	require.Error(t, headPayloadMatchesRecord(manifestHead, packedSnapshot))
 }
 
 func payloadUnionFloor(t *testing.T) Floor {
@@ -351,10 +351,10 @@ func payloadUnionFloor(t *testing.T) Floor {
 	}
 }
 
-func payloadUnionShowcaseSnapshot(t *testing.T) (publication.SnapshotRecord, []byte) {
+func payloadUnionManifestSnapshot(t *testing.T) (publication.SnapshotRecord, []byte) {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, 2)
-	for index, content := range [][]byte{[]byte("showcase init"), []byte("showcase options")} {
+	for index, content := range [][]byte{[]byte("manifest init"), []byte("manifest options")} {
 		cid, err := publication.RawPayloadCID(content)
 		require.NoError(t, err)
 		entries = append(entries, publication.SnapshotEntry{

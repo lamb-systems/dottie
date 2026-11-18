@@ -214,8 +214,8 @@ func validateObservation(input Observation, binding Binding, limits Limits) (val
 		if err != nil || record.Vault != binding.Vault || record.PublicationSeq != sequence {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if payloadFormOf(record) == PayloadFormShowcase {
-			return validatedObservation{}, showcasePayloadUnsupported(StageInput)
+		if payloadFormOf(record) == PayloadFormManifest {
+			return validatedObservation{}, manifestPayloadUnsupported(StageInput)
 		}
 		cid, err := publication.RecordCID(block.Raw)
 		if err != nil {

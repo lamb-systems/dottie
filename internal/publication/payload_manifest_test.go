@@ -30,7 +30,7 @@ func newPayloadFetchMap() *payloadFetchMap {
 	return &payloadFetchMap{blobs: map[string][]byte{}, fails: map[string]error{}}
 }
 
-func (source *payloadFetchMap) serveShowcase(record SnapshotRecord, contents map[string][]byte) {
+func (source *payloadFetchMap) serveManifest(record SnapshotRecord, contents map[string][]byte) {
 	for _, entry := range record.Entries {
 		source.blobs[string(entry.Blob.CID)] = bytes.Clone(contents[entry.Path])
 	}
@@ -52,16 +52,16 @@ func payloadLimits() PayloadLimits {
 	return PayloadLimits{MaxEntries: 512, MaxEntryBytes: 8 << 20, MaxTotalBytes: 64 << 20}
 }
 
-type showcaseFile struct {
+type manifestFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-func newShowcasePayloadFixture(t *testing.T, files ...showcaseFile) (SnapshotRecord, map[string][]byte) {
+func newManifestPayloadFixture(t *testing.T, files ...manifestFile) (SnapshotRecord, map[string][]byte) {
 	t.Helper()
 	sorted := slices.Clone(files)
-	slices.SortFunc(sorted, func(left, right showcaseFile) int {
+	slices.SortFunc(sorted, func(left, right manifestFile) int {
 		return strings.Compare(left.path, right.path)
 	})
 	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID()}
@@ -73,12 +73,12 @@ func newShowcasePayloadFixture(t *testing.T, files ...showcaseFile) (SnapshotRec
 	return record, contents
 }
 
-func defaultShowcasePayloadFixture(t *testing.T) (SnapshotRecord, map[string][]byte) {
+func defaultManifestPayloadFixture(t *testing.T) (SnapshotRecord, map[string][]byte) {
 	t.Helper()
-	return newShowcasePayloadFixture(
+	return newManifestPayloadFixture(
 		t,
-		showcaseFile{path: "init.lua", mode: 0o600, content: []byte("showcase init")},
-		showcaseFile{path: "lua/config/options.lua", mode: 0o644, content: []byte("showcase options")},
+		manifestFile{path: "init.lua", mode: 0o600, content: []byte("manifest init")},
+		manifestFile{path: "lua/config/options.lua", mode: 0o644, content: []byte("manifest options")},
 	)
 }
 
@@ -120,14 +120,14 @@ func TestResolvePayloadReadsPackedThroughTheBlobReference(t *testing.T) {
 	assert.Equal(t, snapshot, resolved)
 }
 
-func TestResolvePayloadReadsShowcaseEntriesWithPathsModesAndSizes(t *testing.T) {
-	record, contents := defaultShowcasePayloadFixture(t)
+func TestResolvePayloadReadsManifestEntriesWithPathsModesAndSizes(t *testing.T) {
+	record, contents := defaultManifestPayloadFixture(t)
 	source := newPayloadFetchMap()
-	source.serveShowcase(record, contents)
+	source.serveManifest(record, contents)
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormShowcase, payload.Form)
+	assert.Equal(t, PayloadFormManifest, payload.Form)
 	assert.Equal(t, model.Snapshot{}, payload.Snapshot)
 	require.Len(t, payload.Entries, len(record.Entries))
 	for index, entry := range record.Entries {
@@ -140,11 +140,11 @@ func TestResolvePayloadReadsShowcaseEntriesWithPathsModesAndSizes(t *testing.T) 
 
 	snapshot, err := payload.PackedSnapshot()
 	assert.Equal(t, model.Snapshot{}, snapshot)
-	require.ErrorIs(t, err, ErrShowcasePayload)
+	require.ErrorIs(t, err, ErrManifestPayload)
 }
 
-func TestResolvePayloadRefusesAMissingShowcaseEntryNamingThePath(t *testing.T) {
-	record, contents := defaultShowcasePayloadFixture(t)
+func TestResolvePayloadRefusesAMissingManifestEntryNamingThePath(t *testing.T) {
+	record, contents := defaultManifestPayloadFixture(t)
 	missing := record.Entries[1]
 	source := newPayloadFetchMap()
 	source.blobs[string(record.Entries[0].Blob.CID)] = contents[record.Entries[0].Path]
@@ -152,18 +152,18 @@ func TestResolvePayloadRefusesAMissingShowcaseEntryNamingThePath(t *testing.T) {
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrShowcasePayload)
+	require.ErrorIs(t, err, ErrManifestPayload)
 	require.ErrorIs(t, err, errPayloadFetchMissing)
-	var refusal *ShowcasePayloadError
+	var refusal *ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, missing.Path, refusal.EntryPath())
-	assert.Equal(t, ShowcaseReasonUnavailable, refusal.Reason)
+	assert.Equal(t, ManifestReasonUnavailable, refusal.Reason)
 	assert.Contains(t, err.Error(), missing.Path)
 	require.Len(t, source.fetched, 2)
 }
 
-func TestResolvePayloadRefusesAShowcaseEntrySizeMismatchNamingTheEntry(t *testing.T) {
-	record, contents := defaultShowcasePayloadFixture(t)
+func TestResolvePayloadRefusesAManifestEntrySizeMismatchNamingTheEntry(t *testing.T) {
+	record, contents := defaultManifestPayloadFixture(t)
 	mismatched := record.Entries[1]
 	short := bytes.Clone(contents[mismatched.Path])
 	short = short[:len(short)-1]
@@ -173,20 +173,20 @@ func TestResolvePayloadRefusesAShowcaseEntrySizeMismatchNamingTheEntry(t *testin
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrShowcasePayload)
+	require.ErrorIs(t, err, ErrManifestPayload)
 	require.ErrorIs(t, err, ErrPayload)
-	var refusal *ShowcasePayloadError
+	var refusal *ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, mismatched.Path, refusal.EntryPath())
-	assert.Equal(t, ShowcaseReasonMismatch, refusal.Reason)
+	assert.Equal(t, ManifestReasonMismatch, refusal.Reason)
 	var violationErr *ViolationError
 	require.ErrorAs(t, err, &violationErr)
 	assert.Equal(t, "blob.size", violationErr.Field())
 	assert.Equal(t, "mismatch", violationErr.Reason())
 }
 
-func TestResolvePayloadRefusesAShowcaseEntryCIDMismatchNamingTheEntry(t *testing.T) {
-	record, contents := defaultShowcasePayloadFixture(t)
+func TestResolvePayloadRefusesAManifestEntryCIDMismatchNamingTheEntry(t *testing.T) {
+	record, contents := defaultManifestPayloadFixture(t)
 	mismatched := record.Entries[1]
 	substitute := bytes.Clone(contents[mismatched.Path])
 	substitute[0] ^= 0xff
@@ -196,26 +196,26 @@ func TestResolvePayloadRefusesAShowcaseEntryCIDMismatchNamingTheEntry(t *testing
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrShowcasePayload)
-	var refusal *ShowcasePayloadError
+	require.ErrorIs(t, err, ErrManifestPayload)
+	var refusal *ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, mismatched.Path, refusal.EntryPath())
-	assert.Equal(t, ShowcaseReasonMismatch, refusal.Reason)
+	assert.Equal(t, ManifestReasonMismatch, refusal.Reason)
 	var violationErr *ViolationError
 	require.ErrorAs(t, err, &violationErr)
 	assert.Equal(t, "blob.ref", violationErr.Field())
 }
 
-func TestResolvePayloadRefusesShowcasePayloadsBeyondItsBounds(t *testing.T) {
-	record, contents := defaultShowcasePayloadFixture(t)
+func TestResolvePayloadRefusesManifestPayloadsBeyondItsBounds(t *testing.T) {
+	record, contents := defaultManifestPayloadFixture(t)
 	source := newPayloadFetchMap()
-	source.serveShowcase(record, contents)
-	var refusal *ShowcasePayloadError
+	source.serveManifest(record, contents)
+	var refusal *ManifestPayloadError
 
 	payload, err := ResolvePayload(record, PayloadLimits{MaxEntries: 1}, source.fetch)
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, ShowcaseReasonEntryCount, refusal.Reason)
+	assert.Equal(t, ManifestReasonEntryCount, refusal.Reason)
 	assert.Empty(t, source.fetched)
 
 	source.fetched = nil
@@ -223,7 +223,7 @@ func TestResolvePayloadRefusesShowcasePayloadsBeyondItsBounds(t *testing.T) {
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
-	assert.Equal(t, ShowcaseReasonEntryBytes, refusal.Reason)
+	assert.Equal(t, ManifestReasonEntryBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
 	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
 
@@ -236,7 +236,7 @@ func TestResolvePayloadRefusesShowcasePayloadsBeyondItsBounds(t *testing.T) {
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
-	assert.Equal(t, ShowcaseReasonTotalBytes, refusal.Reason)
+	assert.Equal(t, ManifestReasonTotalBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
 	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
 }

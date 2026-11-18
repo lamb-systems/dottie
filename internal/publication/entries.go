@@ -15,7 +15,7 @@ import (
 const (
 	MaxSnapshotEntries     = 64
 	MaxEntryPathBytes      = 1024
-	MaxShowcaseRecordBytes = 1 << 20
+	MaxManifestRecordBytes = 1 << 20
 	SnapshotEntryKindFile  = "file"
 
 	maxEntryModeBits = 0o777
@@ -23,22 +23,22 @@ const (
 	entryModeShared  = 0o644
 )
 
-var ErrShowcaseEntryUnsupported = errors.New("publication showcase entry unsupported")
+var ErrManifestEntryUnsupported = errors.New("publication manifest entry unsupported")
 
-type ShowcaseEntryError struct {
+type ManifestEntryError struct {
 	Entry  model.EntryKey
 	Field  string
 	Reason string
 	cause  error
 }
 
-func (e *ShowcaseEntryError) Error() string {
-	return "publication showcase entry: " + e.Field + ": " + e.Reason
+func (e *ManifestEntryError) Error() string {
+	return "publication manifest entry: " + e.Field + ": " + e.Reason
 }
 
-func (e *ShowcaseEntryError) Is(target error) bool { return target == ErrShowcaseEntryUnsupported }
+func (e *ManifestEntryError) Is(target error) bool { return target == ErrManifestEntryUnsupported }
 
-func (e *ShowcaseEntryError) Unwrap() error { return e.cause }
+func (e *ManifestEntryError) Unwrap() error { return e.cause }
 
 type SnapshotEntry struct {
 	Path string
@@ -53,7 +53,7 @@ func SnapshotEntries(snapshot model.Snapshot) ([]SnapshotEntry, error) {
 	for _, entry := range snapshot.Entries {
 		representable, err := snapshotEntry(entry)
 		if err != nil {
-			return nil, showcaseEntryViolationFor(entry, err)
+			return nil, manifestEntryViolationFor(entry, err)
 		}
 		entries = append(entries, representable)
 	}
@@ -61,37 +61,37 @@ func SnapshotEntries(snapshot model.Snapshot) ([]SnapshotEntry, error) {
 		return strings.Compare(left.Path, right.Path)
 	})
 	if err := validateEntries(entries); err != nil {
-		return nil, showcaseEntryViolation(err)
+		return nil, manifestEntryViolation(err)
 	}
 	return entries, nil
 }
 
 func snapshotEntry(entry model.Entry) (SnapshotEntry, error) {
 	if entry.Setting != nil {
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.setting", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.setting", "unsupported")
 	}
 	file := entry.File
 	if file == nil {
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.entry", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.entry", "unsupported")
 	}
 	switch file.State {
 	case model.FileDeleted:
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.deleted", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.deleted", "unsupported")
 	case model.FilePresent:
 	default:
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.state", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.state", "unsupported")
 	}
 	switch file.Kind {
 	case model.FileRegular:
 	case model.FileDirectory:
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.directory", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.directory", "unsupported")
 	case model.FileSymlink:
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.symlink", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.symlink", "unsupported")
 	default:
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.kind", "unsupported")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.kind", "unsupported")
 	}
 	if len(file.Content) == 0 {
-		return SnapshotEntry{}, violation(ErrShowcaseEntryUnsupported, "entries.size", "empty")
+		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.size", "empty")
 	}
 	blobCID, err := RawPayloadCID(file.Content)
 	if err != nil {
@@ -291,19 +291,19 @@ func decodeSnapshotEntry(value any) (SnapshotEntry, error) {
 	}, nil
 }
 
-func showcaseEntryViolation(err error) error {
+func manifestEntryViolation(err error) error {
 	if violationErr, ok := errors.AsType[*ViolationError](err); ok {
-		return violation(ErrShowcaseEntryUnsupported, violationErr.Field(), violationErr.Reason())
+		return violation(ErrManifestEntryUnsupported, violationErr.Field(), violationErr.Reason())
 	}
 	return err
 }
 
-func showcaseEntryViolationFor(entry model.Entry, err error) error {
+func manifestEntryViolationFor(entry model.Entry, err error) error {
 	violationErr, ok := errors.AsType[*ViolationError](err)
 	if !ok {
 		return err
 	}
-	return &ShowcaseEntryError{
+	return &ManifestEntryError{
 		Entry: entry.Identity(), Field: violationErr.Field(), Reason: violationErr.Reason(), cause: err,
 	}
 }

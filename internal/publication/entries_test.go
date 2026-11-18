@@ -16,15 +16,15 @@ import (
 
 func TestSnapshotRecordRefusesBothOrNeitherPayloadForm(t *testing.T) {
 	packed := fixtureSnapshotValue(t)
-	showcase := fixtureShowcaseRecord(t)
+	manifest := fixtureManifestRecord(t)
 
 	both := packed
-	both.Entries = showcase.Entries
+	both.Entries = manifest.Entries
 	encoded, err := EncodeSnapshot(both)
 	assert.Nil(t, encoded)
 	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
 
-	decoded, err := DecodeSnapshot(testCBOR(independentSnapshotValueWithEntries(t, packed, showcase.Entries)))
+	decoded, err := DecodeSnapshot(testCBOR(independentSnapshotValueWithEntries(t, packed, manifest.Entries)))
 	assert.Equal(t, SnapshotRecord{}, decoded)
 	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
 
@@ -41,11 +41,11 @@ func TestSnapshotRecordRefusesBothOrNeitherPayloadForm(t *testing.T) {
 	requireViolation(t, err, ErrInvalidRecord, "record", "missing_payload_form")
 }
 
-func TestSnapshotRecordShowcaseEncodingRoundTripsCanonically(t *testing.T) {
-	record := fixtureShowcaseRecord(t)
+func TestSnapshotRecordManifestEncodingRoundTripsCanonically(t *testing.T) {
+	record := fixtureManifestRecord(t)
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
-	assert.Equal(t, independentShowcaseBytes(t, record), encoded)
+	assert.Equal(t, independentManifestBytes(t, record), encoded)
 
 	decoded, err := DecodeSnapshot(encoded)
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestSnapshotRecordPackedEncodingIsUnchangedByTheUnion(t *testing.T) {
 	assert.Equal(t, encoded, reencoded)
 }
 
-func TestSnapshotRecordRefusesMalformedShowcaseEntries(t *testing.T) {
+func TestSnapshotRecordRefusesMalformedManifestEntries(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*SnapshotRecord)
@@ -143,7 +143,7 @@ func TestSnapshotRecordRefusesMalformedShowcaseEntries(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			record := fixtureShowcaseRecord(t)
+			record := fixtureManifestRecord(t)
 			test.mutate(&record)
 			encoded, err := EncodeSnapshot(record)
 			assert.Nil(t, encoded)
@@ -151,13 +151,13 @@ func TestSnapshotRecordRefusesMalformedShowcaseEntries(t *testing.T) {
 		})
 	}
 
-	roleRecord := fixtureShowcaseRecord(t)
-	roleRecord.Entries[0].Blob.CID = independentCID(t, []byte("wrong showcase role"), cid.DagCBOR)
+	roleRecord := fixtureManifestRecord(t)
+	roleRecord.Entries[0].Blob.CID = independentCID(t, []byte("wrong manifest role"), cid.DagCBOR)
 	roleEncoded, err := EncodeSnapshot(roleRecord)
 	assert.Nil(t, roleEncoded)
 	requireViolation(t, err, ErrCID, "entries.blob.ref", "role")
 
-	overCap := fixtureShowcaseRecord(t)
+	overCap := fixtureManifestRecord(t)
 	overCap.Entries = make([]SnapshotEntry, 0, MaxSnapshotEntries+1)
 	for index := range MaxSnapshotEntries + 1 {
 		name := fmt.Sprintf("file-%03d", index)
@@ -168,7 +168,7 @@ func TestSnapshotRecordRefusesMalformedShowcaseEntries(t *testing.T) {
 	requireViolation(t, err, ErrInvalidRecord, "entries", "count")
 }
 
-func TestDecodeSnapshotRefusesMalformedShowcaseEntries(t *testing.T) {
+func TestDecodeSnapshotRefusesMalformedManifestEntries(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(map[string]any)
@@ -185,43 +185,43 @@ func TestDecodeSnapshotRefusesMalformedShowcaseEntries(t *testing.T) {
 			value["entries"] = []any{}
 		}, field: "record", reason: "missing_payload_form"},
 		{name: "missing entry field", mutate: func(value map[string]any) {
-			delete(showcaseEntryValue(t, value, 0), "kind")
+			delete(manifestEntryValue(t, value, 0), "kind")
 		}, field: "record", reason: "fields"},
 		{name: "extra entry field", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["target"] = "files"
+			manifestEntryValue(t, value, 0)["target"] = "files"
 		}, field: "record", reason: "fields"},
 		{name: "path type", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["path"] = int64(1)
+			manifestEntryValue(t, value, 0)["path"] = int64(1)
 		}, field: "entries.path", reason: "type"},
 		{name: "parent segment", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["path"] = "lua/../init.lua"
+			manifestEntryValue(t, value, 0)["path"] = "lua/../init.lua"
 		}, field: "entries.path", reason: "dot_segment"},
 		{name: "mode range", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["mode"] = int64(0o7777)
+			manifestEntryValue(t, value, 0)["mode"] = int64(0o7777)
 		}, field: "entries.mode", reason: "range"},
 		{name: "mode unsupported", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["mode"] = int64(0o755)
+			manifestEntryValue(t, value, 0)["mode"] = int64(0o755)
 		}, field: "entries.mode", reason: "unsupported"},
 		{name: "size range", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["size"] = int64(0)
+			manifestEntryValue(t, value, 0)["size"] = int64(0)
 		}, field: "entries.size", reason: "range"},
 		{name: "size mismatch", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["size"] = int64(4)
+			manifestEntryValue(t, value, 0)["size"] = int64(4)
 		}, field: "entries.size", reason: "mismatch"},
 		{name: "kind type", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["kind"] = int64(1)
+			manifestEntryValue(t, value, 0)["kind"] = int64(1)
 		}, field: "entries.kind", reason: "type"},
 		{name: "kind not file", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["kind"] = "directory"
+			manifestEntryValue(t, value, 0)["kind"] = "directory"
 		}, field: "entries.kind", reason: "unsupported"},
 		{name: "blob not blob", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["blob"] = "inline"
+			manifestEntryValue(t, value, 0)["blob"] = "inline"
 		}, field: "entries.blob", reason: "type"},
 		{name: "blob media type", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["blob"].(map[string]any)["mimeType"] = "image/png"
+			manifestEntryValue(t, value, 0)["blob"].(map[string]any)["mimeType"] = "image/png"
 		}, field: "entries.blob.mimeType", reason: "unsupported"},
 		{name: "blob size range", mutate: func(value map[string]any) {
-			showcaseEntryValue(t, value, 0)["blob"].(map[string]any)["size"] = int64(0)
+			manifestEntryValue(t, value, 0)["blob"].(map[string]any)["size"] = int64(0)
 		}, field: "entries.blob.size", reason: "range"},
 		{name: "duplicate path", mutate: func(value map[string]any) {
 			entries := value["entries"].([]any)
@@ -234,7 +234,7 @@ func TestDecodeSnapshotRefusesMalformedShowcaseEntries(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			value := independentShowcaseValue(t, fixtureShowcaseRecord(t))
+			value := independentManifestValue(t, fixtureManifestRecord(t))
 			test.mutate(value)
 			decoded, err := DecodeSnapshot(testCBOR(value))
 			assert.Equal(t, SnapshotRecord{}, decoded)
@@ -243,24 +243,24 @@ func TestDecodeSnapshotRefusesMalformedShowcaseEntries(t *testing.T) {
 	}
 }
 
-func TestShowcaseRecordRefusesPackedOnlyConsumers(t *testing.T) {
+func TestManifestRecordRefusesPackedOnlyConsumers(t *testing.T) {
 	packed := fixtureSnapshotValue(t)
 	reference, err := packed.PackedPayload()
 	require.NoError(t, err)
 	assert.Equal(t, packed.Blob, reference)
 
-	showcase := fixtureShowcaseRecord(t)
-	_, err = showcase.PackedPayload()
+	manifest := fixtureManifestRecord(t)
+	_, err = manifest.PackedPayload()
 	requireViolation(t, err, ErrPackedPayloadRequired, "entries", "packed_only")
 
-	encoded, err := EncodeSnapshot(showcase)
+	encoded, err := EncodeSnapshot(manifest)
 	require.NoError(t, err)
 	payload, err := RecordToJSON(encoded)
 	assert.Nil(t, payload)
 	requireViolation(t, err, ErrPackedPayloadRequired, "entries", "packed_only")
 }
 
-func TestShowcaseEntriesRefuseUnrepresentableSnapshotContent(t *testing.T) {
+func TestManifestEntriesRefuseUnrepresentableSnapshotContent(t *testing.T) {
 	cases := []struct {
 		name   string
 		entry  model.Entry
@@ -318,16 +318,16 @@ func TestShowcaseEntriesRefuseUnrepresentableSnapshotContent(t *testing.T) {
 				Entries: []model.Entry{test.entry},
 			})
 			assert.Nil(t, entries)
-			requireViolation(t, err, ErrShowcaseEntryUnsupported, test.field, test.reason)
+			requireViolation(t, err, ErrManifestEntryUnsupported, test.field, test.reason)
 		})
 	}
 
 	empty, err := SnapshotEntries(model.Snapshot{Version: model.SnapshotVersion})
 	assert.Nil(t, empty)
-	requireViolation(t, err, ErrShowcaseEntryUnsupported, "entries", "empty")
+	requireViolation(t, err, ErrManifestEntryUnsupported, "entries", "empty")
 }
 
-func TestShowcaseEntriesNameTheUnrepresentableEntry(t *testing.T) {
+func TestManifestEntriesNameTheUnrepresentableEntry(t *testing.T) {
 	cases := []struct {
 		name   string
 		entry  model.Entry
@@ -362,8 +362,8 @@ func TestShowcaseEntriesNameTheUnrepresentableEntry(t *testing.T) {
 				Entries: []model.Entry{test.entry},
 			})
 			assert.Nil(t, entries)
-			requireViolation(t, err, ErrShowcaseEntryUnsupported, test.field, test.reason)
-			named, ok := errors.AsType[*ShowcaseEntryError](err)
+			requireViolation(t, err, ErrManifestEntryUnsupported, test.field, test.reason)
+			named, ok := errors.AsType[*ManifestEntryError](err)
 			require.True(t, ok, "refusal does not name the entry")
 			assert.Equal(t, test.entry.Identity(), named.Entry)
 			assert.Equal(t, test.field, named.Field)
@@ -372,7 +372,7 @@ func TestShowcaseEntriesNameTheUnrepresentableEntry(t *testing.T) {
 	}
 }
 
-func TestShowcaseEntriesRefuseAManifestPastSixtyFourEntries(t *testing.T) {
+func TestManifestEntriesRefuseAManifestPastSixtyFourEntries(t *testing.T) {
 	assert.Equal(t, 64, MaxSnapshotEntries)
 	atBound := make([]model.Entry, 0, MaxSnapshotEntries)
 	for index := range MaxSnapshotEntries {
@@ -394,10 +394,10 @@ func TestShowcaseEntriesRefuseAManifestPastSixtyFourEntries(t *testing.T) {
 	)
 	entries, err = SnapshotEntries(model.Snapshot{Version: model.SnapshotVersion, Entries: pastBound})
 	assert.Nil(t, entries)
-	requireViolation(t, err, ErrShowcaseEntryUnsupported, "entries", "count")
+	requireViolation(t, err, ErrManifestEntryUnsupported, "entries", "count")
 }
 
-func TestShowcaseEntriesSortRegularFilesIntoARecord(t *testing.T) {
+func TestManifestEntriesSortRegularFilesIntoARecord(t *testing.T) {
 	entries, err := SnapshotEntries(model.Snapshot{
 		Version: model.SnapshotVersion,
 		Entries: []model.Entry{
@@ -430,7 +430,7 @@ func TestShowcaseEntriesSortRegularFilesIntoARecord(t *testing.T) {
 	assert.Equal(t, record, decoded)
 }
 
-func TestShowcaseRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
+func TestManifestRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
 	segments := strings.Repeat("p", MaxEntryPathBytes-4)
 	entries := make([]SnapshotEntry, 0, MaxSnapshotEntries)
 	for index := range MaxSnapshotEntries {
@@ -451,15 +451,15 @@ func TestShowcaseRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
 	assert.Equal(t, record, decoded)
 }
 
-func fixtureShowcaseRecord(t testing.TB) SnapshotRecord {
+func fixtureManifestRecord(t testing.TB) SnapshotRecord {
 	t.Helper()
 	return SnapshotRecord{
 		SchemaVersion: SchemaVersion,
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
 		Entries: []SnapshotEntry{
-			fixtureEntry(t, "init.lua", []byte("showcase init"), 0o600),
-			fixtureEntry(t, "lua/config/options.lua", []byte("showcase options"), 0o644),
+			fixtureEntry(t, "init.lua", []byte("manifest init"), 0o600),
+			fixtureEntry(t, "lua/config/options.lua", []byte("manifest options"), 0o644),
 		},
 	}
 }
@@ -499,7 +499,7 @@ func independentEntriesValue(t testing.TB, entries []SnapshotEntry) []any {
 	return values
 }
 
-func independentShowcaseValue(t testing.TB, record SnapshotRecord) map[string]any {
+func independentManifestValue(t testing.TB, record SnapshotRecord) map[string]any {
 	t.Helper()
 	parent := bytes.Clone(record.Parent)
 	if parent == nil {
@@ -516,9 +516,9 @@ func independentShowcaseValue(t testing.TB, record SnapshotRecord) map[string]an
 	}
 }
 
-func independentShowcaseBytes(t testing.TB, record SnapshotRecord) []byte {
+func independentManifestBytes(t testing.TB, record SnapshotRecord) []byte {
 	t.Helper()
-	return testCBOR(independentShowcaseValue(t, record))
+	return testCBOR(independentManifestValue(t, record))
 }
 
 func independentSnapshotValueWithEntries(t testing.TB, packed SnapshotRecord, entries []SnapshotEntry) map[string]any {
@@ -528,7 +528,7 @@ func independentSnapshotValueWithEntries(t testing.TB, packed SnapshotRecord, en
 	return value
 }
 
-func showcaseEntryValue(t testing.TB, value map[string]any, index int) map[string]any {
+func manifestEntryValue(t testing.TB, value map[string]any, index int) map[string]any {
 	t.Helper()
 	entries, ok := value["entries"].([]any)
 	require.True(t, ok)

@@ -290,7 +290,7 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
 	}
-	if floor.Showcase != nil || record.PayloadForm() == publication.PayloadFormShowcase {
+	if floor.Manifest != nil || record.PayloadForm() == publication.PayloadFormManifest {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 	}
 	if record.Blob.Size != floor.BlobSize {
@@ -712,9 +712,9 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	if terminal.PayloadForm() == publication.PayloadFormShowcase {
-		return pullApplyMaterial{}, &publication.ShowcasePayloadError{
-			Reason: publication.ShowcaseReasonPackedRequired,
+	if terminal.PayloadForm() == publication.PayloadFormManifest {
+		return pullApplyMaterial{}, &publication.ManifestPayloadError{
+			Reason: publication.ManifestReasonPackedRequired,
 		}
 	}
 	recordCID, err := publication.RecordCID(view.Snapshots[len(view.Snapshots)-1].Raw)
@@ -746,14 +746,14 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	if baseRecord.PayloadForm() == publication.PayloadFormShowcase {
-		return pullApplyMaterial{}, &publication.ShowcasePayloadError{
-			Reason: publication.ShowcaseReasonPackedRequired,
+	if baseRecord.PayloadForm() == publication.PayloadFormManifest {
+		return pullApplyMaterial{}, &publication.ManifestPayloadError{
+			Reason: publication.ManifestReasonPackedRequired,
 		}
 	}
 	baseCID, err := publication.RecordCID(block.Raw)
 	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) ||
-		floor.Showcase != nil ||
+		floor.Manifest != nil ||
 		!bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) ||
 		baseRecord.Blob.Size != floor.BlobSize {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved
@@ -782,9 +782,9 @@ func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicat
 }
 
 func pullApplyRemoteFailure(label string, err error) error {
-	if errors.Is(err, publication.ErrShowcasePayload) {
+	if errors.Is(err, publication.ErrManifestPayload) {
 		return urfave.Exit(
-			label+" refused: the provider position carries a showcase publication that this build cannot apply; nothing was changed",
+			label+" refused: the provider position carries a manifest publication that this build cannot apply; nothing was changed",
 			3,
 		)
 	}

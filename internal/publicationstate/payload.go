@@ -12,7 +12,7 @@ type PayloadForm string
 
 const (
 	PayloadFormPacked   PayloadForm = PayloadForm(publication.PayloadFormPacked)
-	PayloadFormShowcase PayloadForm = PayloadForm(publication.PayloadFormShowcase)
+	PayloadFormManifest PayloadForm = PayloadForm(publication.PayloadFormManifest)
 )
 
 type PayloadEntryReference struct {
@@ -21,13 +21,13 @@ type PayloadEntryReference struct {
 	Size uint64
 }
 
-type ShowcasePayload struct {
+type ManifestPayload struct {
 	Entries []PayloadEntryReference
 }
 
-func (p ShowcasePayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
+func (p ManifestPayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
 
-func (p ShowcasePayload) TotalBytes() uint64 {
+func (p ManifestPayload) TotalBytes() uint64 {
 	var total uint64
 	for _, entry := range p.Entries {
 		total += entry.Size
@@ -35,7 +35,7 @@ func (p ShowcasePayload) TotalBytes() uint64 {
 	return total
 }
 
-func cloneShowcasePayload(payload *ShowcasePayload) *ShowcasePayload {
+func cloneManifestPayload(payload *ManifestPayload) *ManifestPayload {
 	if payload == nil {
 		return nil
 	}
@@ -47,14 +47,14 @@ func cloneShowcasePayload(payload *ShowcasePayload) *ShowcasePayload {
 			Size: entry.Size,
 		})
 	}
-	return &ShowcasePayload{Entries: entries}
+	return &ManifestPayload{Entries: entries}
 }
 
 func payloadFormOf(record publication.SnapshotRecord) PayloadForm {
 	return PayloadForm(record.PayloadForm())
 }
 
-func showcasePayloadOf(record publication.SnapshotRecord) *ShowcasePayload {
+func manifestPayloadOf(record publication.SnapshotRecord) *ManifestPayload {
 	if len(record.Entries) == 0 {
 		return nil
 	}
@@ -66,16 +66,16 @@ func showcasePayloadOf(record publication.SnapshotRecord) *ShowcasePayload {
 			Size: entry.Size,
 		})
 	}
-	return &ShowcasePayload{Entries: entries}
+	return &ManifestPayload{Entries: entries}
 }
 
-func validateShowcasePayload(payload *ShowcasePayload) error {
+func validateManifestPayload(payload *ManifestPayload) error {
 	if payload == nil || len(payload.Entries) == 0 {
-		return errors.New("showcase payload")
+		return errors.New("manifest payload")
 	}
 	if len(payload.Entries) > publication.MaxSnapshotEntries {
-		return &showcaseCapacityError{
-			element: showcaseCapacityEntryCount,
+		return &manifestCapacityError{
+			element: manifestCapacityEntryCount,
 			have:    uint64(len(payload.Entries)),
 			limit:   publication.MaxSnapshotEntries,
 		}
@@ -83,26 +83,26 @@ func validateShowcasePayload(payload *ShowcasePayload) error {
 	for _, entry := range payload.Entries {
 		if entry.Path == "" || len(entry.Path) > publication.MaxEntryPathBytes || entry.Size == 0 ||
 			entry.Size > publication.MaxBlobBytes || len(entry.CID) == 0 || len(entry.CID) > publication.MaxCIDBytes {
-			return errors.New("showcase payload")
+			return errors.New("manifest payload")
 		}
 	}
 	return nil
 }
 
-func validateShowcasePayloadCustody(payload *ShowcasePayload, limits AttemptLimits) error {
-	if err := validateShowcasePayload(payload); err != nil {
+func validateManifestPayloadCustody(payload *ManifestPayload, limits AttemptLimits) error {
+	if err := validateManifestPayload(payload); err != nil {
 		return err
 	}
 	if uint64(len(payload.Entries)) > uint64(limits.ManagedObjects) {
-		return &showcaseCapacityError{
-			element: showcaseCapacityManagedObjects,
+		return &manifestCapacityError{
+			element: manifestCapacityManagedObjects,
 			have:    uint64(len(payload.Entries)),
 			limit:   uint64(limits.ManagedObjects),
 		}
 	}
 	if payload.TotalBytes() > limits.CustodyBytes {
-		return &showcaseCapacityError{
-			element: showcaseCapacityCustodyBytes,
+		return &manifestCapacityError{
+			element: manifestCapacityCustodyBytes,
 			have:    payload.TotalBytes(),
 			limit:   limits.CustodyBytes,
 		}
@@ -110,7 +110,7 @@ func validateShowcasePayloadCustody(payload *ShowcasePayload, limits AttemptLimi
 	return nil
 }
 
-func showcasePayloadToWire(payload *ShowcasePayload) []payloadEntryWire {
+func manifestPayloadToWire(payload *ManifestPayload) []payloadEntryWire {
 	if payload == nil {
 		return nil
 	}
@@ -125,15 +125,15 @@ func showcasePayloadToWire(payload *ShowcasePayload) []payloadEntryWire {
 	return entries
 }
 
-func showcasePayloadFromWire(entries []payloadEntryWire) (*ShowcasePayload, error) {
+func manifestPayloadFromWire(entries []payloadEntryWire) (*ManifestPayload, error) {
 	if len(entries) == 0 {
-		return nil, errors.New("showcase payload")
+		return nil, errors.New("manifest payload")
 	}
-	payload := &ShowcasePayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
+	payload := &ManifestPayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
 	for _, entry := range entries {
 		if entry.Path == "" || len(entry.Path) > publication.MaxEntryPathBytes || entry.Size == 0 ||
 			entry.Size > publication.MaxBlobBytes || len(entry.CID) == 0 || len(entry.CID) > publication.MaxCIDBytes {
-			return nil, errors.New("showcase payload")
+			return nil, errors.New("manifest payload")
 		}
 		payload.Entries = append(payload.Entries, PayloadEntryReference{
 			Path: entry.Path,
@@ -144,7 +144,7 @@ func showcasePayloadFromWire(entries []payloadEntryWire) (*ShowcasePayload, erro
 	return payload, nil
 }
 
-func sameShowcasePayload(left, right *ShowcasePayload) bool {
+func sameManifestPayload(left, right *ManifestPayload) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -160,20 +160,20 @@ func sameShowcasePayload(left, right *ShowcasePayload) bool {
 	return true
 }
 
-func showcasePayloadMatchesRecord(snapshot *ShowcasePayload, record publication.SnapshotRecord) bool {
-	return sameShowcasePayload(snapshot, showcasePayloadOf(record))
+func manifestPayloadMatchesRecord(snapshot *ManifestPayload, record publication.SnapshotRecord) bool {
+	return sameManifestPayload(snapshot, manifestPayloadOf(record))
 }
 
 func floorPayloadMatchesRecord(floor Floor, record publication.SnapshotRecord) bool {
-	if payloadFormOf(record) == PayloadFormShowcase {
-		return floor.Showcase != nil && len(floor.BlobCID) == 0 && floor.BlobSize == 0 &&
-			showcasePayloadMatchesRecord(floor.Showcase, record)
+	if payloadFormOf(record) == PayloadFormManifest {
+		return floor.Manifest != nil && len(floor.BlobCID) == 0 && floor.BlobSize == 0 &&
+			manifestPayloadMatchesRecord(floor.Manifest, record)
 	}
-	return floor.Showcase == nil && bytes.Equal(record.Blob.CID, floor.BlobCID) && record.Blob.Size == floor.BlobSize
+	return floor.Manifest == nil && bytes.Equal(record.Blob.CID, floor.BlobCID) && record.Blob.Size == floor.BlobSize
 }
 
 func validateFloorPayload(floor Floor) error {
-	if floor.Showcase == nil {
+	if floor.Manifest == nil {
 		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes {
 			return errors.New("floor payload")
 		}
@@ -182,40 +182,40 @@ func validateFloorPayload(floor Floor) error {
 	if len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
 		return errors.New("floor payload")
 	}
-	return validateShowcasePayload(floor.Showcase)
+	return validateManifestPayload(floor.Manifest)
 }
 
-func showcasePayloadUnsupported(stage Stage) error {
+func manifestPayloadUnsupported(stage Stage) error {
 	return classified(ErrUnsupported, stage, ReasonPayloadForm)
 }
 
 func attemptCoreForm(core attemptCoreWire) PayloadForm {
 	if core.Version == 2 {
-		return PayloadFormShowcase
+		return PayloadFormManifest
 	}
 	return PayloadFormPacked
 }
 
 func requirePackedAttemptCore(core attemptCoreWire, stage Stage) error {
 	if attemptCoreForm(core) != PayloadFormPacked {
-		return showcasePayloadUnsupported(stage)
+		return manifestPayloadUnsupported(stage)
 	}
 	return nil
 }
 
 const (
-	showcaseCapacityEntryCount     = "showcase entry count"
-	showcaseCapacityManagedObjects = "showcase managed objects"
-	showcaseCapacityCustodyBytes   = "showcase custody bytes"
+	manifestCapacityEntryCount     = "manifest entry count"
+	manifestCapacityManagedObjects = "manifest managed objects"
+	manifestCapacityCustodyBytes   = "manifest custody bytes"
 )
 
-type showcaseCapacityError struct {
+type manifestCapacityError struct {
 	element string
 	have    uint64
 	limit   uint64
 }
 
-func (e *showcaseCapacityError) Error() string {
+func (e *manifestCapacityError) Error() string {
 	return fmt.Sprintf(
 		"publication state: %s/%s/%s: %s: %d exceeds %d",
 		className(ErrLimit),
@@ -227,6 +227,6 @@ func (e *showcaseCapacityError) Error() string {
 	)
 }
 
-func (e *showcaseCapacityError) Unwrap() error {
+func (e *manifestCapacityError) Unwrap() error {
 	return classified(ErrLimit, StageInput, ReasonCapacity)
 }

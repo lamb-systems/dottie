@@ -198,12 +198,12 @@ func TestHeadBindingChecksEveryRecordAndPayloadJoin(t *testing.T) {
 }
 
 func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
-	showcase := fixtureShowcaseRecord(t)
-	showcaseBytes, err := EncodeSnapshot(showcase)
+	manifest := fixtureManifestRecord(t)
+	manifestBytes, err := EncodeSnapshot(manifest)
 	require.NoError(t, err)
-	showcaseCID, err := RecordCID(showcaseBytes)
+	manifestCID, err := RecordCID(manifestBytes)
 	require.NoError(t, err)
-	showcaseKey, err := SequenceKey(showcase.PublicationSeq)
+	manifestKey, err := SequenceKey(manifest.PublicationSeq)
 	require.NoError(t, err)
 	packed := fixtureSnapshotValue(t)
 	packedBytes, err := EncodeSnapshot(packed)
@@ -213,15 +213,15 @@ func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
 	packedKey, err := SequenceKey(packed.PublicationSeq)
 	require.NoError(t, err)
 
-	showcaseHead := HeadRecord{
+	manifestHead := HeadRecord{
 		SchemaVersion:  SchemaVersion,
-		Vault:          showcase.Vault,
-		PublicationSeq: showcase.PublicationSeq,
-		SnapshotCID:    showcaseCID,
+		Vault:          manifest.Vault,
+		PublicationSeq: manifest.PublicationSeq,
+		SnapshotCID:    manifestCID,
 	}
-	showcaseHeadBytes, err := EncodeHead(showcaseHead)
+	manifestHeadBytes, err := EncodeHead(manifestHead)
 	require.NoError(t, err)
-	assert.NoError(t, VerifyHeadBinding(showcaseHeadBytes, showcaseBytes, showcaseKey))
+	assert.NoError(t, VerifyHeadBinding(manifestHeadBytes, manifestBytes, manifestKey))
 
 	packedHead := HeadRecord{
 		SchemaVersion:  SchemaVersion,
@@ -234,29 +234,29 @@ func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, VerifyHeadBinding(packedHeadBytes, packedBytes, packedKey))
 
-	packedHeadOnShowcase := packedHead
-	packedHeadOnShowcase.Vault = showcase.Vault
-	packedHeadOnShowcase.PublicationSeq = showcase.PublicationSeq
-	packedHeadOnShowcase.SnapshotCID = showcaseCID
-	packedHeadOnShowcaseBytes, err := EncodeHead(packedHeadOnShowcase)
+	packedHeadOnManifest := packedHead
+	packedHeadOnManifest.Vault = manifest.Vault
+	packedHeadOnManifest.PublicationSeq = manifest.PublicationSeq
+	packedHeadOnManifest.SnapshotCID = manifestCID
+	packedHeadOnManifestBytes, err := EncodeHead(packedHeadOnManifest)
 	require.NoError(t, err)
 	requireViolation(
 		t,
-		VerifyHeadBinding(packedHeadOnShowcaseBytes, showcaseBytes, showcaseKey),
+		VerifyHeadBinding(packedHeadOnManifestBytes, manifestBytes, manifestKey),
 		ErrPayloadFormMismatch,
 		"blobCid",
-		"showcase_payload",
+		"manifest_payload",
 	)
 
-	showcaseHeadOnPacked := showcaseHead
-	showcaseHeadOnPacked.Vault = packed.Vault
-	showcaseHeadOnPacked.PublicationSeq = packed.PublicationSeq
-	showcaseHeadOnPacked.SnapshotCID = packedCID
-	showcaseHeadOnPackedBytes, err := EncodeHead(showcaseHeadOnPacked)
+	manifestHeadOnPacked := manifestHead
+	manifestHeadOnPacked.Vault = packed.Vault
+	manifestHeadOnPacked.PublicationSeq = packed.PublicationSeq
+	manifestHeadOnPacked.SnapshotCID = packedCID
+	manifestHeadOnPackedBytes, err := EncodeHead(manifestHeadOnPacked)
 	require.NoError(t, err)
 	requireViolation(
 		t,
-		VerifyHeadBinding(showcaseHeadOnPackedBytes, packedBytes, packedKey),
+		VerifyHeadBinding(manifestHeadOnPackedBytes, packedBytes, packedKey),
 		ErrPayloadFormMismatch,
 		"blobCid",
 		"packed_payload",

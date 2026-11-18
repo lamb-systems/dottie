@@ -620,9 +620,9 @@ func newMaterialWriteBatch(
 	if err != nil || key != candidate.SnapshotKey {
 		return MaterialWriteBatch{}, errors.New("publication material candidate key does not match its sequence")
 	}
-	if snapshot.PayloadForm() == publication.PayloadFormShowcase {
-		return MaterialWriteBatch{}, &publication.ShowcasePayloadError{
-			Reason: publication.ShowcaseReasonPackedRequired,
+	if snapshot.PayloadForm() == publication.PayloadFormManifest {
+		return MaterialWriteBatch{}, &publication.ManifestPayloadError{
+			Reason: publication.ManifestReasonPackedRequired,
 		}
 	}
 	if err := publication.VerifyPayload(candidate.Payload, snapshot.Blob); err != nil {
@@ -1014,9 +1014,9 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
-		if record.PayloadForm() == publication.PayloadFormShowcase {
-			return PublicationPushPreparation{}, &publication.ShowcasePayloadError{
-				Reason: publication.ShowcaseReasonPackedRequired,
+		if record.PayloadForm() == publication.PayloadFormManifest {
+			return PublicationPushPreparation{}, &publication.ManifestPayloadError{
+				Reason: publication.ManifestReasonPackedRequired,
 			}
 		}
 		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
@@ -1045,7 +1045,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
-	if err := checkShowcasePublication(request.Configuration, snapshot); err != nil {
+	if err := checkManifestPublication(request.Configuration, snapshot); err != nil {
 		return PublicationPushPreparation{}, err
 	}
 	counts := PublicationPushPreparation{

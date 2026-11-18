@@ -132,7 +132,7 @@ type Attempt struct {
 	HeadRecordCID      []byte
 	BlobCID            []byte
 	BlobSize           uint64
-	Showcase           *ShowcasePayload
+	Manifest           *ManifestPayload
 	CapturedFloor      *Floor
 	CapturedRevision   uint64
 	CapturedGeneration uint64

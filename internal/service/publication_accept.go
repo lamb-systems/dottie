@@ -12,8 +12,8 @@ var ErrPublicationAccept = errors.New("publication accept refused")
 
 var errPublicationAcceptRevision = errors.New("the accepted floor revision moved")
 
-var errPublicationAcceptShowcasePayload = &publication.ShowcasePayloadError{
-	Reason: publication.ShowcaseReasonPackedRequired,
+var errPublicationAcceptManifestPayload = &publication.ManifestPayloadError{
+	Reason: publication.ManifestReasonPackedRequired,
 }
 
 type publicationAcceptStage string
@@ -102,12 +102,12 @@ func StagePublicationAccept(
 			err,
 		)
 	}
-	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormShowcase {
+	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormManifest {
 		return PublicationAcceptProposal{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
 			publicationAcceptReasonPayloadForm,
-			errPublicationAcceptShowcasePayload,
+			errPublicationAcceptManifestPayload,
 		)
 	}
 	if _, err := publicationstate.Inspect(ctx, request.Directory, request.Binding); err != nil {
@@ -172,12 +172,12 @@ func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (p
 			err,
 		)
 	}
-	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormShowcase {
+	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormManifest {
 		return publicationstate.Floor{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
 			publicationAcceptReasonPayloadForm,
-			errPublicationAcceptShowcasePayload,
+			errPublicationAcceptManifestPayload,
 		)
 	}
 	store, err := publicationstate.Open(request.Directory, request.Binding)

@@ -23,6 +23,15 @@ const (
 	BackupOnly Mode = "backup-only"
 )
 
+type PayloadForm string
+
+const (
+	PayloadFormPacked   PayloadForm = "packed"
+	PayloadFormManifest PayloadForm = "manifest"
+)
+
+var ErrUnknownPayloadForm = errors.New("unknown target payload form")
+
 type Defaults struct {
 	Mode Mode `toml:"mode,omitempty"`
 }
@@ -39,7 +48,7 @@ type Target struct {
 	ID          string           `toml:"id"`
 	Source      model.SourceKind `toml:"source"`
 	Mode        Mode             `toml:"mode,omitempty"`
-	Showcase    bool             `toml:"showcase,omitempty"`
+	Form        PayloadForm      `toml:"form,omitempty"`
 	Root        *Root            `toml:"root,omitempty"`
 	GNOMEPolicy *GNOMEPolicy     `toml:"gnome_policy,omitempty"`
 }
@@ -100,8 +109,8 @@ func validateTarget(target Target, version uint32) error {
 	if err := portable.Validate(); err != nil {
 		return err
 	}
-	if target.Showcase && target.Source != model.SourceFiles {
-		return errors.New("showcase publications require a files target")
+	if err := validateTargetForm(target); err != nil {
+		return err
 	}
 	if !validModeOrEmpty(target.Mode) {
 		return errors.New("invalid mode")
@@ -120,9 +129,23 @@ func validateTarget(target Target, version uint32) error {
 	return nil
 }
 
-func (c Config) HasShowcaseTarget() bool {
+func validateTargetForm(target Target) error {
+	switch target.Form {
+	case "", PayloadFormPacked:
+		return nil
+	case PayloadFormManifest:
+		if target.Source != model.SourceFiles {
+			return errors.New("manifest publications require a files target")
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w %q", ErrUnknownPayloadForm, target.Form)
+	}
+}
+
+func (c Config) HasManifestTarget() bool {
 	for _, target := range c.Targets {
-		if target.Showcase {
+		if target.Form == PayloadFormManifest {
 			return true
 		}
 	}

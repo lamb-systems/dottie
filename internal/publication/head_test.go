@@ -138,16 +138,16 @@ func TestIndependentMalformedHeadCBORIsRejectedWithoutPartialRecords(t *testing.
 	}
 }
 
-func TestHeadWithoutBlobCIDDecodesAsShowcaseHead(t *testing.T) {
-	showcase := fixtureShowcaseRecord(t)
-	snapshotBytes, err := EncodeSnapshot(showcase)
+func TestHeadWithoutBlobCIDDecodesAsManifestHead(t *testing.T) {
+	manifest := fixtureManifestRecord(t)
+	snapshotBytes, err := EncodeSnapshot(manifest)
 	require.NoError(t, err)
 	snapshotCID, err := RecordCID(snapshotBytes)
 	require.NoError(t, err)
 	head := HeadRecord{
 		SchemaVersion:  SchemaVersion,
-		Vault:          showcase.Vault,
-		PublicationSeq: showcase.PublicationSeq,
+		Vault:          manifest.Vault,
+		PublicationSeq: manifest.PublicationSeq,
 		SnapshotCID:    snapshotCID,
 	}
 	encoded, err := EncodeHead(head)
@@ -158,7 +158,7 @@ func TestHeadWithoutBlobCIDDecodesAsShowcaseHead(t *testing.T) {
 	assert.Equal(t, head, decoded)
 	assert.Nil(t, decoded.BlobCID)
 
-	key, err := SequenceKey(showcase.PublicationSeq)
+	key, err := SequenceKey(manifest.PublicationSeq)
 	require.NoError(t, err)
 	assert.NoError(t, VerifyHeadBinding(encoded, snapshotBytes, key))
 }

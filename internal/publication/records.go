@@ -148,7 +148,7 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 			return nil, err
 		}
 		object["entries"] = entries
-		sizeLimit = MaxShowcaseRecordBytes
+		sizeLimit = MaxManifestRecordBytes
 	} else {
 		blobCID, err := castCID(record.Blob.CID, cid.Raw, "blob.ref")
 		if err != nil {
@@ -429,7 +429,7 @@ func VerifyHeadBinding(headEncoded, snapshotEncoded []byte, snapshotKey string) 
 	}
 	if len(snapshot.Entries) != 0 {
 		if len(head.BlobCID) != 0 {
-			return violation(ErrPayloadFormMismatch, "blobCid", "showcase_payload")
+			return violation(ErrPayloadFormMismatch, "blobCid", "manifest_payload")
 		}
 		return nil
 	}
@@ -496,14 +496,14 @@ func decodeSnapshotObject(encoded []byte) (map[string]any, error) {
 	if len(encoded) <= MaxRecordBytes {
 		return decodeObject(encoded)
 	}
-	if len(encoded) > MaxShowcaseRecordBytes {
+	if len(encoded) > MaxManifestRecordBytes {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
-	object, err := decodeObjectLimit(encoded, MaxShowcaseRecordBytes)
+	object, err := decodeObjectLimit(encoded, MaxManifestRecordBytes)
 	if err != nil {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
-	if _, showcase := object["entries"]; !showcase {
+	if _, manifest := object["entries"]; !manifest {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
 	return object, nil
@@ -562,12 +562,12 @@ func checkHeadKeys(object map[string]any) error {
 
 func checkSnapshotKeys(object map[string]any) error {
 	_, packed := object["blob"]
-	_, showcase := object["entries"]
-	if packed && showcase {
+	_, manifest := object["entries"]
+	if packed && manifest {
 		return violation(ErrInvalidRecord, "record", "both_payload_forms")
 	}
 	expected := len(snapshotCommonKeys)
-	if packed || showcase {
+	if packed || manifest {
 		expected++
 	}
 	if len(object) != expected {
@@ -578,7 +578,7 @@ func checkSnapshotKeys(object map[string]any) error {
 			return violation(ErrInvalidRecord, name, "missing")
 		}
 	}
-	if !packed && !showcase {
+	if !packed && !manifest {
 		return violation(ErrInvalidRecord, "record", "missing_payload_form")
 	}
 	return nil

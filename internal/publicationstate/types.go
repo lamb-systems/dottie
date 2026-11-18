@@ -210,7 +210,7 @@ type Floor struct {
 	RecordCID           []byte
 	BlobCID             []byte
 	BlobSize            uint64
-	Showcase            *ShowcasePayload
+	Manifest            *ManifestPayload
 	ObservationDigest   [32]byte
 	AcceptedEventDigest [32]byte
 }

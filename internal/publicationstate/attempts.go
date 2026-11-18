@@ -429,7 +429,7 @@ func (s *Store) checkCandidatePayloadCapacity(
 	candidate validatedCandidate,
 	createDirectory bool,
 ) error {
-	if candidate.form == PayloadFormShowcase {
+	if candidate.form == PayloadFormManifest {
 		for _, entry := range candidate.entries {
 			if err := s.checkPayloadCapacity(
 				ctx,
@@ -530,7 +530,7 @@ func (s *Store) makeAttemptCore(
 		HeadCID:                 bytes.Clone(candidate.headCID),
 		BlobCID:                 bytes.Clone(candidate.blobCID),
 		BlobSize:                candidate.snapshot.Blob.Size,
-		Entries:                 showcasePayloadToWire(showcasePayloadOf(candidate.snapshot)),
+		Entries:                 manifestPayloadToWire(manifestPayloadOf(candidate.snapshot)),
 		InitialContext:          contextToWire(candidate.view.input.SuppliedContext),
 		InitialViewDigest:       bytes.Clone(candidate.view.digest[:]),
 		Review:                  reviewToWire(review),
@@ -978,8 +978,8 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if err != nil {
 		return CandidateMaterial{}, err
 	}
-	if attemptCoreForm(stored.core) == PayloadFormShowcase {
-		return s.readShowcaseCandidate(ctx, stored, StageCustody)
+	if attemptCoreForm(stored.core) == PayloadFormManifest {
+		return s.readManifestCandidate(ctx, stored, StageCustody)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, StageCustody)
@@ -1065,7 +1065,7 @@ func projectAttempt(
 		HeadRecordCID:      bytes.Clone(core.HeadCID),
 		BlobCID:            bytes.Clone(core.BlobCID),
 		BlobSize:           core.BlobSize,
-		Showcase:           showcasePayloadOf(snapshot),
+		Manifest:           manifestPayloadOf(snapshot),
 		CapturedFloor:      floor,
 		CapturedRevision:   core.CapturedRevision,
 		CapturedGeneration: core.CapturedGeneration,
@@ -1285,12 +1285,12 @@ func validateAttemptCorePayload(
 	if attemptCoreVersion(snapshot) != core.Version {
 		return errors.New("payload form")
 	}
-	if payloadFormOf(snapshot) == PayloadFormShowcase {
-		showcase, err := showcasePayloadFromWire(core.Entries)
-		if err != nil || !showcasePayloadMatchesRecord(showcase, snapshot) {
+	if payloadFormOf(snapshot) == PayloadFormManifest {
+		manifest, err := manifestPayloadFromWire(core.Entries)
+		if err != nil || !manifestPayloadMatchesRecord(manifest, snapshot) {
 			return errors.New("payload form")
 		}
-		return validateShowcasePayloadCustody(showcase, attemptLimits)
+		return validateManifestPayloadCustody(manifest, attemptLimits)
 	}
 	if !bytes.Equal(snapshot.Blob.CID, core.BlobCID) || snapshot.Blob.Size != core.BlobSize {
 		return errors.New("snapshot")
@@ -1474,7 +1474,7 @@ func (s *Store) checkAttemptGraph(ctx context.Context, q queryer, stage Stage) e
 		if active {
 			nonretired++
 			wantedRefCount := int64(1)
-			if attemptCoreForm(attempt.core) == PayloadFormShowcase {
+			if attemptCoreForm(attempt.core) == PayloadFormManifest {
 				wantedRefCount = 0
 			}
 			if activeCount != 1 || id != activeID || refCount != wantedRefCount || reservationCount != 1 ||
@@ -1956,8 +1956,8 @@ func (s *Store) validateAttemptPayloadReference(
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	if attemptCoreForm(attempt.core) == PayloadFormShowcase {
-		return s.validateShowcaseAttemptPayloadReference(ctx, q, attempt, stage)
+	if attemptCoreForm(attempt.core) == PayloadFormManifest {
+		return s.validateManifestAttemptPayloadReference(ctx, q, attempt, stage)
 	}
 	var refCIDValue, objectCIDValue, sizeValue, basenameValue any
 	if err := q.QueryRowContext(ctx, "SELECT attempt_payload_refs.blob_cid,payload_objects.blob_cid,payload_objects.size,payload_objects.basename FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", attempt.core.AttemptID).
@@ -1983,17 +1983,17 @@ func (s *Store) validateAttemptPayloadReference(
 	return nil
 }
 
-func (s *Store) validateShowcaseAttemptPayloadReference(
+func (s *Store) validateManifestAttemptPayloadReference(
 	ctx context.Context,
 	q queryer,
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	showcase, err := showcasePayloadFromWire(attempt.core.Entries)
+	manifest, err := manifestPayloadFromWire(attempt.core.Entries)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	for _, entry := range showcase.Entries {
+	for _, entry := range manifest.Entries {
 		var objectCIDValue, sizeValue, basenameValue any
 		if err := q.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", entry.CID).
 			Scan(&objectCIDValue, &sizeValue, &basenameValue); err != nil {

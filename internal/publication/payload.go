@@ -23,36 +23,36 @@ type PayloadForm string
 
 const (
 	PayloadFormPacked   PayloadForm = "packed"
-	PayloadFormShowcase PayloadForm = "showcase"
+	PayloadFormManifest PayloadForm = "manifest"
 
-	ShowcaseReasonPackedRequired = "packed_payload_required"
-	ShowcaseReasonEntryCount     = "entry_count"
-	ShowcaseReasonEntryBytes     = "entry_bytes"
-	ShowcaseReasonTotalBytes     = "total_bytes"
-	ShowcaseReasonUnavailable    = "entry_unavailable"
-	ShowcaseReasonMismatch       = "entry_mismatch"
+	ManifestReasonPackedRequired = "packed_payload_required"
+	ManifestReasonEntryCount     = "entry_count"
+	ManifestReasonEntryBytes     = "entry_bytes"
+	ManifestReasonTotalBytes     = "total_bytes"
+	ManifestReasonUnavailable    = "entry_unavailable"
+	ManifestReasonMismatch       = "entry_mismatch"
 )
 
-var ErrShowcasePayload = errors.New("publication showcase payload")
+var ErrManifestPayload = errors.New("publication manifest payload")
 
-type ShowcasePayloadError struct {
+type ManifestPayloadError struct {
 	Entry  string
 	Reason string
 	cause  error
 }
 
-func (e *ShowcasePayloadError) Error() string {
+func (e *ManifestPayloadError) Error() string {
 	if e.Entry == "" {
-		return "publication showcase payload: " + e.Reason
+		return "publication manifest payload: " + e.Reason
 	}
-	return "publication showcase payload: " + strconv.Quote(e.Entry) + ": " + e.Reason
+	return "publication manifest payload: " + strconv.Quote(e.Entry) + ": " + e.Reason
 }
 
-func (e *ShowcasePayloadError) Is(target error) bool { return target == ErrShowcasePayload }
+func (e *ManifestPayloadError) Is(target error) bool { return target == ErrManifestPayload }
 
-func (e *ShowcasePayloadError) Unwrap() error { return e.cause }
+func (e *ManifestPayloadError) Unwrap() error { return e.cause }
 
-func (e *ShowcasePayloadError) EntryPath() string { return e.Entry }
+func (e *ManifestPayloadError) EntryPath() string { return e.Entry }
 
 type PayloadEntry struct {
 	Path    string
@@ -69,7 +69,7 @@ type Payload struct {
 
 func (payload Payload) PackedSnapshot() (model.Snapshot, error) {
 	if payload.Form != PayloadFormPacked {
-		return model.Snapshot{}, &ShowcasePayloadError{Reason: ShowcaseReasonPackedRequired}
+		return model.Snapshot{}, &ManifestPayloadError{Reason: ManifestReasonPackedRequired}
 	}
 	return payload.Snapshot, nil
 }
@@ -84,7 +84,7 @@ type PayloadFetch func(reference BlobReference) ([]byte, error)
 
 func (record SnapshotRecord) PayloadForm() PayloadForm {
 	if len(record.Entries) != 0 {
-		return PayloadFormShowcase
+		return PayloadFormManifest
 	}
 	return PayloadFormPacked
 }
@@ -101,40 +101,40 @@ func ResolvePayload(record SnapshotRecord, limits PayloadLimits, fetch PayloadFe
 		}
 		return Payload{Form: PayloadFormPacked, Snapshot: snapshot}, nil
 	}
-	return resolveShowcasePayload(record.Entries, limits, fetch)
+	return resolveManifestPayload(record.Entries, limits, fetch)
 }
 
-func resolveShowcasePayload(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
+func resolveManifestPayload(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
 	if len(entries) == 0 {
-		return Payload{}, &ShowcasePayloadError{Reason: ShowcaseReasonEntryCount}
+		return Payload{}, &ManifestPayloadError{Reason: ManifestReasonEntryCount}
 	}
 	if limits.MaxEntries > 0 && len(entries) > limits.MaxEntries {
-		return Payload{}, &ShowcasePayloadError{Reason: ShowcaseReasonEntryCount}
+		return Payload{}, &ManifestPayloadError{Reason: ManifestReasonEntryCount}
 	}
 	resolved := make([]PayloadEntry, 0, len(entries))
 	var total uint64
 	for _, entry := range entries {
 		if limits.MaxEntryBytes != 0 && entry.Size > limits.MaxEntryBytes {
-			return Payload{}, &ShowcasePayloadError{Entry: entry.Path, Reason: ShowcaseReasonEntryBytes}
+			return Payload{}, &ManifestPayloadError{Entry: entry.Path, Reason: ManifestReasonEntryBytes}
 		}
 		total += entry.Size
 		if limits.MaxTotalBytes != 0 && total > limits.MaxTotalBytes {
-			return Payload{}, &ShowcasePayloadError{Entry: entry.Path, Reason: ShowcaseReasonTotalBytes}
+			return Payload{}, &ManifestPayloadError{Entry: entry.Path, Reason: ManifestReasonTotalBytes}
 		}
 		content, err := fetch(entry.Blob)
 		if err != nil {
-			return Payload{}, &ShowcasePayloadError{
-				Entry: entry.Path, Reason: ShowcaseReasonUnavailable, cause: err,
+			return Payload{}, &ManifestPayloadError{
+				Entry: entry.Path, Reason: ManifestReasonUnavailable, cause: err,
 			}
 		}
 		if err := VerifyPayload(content, entry.Blob); err != nil {
-			return Payload{}, &ShowcasePayloadError{
-				Entry: entry.Path, Reason: ShowcaseReasonMismatch, cause: err,
+			return Payload{}, &ManifestPayloadError{
+				Entry: entry.Path, Reason: ManifestReasonMismatch, cause: err,
 			}
 		}
 		resolved = append(resolved, PayloadEntry{
 			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
 		})
 	}
-	return Payload{Form: PayloadFormShowcase, Entries: resolved}, nil
+	return Payload{Form: PayloadFormManifest, Entries: resolved}, nil
 }

@@ -230,11 +230,11 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 		snapshotRaw: bytes.Clone(input.SnapshotRecord),
 		headRaw:     bytes.Clone(input.HeadRecord),
 	}
-	if form == PayloadFormShowcase {
+	if form == PayloadFormManifest {
 		if len(input.Payload) != 0 {
 			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		entries, err := validateShowcaseCandidateEntries(input, snapshot, limits)
+		entries, err := validateManifestCandidateEntries(input, snapshot, limits)
 		if err != nil {
 			return validatedCandidate{}, err
 		}
@@ -256,12 +256,12 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 	return candidate, nil
 }
 
-func validateShowcaseCandidateEntries(
+func validateManifestCandidateEntries(
 	input CandidateInput,
 	snapshot publication.SnapshotRecord,
 	limits AttemptLimits,
 ) ([]validatedPayloadEntry, error) {
-	manifest := &ShowcasePayload{Entries: make([]PayloadEntryReference, 0, len(snapshot.Entries))}
+	manifest := &ManifestPayload{Entries: make([]PayloadEntryReference, 0, len(snapshot.Entries))}
 	for _, entry := range snapshot.Entries {
 		manifest.Entries = append(manifest.Entries, PayloadEntryReference{
 			Path: entry.Path,
@@ -269,7 +269,7 @@ func validateShowcaseCandidateEntries(
 			Size: entry.Size,
 		})
 	}
-	if err := validateShowcasePayloadCustody(manifest, limits); err != nil {
+	if err := validateManifestPayloadCustody(manifest, limits); err != nil {
 		return nil, err
 	}
 	if len(input.Entries) != len(snapshot.Entries) {
@@ -473,7 +473,7 @@ func (s *Store) checkFirstConflictSlotFeasibility(
 	stage Stage,
 ) error {
 	occupant := candidate.snapshot
-	if candidate.form == PayloadFormShowcase {
+	if candidate.form == PayloadFormManifest {
 		occupant.Entries = append([]publication.SnapshotEntry(nil), occupant.Entries...)
 		for index := range occupant.Entries {
 			occupant.Entries[index].Size = publication.MaxBlobBytes

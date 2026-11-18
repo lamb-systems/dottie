@@ -58,8 +58,8 @@ func (s *Store) ReadAcceptedMaterial(
 	if !sameAcceptedFloor(*state.floor, expectedFloor) {
 		return AcceptedMaterial{}, classified(ErrContinuity, StageReadAcceptedMaterial, ReasonStale)
 	}
-	if state.floor.Showcase != nil {
-		return AcceptedMaterial{}, showcasePayloadUnsupported(StageReadAcceptedMaterial)
+	if state.floor.Manifest != nil {
+		return AcceptedMaterial{}, manifestPayloadUnsupported(StageReadAcceptedMaterial)
 	}
 	basename, record, blob, err := s.acceptedMaterialOwner(ctx, s.conn, *state.floor, StageReadAcceptedMaterial)
 	if err != nil {
@@ -112,7 +112,7 @@ func sameAcceptedFloor(left, right Floor) bool {
 		bytes.Equal(left.RecordCID, right.RecordCID) &&
 		bytes.Equal(left.BlobCID, right.BlobCID) &&
 		left.BlobSize == right.BlobSize &&
-		sameShowcasePayload(left.Showcase, right.Showcase) &&
+		sameManifestPayload(left.Manifest, right.Manifest) &&
 		left.ObservationDigest == right.ObservationDigest &&
 		left.AcceptedEventDigest == right.AcceptedEventDigest
 }

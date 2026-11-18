@@ -1630,7 +1630,7 @@ func buildFloor(
 		RecordCID:         bytes.Clone(candidate.ref.CID),
 		BlobCID:           bytes.Clone(record.Blob.CID),
 		BlobSize:          record.Blob.Size,
-		Showcase:          showcasePayloadOf(record),
+		Manifest:          manifestPayloadOf(record),
 		ObservationDigest: observation.observationDigest,
 	}
 }
@@ -1652,7 +1652,7 @@ func cloneFloor(floor Floor) Floor {
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
 	out.BlobCID = bytes.Clone(floor.BlobCID)
-	out.Showcase = cloneShowcasePayload(floor.Showcase)
+	out.Manifest = cloneManifestPayload(floor.Manifest)
 	return out
 }
 func cloneReference(ref RecordReference) RecordReference {

@@ -270,9 +270,9 @@ func (s *Store) validateEvidenceHeadAndSuffix(
 }
 
 func headPayloadMatchesRecord(head publication.HeadRecord, record publication.SnapshotRecord) error {
-	if payloadFormOf(record) == PayloadFormShowcase {
+	if payloadFormOf(record) == PayloadFormManifest {
 		if len(head.BlobCID) != 0 {
-			return errors.New("showcase evidence head")
+			return errors.New("manifest evidence head")
 		}
 		return nil
 	}

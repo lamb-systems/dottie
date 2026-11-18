@@ -15,24 +15,24 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-type cliShowcaseFile struct {
+type cliManifestFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-type cliShowcasePublication struct {
+type cliManifestPublication struct {
 	block publicationstate.SnapshotBlock
 	head  []byte
 	view  publicationstate.SuppliedRepositoryView
 	floor publicationstate.Floor
 }
 
-func newCLIShowcasePublication(t *testing.T, binding publicationstate.Binding) cliShowcasePublication {
+func newCLIManifestPublication(t *testing.T, binding publicationstate.Binding) cliManifestPublication {
 	t.Helper()
-	files := []cliShowcaseFile{
-		{path: "init.lua", mode: 0o600, content: []byte("synthetic showcase init")},
-		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic showcase options")},
+	files := []cliManifestFile{
+		{path: "init.lua", mode: 0o600, content: []byte("synthetic manifest init")},
+		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic manifest options")},
 	}
 	entries := make([]publication.SnapshotEntry, 0, len(files))
 	for _, file := range files {
@@ -62,7 +62,7 @@ func newCLIShowcasePublication(t *testing.T, binding publicationstate.Binding) c
 	view := publicationstate.SuppliedRepositoryView{
 		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
 		SuppliedContext: publicationstate.SuppliedContext{
-			RepositoryRevision: "synthetic-showcase-revision", RepositoryDigest: []byte{0x71},
+			RepositoryRevision: "synthetic-manifest-revision", RepositoryDigest: []byte{0x71},
 		},
 		Head:      head,
 		Snapshots: []publicationstate.SnapshotBlock{{Key: key, Raw: raw}},
@@ -70,10 +70,10 @@ func newCLIShowcasePublication(t *testing.T, binding publicationstate.Binding) c
 	floor := publicationstate.Floor{
 		Revision: 1, Generation: 1, Binding: binding, RecordCID: recordCID, SnapshotKey: key,
 	}
-	return cliShowcasePublication{block: view.Snapshots[0], head: head, view: view, floor: floor}
+	return cliManifestPublication{block: view.Snapshots[0], head: head, view: view, floor: floor}
 }
 
-func pullTestShowcaseBinding() publicationstate.Binding {
+func pullTestManifestBinding() publicationstate.Binding {
 	binding := publicationstate.Binding{
 		AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62},
 	}
@@ -81,9 +81,9 @@ func pullTestShowcaseBinding() publicationstate.Binding {
 	return binding
 }
 
-func TestPullApplyPlanningRefusesAShowcaseProviderPayload(t *testing.T) {
-	binding := pullTestShowcaseBinding()
-	showcase := newCLIShowcasePublication(t, binding)
+func TestPullApplyPlanningRefusesAManifestProviderPayload(t *testing.T) {
+	binding := pullTestManifestBinding()
+	manifest := newCLIManifestPublication(t, binding)
 	fetched := 0
 	remote := pullRemote{
 		Blob: func(context.Context, publication.SnapshotRecord) ([]byte, error) {
@@ -92,63 +92,63 @@ func TestPullApplyPlanningRefusesAShowcaseProviderPayload(t *testing.T) {
 		},
 	}
 
-	material, err := pullApplySnapshots(context.Background(), remote, showcase.view, showcase.floor, false)
+	material, err := pullApplySnapshots(context.Background(), remote, manifest.view, manifest.floor, false)
 	assert.Equal(t, pullApplyMaterial{}, material)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
-	var refusal *publication.ShowcasePayloadError
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	var refusal *publication.ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, publication.ShowcaseReasonPackedRequired, refusal.Reason)
+	assert.Equal(t, publication.ManifestReasonPackedRequired, refusal.Reason)
 	assert.Zero(t, fetched, "apply planning fetched a payload it refuses")
 
 	var exitError urfave.ExitCoder
 	require.ErrorAs(t, pullApplyRemoteFailure("pull", err), &exitError)
 	assert.Equal(t, 3, exitError.ExitCode())
-	assert.Contains(t, exitError.Error(), "showcase")
+	assert.Contains(t, exitError.Error(), "manifest")
 }
 
-func TestPullPositionComparisonReportsAShowcasePayloadForm(t *testing.T) {
-	binding := pullTestShowcaseBinding()
-	showcase := newCLIShowcasePublication(t, binding)
+func TestPullPositionComparisonReportsAManifestPayloadForm(t *testing.T) {
+	binding := pullTestManifestBinding()
+	manifest := newCLIManifestPublication(t, binding)
 
-	finding := comparePullPosition(showcase.floor, showcase.view)
+	finding := comparePullPosition(manifest.floor, manifest.view)
 	assert.Equal(t, pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}, finding)
 }
 
-func TestSyncViewComparisonRefusesAShowcaseProviderPayload(t *testing.T) {
-	binding := pullTestShowcaseBinding()
-	showcase := newCLIShowcasePublication(t, binding)
+func TestSyncViewComparisonRefusesAManifestProviderPayload(t *testing.T) {
+	binding := pullTestManifestBinding()
+	manifest := newCLIManifestPublication(t, binding)
 
-	err := syncViewMatchesFloor(showcase.floor, showcase.view)
+	err := syncViewMatchesFloor(manifest.floor, manifest.view)
 	require.ErrorIs(t, err, errSyncFloorMismatch)
 }
 
-func TestSyncAcceptedMaterialRefusesAShowcaseRecord(t *testing.T) {
-	binding := pullTestShowcaseBinding()
-	showcase := newCLIShowcasePublication(t, binding)
+func TestSyncAcceptedMaterialRefusesAManifestRecord(t *testing.T) {
+	binding := pullTestManifestBinding()
+	manifest := newCLIManifestPublication(t, binding)
 
 	snapshot, err := syncAcceptedSnapshot(publicationstate.AcceptedMaterial{
-		Floor: showcase.floor, SnapshotRecord: showcase.block.Raw,
-		Payload: []byte("packed payload for a showcase accepted record"),
+		Floor: manifest.floor, SnapshotRecord: manifest.block.Raw,
+		Payload: []byte("packed payload for a manifest accepted record"),
 	})
 	assert.Equal(t, model.Snapshot{}, snapshot)
-	require.ErrorIs(t, err, publication.ErrShowcasePayload)
-	var refusal *publication.ShowcasePayloadError
+	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	var refusal *publication.ManifestPayloadError
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, publication.ShowcaseReasonPackedRequired, refusal.Reason)
+	assert.Equal(t, publication.ManifestReasonPackedRequired, refusal.Reason)
 }
 
-func TestPullRefusesAShowcaseProviderPositionWithoutChangingAnything(t *testing.T) {
+func TestPullRefusesAManifestProviderPositionWithoutChangingAnything(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, "")
-	showcase := newCLIShowcasePublication(t, fixture.binding)
-	reader := &pullTestReader{view: showcase.view}
+	manifest := newCLIManifestPublication(t, fixture.binding)
+	reader := &pullTestReader{view: manifest.view}
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code, stderr.String())
-	assert.Contains(t, stderr.String(), "showcase")
+	assert.Contains(t, stderr.String(), "manifest")
 	assert.Contains(t, stderr.String(), "nothing was changed")
 	assert.NotContains(t, stdout.String(), "confirmation:")
 	assert.Contains(t, stdout.String(), "pull: first-use")

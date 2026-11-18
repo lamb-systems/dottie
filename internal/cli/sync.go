@@ -699,7 +699,7 @@ func runSyncPushHalf(
 		return syncPushRefusal(
 			command,
 			output,
-			"the provider position carries a showcase publication this build cannot compose from",
+			"the provider position carries a manifest publication this build cannot compose from",
 			"post_pull_payload_form",
 		)
 	}
@@ -865,8 +865,8 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 	if err != nil {
 		return errSyncFloorMismatch
 	}
-	if !bytes.Equal(floor.RecordCID, cid) || floor.Showcase != nil ||
-		record.PayloadForm() == publication.PayloadFormShowcase ||
+	if !bytes.Equal(floor.RecordCID, cid) || floor.Manifest != nil ||
+		record.PayloadForm() == publication.PayloadFormManifest ||
 		!bytes.Equal(floor.BlobCID, record.Blob.CID) ||
 		floor.BlobSize != record.Blob.Size ||
 		floor.Sequence != record.PublicationSeq ||
@@ -881,9 +881,9 @@ func syncAcceptedSnapshot(material publicationstate.AcceptedMaterial) (model.Sna
 	if err != nil {
 		return model.Snapshot{}, err
 	}
-	if record.PayloadForm() == publication.PayloadFormShowcase {
-		return model.Snapshot{}, &publication.ShowcasePayloadError{
-			Reason: publication.ShowcaseReasonPackedRequired,
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		return model.Snapshot{}, &publication.ManifestPayloadError{
+			Reason: publication.ManifestReasonPackedRequired,
 		}
 	}
 	return publication.DecodePayload(material.Payload, record.Blob)
