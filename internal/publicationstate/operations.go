@@ -138,7 +138,7 @@ func (s *Store) RecordObservation(ctx context.Context, observation Observation) 
 			var sequence uint64
 			rawLength, err := queryInt64(ctx, tx, "SELECT length(raw) FROM cache_records WHERE cid=?", record.ref.CID)
 			if err == nil {
-				if rawLength <= 0 || rawLength > publication.MaxRecordBytes {
+				if rawLength <= 0 || rawLength > publication.MaxManifestRecordBytes {
 					return classified(ErrSchema, StageObserve, ReasonCorrupt)
 				}
 				var keyValue, sequenceValue, rawValue any
@@ -685,7 +685,7 @@ func (s *Store) queryRecord(
 		return rawStoredRecord{}, storageFailure(ctx, stage, err)
 	}
 	length, ok := rawLength.(int64)
-	if !ok || length <= 0 || length > publication.MaxRecordBytes {
+	if !ok || length <= 0 || length > publication.MaxManifestRecordBytes {
 		return rawStoredRecord{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	var keyValue, sequenceValue, cidValue, rawValue any
@@ -713,7 +713,7 @@ func (s *Store) queryRecord(
 }
 
 func (s *Store) verifyStoredRecord(stored rawStoredRecord, stage Stage) (validatedRecord, error) {
-	if len(stored.raw) == 0 || len(stored.raw) > publication.MaxRecordBytes || len(stored.cid) == 0 {
+	if len(stored.raw) == 0 || len(stored.raw) > publication.MaxManifestRecordBytes || len(stored.cid) == 0 {
 		return validatedRecord{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	record, err := publication.DecodeSnapshot(stored.raw)
@@ -1356,7 +1356,7 @@ func (s *Store) verifyAcceptedRecords(
 	rows, err := source.QueryContext(
 		ctx,
 		"SELECT cid,record_key,sequence,raw,logical_bytes FROM accepted_records WHERE length(raw)<=?",
-		publication.MaxRecordBytes,
+		publication.MaxManifestRecordBytes,
 	)
 	if err != nil {
 		return storageFailure(ctx, stage, err)
@@ -1377,7 +1377,7 @@ func (s *Store) verifyAcceptedRecords(
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		sequence := uint64(sequenceValue)
-		if len(raw) == 0 || len(raw) > publication.MaxRecordBytes {
+		if len(raw) == 0 || len(raw) > publication.MaxManifestRecordBytes {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		stored := rawStoredRecord{key: key, sequence: sequence, cid: cid, raw: raw}
@@ -1447,7 +1447,7 @@ func (s *Store) checkAcceptedCapacityWithReservation(
 		var key string
 		var seq uint64
 		rawLength, err := queryInt64(ctx, tx, "SELECT length(raw) FROM accepted_records WHERE cid=?", record.ref.CID)
-		if err == nil && (rawLength <= 0 || rawLength > publication.MaxRecordBytes) {
+		if err == nil && (rawLength <= 0 || rawLength > publication.MaxManifestRecordBytes) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		if err == nil {
@@ -1533,7 +1533,7 @@ func insertAcceptedRecord(ctx context.Context, tx *sql.Tx, record validatedRecor
 	var key string
 	var seq uint64
 	rawLength, err := queryInt64(ctx, tx, "SELECT length(raw) FROM accepted_records WHERE cid=?", record.ref.CID)
-	if err == nil && (rawLength <= 0 || rawLength > publication.MaxRecordBytes) {
+	if err == nil && (rawLength <= 0 || rawLength > publication.MaxManifestRecordBytes) {
 		return classified(ErrSchema, StageAccept, ReasonCorrupt)
 	}
 	if err == nil {

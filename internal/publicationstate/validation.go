@@ -198,7 +198,7 @@ func validateObservation(input Observation, binding Binding, limits Limits) (val
 		if len(block.Raw) == 0 || len(block.Key) != publication.SequenceKeyLength || !utf8.ValidString(block.Key) {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if len(block.Raw) > publication.MaxRecordBytes {
+		if len(block.Raw) > publication.MaxManifestRecordBytes {
 			return validatedObservation{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 		}
 		total += uint64(len(block.Raw))

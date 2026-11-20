@@ -109,7 +109,7 @@ func validateSuppliedRepositoryView(
 	publicBlocks := make([]SnapshotBlock, 0, len(input.Snapshots))
 	var vault [32]byte
 	for index, block := range input.Snapshots {
-		if len(block.Raw) == 0 || len(block.Raw) > publication.MaxRecordBytes {
+		if len(block.Raw) == 0 || len(block.Raw) > publication.MaxManifestRecordBytes {
 			return validatedRepositoryView{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 		}
 		total += uint64(len(block.Raw))
