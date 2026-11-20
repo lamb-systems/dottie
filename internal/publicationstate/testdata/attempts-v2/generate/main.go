@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -47,9 +48,15 @@ const (
 	maxJSONBytes         = 32 << 20
 	maxOutputBytes       = int64(64 << 20)
 	sqliteApplicationID  = int64(0x44545032)
+	schema2Version       = 2
+	currentStoreVersion  = 3
+	schema2Coverage      = "two-image-schema-2"
 	payloadDirectoryName = "payloads"
 	payloadFileSuffix    = ".payload"
 )
+
+//go:embed schema2.sql
+var schema2DDL string
 
 var (
 	pendingDatabaseIdentity = [32]byte{0x61, 0xe4, 0x38, 0xc8, 0x7e, 0x51, 0x65, 0xa7, 0x21, 0x8e, 0x18, 0xa9, 0xaa, 0xad, 0x2c, 0x65, 0x1f, 0x0d, 0x3a, 0x09, 0x5a, 0xdc, 0x90, 0xac, 0xc5, 0x85, 0x8a, 0x89, 0x73, 0x52, 0x2c, 0x17}
@@ -90,12 +97,16 @@ var tableSpecs = []tableSpec{
 	{Name: "attempt_payload_refs", DDL: "CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))", Columns: []columnSpec{{"attempt_id", "BLOB"}, {"blob_cid", "BLOB"}}, OrderBy: "attempt_id"},
 	{Name: "retained_publications", DDL: "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)", Columns: []columnSpec{{"record_cid", "BLOB"}, {"attempt_id", "BLOB"}, {"sequence", "INTEGER"}, {"blob_cid", "BLOB"}, {"size", "INTEGER"}, {"accepted_revision", "INTEGER"}}, OrderBy: "record_cid"},
 	{Name: "attempt_reservations", DDL: "CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)", Columns: []columnSpec{{"attempt_id", "BLOB"}, {"metadata_bytes", "INTEGER"}, {"accepted_bytes", "INTEGER"}, {"accepted_records", "INTEGER"}, {"accepted_events", "INTEGER"}, {"retained_points", "INTEGER"}}, OrderBy: "attempt_id"},
-	{Name: "accepted_material_refs", DDL: "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))", Columns: []columnSpec{{"accepted_revision", "INTEGER"}, {"record_cid", "BLOB"}, {"blob_cid", "BLOB"}}, OrderBy: "accepted_revision"},
 }
 
 var indexSpecs = []schemaObjectSpec{
 	{Name: "publication_attempts_order", Kind: "index", SQL: "CREATE INDEX publication_attempts_order ON publication_attempts(created_order, attempt_id)"},
 	{Name: "payload_objects_basename", Kind: "index", SQL: "CREATE INDEX payload_objects_basename ON payload_objects(basename)"},
+}
+
+var schema3AcceptedMaterialRefsSpec = tableSpec{
+	Name: "accepted_material_refs",
+	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
 }
 
 type rawCell struct {
@@ -292,6 +303,10 @@ func printFailure(err error) {
 }
 
 func run(outputRoot string) (resultErr error) {
+	schema2Statements, err := loadSchema2Statements()
+	if err != nil {
+		return err
+	}
 	root, rootFD, parentFD, _, err := createOutputRoot(outputRoot)
 	if err != nil {
 		return err
@@ -414,14 +429,13 @@ func run(outputRoot string) (resultErr error) {
 	if err := closeStore(); err != nil {
 		return err
 	}
-	pendingInventory, err := inspectDatabase(filepath.Join(pendingDirectory, "publication.db"))
+	pendingInventory, err := rebuildSchema2(filepath.Join(pendingDirectory, "publication.db"), schema2Statements, func(inventory rowInventory) error {
+		return validatePendingRows(inventory, binding, created.ID, created.StateDigest, pendingCandidate, pendingInput.Payload, physicalPayloadName)
+	})
 	if err != nil {
 		return err
 	}
 	pendingInventory.Coverage = "pending-genesis-only"
-	if err := validatePendingRows(pendingInventory, binding, created.ID, created.StateDigest, pendingCandidate, pendingInput.Payload, physicalPayloadName); err != nil {
-		return err
-	}
 	if pendingInputSize := uint64(len(pendingInput.Payload)); pendingInputSize == 0 || pendingInputSize > uint64(maxOutputBytes) {
 		return errors.New("pending payload exceeds the caller-side physical bound")
 	}
@@ -467,11 +481,10 @@ func run(outputRoot string) (resultErr error) {
 	if err := closeStore(); err != nil {
 		return err
 	}
-	mixedInventory, err := inspectDatabase(filepath.Join(mixedDirectory, "publication.db"))
+	mixedInventory, err := rebuildSchema2(filepath.Join(mixedDirectory, "publication.db"), schema2Statements, func(inventory rowInventory) error {
+		return validateMixedRows(inventory, mixedState)
+	})
 	if err != nil {
-		return err
-	}
-	if err := validateMixedRows(mixedInventory, mixedState); err != nil {
 		return err
 	}
 	mixedInventory.Coverage = "mixed-lifecycle"
@@ -665,9 +678,12 @@ func run(outputRoot string) (resultErr error) {
 		return err
 	}
 	outputManifest := manifest{
-		FormatVersion: 1, Coverage: "two-image-current-schema",
+		FormatVersion: 1, Coverage: schema2Coverage,
 		Provenance: provenance,
 		Images:     []imageManifest{pendingImage, mixedImage}, Files: files,
+	}
+	if err := validateSchema2Manifest(outputManifest); err != nil {
+		return err
 	}
 	manifestJSON, err := marshalJSON(outputManifest)
 	if err != nil || len(manifestJSON) == 0 || len(manifestJSON) > maxJSONBytes {
@@ -2824,7 +2840,7 @@ type databaseSnapshot struct {
 
 func snapshotClosedDatabase(path string) (databaseSnapshot, error) {
 	sidecarPresent := false
-	for _, suffix := range []string{"-wal", "-shm"} {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if _, err := os.Lstat(path + suffix); err == nil {
 			sidecarPresent = true
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -2873,8 +2889,8 @@ func inspectDatabase(path string) (rowInventory, error) {
 	if err := db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&userVersion); err != nil {
 		return rowInventory{}, errors.New("database schema version read failed")
 	}
-	if applicationID != sqliteApplicationID || userVersion != 3 {
-		return rowInventory{}, errors.New("database is not the current store schema")
+	if applicationID != sqliteApplicationID || userVersion != schema2Version {
+		return rowInventory{}, errors.New("database is not the expected schema-2 store")
 	}
 	objects, err := readSchemaObjects(db)
 	if err != nil {
@@ -2963,13 +2979,13 @@ func readSchemaObjects(db *sql.DB) ([]schemaObject, error) {
 	for _, spec := range tableSpecs {
 		object, ok := actual[spec.Name]
 		if !ok || object.Kind != "table" || strings.TrimSpace(object.SQL) != spec.DDL {
-			return nil, errors.New("table definition differs from the current schema")
+			return nil, errors.New("table definition differs from schema 2")
 		}
 	}
 	for _, spec := range indexSpecs {
 		object, ok := actual[spec.Name]
 		if !ok || object.Kind != spec.Kind || strings.TrimSpace(object.SQL) != spec.SQL {
-			return nil, errors.New("index definition differs from the current schema")
+			return nil, errors.New("index definition differs from schema 2")
 		}
 	}
 	return objects, nil
@@ -2990,7 +3006,7 @@ func readMetadataKeys(db *sql.DB) ([]string, error) {
 		}
 		keys = append(keys, key)
 		if len(keys) > 7 {
-			resultErr = errors.New("metadata key count exceeds the current schema")
+			resultErr = errors.New("metadata key count exceeds schema 2")
 			break
 		}
 	}
@@ -3086,8 +3102,8 @@ func encodeCell(value any) (rawCell, int, error) {
 }
 
 func validateInventoryShape(inventory rowInventory) error {
-	if inventory.FormatVersion != 1 || len(inventory.Tables) != len(tableSpecs) || len(inventory.SchemaObjects) != len(tableSpecs)+len(indexSpecs) || inventory.UserVersion != 3 || inventory.ApplicationID != sqliteApplicationID || !equalStrings(inventory.MetadataKeys, []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}) {
-		return errors.New("inventory shape differs from the current schema")
+	if inventory.FormatVersion != 1 || len(inventory.Tables) != len(tableSpecs) || len(inventory.SchemaObjects) != len(tableSpecs)+len(indexSpecs) || inventory.UserVersion != schema2Version || inventory.ApplicationID != sqliteApplicationID || !equalStrings(inventory.MetadataKeys, []string{"attempt_limits", "attempt_mutation_revision", "binding", "database_id", "generation", "limits", "revision"}) {
+		return errors.New("schema-2 inventory shape differs")
 	}
 	expectedObjects := make(map[string]schemaObject, len(tableSpecs)+len(indexSpecs))
 	for _, spec := range tableSpecs {
@@ -3099,21 +3115,21 @@ func validateInventoryShape(inventory rowInventory) error {
 	for _, object := range inventory.SchemaObjects {
 		expected, exists := expectedObjects[object.Name]
 		if !exists || object.Kind != expected.Kind || strings.TrimSpace(object.SQL) != expected.SQL {
-			return errors.New("schema object differs from the current schema")
+			return errors.New("schema-2 schema object differs")
 		}
 		delete(expectedObjects, object.Name)
 	}
 	if len(expectedObjects) != 0 {
-		return errors.New("schema object set is incomplete")
+		return errors.New("schema-2 schema object set is incomplete")
 	}
 	for tableIndex, spec := range tableSpecs {
 		table := inventory.Tables[tableIndex]
 		if table.Name != spec.Name || strings.TrimSpace(table.DDL) != spec.DDL || !reflect.DeepEqual(table.Columns, spec.Columns) || table.RowCount < 0 || table.RowCount > maxTableRows || int64(len(table.Rows)) != table.RowCount {
-			return errors.New("table shape differs from the current schema")
+			return errors.New("schema-2 table shape differs")
 		}
 		for _, row := range table.Rows {
 			if len(row) != len(spec.Columns) {
-				return errors.New("row column count differs")
+				return errors.New("schema-2 row column count differs")
 			}
 			for columnIndex, cell := range row {
 				wantType := map[string]string{"TEXT": "text-base64", "BLOB": "blob-base64", "INTEGER": "integer"}[spec.Columns[columnIndex].Type]
@@ -3121,10 +3137,10 @@ func validateInventoryShape(inventory rowInventory) error {
 					if (spec.Name == "accepted_events" && columnIndex == 4) || (spec.Name == "publication_attempts" && (columnIndex == 9 || columnIndex == 10)) {
 						continue
 					}
-					return errors.New("non-null column is null")
+					return errors.New("schema-2 non-null column is null")
 				}
 				if wantType == "" || cell.Type != wantType {
-					return errors.New("cell type differs from declared column")
+					return errors.New("schema-2 cell type differs from declared column")
 				}
 			}
 		}
@@ -3456,12 +3472,11 @@ func validateMixedRows(inventory rowInventory, state mixedLifecycleState) error 
 		"pending_genesis": 0, "attempt_events": 15, "attempt_evidence": 5,
 		"payload_objects": 3, "attempt_payload_refs": 1,
 		"retained_publications": 1, "attempt_reservations": 1,
-		"accepted_material_refs": 0,
 	}
 	for _, table := range inventory.Tables {
 		count, ok := wantedCounts[table.Name]
 		if !ok || table.RowCount != count || int64(len(table.Rows)) != count {
-			return errors.New("mixed table count differs")
+			return errors.New("mixed schema-2 table count differs")
 		}
 	}
 	binding := state.Binding
@@ -4103,12 +4118,11 @@ func validatePendingRows(inventory rowInventory, binding publicationstate.Bindin
 		"pending_genesis": 1, "attempt_events": 1, "attempt_evidence": 0,
 		"payload_objects": 1, "attempt_payload_refs": 1,
 		"retained_publications": 0, "attempt_reservations": 1,
-		"accepted_material_refs": 0,
 	}
 	for _, table := range inventory.Tables {
 		count, ok := wantedCounts[table.Name]
 		if !ok || table.RowCount != count || int64(len(table.Rows)) != count {
-			return errors.New("table contents do not match pending genesis")
+			return errors.New("schema-2 table contents do not match pending genesis")
 		}
 	}
 	attempts := tableByName(inventory, "publication_attempts")
@@ -6575,12 +6589,494 @@ func seedDatabaseIdentity(directory string, identity [32]byte) error {
 }
 
 func currentBuildProvenance(pending, mixed rowInventory) (provenanceValue, error) {
-	if pending.UserVersion != mixed.UserVersion || pending.ApplicationID != mixed.ApplicationID {
-		return provenanceValue{}, errors.New("images disagree on the store build they were produced by")
+	if pending.UserVersion != schema2Version || mixed.UserVersion != schema2Version {
+		return provenanceValue{}, errors.New("generated images are not schema 2")
+	}
+	if pending.ApplicationID != sqliteApplicationID || mixed.ApplicationID != sqliteApplicationID {
+		return provenanceValue{}, errors.New("generated images do not carry the publication store application ID")
 	}
 	return provenanceValue{
 		Generator:          generatorPath,
 		StoreSchemaVersion: pending.UserVersion,
 		ApplicationID:      pending.ApplicationID,
 	}, nil
+}
+
+func validateSchema2Manifest(value manifest) error {
+	if value.FormatVersion != 1 || value.Coverage != schema2Coverage || value.Provenance.StoreSchemaVersion != schema2Version || value.Provenance.ApplicationID != sqliteApplicationID || len(value.Images) != 2 {
+		return errors.New("combined manifest is not a two-image schema-2 manifest")
+	}
+	for _, image := range value.Images {
+		if image.SchemaVersion != schema2Version || image.ApplicationID != sqliteApplicationID {
+			return errors.New("combined manifest image is not a schema-2 image")
+		}
+	}
+	return nil
+}
+
+func loadSchema2Statements() ([]string, error) {
+	statements, err := parseSchema2DDL(schema2DDL)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSchema2DDL(statements); err != nil {
+		return nil, err
+	}
+	return statements, nil
+}
+
+func parseSchema2DDL(data string) ([]string, error) {
+	if strings.TrimSpace(data) == "" {
+		return nil, errors.New("vendored schema-2 DDL is empty")
+	}
+	lines := strings.Split(data, "\n")
+	statements := make([]string, 0, len(tableSpecs)+len(indexSpecs))
+	names := make(map[string]struct{}, len(tableSpecs)+len(indexSpecs))
+	for index, line := range lines {
+		if line == "" && index == len(lines)-1 {
+			continue
+		}
+		if line == "" || strings.TrimSpace(line) != line {
+			return nil, fmt.Errorf("vendored schema-2 DDL line %d is blank or padded", index+1)
+		}
+		if !strings.HasSuffix(line, ";") {
+			return nil, fmt.Errorf("vendored schema-2 DDL line %d is unterminated", index+1)
+		}
+		statement := strings.TrimSuffix(line, ";")
+		if strings.ContainsAny(statement, ";") {
+			return nil, fmt.Errorf("vendored schema-2 DDL line %d holds more than one statement", index+1)
+		}
+		var name string
+		switch {
+		case strings.HasPrefix(statement, "CREATE TABLE "):
+			name = strings.SplitN(strings.TrimPrefix(statement, "CREATE TABLE "), " (", 2)[0]
+		case strings.HasPrefix(statement, "CREATE INDEX "):
+			name = strings.SplitN(strings.TrimPrefix(statement, "CREATE INDEX "), " ON ", 2)[0]
+		default:
+			return nil, fmt.Errorf("vendored schema-2 DDL line %d is not a CREATE statement", index+1)
+		}
+		if name == "" || strings.TrimSpace(name) != name || strings.ContainsAny(name, " \"'`\\\x00") {
+			return nil, fmt.Errorf("vendored schema-2 DDL line %d has an invalid object name", index+1)
+		}
+		if _, duplicate := names[name]; duplicate {
+			return nil, fmt.Errorf("vendored schema-2 DDL object %s is duplicated", name)
+		}
+		names[name] = struct{}{}
+		statements = append(statements, statement)
+	}
+	return statements, nil
+}
+
+func checkSchema2DDL(statements []string) error {
+	expected := make([]string, 0, len(tableSpecs)+len(indexSpecs))
+	for _, spec := range tableSpecs {
+		expected = append(expected, spec.DDL)
+	}
+	for _, spec := range indexSpecs {
+		expected = append(expected, spec.SQL)
+	}
+	if len(expected) != 17 {
+		return errors.New("generator schema-2 inventory does not hold 17 statements")
+	}
+	if len(statements) != len(expected) {
+		return fmt.Errorf("vendored schema-2 DDL holds %d statements, want %d", len(statements), len(expected))
+	}
+	for index, statement := range expected {
+		if statements[index] != statement {
+			return fmt.Errorf("vendored schema-2 DDL statement %d differs from the generator inventory", index+1)
+		}
+	}
+	return nil
+}
+
+func rebuildSchema2(databasePath string, statements []string, validate func(rowInventory) error) (rowInventory, error) {
+	if len(statements) != len(tableSpecs)+len(indexSpecs) {
+		return rowInventory{}, errors.New("schema-2 statement inventory is incomplete")
+	}
+	sourceBefore, err := snapshotClosedDatabase(databasePath)
+	if err != nil {
+		return rowInventory{}, err
+	}
+	if err := inspectSchema3Source(databasePath); err != nil {
+		return rowInventory{}, err
+	}
+	temporaryPath := databasePath + ".schema2"
+	fd, err := unix.Open(temporaryPath, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return rowInventory{}, errors.New("exclusive schema-2 rebuild destination creation failed")
+	}
+	if err := unix.Close(fd); err != nil {
+		_ = os.Remove(temporaryPath)
+		return rowInventory{}, errors.New("schema-2 rebuild destination close failed")
+	}
+	replaced := false
+	defer func() {
+		if !replaced {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := verifyPrivateFile(temporaryPath); err != nil {
+		return rowInventory{}, errors.New("schema-2 rebuild destination is unsafe")
+	}
+	if err := buildSchema2Database(temporaryPath, databasePath, statements); err != nil {
+		return rowInventory{}, err
+	}
+	if err := verifyAbsentSidecars(temporaryPath); err != nil {
+		return rowInventory{}, err
+	}
+	inventory, err := inspectDatabase(temporaryPath)
+	if err != nil {
+		return rowInventory{}, err
+	}
+	if err := validate(inventory); err != nil {
+		return rowInventory{}, err
+	}
+	if err := verifyTemporaryIntegrity(temporaryPath); err != nil {
+		return rowInventory{}, err
+	}
+	sourceAfter, err := snapshotClosedDatabase(databasePath)
+	if err != nil || sourceAfter != sourceBefore {
+		return rowInventory{}, errors.New("source database changed during the schema-2 rebuild")
+	}
+	if err := fsyncFilePath(temporaryPath); err != nil {
+		return rowInventory{}, errors.New("schema-2 rebuild sync failed")
+	}
+	if err := os.Rename(temporaryPath, databasePath); err != nil {
+		return rowInventory{}, errors.New("schema-2 rebuild replacement failed")
+	}
+	replaced = true
+	if err := fsyncDirectoryPath(filepath.Dir(databasePath)); err != nil {
+		return rowInventory{}, errors.New("schema-2 rebuild directory sync failed after replacement, so the image database replacement is incomplete")
+	}
+	return inventory, nil
+}
+
+func inspectSchema3Source(databasePath string) error {
+	db, closeDatabase, err := openImmutableDatabase(databasePath)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	ctx := context.Background()
+	var applicationID, userVersion int64
+	if err := db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID); err != nil || applicationID != sqliteApplicationID {
+		return errors.New("lifecycle engine database does not carry the store application ID")
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != currentStoreVersion {
+		return errors.New("lifecycle engine database is not the current schema")
+	}
+	rows, err := db.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_master ORDER BY name")
+	if err != nil {
+		return errors.New("lifecycle engine schema inventory query failed")
+	}
+	type sourceObject struct {
+		kind string
+		sql  string
+	}
+	objects := make(map[string]sourceObject, len(tableSpecs)+len(indexSpecs)+1)
+	var resultErr error
+	for rows.Next() {
+		var name, kind string
+		var definition sql.NullString
+		if err := rows.Scan(&name, &kind, &definition); err != nil {
+			resultErr = errors.New("lifecycle engine schema inventory scan failed")
+			break
+		}
+		if kind == "index" && !definition.Valid {
+			continue
+		}
+		if !definition.Valid {
+			resultErr = errors.New("lifecycle engine schema inventory holds an object without a definition")
+			break
+		}
+		if _, duplicate := objects[name]; duplicate {
+			resultErr = errors.New("lifecycle engine schema inventory holds a duplicate object")
+			break
+		}
+		objects[name] = sourceObject{kind: kind, sql: definition.String}
+	}
+	if resultErr == nil && rows.Err() != nil {
+		resultErr = errors.New("lifecycle engine schema inventory read failed")
+	}
+	if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+		resultErr = errors.New("lifecycle engine schema inventory close failed")
+	}
+	if resultErr != nil {
+		return resultErr
+	}
+	if len(objects) != len(tableSpecs)+len(indexSpecs)+1 {
+		return errors.New("lifecycle engine schema inventory differs from the current schema")
+	}
+	for _, spec := range tableSpecs {
+		object, ok := objects[spec.Name]
+		if !ok || object.kind != "table" || strings.TrimSpace(object.sql) != spec.DDL {
+			return errors.New("lifecycle engine schema-2 table definition differs")
+		}
+		delete(objects, spec.Name)
+	}
+	for _, spec := range indexSpecs {
+		object, ok := objects[spec.Name]
+		if !ok || object.kind != spec.Kind || strings.TrimSpace(object.sql) != spec.SQL {
+			return errors.New("lifecycle engine schema-2 index definition differs")
+		}
+		delete(objects, spec.Name)
+	}
+	if len(objects) != 1 {
+		return errors.New("lifecycle engine schema inventory carries an unexpected object")
+	}
+	additional, ok := objects[schema3AcceptedMaterialRefsSpec.Name]
+	if !ok || additional.kind != "table" || strings.TrimSpace(additional.sql) != schema3AcceptedMaterialRefsSpec.DDL {
+		return errors.New("lifecycle engine schema inventory carries an unexpected object")
+	}
+	var references int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM accepted_material_refs").Scan(&references); err != nil || references != 0 {
+		return errors.New("lifecycle engine database holds material references that schema 2 cannot represent")
+	}
+	return nil
+}
+
+func buildSchema2Database(destinationPath, sourcePath string, statements []string) error {
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: destinationPath}).String())
+	if err != nil {
+		return errors.New("schema-2 rebuild database open failed")
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		_ = db.Close()
+		return errors.New("schema-2 rebuild connection failed")
+	}
+	open := true
+	defer func() {
+		if open {
+			_ = conn.Close()
+			_ = db.Close()
+		}
+	}()
+	var journalMode string
+	if err := conn.QueryRowContext(ctx, "PRAGMA journal_mode=DELETE").Scan(&journalMode); err != nil || journalMode != "delete" {
+		return errors.New("schema-2 rebuild journal mode could not be fixed")
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA synchronous=FULL"); err != nil {
+		return errors.New("schema-2 rebuild synchronous mode could not be set")
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		return errors.New("schema-2 rebuild foreign keys could not be enabled")
+	}
+	var foreignKeys, synchronous int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+		return errors.New("schema-2 rebuild foreign keys are not enforced")
+	}
+	if err := conn.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil || synchronous != 2 {
+		return errors.New("schema-2 rebuild synchronous mode is not full")
+	}
+	sourceURI := (&url.URL{Scheme: "file", Path: sourcePath, RawQuery: "mode=ro&immutable=1"}).String()
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS source", sourceURI); err != nil {
+		return errors.New("lifecycle engine source attachment failed")
+	}
+	attached := true
+	defer func() {
+		if attached {
+			_, _ = conn.ExecContext(ctx, "DETACH DATABASE source")
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return errors.New("schema-2 rebuild transaction could not begin")
+	}
+	committed := false
+	abort := func(cause error) error {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+		return cause
+	}
+	for _, statement := range statements {
+		if _, err := conn.ExecContext(ctx, statement); err != nil {
+			return abort(errors.New("schema-2 rebuild could not apply the vendored DDL"))
+		}
+	}
+	for _, spec := range tableSpecs {
+		columns := quotedColumnList(spec)
+		copyStatement := "INSERT INTO main.\"" + spec.Name + "\" (" + columns + ") SELECT " + columns + " FROM source.\"" + spec.Name + "\" ORDER BY " + spec.OrderBy
+		if _, err := conn.ExecContext(ctx, copyStatement); err != nil {
+			return abort(fmt.Errorf("schema-2 rebuild could not copy %s", spec.Name))
+		}
+		var copied, source int64
+		if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM main.\""+spec.Name+"\"").Scan(&copied); err != nil {
+			return abort(fmt.Errorf("schema-2 rebuild could not count %s", spec.Name))
+		}
+		if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM source.\""+spec.Name+"\"").Scan(&source); err != nil {
+			return abort(fmt.Errorf("schema-2 rebuild could not count source %s", spec.Name))
+		}
+		if copied != source {
+			return abort(fmt.Errorf("schema-2 rebuild copied %d of %d rows into %s", copied, source, spec.Name))
+		}
+	}
+	violations, err := countResultRows(ctx, conn, "PRAGMA foreign_key_check")
+	if err != nil || violations != 0 {
+		return abort(errors.New("schema-2 rebuild left foreign key violations"))
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA application_id="+strconv.FormatInt(sqliteApplicationID, 10)); err != nil {
+		return abort(errors.New("schema-2 rebuild application ID could not be set"))
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA user_version="+strconv.Itoa(schema2Version)); err != nil {
+		return abort(errors.New("schema-2 rebuild user version could not be set"))
+	}
+	var applicationID, userVersion int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID); err != nil || applicationID != sqliteApplicationID {
+		return abort(errors.New("schema-2 rebuild application ID differs"))
+	}
+	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != schema2Version {
+		return abort(errors.New("schema-2 rebuild user version differs"))
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return abort(errors.New("schema-2 rebuild commit failed"))
+	}
+	committed = true
+	if _, err := conn.ExecContext(ctx, "DETACH DATABASE source"); err != nil {
+		return errors.New("lifecycle engine source detach failed")
+	}
+	attached = false
+	if _, err := conn.ExecContext(ctx, "VACUUM"); err != nil {
+		return errors.New("schema-2 rebuild compaction failed")
+	}
+	if err := conn.Close(); err != nil {
+		return errors.New("schema-2 rebuild connection close failed")
+	}
+	if err := db.Close(); err != nil {
+		return errors.New("schema-2 rebuild database close failed")
+	}
+	open = false
+	return nil
+}
+
+func verifyTemporaryIntegrity(databasePath string) error {
+	db, closeDatabase, err := openImmutableDatabase(databasePath)
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	ctx := context.Background()
+	rows, err := db.QueryContext(ctx, "PRAGMA integrity_check")
+	if err != nil {
+		return errors.New("schema-2 rebuild integrity check failed")
+	}
+	messages := make([]string, 0, 1)
+	var resultErr error
+	for rows.Next() {
+		var message string
+		if err := rows.Scan(&message); err != nil {
+			resultErr = errors.New("schema-2 rebuild integrity result scan failed")
+			break
+		}
+		messages = append(messages, message)
+	}
+	if resultErr == nil && rows.Err() != nil {
+		resultErr = errors.New("schema-2 rebuild integrity result read failed")
+	}
+	if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+		resultErr = errors.New("schema-2 rebuild integrity result close failed")
+	}
+	if resultErr != nil {
+		return resultErr
+	}
+	if len(messages) != 1 || messages[0] != "ok" {
+		return errors.New("schema-2 rebuild integrity check reported a defect")
+	}
+	violations, err := countResultRows(ctx, db, "PRAGMA foreign_key_check")
+	if err != nil || violations != 0 {
+		return errors.New("schema-2 rebuild foreign key check reported a violation")
+	}
+	return nil
+}
+
+func openImmutableDatabase(databasePath string) (*sql.DB, func(), error) {
+	dsn := (&url.URL{Scheme: "file", Path: databasePath, RawQuery: "mode=ro&immutable=1"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, nil, errors.New("read-only database open failed")
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	closed := false
+	closeDatabase := func() {
+		if !closed {
+			closed = true
+			_ = db.Close()
+		}
+	}
+	return db, closeDatabase, nil
+}
+
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func countResultRows(ctx context.Context, q rowQuerier, statement string) (int64, error) {
+	rows, err := q.QueryContext(ctx, statement)
+	if err != nil {
+		return 0, err
+	}
+	count := int64(0)
+	var resultErr error
+	for rows.Next() {
+		count++
+	}
+	if rows.Err() != nil {
+		resultErr = rows.Err()
+	}
+	if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+		resultErr = closeErr
+	}
+	if resultErr != nil {
+		return 0, resultErr
+	}
+	return count, nil
+}
+
+func quotedColumnList(spec tableSpec) string {
+	quoted := make([]string, 0, len(spec.Columns))
+	for _, column := range spec.Columns {
+		quoted = append(quoted, "\""+column.Name+"\"")
+	}
+	return strings.Join(quoted, ",")
+}
+
+func verifyAbsentSidecars(databasePath string) error {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Lstat(databasePath + suffix); err == nil {
+			return errors.New("schema-2 rebuild left a SQLite sidecar behind")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return errors.New("schema-2 rebuild sidecar state cannot be checked")
+		}
+	}
+	return nil
+}
+
+func fsyncFilePath(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return errors.New("file open for sync failed")
+	}
+	syncErr := unix.Fsync(fd)
+	closeErr := unix.Close(fd)
+	if syncErr != nil || closeErr != nil {
+		return errors.New("file sync failed")
+	}
+	return nil
+}
+
+func fsyncDirectoryPath(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return errors.New("directory open for sync failed")
+	}
+	syncErr := unix.Fsync(fd)
+	closeErr := unix.Close(fd)
+	if syncErr != nil || closeErr != nil {
+		return errors.New("directory sync failed")
+	}
+	return nil
 }
