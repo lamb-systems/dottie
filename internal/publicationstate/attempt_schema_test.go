@@ -819,7 +819,7 @@ func attemptSchemaRequireCurrent3(
 	sort.Strings(expectedAdditions)
 	require.Equal(t, expectedAdditions, additions)
 	require.Equal(t, 10, autoIndexAdditions)
-	for _, statement := range attemptSchemaStatements {
+	for _, statement := range schema3AttemptSchemaStatements {
 		require.Equal(t, statement, objects[statementTableName(statement)].sql, statementTableName(statement))
 	}
 	require.Equal(t, incomingMaterialSchemaStatement, objects["accepted_material_refs"].sql)

@@ -25,6 +25,23 @@ var attemptSchemaStatements = []string{
 	"CREATE INDEX payload_objects_basename ON payload_objects(basename)",
 }
 
+const schema3RetainedPublicationsStatement = "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, manifest BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND size IS NULL AND manifest IS NOT NULL)))"
+
+const retainedPublicationsTable = "retained_publications"
+
+var schema3AttemptSchemaStatements = replaceRetainedPublicationsStatement(attemptSchemaStatements)
+
+func replaceRetainedPublicationsStatement(statements []string) []string {
+	replaced := make([]string, len(statements))
+	for index, statement := range statements {
+		replaced[index] = statement
+		if statementTableName(statement) == retainedPublicationsTable {
+			replaced[index] = schema3RetainedPublicationsStatement
+		}
+	}
+	return replaced
+}
+
 var attemptSchemaObjects = map[string]string{
 	"publication_attempts":       "table",
 	"active_publication_attempt": "table",
@@ -74,17 +91,26 @@ func schemaInventoryForVersion(version int) (schemaInventory, error) {
 			},
 		}, nil
 	case 3:
-		base, err := schemaInventoryForVersion(2)
-		if err != nil {
-			return schemaInventory{}, err
-		}
-		statements := append(append([]string(nil), base.statements...), incomingMaterialSchemaStatement)
-		objects := cloneSchemaObjects(base.objects)
+		statements := make([]string, 0, len(schemaV1Statements)+len(schema3AttemptSchemaStatements)+1)
+		statements = append(statements, schemaV1Statements...)
+		statements = append(statements, schema3AttemptSchemaStatements...)
+		statements = append(statements, incomingMaterialSchemaStatement)
+		objects := make(map[string]string, len(schemaV1Objects)+len(attemptSchemaObjects)+1)
+		maps.Copy(objects, schemaV1Objects)
+		maps.Copy(objects, attemptSchemaObjects)
 		objects[statementTableName(incomingMaterialSchemaStatement)] = "table"
 		return schemaInventory{
-			statements:   statements,
-			objects:      objects,
-			metadataKeys: append([]string(nil), base.metadataKeys...),
+			statements: statements,
+			objects:    objects,
+			metadataKeys: []string{
+				"attempt_limits",
+				"attempt_mutation_revision",
+				"binding",
+				"database_id",
+				"generation",
+				"limits",
+				"revision",
+			},
 		}, nil
 	default:
 		return schemaInventory{}, errSchemaMismatch

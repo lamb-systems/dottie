@@ -405,7 +405,7 @@ func incomingMaterialUpgradeFixturePositionsV1(t *testing.T) {
 	require.Equal(t, 2, destinationCounts.namedIndexes)
 	require.Equal(t, 14, destinationCounts.autoIndexes)
 	require.Len(t, destinationObjects, 32)
-	for _, statement := range attemptSchemaStatements {
+	for _, statement := range schema3AttemptSchemaStatements {
 		require.Equal(
 			t,
 			statement,
@@ -559,6 +559,7 @@ func incomingMaterialUpgradeFixturePendingGenesis(t *testing.T, fixture incoming
 	require.Equal(t, []string{"accepted_material_refs"}, namedAdditions)
 	require.Zero(t, autoIndexAdditions)
 	require.Equal(t, incomingMaterialSchemaStatement, destinationObjects["accepted_material_refs"].sql)
+	incomingMaterialUpgradeFixtureRequirePackedRetained(t, ctx, tx)
 	require.Equal(t, payloadStatesBefore, incomingMaterialUpgradeFixturePayloadStates(t, fixture.root))
 	require.NoError(t, tx.Rollback())
 	require.Equal(t, 2, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -780,6 +781,7 @@ func incomingMaterialUpgradeFixtureMixed(t *testing.T, fixture incomingMaterialU
 	require.Equal(t, []string{"accepted_material_refs"}, namedAdditions)
 	require.Zero(t, autoIndexAdditions)
 	require.Equal(t, incomingMaterialSchemaStatement, destinationObjects["accepted_material_refs"].sql)
+	incomingMaterialUpgradeFixtureRequirePackedRetained(t, ctx, tx)
 	require.Equal(t, payloadStatesBefore, incomingMaterialUpgradeFixturePayloadStates(t, fixture.root))
 	require.NoError(t, tx.Rollback())
 	require.Equal(t, 2, incomingMaterialUpgradeUserVersion(t, ctx, conn))
@@ -1187,6 +1189,53 @@ func incomingMaterialUpgradeFixtureObjectCounts(
 	return counts
 }
 
+func incomingMaterialUpgradeFixtureExpectedObject(
+	t *testing.T,
+	name string,
+	source incomingMaterialUpgradeFixtureObject,
+) incomingMaterialUpgradeFixtureObject {
+	t.Helper()
+	if name != retainedPublicationsTable {
+		return source
+	}
+	require.Equal(t, "table", source.kind, name)
+	require.Equal(t, incomingMaterialUpgradeFixtureSchema2RetainedDDL(), source.sql, name)
+	return incomingMaterialUpgradeFixtureObject{kind: "table", sql: schema3RetainedPublicationsStatement}
+}
+
+func incomingMaterialUpgradeFixtureSchema2RetainedDDL() string {
+	for _, statement := range attemptSchemaStatements {
+		if statementTableName(statement) == retainedPublicationsTable {
+			return statement
+		}
+	}
+	return ""
+}
+
+func incomingMaterialUpgradeFixtureRequirePackedRetained(t *testing.T, ctx context.Context, q queryer) {
+	t.Helper()
+	rows, err := q.QueryContext(ctx, "SELECT record_cid,form,blob_cid,size,manifest FROM retained_publications ORDER BY record_cid")
+	require.NoError(t, err)
+	seen := 0
+	for rows.Next() {
+		var recordCID []byte
+		var form string
+		var blobCID, size, manifest any
+		require.NoError(t, rows.Scan(&recordCID, &form, &blobCID, &size, &manifest))
+		require.NotEmpty(t, recordCID)
+		require.Equal(t, string(PayloadFormPacked), form)
+		require.IsType(t, []byte{}, blobCID)
+		require.NotEmpty(t, blobCID)
+		require.IsType(t, int64(0), size)
+		require.Positive(t, size)
+		require.Nil(t, manifest)
+		seen++
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Equal(t, int(incomingMaterialUpgradeCount(t, ctx, q, "SELECT COUNT(*) FROM retained_publications")), seen)
+}
+
 func incomingMaterialUpgradeFixtureObjectAdditions(
 	t *testing.T,
 	source, destination map[string]incomingMaterialUpgradeFixtureObject,
@@ -1195,7 +1244,7 @@ func incomingMaterialUpgradeFixtureObjectAdditions(
 	for name, sourceObject := range source {
 		observed, present := destination[name]
 		require.True(t, present, name)
-		require.Equal(t, sourceObject, observed, name)
+		require.Equal(t, incomingMaterialUpgradeFixtureExpectedObject(t, name, sourceObject), observed, name)
 	}
 	named := make([]string, 0)
 	autoIndexes := 0

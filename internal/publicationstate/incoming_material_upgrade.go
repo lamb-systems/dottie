@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"errors"
-	"maps"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -152,25 +151,17 @@ func checkIncomingMaterialUpgradeSchema(ctx context.Context, q queryer) error {
 	if err != nil {
 		return storageFailure(ctx, StageOpen, err)
 	}
-	inventory, err := schemaInventoryForVersion(2)
+	inventory, err := schemaInventoryForVersion(3)
 	if err != nil {
 		return schemaOrStorageError(ctx, StageOpen, err)
 	}
-	expected := make(map[string]string, len(inventory.objects)+1)
-	maps.Copy(expected, inventory.objects)
-	expected[statementTableName(incomingMaterialSchemaStatement)] = "table"
-	if !sameObjects(objects, expected) {
+	if !sameObjects(objects, inventory.objects) {
 		return classified(ErrSchema, StageOpen, ReasonSchema)
 	}
 	for _, statement := range inventory.statements {
 		if strings.TrimSpace(definitions[statementTableName(statement)]) != statement {
 			return classified(ErrSchema, StageOpen, ReasonSchema)
 		}
-	}
-	if strings.TrimSpace(
-		definitions[statementTableName(incomingMaterialSchemaStatement)],
-	) != incomingMaterialSchemaStatement {
-		return classified(ErrSchema, StageOpen, ReasonSchema)
 	}
 	keys, err := readMetadataKeys(ctx, q)
 	if err != nil {
@@ -360,6 +351,9 @@ func migrateIncomingMaterialTx(
 			}
 		}
 	}
+	if err := rebuildRetainedPublicationsTx(ctx, tx, source.version); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, incomingMaterialSchemaStatement); err != nil {
 		return storageFailure(ctx, StageOpen, err)
 	}
@@ -383,6 +377,36 @@ func migrateIncomingMaterialTx(
 		if err := fault(incomingMaterialUpgradeDestinationFault); err != nil {
 			return storageFailure(ctx, StageOpen, err)
 		}
+	}
+	return nil
+}
+
+const retainedPublicationsSchema2ScratchTable = "retained_publications_schema2_old"
+
+func rebuildRetainedPublicationsTx(ctx context.Context, tx *sql.Tx, sourceVersion int) error {
+	if sourceVersion != 1 && sourceVersion != 2 {
+		return classified(ErrSchema, StageOpen, ReasonSchema)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"ALTER TABLE "+retainedPublicationsTable+" RENAME TO "+retainedPublicationsSchema2ScratchTable,
+	); err != nil {
+		return storageFailure(ctx, StageOpen, err)
+	}
+	if _, err := tx.ExecContext(ctx, schema3RetainedPublicationsStatement); err != nil {
+		return storageFailure(ctx, StageOpen, err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO "+retainedPublicationsTable+
+			"(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision)"+
+			" SELECT record_cid,attempt_id,sequence,'packed',blob_cid,size,NULL,accepted_revision FROM "+
+			retainedPublicationsSchema2ScratchTable+" ORDER BY record_cid",
+	); err != nil {
+		return storageFailure(ctx, StageOpen, err)
+	}
+	if _, err := tx.ExecContext(ctx, "DROP TABLE "+retainedPublicationsSchema2ScratchTable); err != nil {
+		return storageFailure(ctx, StageOpen, err)
 	}
 	return nil
 }

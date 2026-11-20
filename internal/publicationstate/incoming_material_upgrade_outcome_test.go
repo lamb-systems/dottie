@@ -1455,7 +1455,7 @@ func incomingMaterialUpgradeOpenRequireExtraIndexReadback(
 	for name, object := range c.objects {
 		observed, present := objects[name]
 		require.True(t, present, name)
-		require.Equal(t, object, observed, name)
+		require.Equal(t, incomingMaterialUpgradeFixtureExpectedObject(t, name, object), observed, name)
 	}
 	expectedNamed, expectedAuto := incomingMaterialUpgradeOpenExpectedAdditions(t, c, indexName)
 	namedAdditions, autoIndexAdditions := incomingMaterialUpgradeFixtureObjectAdditions(t, c.objects, objects)
@@ -1469,7 +1469,7 @@ func incomingMaterialUpgradeOpenRequireExtraIndexReadback(
 	)
 	require.Equal(t, incomingMaterialSchemaStatement, objects["accepted_material_refs"].sql)
 	if c.version == 1 {
-		for _, statement := range attemptSchemaStatements {
+		for _, statement := range schema3AttemptSchemaStatements {
 			name := statementTableName(statement)
 			observed, present := objects[name]
 			require.True(t, present, name)

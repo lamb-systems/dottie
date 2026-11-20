@@ -276,27 +276,28 @@ func beginSharedCustodyTransaction(t *testing.T, ctx context.Context, store *Sto
 func sharedCustodyLogicalRows(ctx context.Context, q queryer) (map[string][][]any, error) {
 	tables := []struct {
 		name    string
+		columns string
 		orderBy string
 	}{
-		{"store_meta", "key"},
-		{"cache_records", "cid"},
-		{"cache_observations", "observation_id"},
-		{"accepted_records", "cid"},
-		{"accepted_events", "revision"},
-		{"active_floor", "singleton"},
-		{"publication_attempts", "attempt_id"},
-		{"active_publication_attempt", "singleton"},
-		{"pending_genesis", "singleton"},
-		{"attempt_events", "attempt_id,ordinal"},
-		{"attempt_evidence", "attempt_id,role"},
-		{"payload_objects", "blob_cid"},
-		{"attempt_payload_refs", "attempt_id"},
-		{"retained_publications", "record_cid"},
-		{"attempt_reservations", "attempt_id"},
+		{"store_meta", "*", "key"},
+		{"cache_records", "*", "cid"},
+		{"cache_observations", "*", "observation_id"},
+		{"accepted_records", "*", "cid"},
+		{"accepted_events", "*", "revision"},
+		{"active_floor", "*", "singleton"},
+		{"publication_attempts", "*", "attempt_id"},
+		{"active_publication_attempt", "*", "singleton"},
+		{"pending_genesis", "*", "singleton"},
+		{"attempt_events", "*", "attempt_id,ordinal"},
+		{"attempt_evidence", "*", "attempt_id,role"},
+		{"payload_objects", "*", "blob_cid"},
+		{"attempt_payload_refs", "*", "attempt_id"},
+		{"retained_publications", "record_cid,attempt_id,sequence,blob_cid,size,accepted_revision", "record_cid"},
+		{"attempt_reservations", "*", "attempt_id"},
 	}
 	result := make(map[string][][]any, len(tables))
 	for _, table := range tables {
-		rows, err := q.QueryContext(ctx, "SELECT * FROM "+table.name+" ORDER BY "+table.orderBy)
+		rows, err := q.QueryContext(ctx, "SELECT "+table.columns+" FROM "+table.name+" ORDER BY "+table.orderBy)
 		if err != nil {
 			return nil, err
 		}

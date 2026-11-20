@@ -63,6 +63,8 @@ var (
 	mixedDatabaseIdentity   = [32]byte{0x96, 0xe9, 0xea, 0xf5, 0x93, 0x8c, 0x94, 0x44, 0x76, 0x32, 0x84, 0x15, 0xab, 0x4c, 0x13, 0x9e, 0xd8, 0x83, 0x1f, 0x1f, 0xb1, 0x29, 0x16, 0x5c, 0xe5, 0x0c, 0x56, 0x78, 0xc5, 0x5d, 0xe8, 0x57}
 )
 
+var errUnrepresentableRetainedPublication = errors.New("lifecycle engine database holds retained publications that schema 2 cannot represent")
+
 type columnSpec struct {
 	Name string `json:"name"`
 	Type string `json:"declaredType"`
@@ -107,6 +109,22 @@ var indexSpecs = []schemaObjectSpec{
 var schema3AcceptedMaterialRefsSpec = tableSpec{
 	Name: "accepted_material_refs",
 	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
+}
+
+var schema3RetainedPublicationsSpec = tableSpec{
+	Name: "retained_publications",
+	DDL:  "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, manifest BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND size IS NULL AND manifest IS NOT NULL)))",
+	Columns: []columnSpec{
+		{"record_cid", "BLOB"},
+		{"attempt_id", "BLOB"},
+		{"sequence", "INTEGER"},
+		{"form", "TEXT"},
+		{"blob_cid", "BLOB"},
+		{"size", "INTEGER"},
+		{"manifest", "BLOB"},
+		{"accepted_revision", "INTEGER"},
+	},
+	OrderBy: "record_cid",
 }
 
 type rawCell struct {
@@ -6808,6 +6826,9 @@ func inspectSchema3Source(databasePath string) error {
 		return errors.New("lifecycle engine schema inventory differs from the current schema")
 	}
 	for _, spec := range tableSpecs {
+		if spec.Name == schema3RetainedPublicationsSpec.Name {
+			continue
+		}
 		object, ok := objects[spec.Name]
 		if !ok || object.kind != "table" || strings.TrimSpace(object.sql) != spec.DDL {
 			return errors.New("lifecycle engine schema-2 table definition differs")
@@ -6821,8 +6842,12 @@ func inspectSchema3Source(databasePath string) error {
 		}
 		delete(objects, spec.Name)
 	}
-	if len(objects) != 1 {
+	if len(objects) != 2 {
 		return errors.New("lifecycle engine schema inventory carries an unexpected object")
+	}
+	retained, ok := objects[schema3RetainedPublicationsSpec.Name]
+	if !ok || retained.kind != "table" || strings.TrimSpace(retained.sql) != schema3RetainedPublicationsSpec.DDL {
+		return errors.New("lifecycle engine retained publication definition differs")
 	}
 	additional, ok := objects[schema3AcceptedMaterialRefsSpec.Name]
 	if !ok || additional.kind != "table" || strings.TrimSpace(additional.sql) != schema3AcceptedMaterialRefsSpec.DDL {
@@ -6831,6 +6856,10 @@ func inspectSchema3Source(databasePath string) error {
 	var references int64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM accepted_material_refs").Scan(&references); err != nil || references != 0 {
 		return errors.New("lifecycle engine database holds material references that schema 2 cannot represent")
+	}
+	var unrepresentable int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE form <> 'packed' OR blob_cid IS NULL OR size IS NULL OR manifest IS NOT NULL").Scan(&unrepresentable); err != nil || unrepresentable != 0 {
+		return errUnrepresentableRetainedPublication
 	}
 	return nil
 }

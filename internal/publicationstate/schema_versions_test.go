@@ -313,7 +313,18 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
 	)
 	expectedV2Statements := append([]string(nil), freshV2.statements...)
-	require.Equal(t, freshV2.statements, v3.statements[:17])
+	expectedV3Statements := append([]string(nil), expectedV2Statements...)
+	retainedIndex := -1
+	for index, statement := range expectedV3Statements {
+		if statementTableName(statement) == retainedPublicationsTable {
+			retainedIndex = index
+			expectedV3Statements[index] = schema3RetainedPublicationsStatement
+		}
+	}
+	require.Equal(t, 13, retainedIndex)
+	expectedV3Statements = append(expectedV3Statements, incomingMaterialSchemaStatement)
+	require.Len(t, expectedV3Statements, 18)
+	require.Equal(t, expectedV3Statements[:17], v3.statements[:17])
 	require.Equal(t, incomingMaterialSchemaStatement, v3.statements[17])
 	require.Equal(t, incomingMaterialExpectedSchemaStatement, v3.statements[17])
 	require.Equal(t, expectedSchemaV2MetadataKeys(), v3.metadataKeys)
@@ -340,7 +351,7 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	require.Len(t, isolated.statements, 18)
 	require.Len(t, isolated.objects, 18)
 	require.Len(t, isolated.metadataKeys, 7)
-	require.Equal(t, expectedV2Statements, isolated.statements[:17])
+	require.Equal(t, expectedV3Statements[:17], isolated.statements[:17])
 	require.Equal(t, expectedSchemaV3Objects(), isolated.objects)
 	require.Equal(t, incomingMaterialSchemaStatement, isolated.statements[17])
 	require.Equal(t, incomingMaterialExpectedSchemaStatement, isolated.statements[17])
@@ -373,7 +384,7 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 	require.Len(t, isolated.statements, 18)
 	require.Len(t, isolated.objects, 18)
 	require.Len(t, isolated.metadataKeys, 7)
-	require.Equal(t, expectedV2Statements, isolated.statements[:17])
+	require.Equal(t, expectedV3Statements[:17], isolated.statements[:17])
 	require.Equal(t, incomingMaterialExpectedSchemaStatement, isolated.statements[17])
 	require.Equal(t, expectedSchemaV2MetadataKeys(), isolated.metadataKeys)
 	require.Equal(t, expectedSchemaV3Objects(), isolated.objects)
@@ -393,8 +404,7 @@ func TestSchema3InventoryCompositionAndDetachment(t *testing.T) {
 		"32277ef36c51acb9115f9ece47c2917bd4f75ad9e4e8f1fa8f687f3b1d711ad3",
 	)
 	require.Equal(t, expectedV2Statements, againV2.statements)
-	require.Equal(t, againV2.statements, composed.statements[:17])
-	require.Equal(t, expectedV2Statements, composed.statements[:17])
+	require.Equal(t, expectedV3Statements[:17], composed.statements[:17])
 	require.Equal(t, incomingMaterialExpectedSchemaStatement, composed.statements[17])
 	require.Equal(t, againV2.metadataKeys, composed.metadataKeys)
 	require.Equal(t, expectedSchemaV2MetadataKeys(), composed.metadataKeys)

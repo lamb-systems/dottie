@@ -230,3 +230,32 @@ func (e *manifestCapacityError) Error() string {
 func (e *manifestCapacityError) Unwrap() error {
 	return classified(ErrLimit, StageInput, ReasonCapacity)
 }
+
+func encodeRetainedManifest(payload *ManifestPayload) ([]byte, error) {
+	if err := validateManifestPayload(payload); err != nil {
+		return nil, err
+	}
+	encoded, err := canonicalJSON(manifestPayloadToWire(payload))
+	if err != nil || len(encoded) == 0 || len(encoded) > publication.MaxManifestRecordBytes {
+		return nil, errors.New("retained manifest")
+	}
+	return encoded, nil
+}
+
+func decodeRetainedManifest(encoded []byte) (*ManifestPayload, error) {
+	if len(encoded) == 0 || len(encoded) > publication.MaxManifestRecordBytes {
+		return nil, errors.New("retained manifest")
+	}
+	var entries []payloadEntryWire
+	if err := strictJSON(encoded, &entries); err != nil {
+		return nil, errors.New("retained manifest")
+	}
+	payload, err := manifestPayloadFromWire(entries)
+	if err != nil {
+		return nil, errors.New("retained manifest")
+	}
+	if err := validateManifestPayload(payload); err != nil {
+		return nil, errors.New("retained manifest")
+	}
+	return payload, nil
+}

@@ -1993,6 +1993,15 @@ func (s *Store) validateManifestAttemptPayloadReference(
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
+	return s.checkManifestPayloadReferences(ctx, q, manifest, stage)
+}
+
+func (s *Store) checkManifestPayloadReferences(
+	ctx context.Context,
+	q queryer,
+	manifest *ManifestPayload,
+	stage Stage,
+) error {
 	for _, entry := range manifest.Entries {
 		var objectCIDValue, sizeValue, basenameValue any
 		if err := q.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", entry.CID).
@@ -2011,59 +2020,40 @@ func (s *Store) validateManifestAttemptPayloadReference(
 	return nil
 }
 
+type retainedPublicationRow struct {
+	recordCID      []byte
+	sequence       int64
+	revision       int64
+	form           PayloadForm
+	blobCID        []byte
+	size           int64
+	hasManifest    bool
+	manifestLength int64
+}
+
 func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, attempt storedAttempt, stage Stage) error {
-	var recordValue, blobValue, seqValue, sizeValue, revisionValue any
-	var recordLengthValue, blobLengthValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),substr(blob_cid,1,129),length(blob_cid),sequence,size,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
-		Scan(&recordValue, &recordLengthValue, &blobValue, &blobLengthValue, &seqValue, &sizeValue, &revisionValue); err != nil {
-		return classified(ErrSchema, stage, ReasonCorrupt)
+	row, err := s.readRetainedPublication(ctx, q, attempt, stage)
+	if err != nil {
+		return err
 	}
-	record, recordOK := rawBytes(recordValue)
-	recordLength, recordLengthOK := rawInt64(recordLengthValue)
-	blob, blobOK := rawBytes(blobValue)
-	blobLength, blobLengthOK := rawInt64(blobLengthValue)
-	seq, seqOK := rawInt64(seqValue)
-	size, sizeOK := rawInt64(sizeValue)
-	revision, revisionOK := rawInt64(revisionValue)
 	snapshot, err := publication.DecodeSnapshot(attempt.core.SnapshotRecord)
-	if err != nil || !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
-		int64(len(record)) != recordLength ||
-		!blobOK ||
-		!blobLengthOK ||
-		blobLength <= 0 ||
-		blobLength > publication.MaxCIDBytes ||
-		int64(len(blob)) != blobLength ||
-		!bytes.Equal(record, attempt.core.SnapshotCID) ||
-		!bytes.Equal(blob, attempt.core.BlobCID) ||
-		!seqOK ||
-		seq < 0 ||
-		uint64(seq) != snapshot.PublicationSeq ||
-		!sizeOK ||
-		size <= 0 ||
-		uint64(size) != attempt.core.BlobSize ||
-		!revisionOK ||
-		revision <= 0 {
+	if err != nil || !bytes.Equal(row.recordCID, attempt.core.SnapshotCID) ||
+		row.sequence < 0 || uint64(row.sequence) != snapshot.PublicationSeq || row.revision <= 0 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	var modeValue, floorValue, eventDigestValue any
-	if err := q.QueryRowContext(ctx, "SELECT mode,new_floor,digest FROM accepted_events WHERE revision=?", revision).
-		Scan(&modeValue, &floorValue, &eventDigestValue); err != nil {
-		return classified(ErrSchema, stage, ReasonCorrupt)
+	acceptedFloor, digest, err := s.readRetainedAcceptedEvent(ctx, q, row.revision, stage)
+	if err != nil {
+		return err
 	}
-	mode, modeOK := modeValue.(string)
-	floorBytes, floorOK := rawBytes(floorValue)
-	digest, digestOK := rawBytes(eventDigestValue)
-	acceptedFloor, floorErr := decodeFloor(floorBytes)
-	if !modeOK || (mode != string(ModeFirstUse) && mode != string(ModeAdvance)) || !floorOK || !digestOK ||
-		len(digest) != 32 ||
-		floorErr != nil ||
-		acceptedFloor.Revision != uint64(revision) ||
+	if acceptedFloor.Revision != uint64(row.revision) ||
 		!bytes.Equal(acceptedFloor.RecordCID, attempt.core.SnapshotCID) ||
-		!bytes.Equal(acceptedFloor.BlobCID, attempt.core.BlobCID) ||
 		acceptedFloor.Sequence != snapshot.PublicationSeq ||
 		!bytes.Equal(acceptedFloor.AcceptedEventDigest[:], digest) ||
 		!sameBinding(acceptedFloor.Binding, s.binding) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if err := s.validateRetainedPayload(ctx, q, attempt, row, &snapshot, acceptedFloor, stage); err != nil {
+		return err
 	}
 	var acceptedRecord any
 	if err := q.QueryRowContext(ctx, "SELECT raw FROM accepted_records WHERE cid=?", attempt.core.SnapshotCID).
@@ -2075,6 +2065,201 @@ func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, atte
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return nil
+}
+
+func (s *Store) validateRetainedPayload(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	row retainedPublicationRow,
+	snapshot *publication.SnapshotRecord,
+	acceptedFloor Floor,
+	stage Stage,
+) error {
+	switch row.form {
+	case PayloadFormPacked:
+		if row.hasManifest || !bytes.Equal(row.blobCID, attempt.core.BlobCID) || row.size <= 0 ||
+			uint64(row.size) != attempt.core.BlobSize ||
+			!bytes.Equal(acceptedFloor.BlobCID, attempt.core.BlobCID) ||
+			acceptedFloor.BlobSize != attempt.core.BlobSize || acceptedFloor.Manifest != nil {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		return nil
+	case PayloadFormManifest:
+		if len(row.blobCID) != 0 || row.size != 0 || len(attempt.core.BlobCID) != 0 ||
+			attempt.core.BlobSize != 0 || !floorPayloadMatchesRecord(acceptedFloor, *snapshot) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		manifest, err := s.readRetainedManifest(ctx, q, attempt, row.manifestLength, stage)
+		if err != nil {
+			return err
+		}
+		if !sameManifestPayload(manifest, manifestPayloadOf(*snapshot)) ||
+			!sameManifestPayload(manifest, acceptedFloor.Manifest) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		return s.checkManifestPayloadReferences(ctx, q, manifest, stage)
+	}
+	return classified(ErrSchema, stage, ReasonCorrupt)
+}
+
+func (s *Store) readRetainedPublication(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	stage Stage,
+) (retainedPublicationRow, error) {
+	if s.schemaVersion < 3 {
+		return s.readPackedRetainedPublication(ctx, q, attempt, stage)
+	}
+	return s.readUnionRetainedPublication(ctx, q, attempt, stage)
+}
+
+func (s *Store) readPackedRetainedPublication(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	stage Stage,
+) (retainedPublicationRow, error) {
+	var recordValue, blobValue, seqValue, sizeValue, revisionValue any
+	var recordLengthValue, blobLengthValue any
+	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),substr(blob_cid,1,129),length(blob_cid),sequence,size,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
+		Scan(&recordValue, &recordLengthValue, &blobValue, &blobLengthValue, &seqValue, &sizeValue, &revisionValue); err != nil {
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	record, recordOK := rawBytes(recordValue)
+	recordLength, recordLengthOK := rawInt64(recordLengthValue)
+	blob, blobOK := rawBytes(blobValue)
+	blobLength, blobLengthOK := rawInt64(blobLengthValue)
+	seq, seqOK := rawInt64(seqValue)
+	size, sizeOK := rawInt64(sizeValue)
+	revision, revisionOK := rawInt64(revisionValue)
+	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
+		int64(len(record)) != recordLength ||
+		!blobOK || !blobLengthOK || blobLength <= 0 || blobLength > publication.MaxCIDBytes ||
+		int64(len(blob)) != blobLength ||
+		!seqOK || seq < 0 || !sizeOK || size <= 0 || !revisionOK || revision <= 0 {
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return retainedPublicationRow{
+		recordCID: bytes.Clone(record),
+		sequence:  seq,
+		revision:  revision,
+		form:      PayloadFormPacked,
+		blobCID:   bytes.Clone(blob),
+		size:      size,
+	}, nil
+}
+
+func (s *Store) readUnionRetainedPublication(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	stage Stage,
+) (retainedPublicationRow, error) {
+	var recordValue, recordLengthValue any
+	var formTypeValue, formValue, formLengthValue any
+	var blobTypeValue, blobValue, blobLengthValue any
+	var sizeTypeValue, sizeValue any
+	var manifestTypeValue, manifestLengthValue any
+	var seqValue, revisionValue any
+	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),substr(blob_cid,1,129),length(blob_cid),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(manifest),length(CAST(manifest AS BLOB)),sequence,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
+		Scan(&recordValue, &recordLengthValue, &formTypeValue, &formValue, &formLengthValue, &blobTypeValue, &blobValue, &blobLengthValue, &sizeTypeValue, &sizeValue, &manifestTypeValue, &manifestLengthValue, &seqValue, &revisionValue); err != nil {
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	record, recordOK := rawBytes(recordValue)
+	recordLength, recordLengthOK := rawInt64(recordLengthValue)
+	formType, formTypeOK := formTypeValue.(string)
+	form, formOK := formValue.(string)
+	formLength, formLengthOK := rawInt64(formLengthValue)
+	blobType, blobTypeOK := blobTypeValue.(string)
+	blob, blobOK := rawBytes(blobValue)
+	blobLength, blobLengthOK := rawInt64(blobLengthValue)
+	sizeType, sizeTypeOK := sizeTypeValue.(string)
+	size, sizeOK := rawInt64(sizeValue)
+	manifestType, manifestTypeOK := manifestTypeValue.(string)
+	manifestLength, manifestLengthOK := rawInt64(manifestLengthValue)
+	seq, seqOK := rawInt64(seqValue)
+	revision, revisionOK := rawInt64(revisionValue)
+	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
+		int64(len(record)) != recordLength ||
+		!formTypeOK || formType != "text" || !formOK || !formLengthOK || formLength != int64(len(form)) ||
+		!seqOK || seq < 0 || !revisionOK || revision <= 0 || !manifestTypeOK {
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	row := retainedPublicationRow{
+		recordCID: bytes.Clone(record),
+		sequence:  seq,
+		revision:  revision,
+	}
+	switch PayloadForm(form) {
+	case PayloadFormPacked:
+		if !blobTypeOK || blobType != "blob" || !blobOK || !blobLengthOK || blobLength <= 0 ||
+			blobLength > publication.MaxCIDBytes || int64(len(blob)) != blobLength ||
+			!sizeTypeOK || sizeType != "integer" || !sizeOK || size <= 0 ||
+			manifestType != "null" {
+			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		row.form = PayloadFormPacked
+		row.blobCID = bytes.Clone(blob)
+		row.size = size
+	case PayloadFormManifest:
+		if blobType != "null" || sizeType != "null" || manifestType != "blob" ||
+			!manifestLengthOK || manifestLength <= 0 || manifestLength > publication.MaxManifestRecordBytes {
+			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		row.form = PayloadFormManifest
+		row.hasManifest = true
+		row.manifestLength = manifestLength
+	default:
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return row, nil
+}
+
+func (s *Store) readRetainedAcceptedEvent(
+	ctx context.Context,
+	q queryer,
+	revision int64,
+	stage Stage,
+) (Floor, []byte, error) {
+	var modeValue, floorValue, eventDigestValue any
+	if err := q.QueryRowContext(ctx, "SELECT mode,new_floor,digest FROM accepted_events WHERE revision=?", revision).
+		Scan(&modeValue, &floorValue, &eventDigestValue); err != nil {
+		return Floor{}, nil, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	mode, modeOK := modeValue.(string)
+	floorBytes, floorOK := rawBytes(floorValue)
+	digest, digestOK := rawBytes(eventDigestValue)
+	acceptedFloor, floorErr := decodeFloor(floorBytes)
+	if !modeOK || (mode != string(ModeFirstUse) && mode != string(ModeAdvance)) || !floorOK || !digestOK ||
+		len(digest) != 32 || floorErr != nil {
+		return Floor{}, nil, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return acceptedFloor, digest, nil
+}
+
+func (s *Store) readRetainedManifest(
+	ctx context.Context,
+	q queryer,
+	attempt storedAttempt,
+	manifestLength int64,
+	stage Stage,
+) (*ManifestPayload, error) {
+	var manifestValue any
+	if err := q.QueryRowContext(ctx, "SELECT substr(manifest,1,?) FROM retained_publications WHERE attempt_id=?", publication.MaxManifestRecordBytes+1, attempt.core.AttemptID).
+		Scan(&manifestValue); err != nil {
+		return nil, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	raw, rawOK := rawBytes(manifestValue)
+	if !rawOK || int64(len(raw)) != manifestLength {
+		return nil, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	manifest, err := decodeRetainedManifest(raw)
+	if err != nil {
+		return nil, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return manifest, nil
 }
 
 func (s *Store) reconcileAttemptMutationRevision(ctx context.Context, q queryer, stage Stage) (uint64, error) {
