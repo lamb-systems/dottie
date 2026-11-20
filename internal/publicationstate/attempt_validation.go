@@ -576,6 +576,9 @@ func (s *Store) checkFinalizationFeasibility(
 		BlobSize:          candidate.snapshot.Blob.Size,
 		ObservationDigest: [32]byte{1},
 	}
+	if candidate.form == PayloadFormManifest {
+		next.Manifest = manifestPayloadOf(candidate.snapshot)
+	}
 	if state.floor == nil {
 		next.Generation = 1
 	} else {

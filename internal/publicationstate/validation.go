@@ -168,6 +168,14 @@ func validateContext(context SuppliedContext, binding Binding, limits Limits) er
 }
 
 func validateObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
+	return validateObservationWithManifest(input, binding, limits, false)
+}
+
+func validateFinalizationObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
+	return validateObservationWithManifest(input, binding, limits, true)
+}
+
+func validateObservationWithManifest(input Observation, binding Binding, limits Limits, allowManifest bool) (validatedObservation, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonBinding)
 	}
@@ -214,7 +222,7 @@ func validateObservation(input Observation, binding Binding, limits Limits) (val
 		if err != nil || record.Vault != binding.Vault || record.PublicationSeq != sequence {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if payloadFormOf(record) == PayloadFormManifest {
+		if payloadFormOf(record) == PayloadFormManifest && !allowManifest {
 			return validatedObservation{}, manifestPayloadUnsupported(StageInput)
 		}
 		cid, err := publication.RecordCID(block.Raw)

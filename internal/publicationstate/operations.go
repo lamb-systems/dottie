@@ -407,6 +407,9 @@ func (s *Store) acceptFloorTx(
 	if err != nil {
 		return zeroFloor(), classified(ErrInvalid, stage, ReasonRecordSet)
 	}
+	if len(encodedNext) > 65536 {
+		return zeroFloor(), classified(ErrLimit, stage, ReasonCapacity)
+	}
 	if err := s.checkAcceptedCapacityWithReservation(
 		ctx,
 		tx,

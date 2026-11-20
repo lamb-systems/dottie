@@ -1300,6 +1300,18 @@ func independentFinalizationHistoryBound(
 	review LocalReviewContext,
 ) uint64 {
 	t.Helper()
+	return finalizationHistoryBound(t, store, candidate, view, review, true)
+}
+
+func finalizationHistoryBound(
+	t *testing.T,
+	store *Store,
+	candidate CandidateInput,
+	view SuppliedRepositoryView,
+	review LocalReviewContext,
+	modelManifest bool,
+) uint64 {
+	t.Helper()
 	ctx := context.Background()
 	state, err := store.readState(ctx, store.conn, StageAttempt)
 	require.NoError(t, err)
@@ -1314,7 +1326,7 @@ func independentFinalizationHistoryBound(
 	finalView, err := validateSuppliedRepositoryView(finalViewInput, store.binding, store.limits, false)
 	require.NoError(t, err)
 	observation := repositoryViewToObservation(finalView)
-	validatedObservation, err := validateObservation(observation, store.binding, store.limits)
+	validatedObservation, err := validateFinalizationObservation(observation, store.binding, store.limits)
 	require.NoError(t, err)
 	mode := ModeAdvance
 	trace := resolvedTrace{
@@ -1338,6 +1350,9 @@ func independentFinalizationHistoryBound(
 		trace.records = append(trace.records, cloneValidatedRecord(*validatedCandidate.predecessor))
 	}
 	floor := buildFloor(store.databaseID, store.binding, validatedObservation, state, trace, mode)
+	if !modelManifest {
+		floor.Manifest = nil
+	}
 	body := oracleJSON(
 		t,
 		oracleEvent{

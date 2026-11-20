@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+
+	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 type abandonConfirmationWire struct {
@@ -345,9 +347,6 @@ func (s *Store) FinalizeAttempt(
 	if err != nil {
 		return Finalization{}, err
 	}
-	if err := requirePackedAttemptCore(stored.core, StageFinalize); err != nil {
-		return Finalization{}, err
-	}
 	if !bytes.Equal(stored.stateDigest, expectedToken[:]) {
 		return Finalization{}, classified(ErrConsent, StageFinalize, ReasonStale)
 	}
@@ -380,13 +379,17 @@ func (s *Store) FinalizeAttempt(
 		return Finalization{}, err
 	}
 	observation := repositoryViewToObservation(view)
-	validated, err := validateObservation(observation, s.binding, s.limits)
+	validated, err := validateFinalizationObservation(observation, s.binding, s.limits)
 	if err != nil {
 		return Finalization{}, err
 	}
 	if !bytes.Equal(validated.candidate.ref.CID, stored.core.SnapshotCID) ||
 		!bytes.Equal(validated.candidate.raw, candidate.SnapshotRecord) {
 		return Finalization{}, classified(ErrContinuity, StageFinalize, ReasonRecordSet)
+	}
+	retainedManifest, err := encodeAttemptRetainedManifest(stored.core)
+	if err != nil {
+		return Finalization{}, classified(ErrSchema, StageFinalize, ReasonCorrupt)
 	}
 	trace, err := s.resolveTrace(ctx, s.conn, validated, state.floor, StageFinalize)
 	if err != nil {
@@ -443,7 +446,19 @@ func (s *Store) FinalizeAttempt(
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(
+		if retainedManifest != nil {
+			if _, err := tx.ExecContext(
+				ctx,
+				"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',NULL,NULL,?,?)",
+				fresh.core.SnapshotCID,
+				id[:],
+				int64(floor.Sequence),
+				retainedManifest,
+				int64(floor.Revision),
+			); err != nil {
+				return classified(ErrStorage, StageFinalize, ReasonIO)
+			}
+		} else if _, err := tx.ExecContext(
 			ctx,
 			"INSERT INTO retained_publications(record_cid,attempt_id,sequence,blob_cid,size,accepted_revision) VALUES(?,?,?,?,?,?)",
 			fresh.core.SnapshotCID,
@@ -520,6 +535,17 @@ func repositoryViewToObservation(view validatedRepositoryView) Observation {
 		Head:            bytes.Clone(view.input.Head),
 		Snapshots:       blocks,
 	}
+}
+
+func encodeAttemptRetainedManifest(core attemptCoreWire) ([]byte, error) {
+	if attemptCoreForm(core) != PayloadFormManifest {
+		return nil, nil
+	}
+	record, err := publication.DecodeSnapshot(core.SnapshotRecord)
+	if err != nil {
+		return nil, err
+	}
+	return encodeRetainedManifest(manifestPayloadOf(record))
 }
 
 func (s *Store) attemptReservationSize() uint64 {
