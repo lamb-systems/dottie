@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -447,6 +449,15 @@ func (s *Store) checkPayloadCapacityWithQueryer(
 	size uint64,
 	createDirectory bool,
 ) error {
+	return s.checkPayloadBatchCapacity(ctx, q, map[string]uint64{name: size}, createDirectory)
+}
+
+func (s *Store) checkPayloadBatchCapacity(
+	ctx context.Context,
+	q queryer,
+	batch map[string]uint64,
+	createDirectory bool,
+) error {
 	if s.payloadFD < 0 && !createDirectory {
 		fd, openErr := unix.Openat(
 			s.rootFD,
@@ -460,7 +471,15 @@ func (s *Store) checkPayloadCapacityWithQueryer(
 				return err
 			}
 			count, ok := rawInt64(catalogued)
-			if !ok || count != 0 || size > s.attemptLimits.CustodyBytes || s.attemptLimits.ManagedObjects == 0 {
+			var total uint64
+			for _, size := range batch {
+				if ^uint64(0)-total < size {
+					return errors.New("payload inventory overflow")
+				}
+				total += size
+			}
+			if !ok || count != 0 || total > s.attemptLimits.CustodyBytes ||
+				uint64(len(batch)) > uint64(s.attemptLimits.ManagedObjects) {
 				return errors.New("payload inventory")
 			}
 			return nil
@@ -528,15 +547,20 @@ func (s *Store) checkPayloadCapacityWithQueryer(
 	if uint32(len(objects)) > s.attemptLimits.ManagedObjects || total > s.attemptLimits.CustodyBytes {
 		return errors.New("payload capacity")
 	}
-	if existingSize, exists := objects[name]; exists {
-		if existingSize != size {
-			return errStoredValue
+	for _, name := range slices.Sorted(maps.Keys(batch)) {
+		size := batch[name]
+		if existingSize, exists := objects[name]; exists {
+			if existingSize != size {
+				return errStoredValue
+			}
+			continue
 		}
-		return nil
-	}
-	if uint32(len(objects)) >= s.attemptLimits.ManagedObjects || size > s.attemptLimits.CustodyBytes ||
-		total > s.attemptLimits.CustodyBytes-size {
-		return errors.New("payload capacity")
+		if uint32(len(objects)) >= s.attemptLimits.ManagedObjects || size > s.attemptLimits.CustodyBytes ||
+			total > s.attemptLimits.CustodyBytes-size {
+			return errors.New("payload capacity")
+		}
+		objects[name] = size
+		total += size
 	}
 	return nil
 }

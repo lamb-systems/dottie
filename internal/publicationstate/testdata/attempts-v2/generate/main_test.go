@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,4 +150,18 @@ func TestSchema2RebuildAcceptsPackedRetainedRows(t *testing.T) {
 	var rows int64
 	require.NoError(t, db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM retained_publications").Scan(&rows))
 	assert.Equal(t, int64(1), rows)
+}
+
+func TestSchema3AcceptedMaterialSpecMatchesTheLiveSchema(t *testing.T) {
+	databasePath := generatorPreflightSource(t)
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: databasePath}).String())
+	require.NoError(t, err)
+	var stored string
+	require.NoError(t, db.QueryRowContext(
+		context.Background(),
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+		schema3AcceptedMaterialRefsSpec.Name,
+	).Scan(&stored))
+	require.NoError(t, db.Close())
+	assert.Equal(t, schema3AcceptedMaterialRefsSpec.DDL, strings.TrimSpace(stored))
 }

@@ -108,7 +108,7 @@ var indexSpecs = []schemaObjectSpec{
 
 var schema3AcceptedMaterialRefsSpec = tableSpec{
 	Name: "accepted_material_refs",
-	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
+	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), manifest BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND manifest IS NOT NULL)))",
 }
 
 var schema3RetainedPublicationsSpec = tableSpec{

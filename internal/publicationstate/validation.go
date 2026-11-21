@@ -175,6 +175,72 @@ func validateFinalizationObservation(input Observation, binding Binding, limits 
 	return validateObservationWithManifest(input, binding, limits, true)
 }
 
+func validateMaterialObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
+	return validateObservationWithManifest(input, binding, limits, true)
+}
+
+func validateMaterialInput(
+	input MaterialInput,
+	observation validatedObservation,
+	limits AttemptLimits,
+) (materialAttachment, error) {
+	record, err := publication.DecodeSnapshot(observation.candidate.raw)
+	if err != nil {
+		return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
+	}
+	switch payloadFormOf(record) {
+	case PayloadFormPacked:
+		if len(input.Entries) != 0 {
+			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+		}
+		if _, err := publication.DecodePayload(input.Payload, record.Blob); err != nil {
+			return materialAttachment{}, err
+		}
+		return materialAttachment{
+			form:    PayloadFormPacked,
+			payload: input.Payload,
+			blob:    record.Blob,
+			name:    payloadBasename(input.Payload),
+		}, nil
+	case PayloadFormManifest:
+		if len(input.Entries) == 0 {
+			return materialAttachment{}, manifestPayloadUnsupported(StageInput)
+		}
+		if len(input.Payload) != 0 || len(input.Entries) != len(record.Entries) {
+			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+		}
+		for index, entry := range record.Entries {
+			supplied := input.Entries[index]
+			if supplied.Path != entry.Path || supplied.Mode != entry.Mode ||
+				supplied.Size != entry.Size || uint64(len(supplied.Content)) != entry.Size {
+				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			}
+		}
+		manifest := manifestPayloadOf(record)
+		if err := validateManifestMaterialLimits(manifest, limits); err != nil {
+			return materialAttachment{}, err
+		}
+		entries := make([]materialEntry, 0, len(record.Entries))
+		for index, entry := range record.Entries {
+			contentCID, err := publication.RawPayloadCID(input.Entries[index].Content)
+			if err != nil || !bytes.Equal(contentCID, entry.Blob.CID) {
+				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			}
+			entries = append(entries, materialEntry{
+				content: bytes.Clone(input.Entries[index].Content),
+				blob: publication.BlobReference{
+					CID:      bytes.Clone(entry.Blob.CID),
+					Size:     entry.Size,
+					MIMEType: entry.Blob.MIMEType,
+				},
+			})
+		}
+		return materialAttachment{form: PayloadFormManifest, manifest: manifest, entries: entries}, nil
+	default:
+		return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
+	}
+}
+
 func validateObservationWithManifest(input Observation, binding Binding, limits Limits, allowManifest bool) (validatedObservation, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonBinding)

@@ -37,6 +37,18 @@ func newManifestServicePublication(
 	files ...manifestServiceFile,
 ) manifestServicePublication {
 	t.Helper()
+	return newSequencedManifestServicePublication(t, vault, publicationID, 0, nil, files...)
+}
+
+func newSequencedManifestServicePublication(
+	t *testing.T,
+	vault [32]byte,
+	publicationID [16]byte,
+	sequence uint64,
+	parent []byte,
+	files ...manifestServiceFile,
+) manifestServicePublication {
+	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
 	for _, file := range files {
 		blobCID, err := publication.RawPayloadCID(file.content)
@@ -51,16 +63,17 @@ func newManifestServicePublication(
 	}
 	document := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: vault, PublicationID: publicationID,
+		PublicationSeq: sequence, Parent: parent,
 		Entries: entries,
 	}
 	raw, err := publication.EncodeSnapshot(document)
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: vault,
-		SnapshotCID: mustManifestRecordCID(t, raw),
+		PublicationSeq: sequence, SnapshotCID: mustManifestRecordCID(t, raw),
 	})
 	require.NoError(t, err)
-	key, err := publication.SequenceKey(0)
+	key, err := publication.SequenceKey(sequence)
 	require.NoError(t, err)
 	return manifestServicePublication{
 		document: document, raw: raw,
@@ -104,7 +117,7 @@ func requireManifestRefusal(t *testing.T, err error, want error) {
 	assert.Equal(t, publication.ManifestReasonPackedRequired, refusal.Reason)
 }
 
-func TestStagePublicationAcceptRefusesAManifestObservation(t *testing.T) {
+func TestStagePublicationAcceptRefusesAPackedPayloadForAManifestObservation(t *testing.T) {
 	fixture := newPublicationAcceptFixture(t)
 	observation := manifestServiceObservation(t, fixture.binding, fixture.context)
 
@@ -113,21 +126,30 @@ func TestStagePublicationAcceptRefusesAManifestObservation(t *testing.T) {
 		Observation: observation, Payload: []byte("packed payload for a manifest observation"),
 	})
 	assert.Equal(t, PublicationAcceptProposal{}, proposal)
-	requireManifestRefusal(t, err, ErrPublicationAccept)
-	assertPublicationAcceptFailure(t, err, "accept-input", "payload_form")
+	require.ErrorIs(t, err, ErrPublicationAccept)
+	require.ErrorIs(t, err, publicationstate.ErrUnsupported)
+	assertPublicationAcceptFailure(t, err, "accept-prepare", "proposal_refused")
 }
 
-func TestAcceptPublicationRefusesAManifestObservation(t *testing.T) {
+func TestAcceptPublicationRefusesAPackedPayloadForAManifestObservation(t *testing.T) {
 	fixture := newPublicationAcceptFixture(t)
 	observation := manifestServiceObservation(t, fixture.binding, fixture.context)
+	proposal, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
+		Directory: fixture.directory, Binding: fixture.binding,
+		Observation: observation, Entries: manifestServiceEntries(manifestServiceFiles()),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, publicationstate.ModeFirstUse, proposal.Mode)
 
 	floor, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
-		Directory: fixture.directory, Binding: fixture.binding, Mode: publicationstate.ModeFirstUse,
+		Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode,
+		StateToken: proposal.StateToken, Confirmation: proposal.Confirmation,
 		Observation: observation, Payload: []byte("packed payload for a manifest observation"),
 	})
 	assert.Equal(t, publicationstate.Floor{}, floor)
-	requireManifestRefusal(t, err, ErrPublicationAccept)
-	assertPublicationAcceptFailure(t, err, "accept-input", "payload_form")
+	require.ErrorIs(t, err, ErrPublicationAccept)
+	require.ErrorIs(t, err, publicationstate.ErrUnsupported)
+	assertPublicationAcceptFailure(t, err, "accept-material", "material_refused")
 }
 
 func TestPreparePublicationPushRefusesAManifestAcceptedPublication(t *testing.T) {

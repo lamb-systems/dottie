@@ -5,16 +5,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-const incomingMaterialSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))"
+const incomingMaterialSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), manifest BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND manifest IS NOT NULL)))"
 
 type incomingMaterialRef struct {
-	revision  int64
-	recordCID []byte
-	blobCID   []byte
+	revision       int64
+	recordCID      []byte
+	form           PayloadForm
+	blobCID        []byte
+	manifestLength int64
 }
 
 func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage Stage) error {
@@ -37,7 +40,7 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 	}
 	rows, err := q.QueryContext(
 		ctx,
-		"SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129) FROM accepted_material_refs ORDER BY accepted_revision LIMIT ?",
+		"SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(manifest),length(CAST(manifest AS BLOB)) FROM accepted_material_refs ORDER BY accepted_revision LIMIT ?",
 		int64(s.limits.AcceptedEventCount)+1,
 	)
 	if err != nil {
@@ -51,7 +54,7 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 		}
 	}()
 	for rows.Next() {
-		values, scanErr := scanRawValues(rows, 8)
+		values, scanErr := scanRawValues(rows, 13)
 		if scanErr != nil {
 			return storageFailure(ctx, stage, scanErr)
 		}
@@ -60,9 +63,14 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 		recordType, recordTypeOK := values[2].(string)
 		recordLength, recordLengthOK := rawInt64(values[3])
 		recordCID, recordCIDOK := rawBytes(values[4])
-		blobType, blobTypeOK := values[5].(string)
-		blobLength, blobLengthOK := rawInt64(values[6])
-		blobCID, blobCIDOK := rawBytes(values[7])
+		formType, formTypeOK := values[5].(string)
+		form, formOK := values[6].(string)
+		formLength, formLengthOK := rawInt64(values[7])
+		blobType, blobTypeOK := values[8].(string)
+		blobLength, blobLengthOK := rawInt64(values[9])
+		blobCID, blobCIDOK := rawBytes(values[10])
+		manifestType, manifestTypeOK := values[11].(string)
+		manifestLength, manifestLengthOK := rawInt64(values[12])
 		if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 ||
 			uint64(revision) > publication.MaxSequence {
 			return classified(ErrSchema, stage, ReasonCorrupt)
@@ -73,19 +81,33 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 			int64(len(recordCID)) != recordLength {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		if !blobTypeOK || blobType != "blob" || !blobLengthOK || blobLength < 1 ||
-			blobLength > publication.MaxCIDBytes ||
-			!blobCIDOK ||
-			int64(len(blobCID)) != blobLength {
+		if !formTypeOK || formType != "text" || !formOK || !formLengthOK || formLength != int64(len(form)) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		ref := incomingMaterialRef{revision: revision, recordCID: bytes.Clone(recordCID), form: PayloadForm(form)}
+		switch ref.form {
+		case PayloadFormPacked:
+			if !blobTypeOK || blobType != "blob" || !blobLengthOK || blobLength < 1 ||
+				blobLength > publication.MaxCIDBytes ||
+				!blobCIDOK ||
+				int64(len(blobCID)) != blobLength ||
+				!manifestTypeOK || manifestType != "null" {
+				return classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			ref.blobCID = bytes.Clone(blobCID)
+		case PayloadFormManifest:
+			if blobType != "null" || !manifestTypeOK || manifestType != "blob" ||
+				!manifestLengthOK || manifestLength < 1 || manifestLength > publication.MaxManifestRecordBytes {
+				return classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			ref.manifestLength = manifestLength
+		default:
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		if len(refs) >= int(refCount) || len(refs) >= int(s.limits.AcceptedEventCount) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		refs = append(
-			refs,
-			incomingMaterialRef{revision: revision, recordCID: bytes.Clone(recordCID), blobCID: bytes.Clone(blobCID)},
-		)
+		refs = append(refs, ref)
 	}
 	if err := rows.Err(); err != nil {
 		return storageFailure(ctx, stage, err)
@@ -97,15 +119,22 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 	if len(refs) != int(refCount) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
+	cache := make(manifestCatalogCache)
 	for _, ref := range refs {
-		if err := s.checkIncomingMaterialRef(ctx, q, ref, stage); err != nil {
+		if err := s.checkIncomingMaterialRef(ctx, q, ref, stage, cache); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) checkIncomingMaterialRef(ctx context.Context, q queryer, ref incomingMaterialRef, stage Stage) error {
+func (s *Store) checkIncomingMaterialRef(
+	ctx context.Context,
+	q queryer,
+	ref incomingMaterialRef,
+	stage Stage,
+	cache manifestCatalogCache,
+) error {
 	retainedCount, err := queryInt64(
 		ctx,
 		q,
@@ -145,16 +174,45 @@ func (s *Store) checkIncomingMaterialRef(ctx context.Context, q queryer, ref inc
 	if err != nil || validatePersistedFloor(floor, s.binding, s.databaseID, s.limits) != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if floor.Manifest != nil {
-		return manifestPayloadUnsupported(stage)
-	}
 	if floor.Revision != uint64(ref.revision) || !bytes.Equal(floor.RecordCID, ref.recordCID) ||
-		!bytes.Equal(floor.BlobCID, ref.blobCID) ||
 		!bytes.Equal(floor.AcceptedEventDigest[:], digestRaw) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
+	if floor.Manifest == nil {
+		if ref.form != PayloadFormPacked || !bytes.Equal(floor.BlobCID, ref.blobCID) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+	} else {
+		if ref.form != PayloadFormManifest || len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		expected, err := encodeRetainedManifest(floor.Manifest)
+		if err != nil {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		stored, err := queryInt64(
+			ctx,
+			q,
+			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=? AND manifest=?",
+			ref.revision,
+			expected,
+		)
+		if err != nil {
+			return queryReadError(ctx, stage, err)
+		}
+		if stored != 1 {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+	}
 	var cidTypeValue, cidLengthValue, cidValue, keyTypeValue, keyLengthValue, keyValue, sequenceTypeValue, sequenceValue, rawTypeValue, rawLengthValue, rawValue, logicalTypeValue, logicalValue any
-	err = q.QueryRowContext(ctx, "SELECT typeof(cid),length(CAST(cid AS BLOB)),substr(CAST(cid AS BLOB),1,129),typeof(record_key),length(CAST(record_key AS BLOB)),substr(CAST(record_key AS BLOB),1,17),typeof(sequence),CASE WHEN typeof(sequence)='integer' THEN sequence END,typeof(raw),length(CAST(raw AS BLOB)),substr(CAST(raw AS BLOB),1,2049),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM accepted_records WHERE cid=?", ref.recordCID).
+	err = q.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			"SELECT typeof(cid),length(CAST(cid AS BLOB)),substr(CAST(cid AS BLOB),1,129),typeof(record_key),length(CAST(record_key AS BLOB)),substr(CAST(record_key AS BLOB),1,17),typeof(sequence),CASE WHEN typeof(sequence)='integer' THEN sequence END,typeof(raw),length(CAST(raw AS BLOB)),substr(CAST(raw AS BLOB),1,%d),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM accepted_records WHERE cid=?",
+			publication.MaxManifestRecordBytes+1,
+		),
+		ref.recordCID,
+	).
 		Scan(&cidTypeValue, &cidLengthValue, &cidValue, &keyTypeValue, &keyLengthValue, &keyValue, &sequenceTypeValue, &sequenceValue, &rawTypeValue, &rawLengthValue, &rawValue, &logicalTypeValue, &logicalValue)
 	if errors.Is(err, sql.ErrNoRows) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
@@ -189,7 +247,7 @@ func (s *Store) checkIncomingMaterialRef(ctx context.Context, q queryer, ref inc
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if !recordRawTypeOK || recordRawType != "blob" || !recordRawLengthOK || recordRawLength < 1 ||
-		recordRawLength > publication.MaxRecordBytes ||
+		recordRawLength > publication.MaxManifestRecordBytes ||
 		!recordRawOK ||
 		int64(len(recordRaw)) != recordRawLength {
 		return classified(ErrSchema, stage, ReasonCorrupt)
@@ -212,57 +270,113 @@ func (s *Store) checkIncomingMaterialRef(ctx context.Context, q queryer, ref inc
 	snapshot, err := publication.DecodeSnapshot(record.raw)
 	if err != nil || snapshot.Vault != floor.Binding.Vault || snapshot.PublicationSeq != floor.Sequence ||
 		snapshot.PublicationID != floor.PublicationID ||
-		!bytes.Equal(snapshot.Blob.CID, floor.BlobCID) ||
-		snapshot.Blob.Size != floor.BlobSize {
+		!floorPayloadMatchesRecord(floor, snapshot) {
+		return classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if payloadFormOf(snapshot) != ref.form {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if publication.VerifyHeadBinding(floor.Head, record.raw, floor.SnapshotKey) != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	var catalogCIDTypeValue, catalogCIDLengthValue, catalogCIDValue, sizeTypeValue, sizeValue, nameTypeValue, nameLengthValue, nameValue, catalogLogicalTypeValue, catalogLogicalValue any
-	err = q.QueryRowContext(ctx, "SELECT typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(basename),length(CAST(basename AS BLOB)),substr(CAST(basename AS BLOB),1,73),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM payload_objects WHERE blob_cid=?", ref.blobCID).
-		Scan(&catalogCIDTypeValue, &catalogCIDLengthValue, &catalogCIDValue, &sizeTypeValue, &sizeValue, &nameTypeValue, &nameLengthValue, &nameValue, &catalogLogicalTypeValue, &catalogLogicalValue)
-	if errors.Is(err, sql.ErrNoRows) {
+	if ref.form == PayloadFormManifest {
+		return s.checkIncomingManifestCatalog(ctx, q, floor.Manifest, stage, cache)
+	}
+	object, err := s.readPayloadCatalogRow(ctx, q, ref.blobCID, stage)
+	if err != nil {
+		return err
+	}
+	if object.size != int64(floor.BlobSize) || !bytes.Equal(object.cid, ref.blobCID) ||
+		!bytes.Equal(ref.blobCID, floor.BlobCID) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if err != nil {
-		return storageFailure(ctx, stage, err)
+	wantedName, nameErr := payloadBasenameFromCID(ref.blobCID)
+	if nameErr != nil || !validPayloadBasename(object.name) || object.name != wantedName {
+		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	catalogCIDType, catalogCIDTypeOK := catalogCIDTypeValue.(string)
-	catalogCIDLength, catalogCIDLengthOK := rawInt64(catalogCIDLengthValue)
-	catalogCID, catalogCIDOK := rawBytes(catalogCIDValue)
+	return nil
+}
+
+type payloadCatalogObject struct {
+	cid  []byte
+	size int64
+	name string
+}
+
+type manifestCatalogCache map[string]payloadCatalogObject
+
+func (s *Store) readPayloadCatalogRow(ctx context.Context, q queryer, blobCID []byte, stage Stage) (payloadCatalogObject, error) {
+	var cidTypeValue, cidLengthValue, cidValue, sizeTypeValue, sizeValue, nameTypeValue, nameLengthValue, nameValue, logicalTypeValue, logicalValue any
+	err := q.QueryRowContext(ctx, "SELECT typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(basename),length(CAST(basename AS BLOB)),substr(CAST(basename AS BLOB),1,73),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM payload_objects WHERE blob_cid=?", blobCID).
+		Scan(&cidTypeValue, &cidLengthValue, &cidValue, &sizeTypeValue, &sizeValue, &nameTypeValue, &nameLengthValue, &nameValue, &logicalTypeValue, &logicalValue)
+	if errors.Is(err, sql.ErrNoRows) {
+		return payloadCatalogObject{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if err != nil {
+		return payloadCatalogObject{}, storageFailure(ctx, stage, err)
+	}
+	cidType, cidTypeOK := cidTypeValue.(string)
+	cidLength, cidLengthOK := rawInt64(cidLengthValue)
+	cid, cidOK := rawBytes(cidValue)
 	sizeType, sizeTypeOK := sizeTypeValue.(string)
 	size, sizeOK := rawInt64(sizeValue)
 	nameType, nameTypeOK := nameTypeValue.(string)
 	nameLength, nameLengthOK := rawInt64(nameLengthValue)
 	nameBytes, nameOK := rawBytes(nameValue)
-	catalogLogicalType, catalogLogicalTypeOK := catalogLogicalTypeValue.(string)
-	catalogLogical, catalogLogicalOK := rawInt64(catalogLogicalValue)
-	if !catalogCIDTypeOK || catalogCIDType != "blob" || !catalogCIDLengthOK || catalogCIDLength < 1 ||
-		catalogCIDLength > publication.MaxCIDBytes ||
-		!catalogCIDOK ||
-		int64(len(catalogCID)) != catalogCIDLength {
-		return classified(ErrSchema, stage, ReasonCorrupt)
+	logicalType, logicalTypeOK := logicalTypeValue.(string)
+	logical, logicalOK := rawInt64(logicalValue)
+	if !cidTypeOK || cidType != "blob" || !cidLengthOK || cidLength < 1 ||
+		cidLength > publication.MaxCIDBytes ||
+		!cidOK ||
+		int64(len(cid)) != cidLength {
+		return payloadCatalogObject{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if !sizeTypeOK || sizeType != "integer" || !sizeOK || size <= 0 || uint64(size) > publication.MaxBlobBytes {
-		return classified(ErrSchema, stage, ReasonCorrupt)
+		return payloadCatalogObject{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if !nameTypeOK || nameType != "text" || !nameLengthOK || nameLength != int64(64+len(payloadSuffix)) || !nameOK ||
 		int64(len(nameBytes)) != nameLength {
+		return payloadCatalogObject{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if !logicalTypeOK || logicalType != "integer" || !logicalOK || logical < 0 ||
+		logical != size {
+		return payloadCatalogObject{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	return payloadCatalogObject{cid: bytes.Clone(cid), size: size, name: string(nameBytes)}, nil
+}
+
+func (s *Store) checkIncomingManifestCatalog(
+	ctx context.Context,
+	q queryer,
+	manifest *ManifestPayload,
+	stage Stage,
+	cache manifestCatalogCache,
+) error {
+	if manifest == nil || len(manifest.Entries) == 0 || len(manifest.Entries) > publication.MaxSnapshotEntries {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if !catalogLogicalTypeOK || catalogLogicalType != "integer" || !catalogLogicalOK || catalogLogical < 0 ||
-		catalogLogical != size {
-		return classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	if !bytes.Equal(catalogCID, ref.blobCID) || !bytes.Equal(ref.blobCID, floor.BlobCID) ||
-		uint64(size) != floor.BlobSize {
-		return classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	name := string(nameBytes)
-	wantedName, nameErr := payloadBasenameFromCID(ref.blobCID)
-	if nameErr != nil || !validPayloadBasename(name) || name != wantedName {
-		return classified(ErrSchema, stage, ReasonCorrupt)
+	seen := cache
+	for _, entry := range manifest.Entries {
+		key := manifestCatalogKey(entry)
+		if _, verified := seen[key]; verified {
+			continue
+		}
+		object, err := s.readPayloadCatalogRow(ctx, q, entry.CID, stage)
+		if err != nil {
+			return err
+		}
+		if object.size != int64(entry.Size) || !bytes.Equal(object.cid, entry.CID) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		wantedName, nameErr := payloadBasenameFromCID(entry.CID)
+		if nameErr != nil || !validPayloadBasename(object.name) || object.name != wantedName {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		seen[key] = object
 	}
 	return nil
+}
+
+func manifestCatalogKey(entry PayloadEntryReference) string {
+	return string(entry.CID) + "\x00" + fmt.Sprint(entry.Size)
 }

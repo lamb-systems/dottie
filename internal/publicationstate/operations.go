@@ -239,6 +239,41 @@ func (s *Store) Prepare(ctx context.Context, mode Mode, observation Observation,
 	return s.proposal(mode, validated, state, trace, StagePrepare)
 }
 
+func (s *Store) PrepareMaterial(
+	ctx context.Context,
+	mode Mode,
+	observation Observation,
+	input MaterialInput,
+) (Proposal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkContext(ctx, StagePrepare); err != nil {
+		return Proposal{}, err
+	}
+	if err := s.requireReadback(StagePrepare); err != nil {
+		return Proposal{}, err
+	}
+	if !validMode(mode) {
+		return Proposal{}, classified(ErrInvalid, StageInput, ReasonMode)
+	}
+	validated, err := validateMaterialObservation(observation, s.binding, s.limits)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if _, err := validateMaterialInput(input, validated, s.attemptLimits); err != nil {
+		return Proposal{}, err
+	}
+	state, err := s.readState(ctx, s.conn, StagePrepare)
+	if err != nil {
+		return Proposal{}, err
+	}
+	trace, err := s.resolveTrace(ctx, s.conn, validated, state.floor, StagePrepare)
+	if err != nil {
+		return Proposal{}, err
+	}
+	return s.proposal(mode, validated, state, trace, StagePrepare)
+}
+
 func (s *Store) Accept(
 	ctx context.Context,
 	mode Mode,

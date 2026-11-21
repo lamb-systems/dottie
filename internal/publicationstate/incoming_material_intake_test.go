@@ -966,6 +966,7 @@ func TestAcceptMaterialUsesTransactionQueryer(t *testing.T) {
 		validated, err := validateObservation(observation, store.binding, store.limits)
 		require.NoError(t, err)
 		material := materialAttachment{
+			form:    PayloadFormPacked,
 			payload: f.payload,
 			blob:    blobReference(validated.candidate.raw),
 			name:    payloadBasename(f.payload),
@@ -1038,6 +1039,7 @@ func TestAcceptMaterialUsesTransactionQueryer(t *testing.T) {
 		validated, err := validateObservation(observation, store.binding, store.limits)
 		require.NoError(t, err)
 		material := materialAttachment{
+			form:    PayloadFormPacked,
 			payload: f.payload,
 			blob:    blobReference(validated.candidate.raw),
 			name:    payloadBasename(f.payload),
@@ -1108,6 +1110,7 @@ func TestAcceptMaterialUsesTransactionQueryer(t *testing.T) {
 		validated, err := validateObservation(observation, store.binding, store.limits)
 		require.NoError(t, err)
 		material := materialAttachment{
+			form:    PayloadFormPacked,
 			payload: f.payload,
 			blob:    blobReference(validated.candidate.raw),
 			name:    payloadBasename(f.payload),

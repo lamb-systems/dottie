@@ -18,7 +18,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/vault"
 )
 
-const incomingMaterialExpectedSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))"
+const incomingMaterialExpectedSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), manifest BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND manifest IS NOT NULL)))"
 
 func incomingMaterialFirstUse(t *testing.T, store *Store, f fixture) Floor {
 	t.Helper()
@@ -375,7 +375,9 @@ func TestIncomingMaterialSchemaDefinitionAndSource2Isolation(t *testing.T) {
 	require.Equal(t, map[string]incomingMaterialColumn{
 		"accepted_revision": {name: "accepted_revision", kind: "INTEGER", notNull: 1, primary: 1},
 		"record_cid":        {name: "record_cid", kind: "BLOB", notNull: 1, primary: 0},
-		"blob_cid":          {name: "blob_cid", kind: "BLOB", notNull: 1, primary: 0},
+		"form":              {name: "form", kind: "TEXT", notNull: 1, primary: 0},
+		"blob_cid":          {name: "blob_cid", kind: "BLOB", notNull: 0, primary: 0},
+		"manifest":          {name: "manifest", kind: "BLOB", notNull: 0, primary: 0},
 	}, columns)
 
 	foreignRows, err := tx.QueryContext(txContext, "PRAGMA foreign_key_list(accepted_material_refs)")

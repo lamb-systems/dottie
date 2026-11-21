@@ -25,6 +25,11 @@ type ManifestPayload struct {
 	Entries []PayloadEntryReference
 }
 
+type MaterialInput struct {
+	Payload []byte
+	Entries []publication.PayloadEntry
+}
+
 func (p ManifestPayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
 
 func (p ManifestPayload) TotalBytes() uint64 {
@@ -97,6 +102,31 @@ func validateManifestPayloadCustody(payload *ManifestPayload, limits AttemptLimi
 		return &manifestCapacityError{
 			element: manifestCapacityManagedObjects,
 			have:    uint64(len(payload.Entries)),
+			limit:   uint64(limits.ManagedObjects),
+		}
+	}
+	if payload.TotalBytes() > limits.CustodyBytes {
+		return &manifestCapacityError{
+			element: manifestCapacityCustodyBytes,
+			have:    payload.TotalBytes(),
+			limit:   limits.CustodyBytes,
+		}
+	}
+	return nil
+}
+
+func validateManifestMaterialLimits(payload *ManifestPayload, limits AttemptLimits) error {
+	if err := validateManifestPayload(payload); err != nil {
+		return err
+	}
+	distinct := make(map[string]bool, len(payload.Entries))
+	for _, entry := range payload.Entries {
+		distinct[string(entry.CID)] = true
+	}
+	if uint64(len(distinct)) > uint64(limits.ManagedObjects) {
+		return &manifestCapacityError{
+			element: manifestCapacityManagedObjects,
+			have:    uint64(len(distinct)),
 			limit:   uint64(limits.ManagedObjects),
 		}
 	}

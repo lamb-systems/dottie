@@ -12,10 +12,6 @@ var ErrPublicationAccept = errors.New("publication accept refused")
 
 var errPublicationAcceptRevision = errors.New("the accepted floor revision moved")
 
-var errPublicationAcceptManifestPayload = &publication.ManifestPayloadError{
-	Reason: publication.ManifestReasonPackedRequired,
-}
-
 type publicationAcceptStage string
 type publicationAcceptReason string
 
@@ -53,7 +49,6 @@ const (
 	publicationAcceptReasonMode           publicationAcceptReason = "mode_refused"
 	publicationAcceptReasonPrepare        publicationAcceptReason = "proposal_refused"
 	publicationAcceptReasonMaterial       publicationAcceptReason = "material_refused"
-	publicationAcceptReasonPayloadForm    publicationAcceptReason = "payload_form"
 )
 
 type PublicationAcceptStageRequest struct {
@@ -62,6 +57,7 @@ type PublicationAcceptStageRequest struct {
 	FloorRevision uint64
 	Observation   publicationstate.Observation
 	Payload       []byte
+	Entries       []publication.PayloadEntry
 }
 
 type PublicationAcceptProposal struct {
@@ -80,13 +76,14 @@ type PublicationAcceptRequest struct {
 	Confirmation  [32]byte
 	Observation   publicationstate.Observation
 	Payload       []byte
+	Entries       []publication.PayloadEntry
 }
 
 func StagePublicationAccept(
 	ctx context.Context,
 	request PublicationAcceptStageRequest,
 ) (PublicationAcceptProposal, error) {
-	if ctx == nil || request.Directory == "" || len(request.Payload) == 0 {
+	if ctx == nil || request.Directory == "" || (len(request.Payload) == 0 && len(request.Entries) == 0) {
 		return PublicationAcceptProposal{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
@@ -100,14 +97,6 @@ func StagePublicationAccept(
 			publicationAcceptStageInput,
 			publicationAcceptReasonCanceled,
 			err,
-		)
-	}
-	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormManifest {
-		return PublicationAcceptProposal{}, publicationAcceptFailure(
-			ctx,
-			publicationAcceptStageInput,
-			publicationAcceptReasonPayloadForm,
-			errPublicationAcceptManifestPayload,
 		)
 	}
 	if _, err := publicationstate.Inspect(ctx, request.Directory, request.Binding); err != nil {
@@ -132,7 +121,10 @@ func StagePublicationAccept(
 	if err != nil {
 		return PublicationAcceptProposal{}, err
 	}
-	proposal, err := store.Prepare(ctx, mode, request.Observation, request.Payload)
+	proposal, err := store.PrepareMaterial(ctx, mode, request.Observation, publicationstate.MaterialInput{
+		Payload: request.Payload,
+		Entries: request.Entries,
+	})
 	if err != nil {
 		return PublicationAcceptProposal{}, publicationAcceptFailure(
 			ctx,
@@ -148,7 +140,7 @@ func StagePublicationAccept(
 }
 
 func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (publicationstate.Floor, error) {
-	if ctx == nil || request.Directory == "" || len(request.Payload) == 0 {
+	if ctx == nil || request.Directory == "" || (len(request.Payload) == 0 && len(request.Entries) == 0) {
 		return publicationstate.Floor{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
@@ -170,14 +162,6 @@ func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (p
 			publicationAcceptStageInput,
 			publicationAcceptReasonCanceled,
 			err,
-		)
-	}
-	if publicationAcceptObservationPayloadForm(request.Observation) == publication.PayloadFormManifest {
-		return publicationstate.Floor{}, publicationAcceptFailure(
-			ctx,
-			publicationAcceptStageInput,
-			publicationAcceptReasonPayloadForm,
-			errPublicationAcceptManifestPayload,
 		)
 	}
 	store, err := publicationstate.Open(request.Directory, request.Binding)
@@ -202,12 +186,12 @@ func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (p
 			nil,
 		)
 	}
-	accepted, err := store.AcceptMaterial(
+	accepted, err := store.AcceptMaterialInput(
 		ctx,
 		request.Mode,
 		request.StateToken,
 		request.Observation,
-		request.Payload,
+		publicationstate.MaterialInput{Payload: request.Payload, Entries: request.Entries},
 		request.Confirmation,
 	)
 	if err != nil {
@@ -267,17 +251,6 @@ func publicationAcceptPositionReason(err error) publicationAcceptReason {
 
 func publicationAcceptModeRefused(mode publicationstate.Mode) bool {
 	return mode != publicationstate.ModeFirstUse && mode != publicationstate.ModeAdvance
-}
-
-func publicationAcceptObservationPayloadForm(observation publicationstate.Observation) publication.PayloadForm {
-	if len(observation.Snapshots) == 0 {
-		return publication.PayloadFormPacked
-	}
-	record, err := publication.DecodeSnapshot(observation.Snapshots[len(observation.Snapshots)-1].Raw)
-	if err != nil {
-		return publication.PayloadFormPacked
-	}
-	return record.PayloadForm()
 }
 
 func publicationAcceptFailure(

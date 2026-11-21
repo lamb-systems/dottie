@@ -133,7 +133,8 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 		b8RequireCurrentFloor(t, ctx, store, lease.tx, floor)
 		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
 		recorder := &b8QueryRecorder{source: lease.tx}
-		name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		name, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 owner query trace no-owner: %s", b8FormatQueryTrace(recorder.calls))
 		requireErrorMetadata(t, err, ErrStorage, StageAccept, ReasonMaterialNotRetained)
 		require.Empty(t, name)
@@ -167,7 +168,8 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, beforeFile.Exists)
 		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, finalized.Floor, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, finalized.Floor, StageAccept)
+		name, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 owner query trace finalized: %s", b8FormatQueryTrace(recorder.calls))
 		require.NoError(t, err)
 		require.Equal(t, candidate.SnapshotRecord, record)
@@ -214,7 +216,8 @@ func TestIncomingMaterialOwnerUsesQueryer(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, beforeFile.Exists)
 		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		ownerName, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		ownerName, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 owner query trace incoming: %s", b8FormatQueryTrace(recorder.calls))
 		require.NoError(t, err)
 		require.Equal(t, name, ownerName)
@@ -266,7 +269,8 @@ func TestIncomingMaterialOwnerSchema2Isolation(t *testing.T) {
 	floor := incomingMaterialFirstUse(t, store, f)
 	b8RequireCurrentFloor(t, ctx, store, store.conn, floor)
 	recorder := &b8QueryRecorder{source: store.conn}
-	name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+	owner, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+	name, record, blob := owner.name, owner.record, owner.blob
 	t.Logf("B8 owner query trace schema2: %s", b8FormatQueryTrace(recorder.calls))
 	requireErrorMetadata(t, err, ErrStorage, StageAccept, ReasonMaterialNotRetained)
 	require.Empty(t, name)
@@ -380,7 +384,8 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Equal(t, stateSnapshot{}, state)
 		recorder := &b8QueryRecorder{source: tx}
-		name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, finalized.Floor, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, finalized.Floor, StageAccept)
+		name, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 overlap query trace: %s", b8FormatQueryTrace(recorder.calls))
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Empty(t, name)
@@ -420,7 +425,8 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Equal(t, stateSnapshot{}, state)
 		recorder := &b8QueryRecorder{source: tx}
-		name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, current, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, current, StageAccept)
+		name, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 wrong-record query trace: %s", b8FormatQueryTrace(recorder.calls))
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Empty(t, name)
@@ -461,7 +467,8 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Equal(t, stateSnapshot{}, state)
 		recorder := &b8QueryRecorder{source: tx}
-		name, record, blob, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		owner, err := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		name, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 wrong-blob query trace: %s", b8FormatQueryTrace(recorder.calls))
 		requireErrorMetadata(t, err, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Empty(t, name)
@@ -522,7 +529,8 @@ func TestIncomingMaterialOwnerRejectsCorruptRefs(t *testing.T) {
 		require.Equal(t, "text", valueType)
 		require.Equal(t, int64(len("wrong-text-cid")), valueLength)
 		recorder := &b8QueryRecorder{source: tx}
-		ownerName, record, blob, helperErr := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		owner, helperErr := store.acceptedMaterialOwner(ctx, recorder, floor, StageAccept)
+		ownerName, record, blob := owner.name, owner.record, owner.blob
 		t.Logf("B8 wrong-type query trace: %s", b8FormatQueryTrace(recorder.calls))
 		requireErrorMetadata(t, helperErr, ErrSchema, StageAccept, ReasonCorrupt)
 		require.Empty(t, ownerName)
