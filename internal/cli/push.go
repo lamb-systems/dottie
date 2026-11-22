@@ -14,6 +14,7 @@ import (
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
@@ -423,7 +424,7 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	} else {
 		output.WriteString("push: review required (retained proposal)\n")
 	}
-	fmt.Fprintf(&output, "targets: %d\nentries: %d\n", preparation.Targets, preparation.Entries)
+	fmt.Fprintf(&output, "form: %s\ntargets: %d\nentries: %d\n", preparation.Form, preparation.Targets, preparation.Entries)
 	if preparation.Present {
 		fmt.Fprintf(
 			&output,
@@ -435,13 +436,22 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	} else {
 		output.WriteString("accepted floor: none (first publication)\n")
 	}
-	fmt.Fprintf(
-		&output,
-		"candidate record: %x\ncandidate payload: %x size=%d\n",
-		preparation.Proposal.Proposal.CandidateRecordCID,
-		preparation.Proposal.Proposal.CandidateBlobCID,
-		preparation.Proposal.Blob.Size,
-	)
+	fmt.Fprintf(&output, "candidate record: %x\n", preparation.Proposal.Proposal.CandidateRecordCID)
+	if preparation.Form == publication.PayloadFormManifest {
+		fmt.Fprintf(
+			&output,
+			"candidate manifest: entries=%d entry-set=%x\n",
+			preparation.Record.CandidateEntryCount,
+			preparation.Record.CandidateEntryDigest,
+		)
+	} else {
+		fmt.Fprintf(
+			&output,
+			"candidate payload: %x size=%d\n",
+			preparation.Proposal.Proposal.CandidateBlobCID,
+			preparation.Proposal.Blob.Size,
+		)
+	}
 	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
 		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,
 		preparation.Proposal.Review.ApprovalDigest, preparation.Proposal.Review.ApprovalRevision)

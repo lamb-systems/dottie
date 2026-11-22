@@ -1,9 +1,9 @@
 # Dottie
 
 Dottie keeps directories in sync between Linux machines through an existing AT Protocol
-account. You choose a directory, it packs the files into a snapshot, publishes that snapshot to
-your repository, and other machines pull it back. There is no Dottie server: your PDS holds the
-data and your account authorises the writes.
+account. You choose a directory, it publishes the files as a snapshot to your repository, and
+other machines pull it back. There is no Dottie server: your PDS holds the data and your account
+authorises the writes.
 
 It is early software. It works, it has been run against a real PDS from two independent
 installs, but almost nobody has used it and the limits at the bottom of this file are real.
@@ -17,8 +17,14 @@ installs, but almost nobody has used it and the limits at the bottom of this fil
 - `status` shows your targets and which vault this install knows about, locally.
 - `position status` reads the publication position without changing anything.
 
-Files are synced as plaintext inside a packed archive. Snapshots are content addressed and
-chained, so a reader can tell a snapshot belongs to the publication it claims to.
+Files are synced as plaintext. Dottie automatically chooses between two snapshot forms: a packed
+archive of the whole snapshot, or a manifest that names one blob per regular file. The manifest is
+used when exactly one directory files target is configured, the tree contains only non-empty regular
+files with mode `0600` or `0644`, every directory in it holds at least one published file and carries
+no mode of its own, and the change does not delete a file relative to the accepted position. Anything
+else falls back to packed, including a directory that holds no file at all. There is no per-target
+form setting. Snapshots are content addressed and chained, so a reader can tell a snapshot belongs to
+the publication it claims to.
 
 ## Install
 
@@ -55,10 +61,17 @@ for installs that know several vaults.
 ## How it works
 
 A publication is two records in your repository. `vaultSnapshotV2` is an immutable link in a
-chain: it names the packed payload as a blob, points at its predecessor, and carries a
-publication id and sequence. `vaultHeadV2` is the single mutable pointer at `self` naming the
-current snapshot record and payload. `pull` reads the head, walks back through the chain, then
-fetches and verifies the payload against its CID and size.
+chain: it names either one packed payload blob or an ordered list of file entries with their paths,
+modes, sizes and blob CIDs, points at its predecessor, and carries a publication id and sequence.
+`vaultHeadV2` is the single mutable pointer at `self` naming the current snapshot record; a manifest
+head carries no `blobCid`. `pull` reads the head, walks back through the chain, then fetches and
+verifies every payload blob against its CID and size.
+
+A manifest record has no target id or portable root. Dottie therefore maps it only to the sole local
+directory files target. It cannot prove that the publisher used the same directory; the pull
+confirmation binds the local target id, portable root and configuration revisions so a local target
+or root change between review and confirmation refuses. The target root must already exist; parent
+directories absent from the manifest are created with mode `0755` during apply.
 
 Applying files is the part with the sharp edges, so it is journaled. Before touching a file,
 Dottie records the intent and a copy of the previous contents in a separate journal database,
@@ -76,14 +89,20 @@ account can read it back.
 
 ## Limits
 
-- Plaintext. The packed payload is uploaded as a blob before any record references it, so a
-  rejected or ambiguous batch can leave a retrievable blob at the provider. Dottie cannot delete
-  provider blobs, and it never prints candidate bytes for a publication that failed.
+- Plaintext. A packed payload is uploaded as one blob before any record references it. A manifest
+  uploads up to one blob per entry, then its record batch. A rejected or ambiguous batch can leave
+  unattached, retrievable plaintext blobs at the provider; Dottie cannot delete them, and it never
+  prints candidate bytes for a publication that failed. The custody object limit is shared across
+  retained publications, not per publication: a representable 64-entry successor that changes a
+  CID can still be refused by custody, and Dottie does not retry another form after an attempt
+  starts.
 - No offline verification. If you do not trust the provider to serve honest history, this is not
   the tool for that threat model.
 - No recovery story of its own. A backup is `cp -r`. Earlier versions tried to build one from a
   recovery kit and it was not worth the complexity.
 - Conflict resolution is manual by design. `pull` names the conflicting files and stops.
+- Prototype breaking change. A `config.toml` that still sets `targets.form` no longer loads: the key
+  was removed, so the file fails with an unknown configuration key instead of being ignored.
 - Concurrent publication from two machines at once is refused rather than merged.
 - No power-loss evidence. Process death, yes; sudden power loss, untested.
 

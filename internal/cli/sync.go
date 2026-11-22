@@ -29,7 +29,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 	"github.com/lamb-systems/dottie/internal/state"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 var errSyncFloorMismatch = errors.New("the post-pull accepted floor does not match the reviewed provider position")
@@ -369,12 +368,15 @@ func previewEntryName(key model.EntryKey) string {
 }
 
 type syncPushIdentity struct {
-	PayloadCID    []byte
-	PayloadDigest [32]byte
-	PayloadSize   uint64
-	Targets       int
-	Entries       int
-	Review        publicationstate.LocalReviewContext
+	Form           publication.PayloadForm
+	PayloadCID     []byte
+	PayloadDigest  [32]byte
+	PayloadSize    uint64
+	EntryCount     int
+	EntrySetDigest [32]byte
+	Targets        int
+	Entries        int
+	Review         publicationstate.LocalReviewContext
 }
 
 type syncPushPreviewSources struct {
@@ -599,6 +601,8 @@ func runSyncCommand(
 		previews,
 		command,
 		binding,
+		inspection.Floor,
+		inspection.Present,
 		preparation.Material.Base,
 		preparation.Material.Remote,
 	)
@@ -694,12 +698,12 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the provider position cannot be re-read", "post_pull_provider")
 	}
-	acceptedSnapshot, err := accepted.Payload.PackedSnapshot()
+	acceptedSnapshot, err := service.PublicationPayloadSnapshot(accepted.Payload, sources.Configuration)
 	if err != nil {
 		return syncPushRefusal(
 			command,
 			output,
-			"the provider position carries a manifest publication this build cannot compose from",
+			"the provider position cannot be projected onto the local target",
 			"post_pull_payload_form",
 		)
 	}
@@ -723,7 +727,7 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be read", "post_pull_floor")
 	}
-	baseline, err := syncAcceptedSnapshot(material)
+	baseline, err := syncAcceptedSnapshot(material, sources.Configuration)
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be decoded", "post_pull_floor")
 	}
@@ -740,20 +744,41 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication cannot be composed", "post_pull_candidate")
 	}
-	packed, err := vault.Pack(snapshot)
+	form, candidateSnapshot, err := service.SelectPublicationForm(sources.Configuration, snapshot, baseline)
 	if err != nil {
-		return syncPushRefusal(command, output, "the post-pull publication cannot be packed", "post_pull_candidate")
+		return syncPushRefusal(command, output, "the post-pull publication form cannot be selected", "post_pull_candidate")
 	}
-	if digest := syncPayloadDigest(
-		packed.Payload,
-	); digest != identity.PayloadDigest ||
-		uint64(len(packed.Payload)) != identity.PayloadSize {
-		return syncPushRefusal(
-			command,
-			output,
-			"the post-pull publication differs from the reviewed candidate",
-			"post_pull_candidate_mismatch",
-		)
+	candidateMaterial, candidateBlob, err := service.EncodePublicationCandidate(
+		binding, form, candidateSnapshot, floor, true, publicationID,
+	)
+	if err != nil {
+		return syncPushRefusal(command, output, "the post-pull publication identity is unavailable", "post_pull_candidate")
+	}
+	switch form {
+	case publication.PayloadFormPacked:
+		if digest := syncPayloadDigest(
+			candidateMaterial.Payload,
+		); digest != identity.PayloadDigest ||
+			uint64(len(candidateMaterial.Payload)) != identity.PayloadSize ||
+			!bytes.Equal(candidateBlob.CID, identity.PayloadCID) {
+			return syncPushRefusal(
+				command,
+				output,
+				"the post-pull publication differs from the reviewed candidate",
+				"post_pull_candidate_mismatch",
+			)
+		}
+	case publication.PayloadFormManifest:
+		record, err := publication.DecodeSnapshot(candidateMaterial.SnapshotRecord)
+		if err != nil || len(record.Entries) != identity.EntryCount ||
+			service.ManifestEntrySetDigest(record.Entries) != identity.EntrySetDigest {
+			return syncPushRefusal(
+				command,
+				output,
+				"the post-pull publication differs from the reviewed candidate",
+				"post_pull_candidate_mismatch",
+			)
+		}
 	}
 	review, _, guard, err := sources.Reviews.Acquire(ctx)
 	if err != nil {
@@ -865,28 +890,38 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 	if err != nil {
 		return errSyncFloorMismatch
 	}
-	if !bytes.Equal(floor.RecordCID, cid) || floor.Manifest != nil ||
-		record.PayloadForm() == publication.PayloadFormManifest ||
-		!bytes.Equal(floor.BlobCID, record.Blob.CID) ||
-		floor.BlobSize != record.Blob.Size ||
+	if !bytes.Equal(floor.RecordCID, cid) ||
 		floor.Sequence != record.PublicationSeq ||
 		floor.SnapshotKey != terminal.Key {
+		return errSyncFloorMismatch
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.Manifest.Entries) != len(record.Entries) {
+			return errSyncFloorMismatch
+		}
+		for index, entry := range record.Entries {
+			reference := floor.Manifest.Entries[index]
+			if reference.Path != entry.Path || reference.Size != entry.Size ||
+				!bytes.Equal(reference.CID, entry.Blob.CID) {
+				return errSyncFloorMismatch
+			}
+		}
+		return nil
+	}
+	if floor.Manifest != nil || !bytes.Equal(floor.BlobCID, record.Blob.CID) ||
+		floor.BlobSize != record.Blob.Size {
 		return errSyncFloorMismatch
 	}
 	return nil
 }
 
-func syncAcceptedSnapshot(material publicationstate.AcceptedMaterial) (model.Snapshot, error) {
-	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
-	if err != nil {
-		return model.Snapshot{}, err
-	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		return model.Snapshot{}, &publication.ManifestPayloadError{
-			Reason: publication.ManifestReasonPackedRequired,
-		}
-	}
-	return publication.DecodePayload(material.Payload, record.Blob)
+func syncAcceptedSnapshot(
+	material publicationstate.AcceptedMaterial,
+	configuration config.Config,
+) (model.Snapshot, error) {
+	snapshot, _, err := service.AcceptedPublicationSnapshot(material, configuration)
+	return snapshot, err
 }
 
 func syncPayloadDigest(payload []byte) [32]byte {
@@ -898,17 +933,36 @@ func syncPreparedMatches(
 	binding publicationstate.Binding,
 	identity syncPushIdentity,
 ) bool {
-	return record.Binding == binding && record.Review == identity.Review &&
-		bytes.Equal(
-			record.CandidatePayloadCID,
-			identity.PayloadCID,
-		) && record.CandidatePayloadSize == identity.PayloadSize
+	if record.Binding != binding || record.Review != identity.Review {
+		return false
+	}
+	switch identity.Form {
+	case publication.PayloadFormPacked:
+		return (record.Form == "" || record.Form == publication.PayloadFormPacked) &&
+			bytes.Equal(record.CandidatePayloadCID, identity.PayloadCID) &&
+			record.CandidatePayloadSize == identity.PayloadSize
+	case publication.PayloadFormManifest:
+		return record.Form == publication.PayloadFormManifest &&
+			record.CandidateEntryCount == identity.EntryCount &&
+			record.CandidateEntryDigest == identity.EntrySetDigest
+	default:
+		return false
+	}
 }
 
 func renderSyncPushPreview(identity syncPushIdentity) string {
 	var output strings.Builder
-	fmt.Fprintf(&output, "push: targets=%d entries=%d\n", identity.Targets, identity.Entries)
-	fmt.Fprintf(&output, "push: candidate payload: %x size=%d\n", identity.PayloadCID, identity.PayloadSize)
+	fmt.Fprintf(&output, "push: form=%s targets=%d entries=%d\n", identity.Form, identity.Targets, identity.Entries)
+	if identity.Form == publication.PayloadFormManifest {
+		fmt.Fprintf(
+			&output,
+			"push: candidate manifest: entries=%d entry-set=%x\n",
+			identity.EntryCount,
+			identity.EntrySetDigest,
+		)
+	} else {
+		fmt.Fprintf(&output, "push: candidate payload: %x size=%d\n", identity.PayloadCID, identity.PayloadSize)
+	}
 	fmt.Fprintf(
 		&output,
 		"push: review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
@@ -925,6 +979,8 @@ func prepareSyncPushIdentity(
 	previews syncPushPreviewFactory,
 	command *urfave.Command,
 	binding publicationstate.Binding,
+	position publicationstate.Floor,
+	present bool,
 	floor, remote model.Snapshot,
 ) (syncPushIdentity, error) {
 	preview, err := previews(ctx, command, binding)
@@ -954,19 +1010,43 @@ func prepareSyncPushIdentity(
 			3,
 		)
 	}
-	packed, err := vault.Pack(snapshot)
+	form, candidate, err := service.SelectPublicationForm(preview.Configuration, snapshot, floor)
 	if err != nil {
 		return syncPushIdentity{}, urfave.Exit(
-			"sync refused: the post-pull publication cannot be packed; nothing was changed",
+			"sync refused: the post-pull publication form cannot be selected; nothing was changed",
 			3,
 		)
 	}
-	payloadCID, err := publication.RawPayloadCID(packed.Payload)
+	material, blob, err := service.EncodePublicationCandidate(
+		binding, form, candidate, position, present, publicationID,
+	)
 	if err != nil {
 		return syncPushIdentity{}, urfave.Exit(
 			"sync refused: the post-pull publication identity is unavailable; nothing was changed",
 			3,
 		)
+	}
+	identity := syncPushIdentity{
+		Form:        form,
+		PayloadCID:  append([]byte(nil), blob.CID...),
+		PayloadSize: blob.Size,
+		Targets:     len(candidate.Targets),
+		Entries:     len(candidate.Entries),
+		Review:      publicationstate.LocalReviewContext{},
+	}
+	switch form {
+	case publication.PayloadFormPacked:
+		identity.PayloadDigest = syncPayloadDigest(material.Payload)
+	case publication.PayloadFormManifest:
+		record, err := publication.DecodeSnapshot(material.SnapshotRecord)
+		if err != nil {
+			return syncPushIdentity{}, urfave.Exit(
+				"sync refused: the post-pull publication identity is unavailable; nothing was changed",
+				3,
+			)
+		}
+		identity.EntryCount = len(record.Entries)
+		identity.EntrySetDigest = service.ManifestEntrySetDigest(record.Entries)
 	}
 	review, _, guard, err := preview.Reviews.Acquire(ctx)
 	if err != nil {
@@ -976,16 +1056,8 @@ func prepareSyncPushIdentity(
 		)
 	}
 	guard.Release()
-	return syncPushIdentity{
-		PayloadCID: append(
-			[]byte(nil),
-			payloadCID...),
-		PayloadDigest: syncPayloadDigest(packed.Payload),
-		PayloadSize:   uint64(len(packed.Payload)),
-		Targets:       len(snapshot.Targets),
-		Entries:       len(snapshot.Entries),
-		Review:        review,
-	}, nil
+	identity.Review = review
+	return identity, nil
 }
 
 func syncConfirmationToken(
@@ -1009,10 +1081,18 @@ func syncConfirmationToken(
 	_, _ = digest.Write(stateToken[:])
 	_, _ = digest.Write(observationDigest[:])
 	_, _ = digest.Write(viewDigest[:])
-	_, _ = digest.Write(identity.PayloadDigest[:])
 	var scratch [8]byte
-	binary.BigEndian.PutUint64(scratch[:], identity.PayloadSize)
-	_, _ = digest.Write(scratch[:])
+	if identity.Form == publication.PayloadFormManifest {
+		writeField("dottie/sync/manifest/v1")
+		writeField(string(identity.Form))
+		binary.BigEndian.PutUint64(scratch[:], uint64(identity.EntryCount))
+		_, _ = digest.Write(scratch[:])
+		_, _ = digest.Write(identity.EntrySetDigest[:])
+	} else {
+		_, _ = digest.Write(identity.PayloadDigest[:])
+		binary.BigEndian.PutUint64(scratch[:], identity.PayloadSize)
+		_, _ = digest.Write(scratch[:])
+	}
 	_, _ = digest.Write(identity.Review.SelectionDigest[:])
 	binary.BigEndian.PutUint64(scratch[:], identity.Review.SelectionRevision)
 	_, _ = digest.Write(scratch[:])

@@ -403,6 +403,8 @@ func newPublicationTwoMachine(t *testing.T, root, name string) *publicationTwoMa
 	}
 	selected := filepath.Join(home, "synthetic")
 	require.NoError(t, os.MkdirAll(selected, 0o700))
+	empty := filepath.Join(home, "synthetic-empty")
+	require.NoError(t, os.MkdirAll(empty, 0o700))
 	target := config.Target{
 		ID:     publicationTwoMachineTargetID,
 		Source: model.SourceFiles,
@@ -415,7 +417,10 @@ func newPublicationTwoMachine(t *testing.T, root, name string) *publicationTwoMa
 		},
 	}
 	configuration := config.Default()
-	configuration.Targets = []config.Target{target}
+	configuration.Targets = []config.Target{target, {
+		ID: publicationTwoMachineTargetID + "-empty", Source: model.SourceFiles, Mode: config.Review,
+		Root: &config.Root{Base: model.RootHome, Path: "synthetic-empty", Kind: model.SelectionDirectory},
+	}}
 	require.NoError(t, configuration.Validate())
 	local, err := service.NewPublicationLocalContext(paths, service.LocalFilesCapture{}, nil)
 	require.NoError(t, err)
@@ -523,7 +528,10 @@ func (fixture *publicationTwoMachineFixture) preparePull(
 	preparation.Request = service.PublicationApplyRequest{
 		Vault: fixture.binding.Vault, FloorRevision: inspection.Floor.Revision,
 		Configuration: machine.configuration, BaseSnapshot: base, RemoteSnapshot: remote,
-		Roots: map[string]string{machine.target.ID: machine.selected}, Local: machine.local,
+		Roots: map[string]string{
+			machine.target.ID:            machine.selected,
+			machine.target.ID + "-empty": filepath.Join(machine.paths.Home, "synthetic-empty"),
+		}, Local: machine.local,
 	}
 	plan, err := service.PlanPublicationApply(ctx, preparation.Request)
 	if err != nil {

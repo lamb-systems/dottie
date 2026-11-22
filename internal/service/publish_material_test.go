@@ -68,6 +68,7 @@ type materialTestTransport struct {
 	sendHook         func()
 	applied          []MaterialWriteBatch
 	uploadErr        error
+	uploadFailAt     int
 	uploadMIME       string
 	uploadCID        []byte
 	writeOnUpload    bool
@@ -108,8 +109,11 @@ func (transport *materialTestTransport) UploadPayload(
 	defer transport.mu.Unlock()
 	transport.uploads++
 	transport.calls = append(transport.calls, "upload-payload")
-	if transport.uploadErr != nil {
-		return publication.BlobReference{}, transport.uploadErr
+	if transport.uploadErr != nil || transport.uploadFailAt > 0 && transport.uploads == transport.uploadFailAt {
+		if transport.uploadErr != nil {
+			return publication.BlobReference{}, transport.uploadErr
+		}
+		return publication.BlobReference{}, errors.New("synthetic manifest upload failure")
 	}
 	cid, err := publication.RawPayloadCID(payload)
 	if err != nil {
@@ -302,12 +306,24 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 	if err != nil {
 		return errMaterialTestBatchShape
 	}
-	payload, uploaded := transport.blobs[string(snapshot.Blob.CID)]
-	if !uploaded {
-		return errMaterialTestPayloadMissing
-	}
-	if uint64(len(payload)) != snapshot.Blob.Size {
-		return errMaterialTestBatchShape
+	if snapshot.PayloadForm() == publication.PayloadFormManifest {
+		for _, entry := range snapshot.Entries {
+			payload, uploaded := transport.blobs[string(entry.Blob.CID)]
+			if !uploaded {
+				return errMaterialTestPayloadMissing
+			}
+			if uint64(len(payload)) != entry.Size {
+				return errMaterialTestBatchShape
+			}
+		}
+	} else {
+		payload, uploaded := transport.blobs[string(snapshot.Blob.CID)]
+		if !uploaded {
+			return errMaterialTestPayloadMissing
+		}
+		if uint64(len(payload)) != snapshot.Blob.Size {
+			return errMaterialTestBatchShape
+		}
 	}
 	if batch.HeadCreate {
 		if len(transport.head) != 0 {

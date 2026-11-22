@@ -9,7 +9,10 @@ import (
 	"github.com/ipfs/go-cid"
 )
 
-const maxRecordJSONBytes = 8192
+const (
+	maxRecordJSONBytes         = 8192
+	maxManifestRecordJSONBytes = 2 * MaxManifestRecordBytes
+)
 
 var ErrRecordJSON = errors.New("publication record JSON conversion failed")
 
@@ -37,7 +40,7 @@ func recordToJSONWithEncoder(canonicalRecord []byte, encode func(any) ([]byte, e
 	if err != nil {
 		return nil, recordJSONViolation("encoding")
 	}
-	if len(encoded) > maxRecordJSONBytes {
+	if len(encoded) > recordJSONLimit(canonicalRecord) {
 		return nil, recordJSONViolation("size_limit")
 	}
 
@@ -77,26 +80,32 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := record.PackedPayload(); err != nil {
-			return nil, err
-		}
-		blobCID, err := cid.Cast(record.Blob.CID)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{
+		value := map[string]any{
 			"$type":          SnapshotNSID,
 			"schemaVersion":  record.SchemaVersion,
 			"vault":          atdata.Bytes(cloneRecordBytes(record.Vault[:])),
 			"publicationId":  atdata.Bytes(cloneRecordBytes(record.PublicationID[:])),
 			"publicationSeq": int64(record.PublicationSeq),
 			"parent":         atdata.Bytes(cloneRecordBytes(record.Parent)),
-			"blob": atdata.Blob{
-				Ref:      atdata.CIDLink(blobCID),
-				MimeType: record.Blob.MIMEType,
-				Size:     int64(record.Blob.Size),
-			},
-		}, nil
+		}
+		if record.PayloadForm() == PayloadFormManifest {
+			entries, err := encodeSnapshotEntries(record.Entries)
+			if err != nil {
+				return nil, err
+			}
+			value["entries"] = entries
+			return value, nil
+		}
+		blobCID, err := cid.Cast(record.Blob.CID)
+		if err != nil {
+			return nil, err
+		}
+		value["blob"] = atdata.Blob{
+			Ref:      atdata.CIDLink(blobCID),
+			MimeType: record.Blob.MIMEType,
+			Size:     int64(record.Blob.Size),
+		}
+		return value, nil
 	case HeadNSID:
 		record, err := DecodeHead(canonicalRecord)
 		if err != nil {
@@ -116,6 +125,17 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 	default:
 		return nil, ErrInvalidRecord
 	}
+}
+
+func recordJSONLimit(record []byte) int {
+	object, err := decodeSnapshotObject(record)
+	if err != nil {
+		return maxRecordJSONBytes
+	}
+	if _, manifest := object["entries"]; manifest {
+		return maxManifestRecordJSONBytes
+	}
+	return maxRecordJSONBytes
 }
 
 func cloneRecordBytes(value []byte) []byte {

@@ -26,6 +26,7 @@ type ApplyFile interface {
 
 type ApplyRoot interface {
 	Lstat(string) (os.FileInfo, error)
+	Mkdir(string, os.FileMode) error
 	OpenFile(string, int, os.FileMode) (ApplyFile, error)
 	Rename(string, string) error
 	Remove(string) error
@@ -143,6 +144,10 @@ func (osApplyFileSystem) OpenRoot(path string) (ApplyRoot, error) {
 
 func (r osApplyRoot) Lstat(name string) (os.FileInfo, error) {
 	return r.root.Lstat(name)
+}
+
+func (r osApplyRoot) Mkdir(name string, mode os.FileMode) error {
+	return r.root.Mkdir(name, mode)
 }
 
 func (r osApplyRoot) OpenFile(name string, flag int, mode os.FileMode) (ApplyFile, error) {

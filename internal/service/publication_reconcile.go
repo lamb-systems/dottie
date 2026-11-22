@@ -39,11 +39,21 @@ type acceptedPublicationRequest struct {
 	expectedFloor  publicationstate.Floor
 	snapshotRecord []byte
 	payload        []byte
+	entries        []publication.PayloadEntry
 }
 
 type acceptedPublicationMaterial struct {
 	floor    publicationstate.Floor
+	form     publication.PayloadForm
 	snapshot model.Snapshot
+	entries  []publication.PayloadEntry
+}
+
+func (material acceptedPublicationMaterial) snapshotFor(portable model.Target) (model.Snapshot, error) {
+	if material.form == publication.PayloadFormPacked {
+		return material.snapshot, nil
+	}
+	return manifestProjection(portable, material.entries)
 }
 
 const (
@@ -203,8 +213,25 @@ func validateAcceptedPublication(
 	if !bytes.Equal(recordCID, floor.RecordCID) ||
 		record.Vault != floor.Binding.Vault ||
 		record.PublicationID != floor.PublicationID ||
-		record.PublicationSeq != floor.Sequence ||
-		!bytes.Equal(record.Blob.CID, floor.BlobCID) ||
+		record.PublicationSeq != floor.Sequence {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStageRecord,
+			publicationReasonRecord,
+			nil,
+		)
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			!manifestFloorMatchesRecord(floor.Manifest, record.Entries) {
+			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+				ctx,
+				publicationStageRecord,
+				publicationReasonRecord,
+				nil,
+			)
+		}
+	} else if floor.Manifest != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
 		record.Blob.Size != floor.BlobSize {
 		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 			ctx,
@@ -233,9 +260,12 @@ func validateAcceptedPublication(
 		)
 	}
 	head, err := publication.DecodeHead(floor.Head)
+	headBlobMatches := bytes.Equal(head.BlobCID, floor.BlobCID)
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		headBlobMatches = len(head.BlobCID) == 0
+	}
 	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence ||
-		!bytes.Equal(head.SnapshotCID, floor.RecordCID) ||
-		!bytes.Equal(head.BlobCID, floor.BlobCID) {
+		!bytes.Equal(head.SnapshotCID, floor.RecordCID) || !headBlobMatches {
 		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 			ctx,
 			publicationStageRecord,
@@ -252,23 +282,37 @@ func validateAcceptedPublication(
 			err,
 		)
 	}
-	snapshot, err := publication.DecodePayload(request.payload, record.Blob)
-	if err != nil {
-		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
-			ctx,
-			publicationStagePayload,
-			publicationReasonPayload,
-			err,
-		)
+	material := acceptedPublicationMaterial{
+		form:    record.PayloadForm(),
+		entries: clonePublicationPayloadEntries(request.entries),
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if !manifestPayloadEntriesMatch(record.Entries, request.entries) {
+			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+				ctx,
+				publicationStagePayload,
+				publicationReasonPayload,
+				nil,
+			)
+		}
+	} else {
+		snapshot, err := publication.DecodePayload(request.payload, record.Blob)
+		if err != nil {
+			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+				ctx,
+				publicationStagePayload,
+				publicationReasonPayload,
+				err,
+			)
+		}
+		material.snapshot = clonePublicationSnapshot(snapshot)
 	}
 
 	if err := checkAcceptedPublicationFloor(ctx, request.store, floor); err != nil {
 		return acceptedPublicationMaterial{}, err
 	}
-	return acceptedPublicationMaterial{
-		floor:    clonePublicationFloor(floor),
-		snapshot: clonePublicationSnapshot(snapshot),
-	}, nil
+	material.floor = clonePublicationFloor(floor)
+	return material, nil
 }
 
 func checkAcceptedPublicationFloor(
@@ -293,13 +337,39 @@ func checkAcceptedPublicationFloor(
 }
 
 func validAcceptedPublicationRequest(request acceptedPublicationRequest) bool {
-	return request.store != nil &&
-		validPublicationBindingInput(request.binding) &&
-		validPublicationFloorInput(request.expectedFloor) &&
-		len(request.snapshotRecord) > 0 &&
-		len(request.snapshotRecord) <= publication.MaxRecordBytes &&
-		len(request.payload) > 0 &&
-		uint64(len(request.payload)) <= publication.MaxBlobBytes
+	if request.store == nil || !validPublicationBindingInput(request.binding) ||
+		!validPublicationFloorInput(request.expectedFloor) ||
+		len(request.snapshotRecord) == 0 ||
+		len(request.snapshotRecord) > publication.MaxManifestRecordBytes {
+		return false
+	}
+	record, err := publication.DecodeSnapshot(request.snapshotRecord)
+	if err != nil {
+		return false
+	}
+	if len(request.payload) > 0 {
+		if record.PayloadForm() != publication.PayloadFormPacked ||
+			uint64(len(request.payload)) > publication.MaxBlobBytes || len(request.entries) != 0 ||
+			len(request.snapshotRecord) > publication.MaxRecordBytes {
+			return false
+		}
+		return true
+	}
+	if record.PayloadForm() != publication.PayloadFormManifest ||
+		len(request.entries) == 0 || len(request.entries) > publication.MaxSnapshotEntries {
+		return false
+	}
+	var total uint64
+	for _, entry := range request.entries {
+		size := uint64(len(entry.Content))
+		if entry.Path == "" || entry.Mode != 0o600 && entry.Mode != 0o644 ||
+			size == 0 || size > publication.MaxBlobBytes ||
+			size > publication.MaxBlobBytes-total {
+			return false
+		}
+		total += size
+	}
+	return true
 }
 
 func validPublicationBindingInput(binding publicationstate.Binding) bool {
@@ -317,11 +387,19 @@ func validPublicationFloorInput(floor publicationstate.Floor) bool {
 		len(floor.AnchorCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes || len(floor.BlobCID) == 0 ||
-		len(floor.BlobCID) > publication.MaxCIDBytes {
+	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes || len(floor.Head) == 0 ||
+	if floor.Manifest == nil {
+		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes ||
+			floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes {
+			return false
+		}
+	} else if len(floor.BlobCID) != 0 || floor.BlobSize != 0 || len(floor.Manifest.Entries) == 0 ||
+		len(floor.Manifest.Entries) > publication.MaxSnapshotEntries {
+		return false
+	}
+	if len(floor.Head) == 0 ||
 		len(floor.Head) > publication.MaxRecordBytes ||
 		!validPublicationBindingInput(floor.Binding) {
 		return false
@@ -402,6 +480,7 @@ func clonePublicationFloor(floor publicationstate.Floor) publicationstate.Floor 
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
 	out.BlobCID = bytes.Clone(floor.BlobCID)
+	out.Manifest = cloneManifestPayloadReference(floor.Manifest)
 	return out
 }
 

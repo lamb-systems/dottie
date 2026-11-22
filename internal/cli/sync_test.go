@@ -650,7 +650,7 @@ func TestSyncRefusesANewcomerUntilAConfirmedPullEstablishesTheFloor(t *testing.T
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, confirmed, "push: committed")
 	uploads, sends := fixture.transport.counts()
-	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 2, uploads)
 	assert.Equal(t, 1, sends)
 }
 
@@ -671,8 +671,8 @@ func TestSyncUnconfirmedPrintsBothHalvesAndChangesNothing(t *testing.T) {
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=1")
 	assert.Contains(t, stdout, "apply: write a.txt")
-	assert.Contains(t, stdout, "push: targets=1 entries=2")
-	assert.Contains(t, stdout, "push: candidate payload:")
+	assert.Contains(t, stdout, "push: form=manifest targets=1 entries=2")
+	assert.Contains(t, stdout, "push: candidate manifest:")
 	assert.Contains(t, stdout, "confirmation: ")
 	assert.Contains(t, stdout, "sync: plan only; nothing was applied or published; repeat with --confirm ")
 	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"), "the unconfirmed run applied the pull half")
@@ -721,7 +721,7 @@ func TestSyncConfirmedAppliesThePullHalfAndPublishesTheReconciledCandidate(t *te
 	assert.Equal(t, before.Revision+2, floor.Revision, "the pull accept and push commit did not both advance the floor")
 	assert.Equal(t, before.Sequence+2, floor.Sequence)
 	uploads, sends := fixture.transport.counts()
-	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 2, uploads)
 	assert.Equal(t, 1, sends)
 	assert.Zero(t, fixture.proposalCount(t), "a retained push record survived the confirmed sync")
 	last := syncTestTerminalSnapshot(t, fixture)
@@ -762,7 +762,7 @@ func TestSyncPlainPushWhenTheAcceptedFloorMatchesTheProvider(t *testing.T) {
 	assert.Contains(t, confirmed, "pull: no changes")
 	assert.Contains(t, confirmed, "push: committed")
 	uploads, sends := fixture.transport.counts()
-	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 2, uploads)
 	assert.Equal(t, 1, sends)
 	last := syncTestTerminalSnapshot(t, fixture)
 	assert.Equal(t, syncTestLocalB, string(last.Entries[1].File.Content))
@@ -1212,6 +1212,24 @@ func syncTestTerminalSnapshot(t *testing.T, fixture *syncTestFixture) model.Snap
 	raw := fixture.terminal(t)
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		target := model.Target{
+			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}
+		entries := make([]publication.PayloadEntry, 0, len(record.Entries))
+		for _, entry := range record.Entries {
+			fixture.transport.mu.Lock()
+			content := bytes.Clone(fixture.transport.blobs[string(entry.Blob.CID)])
+			fixture.transport.mu.Unlock()
+			entries = append(entries, publication.PayloadEntry{
+				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
+			})
+		}
+		snapshot, err := service.ProjectManifestSnapshot(target, entries)
+		require.NoError(t, err)
+		return snapshot
+	}
 	fixture.transport.mu.Lock()
 	payload := bytes.Clone(fixture.transport.blobs[string(record.Blob.CID)])
 	fixture.transport.mu.Unlock()
@@ -1468,4 +1486,33 @@ func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 		"dottie: sync refused: sync needs an accepted publication floor to reconcile against; run dottie pull --confirm first to accept the published position, then run dottie sync; nothing was changed\n",
 		stderr.String(),
 	)
+}
+
+func TestSyncConfirmationTokenBindsTheManifestEntrySet(t *testing.T) {
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62},
+	}
+	binding.Repository = "at://" + binding.AccountDID
+	plan := sha256.Sum256([]byte("manifest plan"))
+	stateToken := sha256.Sum256([]byte("manifest state"))
+	observation := sha256.Sum256([]byte("manifest observation"))
+	view := sha256.Sum256([]byte("manifest view"))
+	identity := syncPushIdentity{
+		Form:           publication.PayloadFormManifest,
+		EntryCount:     2,
+		EntrySetDigest: [32]byte{0x01},
+		Targets:        1,
+		Entries:        3,
+	}
+	token := syncConfirmationToken(binding, plan, stateToken, observation, view, identity)
+	changedDigest := identity
+	changedDigest.EntrySetDigest = [32]byte{0x02}
+	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedDigest))
+	changedCount := identity
+	changedCount.EntryCount = 1
+	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedCount))
+	changedForm := identity
+	changedForm.Form = publication.PayloadFormPacked
+	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedForm))
+	assert.Equal(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, identity))
 }

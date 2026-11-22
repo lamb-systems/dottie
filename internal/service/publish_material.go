@@ -21,7 +21,10 @@ var (
 	ErrReviewMismatch            = errors.New("publication review identity does not match the configuration")
 )
 
-const materialProposalTag = "dottie/material-proposal/v1"
+const (
+	materialProposalTag         = "dottie/material-proposal/v1"
+	materialManifestProposalTag = "dottie/material-proposal/manifest/v1"
+)
 
 type publishMaterialStage string
 type publishMaterialReason string
@@ -149,6 +152,7 @@ type MaterialPublishRequest struct {
 	Store         *publicationstate.Store
 	Transport     MaterialTransport
 	Binding       publicationstate.Binding
+	Form          publication.PayloadForm
 	Snapshot      model.Snapshot
 	PublicationID [16]byte
 	Reviews       ReviewSource
@@ -158,6 +162,7 @@ type MaterialPublishProposal struct {
 	Store         *publicationstate.Store
 	Transport     MaterialTransport
 	Binding       publicationstate.Binding
+	Form          publication.PayloadForm
 	Review        publicationstate.LocalReviewContext
 	ConfigToken   config.Token
 	ProposalToken [32]byte
@@ -240,8 +245,13 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 			nil,
 		)
 	}
+	form := request.Form
+	if form == "" {
+		form = publication.PayloadFormPacked
+	}
 	candidate, blob, batch, err := buildPublicationMaterial(
 		request.Binding,
+		form,
 		request.Snapshot,
 		floor,
 		present,
@@ -273,6 +283,7 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 		Store:         request.Store,
 		Transport:     request.Transport,
 		Binding:       request.Binding,
+		Form:          form,
 		Review:        review,
 		ConfigToken:   configToken,
 		ProposalToken: proposalToken,
@@ -344,9 +355,8 @@ func (coordinator *Coordinator) PublishMaterial(
 			err,
 		)
 	}
-	payloadCID, err := publication.RawPayloadCID(proposal.Candidate.Payload)
-	if err != nil || !bytes.Equal(payloadCID, proposal.Blob.CID) ||
-		uint64(len(proposal.Candidate.Payload)) != proposal.Blob.Size {
+	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+	if err != nil || sealed.PayloadForm() != proposal.Form {
 		return MaterialPublishResult{}, publishMaterialFailure(
 			ctx,
 			publishMaterialStageBatch,
@@ -354,13 +364,36 @@ func (coordinator *Coordinator) PublishMaterial(
 			err,
 		)
 	}
-	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
-	if err != nil || sealed.Blob.MIMEType != proposal.Blob.MIMEType {
+	switch proposal.Form {
+	case publication.PayloadFormPacked:
+		payloadCID, err := publication.RawPayloadCID(proposal.Candidate.Payload)
+		if err != nil || !bytes.Equal(payloadCID, proposal.Blob.CID) ||
+			uint64(len(proposal.Candidate.Payload)) != proposal.Blob.Size ||
+			sealed.Blob.MIMEType != proposal.Blob.MIMEType ||
+			!bytes.Equal(sealed.Blob.CID, proposal.Blob.CID) ||
+			sealed.Blob.Size != proposal.Blob.Size {
+			return MaterialPublishResult{}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageBatch,
+				publishMaterialReasonBlob,
+				err,
+			)
+		}
+	case publication.PayloadFormManifest:
+		if !manifestCandidateEntriesMatch(proposal.Candidate.Entries, sealed.Entries) {
+			return MaterialPublishResult{}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageBatch,
+				publishMaterialReasonBlob,
+				nil,
+			)
+		}
+	default:
 		return MaterialPublishResult{}, publishMaterialFailure(
 			ctx,
 			publishMaterialStageBatch,
 			publishMaterialReasonBlob,
-			err,
+			nil,
 		)
 	}
 	observation, err := proposal.Transport.ReadView(ctx)
@@ -425,36 +458,97 @@ func (coordinator *Coordinator) PublishMaterial(
 	if err != nil {
 		return MaterialPublishResult{Attempt: attempt}, err
 	}
-	if !sameMaterialBlob(upload.Blob, proposal.Blob) || !bytes.Equal(upload.Payload, proposal.Candidate.Payload) {
-		return MaterialPublishResult{
-			Attempt: attempt,
-		}, publishMaterialFailure(
-			ctx,
-			publishMaterialStageUpload,
-			publishMaterialReasonBlob,
-			nil,
-		)
-	}
-	uploaded, err := proposal.Transport.UploadPayload(ctx, upload.Payload)
-	if err != nil {
-		return MaterialPublishResult{
-			Attempt: attempt,
-		}, publishMaterialFailure(
-			ctx,
-			publishMaterialStageUpload,
-			publishMaterialReasonUpload,
-			err,
-		)
-	}
-	if !sameMaterialBlob(uploaded, proposal.Blob) || uploaded.MIMEType != sealed.Blob.MIMEType {
-		return MaterialPublishResult{
-			Attempt: attempt,
-		}, publishMaterialFailure(
-			ctx,
-			publishMaterialStageUpload,
-			publishMaterialReasonBlob,
-			nil,
-		)
+	var uploadedRefs []publicationstate.PayloadEntryReference
+	switch proposal.Form {
+	case publication.PayloadFormPacked:
+		if !sameMaterialBlob(upload.Blob, proposal.Blob) ||
+			!bytes.Equal(upload.Payload, proposal.Candidate.Payload) ||
+			len(upload.Entries) != 0 {
+			return MaterialPublishResult{
+				Attempt: attempt,
+			}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageUpload,
+				publishMaterialReasonBlob,
+				nil,
+			)
+		}
+		uploaded, err := proposal.Transport.UploadPayload(ctx, upload.Payload)
+		if err != nil {
+			return MaterialPublishResult{
+				Attempt: attempt,
+			}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageUpload,
+				publishMaterialReasonUpload,
+				err,
+			)
+		}
+		if !sameMaterialBlob(uploaded, proposal.Blob) || uploaded.MIMEType != sealed.Blob.MIMEType {
+			return MaterialPublishResult{
+				Attempt: attempt,
+			}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageUpload,
+				publishMaterialReasonBlob,
+				nil,
+			)
+		}
+	case publication.PayloadFormManifest:
+		if len(upload.Payload) != 0 || len(upload.Entries) != len(proposal.Candidate.Entries) ||
+			len(upload.Entries) != len(sealed.Entries) {
+			return MaterialPublishResult{
+				Attempt: attempt,
+			}, publishMaterialFailure(
+				ctx,
+				publishMaterialStageUpload,
+				publishMaterialReasonBlob,
+				nil,
+			)
+		}
+		uploadedRefs = make([]publicationstate.PayloadEntryReference, 0, len(upload.Entries))
+		for index, entry := range upload.Entries {
+			want := sealed.Entries[index]
+			candidate := proposal.Candidate.Entries[index]
+			if entry.Path != want.Path || entry.Path != candidate.Path ||
+				!sameMaterialBlob(entry.Blob, want.Blob) ||
+				!bytes.Equal(entry.Payload, candidate.Content) {
+				return MaterialPublishResult{
+					Attempt: attempt,
+				}, publishMaterialFailure(
+					ctx,
+					publishMaterialStageUpload,
+					publishMaterialReasonBlob,
+					nil,
+				)
+			}
+			uploaded, err := proposal.Transport.UploadPayload(ctx, entry.Payload)
+			if err != nil {
+				return MaterialPublishResult{
+					Attempt: attempt,
+				}, publishMaterialFailure(
+					ctx,
+					publishMaterialStageUpload,
+					publishMaterialReasonUpload,
+					err,
+				)
+			}
+			if !sameMaterialBlob(uploaded, entry.Blob) {
+				return MaterialPublishResult{
+					Attempt: attempt,
+				}, publishMaterialFailure(
+					ctx,
+					publishMaterialStageUpload,
+					publishMaterialReasonBlob,
+					nil,
+				)
+			}
+			uploadedRefs = append(uploadedRefs, publicationstate.PayloadEntryReference{
+				Path: entry.Path,
+				CID:  bytes.Clone(uploaded.CID),
+				Size: uploaded.Size,
+			})
+		}
 	}
 	review, configToken, guard, err := proposal.Reviews.Acquire(ctx)
 	if err != nil {
@@ -520,14 +614,27 @@ func (coordinator *Coordinator) PublishMaterial(
 	if err != nil {
 		return MaterialPublishResult{Attempt: attempt}, err
 	}
-	submission, err := proposal.Store.BeginSubmission(
-		ctx,
-		id,
-		submissionProposal.StateToken,
-		proposal.View,
-		proposal.Review,
-		submissionProposal.Confirmation,
-	)
+	var submission publicationstate.SubmissionMaterial
+	if proposal.Form == publication.PayloadFormManifest {
+		submission, err = proposal.Store.BeginManifestSubmission(
+			ctx,
+			id,
+			submissionProposal.StateToken,
+			proposal.View,
+			proposal.Review,
+			submissionProposal.Confirmation,
+			uploadedRefs,
+		)
+	} else {
+		submission, err = proposal.Store.BeginSubmission(
+			ctx,
+			id,
+			submissionProposal.StateToken,
+			proposal.View,
+			proposal.Review,
+			submissionProposal.Confirmation,
+		)
+	}
 	if err != nil {
 		return MaterialPublishResult{Attempt: attempt}, err
 	}
@@ -606,6 +713,24 @@ func (coordinator *Coordinator) retireRejectedMaterialSubmission(
 	return MaterialPublishResult{Attempt: rejected, Outcome: publicationstate.OutcomeRejected}, refusal
 }
 
+func manifestCandidateEntriesMatch(entries []publication.PayloadEntry, record []publication.SnapshotEntry) bool {
+	if len(entries) != len(record) {
+		return false
+	}
+	for index, entry := range entries {
+		want := record[index]
+		if entry.Path != want.Path || entry.Mode != want.Mode || entry.Size != want.Size ||
+			uint64(len(entry.Content)) != want.Size {
+			return false
+		}
+		cid, err := publication.RawPayloadCID(entry.Content)
+		if err != nil || !bytes.Equal(cid, want.Blob.CID) {
+			return false
+		}
+	}
+	return true
+}
+
 func newMaterialWriteBatch(
 	binding publicationstate.Binding,
 	captured *publicationstate.Floor,
@@ -621,12 +746,16 @@ func newMaterialWriteBatch(
 		return MaterialWriteBatch{}, errors.New("publication material candidate key does not match its sequence")
 	}
 	if snapshot.PayloadForm() == publication.PayloadFormManifest {
-		return MaterialWriteBatch{}, &publication.ManifestPayloadError{
-			Reason: publication.ManifestReasonPackedRequired,
+		if len(candidate.Payload) != 0 || !manifestCandidateEntriesMatch(candidate.Entries, snapshot.Entries) {
+			return MaterialWriteBatch{}, publication.ErrPayloadFormMismatch
 		}
-	}
-	if err := publication.VerifyPayload(candidate.Payload, snapshot.Blob); err != nil {
-		return MaterialWriteBatch{}, err
+	} else {
+		if len(candidate.Entries) != 0 {
+			return MaterialWriteBatch{}, publication.ErrPayloadFormMismatch
+		}
+		if err := publication.VerifyPayload(candidate.Payload, snapshot.Blob); err != nil {
+			return MaterialWriteBatch{}, err
+		}
 	}
 	if err := publication.VerifyHeadBinding(
 		candidate.HeadRecord,
@@ -671,6 +800,19 @@ func newMaterialWriteBatch(
 		Sequence: captured.Sequence,
 	}
 	return batch, nil
+}
+
+func cloneManifestPayloadReference(payload *publicationstate.ManifestPayload) *publicationstate.ManifestPayload {
+	if payload == nil {
+		return nil
+	}
+	entries := make([]publicationstate.PayloadEntryReference, 0, len(payload.Entries))
+	for _, entry := range payload.Entries {
+		entries = append(entries, publicationstate.PayloadEntryReference{
+			Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
+		})
+	}
+	return &publicationstate.ManifestPayload{Entries: entries}
 }
 
 func materialWriteBatchFromSubmission(material publicationstate.SubmissionMaterial) MaterialWriteBatch {
@@ -800,6 +942,21 @@ func cloneMaterialCandidate(candidate publicationstate.CandidateInput) publicati
 	return cloned
 }
 
+func sameManifestSnapshotEntries(left, right []publication.SnapshotEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index, entry := range left {
+		other := right[index]
+		if entry.Path != other.Path || entry.Mode != other.Mode || entry.Size != other.Size ||
+			entry.Kind != other.Kind || !bytes.Equal(entry.Blob.CID, other.Blob.CID) ||
+			entry.Blob.Size != other.Blob.Size || entry.Blob.MIMEType != other.Blob.MIMEType {
+			return false
+		}
+	}
+	return true
+}
+
 func materialProposalToken(
 	review publicationstate.LocalReviewContext,
 	candidate publicationstate.CandidateInput,
@@ -809,11 +966,38 @@ func materialProposalToken(
 	if err != nil {
 		return [32]byte{}, err
 	}
-	payloadCID, err := publication.RawPayloadCID(candidate.Payload)
+	record, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	if err != nil {
 		return [32]byte{}, err
 	}
 	message := make([]byte, 0, len(materialProposalTag)+3*32+16+16+16)
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if len(candidate.Payload) != 0 || !manifestCandidateEntriesMatch(candidate.Entries, record.Entries) {
+			return [32]byte{}, publication.ErrPayloadFormMismatch
+		}
+		message = append(message, materialManifestProposalTag...)
+		message = append(message, review.SelectionDigest[:]...)
+		var revisions [16]byte
+		binary.BigEndian.PutUint64(revisions[0:8], review.SelectionRevision)
+		binary.BigEndian.PutUint64(revisions[8:16], review.ApprovalRevision)
+		message = append(message, revisions[:]...)
+		message = append(message, review.ApprovalDigest[:]...)
+		message = append(message, snapshotCID...)
+		message = append(message, publicationID[:]...)
+		var count [8]byte
+		binary.BigEndian.PutUint64(count[:], uint64(len(record.Entries)))
+		message = append(message, count[:]...)
+		entryDigest := manifestEntrySetDigest(record.Entries)
+		message = append(message, entryDigest[:]...)
+		return sha256.Sum256(message), nil
+	}
+	if len(candidate.Entries) != 0 {
+		return [32]byte{}, publication.ErrPayloadFormMismatch
+	}
+	payloadCID, err := publication.RawPayloadCID(candidate.Payload)
+	if err != nil {
+		return [32]byte{}, err
+	}
 	message = append(message, materialProposalTag...)
 	message = append(message, review.SelectionDigest[:]...)
 	var revisions [16]byte
@@ -835,7 +1019,8 @@ func validMaterialPublishRequest(request MaterialPublishRequest) bool {
 	if request.PublicationID == ([16]byte{}) || request.Snapshot.Validate() != nil {
 		return false
 	}
-	return true
+	return request.Form == "" || request.Form == publication.PayloadFormPacked ||
+		request.Form == publication.PayloadFormManifest
 }
 
 func validMaterialPublishProposal(proposal MaterialPublishProposal) bool {
@@ -851,15 +1036,28 @@ func validMaterialPublishProposal(proposal MaterialPublishProposal) bool {
 		return false
 	}
 	if proposal.Candidate.SnapshotKey == "" || len(proposal.Candidate.SnapshotRecord) == 0 ||
-		len(proposal.Candidate.HeadRecord) == 0 ||
-		len(proposal.Candidate.Payload) == 0 {
+		len(proposal.Candidate.HeadRecord) == 0 {
 		return false
 	}
 	if len(proposal.Batch.SnapshotRecord) == 0 || len(proposal.Batch.ExpectedSnapshotCID) == 0 ||
 		len(proposal.Batch.HeadRecord) == 0 {
 		return false
 	}
-	return len(proposal.Blob.CID) != 0 && proposal.Blob.Size != 0 && proposal.Blob.MIMEType != ""
+	switch proposal.Form {
+	case publication.PayloadFormPacked:
+		if len(proposal.Candidate.Payload) == 0 || len(proposal.Candidate.Entries) != 0 ||
+			len(proposal.Blob.CID) == 0 || proposal.Blob.Size == 0 || proposal.Blob.MIMEType == "" {
+			return false
+		}
+	case publication.PayloadFormManifest:
+		if len(proposal.Candidate.Payload) != 0 || len(proposal.Candidate.Entries) == 0 ||
+			len(proposal.Blob.CID) != 0 || proposal.Blob.Size != 0 || proposal.Blob.MIMEType != "" {
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 func validMaterialBinding(binding publicationstate.Binding) bool {
@@ -916,8 +1114,11 @@ type PublicationProposalRecord struct {
 	Generation           uint64
 	FloorRevision        uint64
 	CandidateRecordCID   []byte
+	Form                 publication.PayloadForm
 	CandidatePayloadCID  []byte
 	CandidatePayloadSize uint64
+	CandidateEntryCount  int
+	CandidateEntryDigest [32]byte
 	Review               publicationstate.LocalReviewContext
 	PublicationID        [16]byte
 	Lifecycle            publicationstate.AttemptLifecycle
@@ -955,11 +1156,16 @@ type PublicationPushPreparation struct {
 	NoOp     bool
 	Present  bool
 	Floor    publicationstate.Floor
+	Form     publication.PayloadForm
 	Targets  int
 	Entries  int
 }
 
 func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
+	form := record.Form
+	if form == "" {
+		form = publication.PayloadFormPacked
+	}
 	if record.Version != publicationProposalRecordVersion || record.PublicationID == ([16]byte{}) ||
 		allZeroMaterial(record.Confirmation[:]) ||
 		allZeroMaterial(record.Review.SelectionDigest[:]) ||
@@ -967,9 +1173,22 @@ func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
 		record.Review.SelectionRevision == 0 ||
 		record.Review.ApprovalRevision == 0 ||
 		!validMaterialBinding(record.Binding) ||
-		len(record.CandidateRecordCID) == 0 ||
-		len(record.CandidatePayloadCID) == 0 ||
-		record.CandidatePayloadSize == 0 {
+		len(record.CandidateRecordCID) == 0 {
+		return ErrPublicationProposal
+	}
+	switch form {
+	case publication.PayloadFormPacked:
+		if len(record.CandidatePayloadCID) == 0 || record.CandidatePayloadSize == 0 ||
+			record.CandidateEntryCount != 0 || !allZeroMaterial(record.CandidateEntryDigest[:]) {
+			return ErrPublicationProposal
+		}
+	case publication.PayloadFormManifest:
+		if len(record.CandidatePayloadCID) != 0 || record.CandidatePayloadSize != 0 ||
+			record.CandidateEntryCount <= 0 || record.CandidateEntryCount > publication.MaxSnapshotEntries ||
+			allZeroMaterial(record.CandidateEntryDigest[:]) {
+			return ErrPublicationProposal
+		}
+	default:
 		return ErrPublicationProposal
 	}
 	return nil
@@ -1004,33 +1223,23 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		return PublicationPushPreparation{}, ErrPublicationProposal
 	}
 	base := model.Snapshot{}
-	var acceptedPayload []byte
+	baseForm := publication.PayloadFormPacked
+	var acceptedMaterial publicationstate.AcceptedMaterial
 	if present {
-		material, err := request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
+		acceptedMaterial, err = request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
-		record, err := publication.DecodeSnapshot(material.SnapshotRecord)
+		base, baseForm, err = acceptedPublicationSnapshot(acceptedMaterial, request.Configuration)
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
-		if record.PayloadForm() == publication.PayloadFormManifest {
-			return PublicationPushPreparation{}, &publication.ManifestPayloadError{
-				Reason: publication.ManifestReasonPackedRequired,
-			}
-		}
-		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
-		if err != nil {
-			return PublicationPushPreparation{}, err
-		}
-		base = snapshot
-		acceptedPayload = material.Payload
 	}
 	remote := model.Snapshot{}
 	accepted, err := request.Reader.ReadAcceptedPayload(ctx)
 	switch {
 	case err == nil:
-		remote, err = accepted.Payload.PackedSnapshot()
+		remote, err = publicationPayloadSnapshot(accepted.Payload, request.Configuration)
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
@@ -1045,28 +1254,51 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
-	if err := checkManifestPublication(request.Configuration, snapshot); err != nil {
+	form, candidateSnapshot, err := selectPublicationForm(request.Configuration, snapshot, base)
+	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
 	counts := PublicationPushPreparation{
 		Present: present,
 		Floor:   floor,
-		Targets: len(snapshot.Targets),
-		Entries: len(snapshot.Entries),
+		Form:    form,
+		Targets: len(candidateSnapshot.Targets),
+		Entries: len(candidateSnapshot.Entries),
 	}
 	if present {
-		packed, err := vault.Pack(snapshot)
-		if err != nil {
-			return PublicationPushPreparation{}, err
-		}
-		if bytes.Equal(packed.Payload, acceptedPayload) {
-			counts.NoOp = true
-			return coordinator.preparePublicationPushNoOp(ctx, request, counts)
+		switch form {
+		case publication.PayloadFormPacked:
+			if baseForm == publication.PayloadFormPacked {
+				packed, err := vault.Pack(candidateSnapshot)
+				if err != nil {
+					return PublicationPushPreparation{}, err
+				}
+				if bytes.Equal(packed.Payload, acceptedMaterial.Payload) {
+					counts.NoOp = true
+					return coordinator.preparePublicationPushNoOp(ctx, request, counts)
+				}
+			}
+		case publication.PayloadFormManifest:
+			if baseForm == publication.PayloadFormManifest {
+				baseRecord, err := publication.DecodeSnapshot(acceptedMaterial.SnapshotRecord)
+				if err != nil {
+					return PublicationPushPreparation{}, err
+				}
+				candidateEntries, err := publication.SnapshotEntries(candidateSnapshot)
+				if err != nil {
+					return PublicationPushPreparation{}, err
+				}
+				if sameManifestSnapshotEntries(baseRecord.Entries, candidateEntries) {
+					counts.NoOp = true
+					return coordinator.preparePublicationPushNoOp(ctx, request, counts)
+				}
+			}
 		}
 	}
 	proposal, err := coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
 		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
-		Snapshot: snapshot, PublicationID: request.PublicationID, Reviews: request.Reviews,
+		Form: form, Snapshot: candidateSnapshot, PublicationID: request.PublicationID,
+		Reviews: request.Reviews,
 	})
 	if err != nil {
 		return PublicationPushPreparation{}, coordinator.publicationPushRefusal(ctx, request, err)
@@ -1233,10 +1465,17 @@ func newPublicationProposalRecord(proposal MaterialPublishProposal) PublicationP
 		Version: publicationProposalRecordVersion, Binding: proposal.Binding,
 		Generation:           proposal.Proposal.CapturedGeneration,
 		CandidateRecordCID:   bytes.Clone(proposal.Proposal.CandidateRecordCID),
+		Form:                 proposal.Form,
 		CandidatePayloadCID:  bytes.Clone(proposal.Proposal.CandidateBlobCID),
 		CandidatePayloadSize: proposal.Proposal.CandidateBlobSize,
 		Review:               proposal.Review, PublicationID: proposal.PublicationID,
 		Lifecycle: publicationstate.AttemptPrepared, Confirmation: proposal.Confirmation,
+	}
+	if proposal.Form == publication.PayloadFormManifest {
+		if snapshot, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord); err == nil {
+			record.CandidateEntryCount = len(snapshot.Entries)
+			record.CandidateEntryDigest = manifestEntrySetDigest(snapshot.Entries)
+		}
 	}
 	if proposal.Proposal.CapturedFloor != nil {
 		record.DatabaseID = proposal.Proposal.CapturedFloor.DatabaseID

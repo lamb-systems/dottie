@@ -206,10 +206,15 @@ func newPublicationPrivacyFixture(
 	}
 	selected := filepath.Join(paths.Home, "synthetic")
 	require.NoError(t, os.MkdirAll(selected, 0o700))
+	empty := filepath.Join(paths.Home, "synthetic-empty")
+	require.NoError(t, os.MkdirAll(empty, 0o700))
 	configuration := config.Default()
 	configuration.Targets = []config.Target{{
 		ID: publicationPrivacyTargetID, Source: model.SourceFiles, Mode: config.Review,
 		Root: &config.Root{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}, {
+		ID: publicationPrivacyTargetID + "-empty", Source: model.SourceFiles, Mode: config.Review,
+		Root: &config.Root{Base: model.RootHome, Path: "synthetic-empty", Kind: model.SelectionDirectory},
 	}}
 	require.NoError(t, configuration.Validate())
 
@@ -327,6 +332,14 @@ func (fixture *publicationPrivacyFixture) terminalSnapshot(t *testing.T) publica
 	record, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	require.NoError(t, err)
 	return record
+}
+
+func (fixture *publicationPrivacyFixture) terminalRaw(t *testing.T) []byte {
+	t.Helper()
+	view, err := fixture.adapter.ReadView(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, view.Snapshots)
+	return bytes.Clone(view.Snapshots[len(view.Snapshots)-1].Raw)
 }
 
 func (fixture *publicationPrivacyFixture) floorPresent(t *testing.T) bool {
@@ -1083,3 +1096,43 @@ func (reviews publicationPrivacyReviews) Acquire(
 type publicationPrivacyGuard struct{}
 
 func (publicationPrivacyGuard) Release() {}
+
+func TestPublicationV2ManifestPrivacyGate(t *testing.T) {
+	nonce := publicationPrivacyNonce(t)
+	fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
+	fixture.configuration.Targets = fixture.configuration.Targets[:1]
+	content := publicationPrivacyFileContent(nonce)
+	trackedPath := fixture.writeTrackedFile(t, content)
+	canaries := newPublicationPrivacyCanaries(nonce, trackedPath)
+
+	result, preparation, err := fixture.publish(t)
+	require.NoError(t, err)
+	require.NotNil(t, result.Floor.Manifest)
+	record := fixture.terminalSnapshot(t)
+	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	require.Len(t, record.Entries, 1)
+	assert.Equal(t, publicationPrivacyTrackedFile, record.Entries[0].Path)
+	assert.Equal(t, uint32(0o600), record.Entries[0].Mode)
+	assert.Equal(t, uint64(len(content)), record.Entries[0].Size)
+	assert.NotEqual(t, [32]byte{}, preparation.Record.CandidateEntryDigest)
+
+	head, err := publication.DecodeHead(result.Floor.Head)
+	require.NoError(t, err)
+	assert.Empty(t, head.BlobCID)
+	assert.Empty(t, result.Floor.BlobCID)
+	assert.Zero(t, result.Floor.BlobSize)
+
+	for _, stored := range fixture.pds.CurrentRevision().Records {
+		for _, canary := range canaries.allCanaries {
+			assert.NotContains(t, string(stored.Data), string(canary.value), "manifest record exposed candidate bytes")
+		}
+	}
+	encoded, err := publication.RecordToJSON(fixture.terminalRaw(t))
+	require.NoError(t, err)
+	for _, canary := range canaries.allCanaries {
+		assert.NotContains(t, string(encoded), string(canary.value), "manifest record JSON exposed candidate bytes")
+	}
+	assert.Contains(t, string(encoded), `"path":"`+publicationPrivacyTrackedFile+`"`)
+	assert.Contains(t, string(encoded), `"mode":384`)
+	assert.Equal(t, []string{publicationPrivacyBlobIdentifier(t, record.Entries[0].Blob.CID)}, fixture.pds.StoredBlobCIDs())
+}

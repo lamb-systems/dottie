@@ -38,12 +38,12 @@ func PreviewPublicationTarget(
 
 	material, err := validateAcceptedPublication(ctx, acceptedPublicationRequest{
 		store: owned.store, binding: owned.binding, expectedFloor: owned.expectedFloor,
-		snapshotRecord: owned.snapshotRecord, payload: owned.payload,
+		snapshotRecord: owned.snapshotRecord, payload: owned.payload, entries: owned.entries,
 	})
 	if err != nil {
 		return syncengine.Preview{}, "", err
 	}
-	portable, found := publicationPreviewTarget(material.snapshot, owned.targetID)
+	portable, found := publicationAcceptedTarget(owned.configuration, owned.targetID, material)
 	if !found {
 		return syncengine.Preview{}, "", publicationPreviewFailure(ctx, publicationPreviewReasonTarget, nil)
 	}
@@ -51,8 +51,12 @@ func PreviewPublicationTarget(
 	if err != nil {
 		return syncengine.Preview{}, "", err
 	}
+	snapshot, err := material.snapshotFor(portable)
+	if err != nil {
+		return syncengine.Preview{}, "", publicationPreviewFailure(ctx, publicationPreviewReasonPlan, err)
+	}
 
-	current, err := projectPublicationSnapshot(selection, material.snapshot)
+	current, err := projectPublicationSnapshot(selection, snapshot)
 	if err != nil {
 		return syncengine.Preview{}, "", err
 	}
@@ -142,6 +146,7 @@ type publicationPreviewInputs struct {
 	expectedFloor  publicationstate.Floor
 	snapshotRecord []byte
 	payload        []byte
+	entries        []publication.PayloadEntry
 	configuration  config.Config
 	targetID       string
 	local          *PublicationLocalContext
@@ -159,10 +164,7 @@ func snapshotPublicationPreviewInputs(
 	if err := ctx.Err(); err != nil {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonInput, err)
 	}
-	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxRecordBytes ||
-		len(request.Payload) == 0 ||
-		uint64(len(request.Payload)) > publication.MaxBlobBytes ||
-		!validPublicationFloorInput(request.ExpectedFloor) {
+	if err := validPreviewMaterialInput(request); err != nil {
 		return publicationPreviewInputs{}, publicationPreviewFailure(ctx, publicationPreviewReasonInput, nil)
 	}
 	if len(request.Configuration.Targets) > publicationSelectionMaxTargets {
@@ -195,6 +197,7 @@ func snapshotPublicationPreviewInputs(
 		store: request.Store, binding: request.Binding,
 		expectedFloor:  clonePublicationFloor(request.ExpectedFloor),
 		snapshotRecord: bytes.Clone(request.SnapshotRecord), payload: bytes.Clone(request.Payload),
+		entries:       clonePublicationPayloadEntries(request.Entries),
 		configuration: clonePublicationPreviewConfig(request.Configuration), targetID: request.TargetID, local: local,
 	}
 	if base != nil {
@@ -222,7 +225,7 @@ func snapshotPublicationPreviewBase(
 	base *PublicationReconciliationBase,
 ) (*PublicationReconciliationBase, publicationReconciliationReason) {
 	if !validPublicationFloorInput(base.position.floor) || len(base.position.snapshotRecord) == 0 ||
-		len(base.position.snapshotRecord) > publication.MaxRecordBytes {
+		len(base.position.snapshotRecord) > publication.MaxManifestRecordBytes {
 		return nil, publicationPreviewReasonInput
 	}
 	if !publicationPreviewBaseSelectionWithinBounds(base.selection) {

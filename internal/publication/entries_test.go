@@ -256,8 +256,9 @@ func TestManifestRecordRefusesPackedOnlyConsumers(t *testing.T) {
 	encoded, err := EncodeSnapshot(manifest)
 	require.NoError(t, err)
 	payload, err := RecordToJSON(encoded)
-	assert.Nil(t, payload)
-	requireViolation(t, err, ErrPackedPayloadRequired, "entries", "packed_only")
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), `"entries"`)
+	assert.NotContains(t, string(payload), `"blobCid"`)
 }
 
 func TestManifestEntriesRefuseUnrepresentableSnapshotContent(t *testing.T) {

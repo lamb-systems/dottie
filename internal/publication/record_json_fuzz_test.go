@@ -48,7 +48,7 @@ func FuzzRecordToJSON(f *testing.F) {
 
 		require.NoError(t, err)
 		require.NotNil(t, encoded)
-		require.LessOrEqual(t, len(encoded), maxRecordJSONBytes)
+		require.LessOrEqual(t, len(encoded), recordJSONLimit(data))
 		parsed, err := atdata.UnmarshalJSON(encoded)
 		require.NoError(t, err)
 		reconstructed, err := atdata.MarshalCBOR(parsed)

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/service"
 )
@@ -43,8 +44,11 @@ type proposalRecordFile struct {
 	Generation           uint64              `json:"generation"`
 	FloorRevision        uint64              `json:"floor_revision"`
 	CandidateRecordCID   string              `json:"candidate_record_cid"`
+	Form                 string              `json:"form,omitempty"`
 	CandidatePayloadCID  string              `json:"candidate_payload_cid"`
 	CandidatePayloadSize uint64              `json:"candidate_payload_size"`
+	CandidateEntryCount  int                 `json:"candidate_entry_count,omitempty"`
+	CandidateEntryDigest string              `json:"candidate_entry_digest,omitempty"`
 	SelectionDigest      string              `json:"selection_digest"`
 	SelectionRevision    uint64              `json:"selection_revision"`
 	ApprovalDigest       string              `json:"approval_digest"`
@@ -74,8 +78,11 @@ func encodeProposalRecord(record service.PublicationProposalRecord) ([]byte, err
 		Generation:           record.Generation,
 		FloorRevision:        record.FloorRevision,
 		CandidateRecordCID:   hex.EncodeToString(record.CandidateRecordCID),
+		Form:                 string(record.Form),
 		CandidatePayloadCID:  hex.EncodeToString(record.CandidatePayloadCID),
 		CandidatePayloadSize: record.CandidatePayloadSize,
+		CandidateEntryCount:  record.CandidateEntryCount,
+		CandidateEntryDigest: hex.EncodeToString(record.CandidateEntryDigest[:]),
 		SelectionDigest:      hex.EncodeToString(record.Review.SelectionDigest[:]),
 		SelectionRevision:    record.Review.SelectionRevision,
 		ApprovalDigest:       hex.EncodeToString(record.Review.ApprovalDigest[:]),
@@ -115,7 +122,9 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 		},
 		Generation:           file.Generation,
 		FloorRevision:        file.FloorRevision,
+		Form:                 publication.PayloadForm(file.Form),
 		CandidatePayloadSize: file.CandidatePayloadSize,
+		CandidateEntryCount:  file.CandidateEntryCount,
 		Review: publicationstate.LocalReviewContext{
 			SelectionRevision: file.SelectionRevision, ApprovalRevision: file.ApprovalRevision,
 		},
@@ -143,7 +152,13 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 	if record.CandidateRecordCID, err = decodeHexField(file.CandidateRecordCID); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
-	if record.CandidatePayloadCID, err = decodeHexField(file.CandidatePayloadCID); err != nil {
+	if record.Form == publication.PayloadFormManifest {
+		digest, err := decodeFixedHex(file.CandidateEntryDigest, 32)
+		if err != nil {
+			return service.PublicationProposalRecord{}, errProposalRecordInvalid
+		}
+		copy(record.CandidateEntryDigest[:], digest)
+	} else if record.CandidatePayloadCID, err = decodeHexField(file.CandidatePayloadCID); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
 	if err := service.VerifyPublicationProposalRecord(record); err != nil {

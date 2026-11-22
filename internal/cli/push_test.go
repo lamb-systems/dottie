@@ -30,22 +30,23 @@ import (
 )
 
 type pushTestTransport struct {
-	mu         sync.Mutex
-	binding    publicationstate.Binding
-	context    publicationstate.SuppliedContext
-	contextSeq int
-	blocks     map[string][]byte
-	head       []byte
-	blobs      map[string][]byte
-	prepared   map[string]service.MaterialWriteBatch
-	dispatched map[string]bool
-	uploads    int
-	sends      int
-	prepareErr error
-	staleWrite bool
-	viewErr    error
-	uploadErr  error
-	sendErr    error
+	mu             sync.Mutex
+	binding        publicationstate.Binding
+	context        publicationstate.SuppliedContext
+	contextSeq     int
+	blocks         map[string][]byte
+	head           []byte
+	blobs          map[string][]byte
+	prepared       map[string]service.MaterialWriteBatch
+	dispatched     map[string]bool
+	uploads        int
+	sends          int
+	prepareErr     error
+	staleWrite     bool
+	viewErr        error
+	uploadErr      error
+	sendErr        error
+	commitThenFail bool
 }
 
 func newPushTestTransport(binding publicationstate.Binding) *pushTestTransport {
@@ -133,6 +134,9 @@ func (transport *pushTestTransport) SendWrites(
 	transport.head = bytes.Clone(batch.HeadRecord)
 	transport.contextSeq++
 	transport.context = pushTestContext(transport.contextSeq)
+	if transport.commitThenFail {
+		return service.MaterialWriteOutcome{}, errors.New("synthetic ambiguous commit response")
+	}
 	return service.MaterialWriteOutcome{Committed: true}, nil
 }
 
@@ -204,6 +208,24 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 	record, err := publication.DecodeSnapshot(terminal.Raw)
 	if err != nil {
 		return service.AcceptedPublication{}, err
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		entries := make([]publication.PayloadEntry, 0, len(record.Entries))
+		for _, entry := range record.Entries {
+			content, err := source.transport.blob(ctx, entry.Blob)
+			if err != nil {
+				return service.AcceptedPublication{}, err
+			}
+			entries = append(entries, publication.PayloadEntry{
+				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
+			})
+		}
+		return service.AcceptedPublication{
+			View: view,
+			Payload: publication.Payload{
+				Form: publication.PayloadFormManifest, Entries: entries,
+			},
+		}, nil
 	}
 	payload, err := source.transport.blob(ctx, record.Blob)
 	if err != nil {
@@ -1530,4 +1552,68 @@ func TestPushStillRejectsTheHandleSelector(t *testing.T) {
 		"dottie: usage: push requires --did; a handle cannot be resolved before the publication scope check\n",
 		stderr.String(),
 	)
+}
+
+func TestPushKeepsAnAmbiguousManifestSubmissionBlockingAfterTheCliReturns(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	fixture.transport.commitThenFail = true
+	var stdout, stderr bytes.Buffer
+	code := 0
+	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return pushTestSession(t), nil }
+	sources := func(context.Context, *urfave.Command, pushSession) (publicationPushSources, error) {
+		return fixture.sources(), nil
+	}
+	review := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
+	code = runPushForTest(review, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code, stderr.String())
+	confirmation := confirmationFromOutput(t, stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	confirm := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
+	code = runPushForTest(confirm, &code, "push", "--did", fixture.binding.AccountDID, "--confirm", confirmation)
+	require.Equal(t, 4, code, stderr.String())
+	assert.Contains(t, stdout.String(), "unresolved")
+	uploads, sends := fixture.transport.counts()
+	assert.Equal(t, 1, uploads)
+	assert.Equal(t, 1, sends)
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	retry := newPushCommand(&stdout, &stderr, &code, sessions, sources, pushTestDIDs(pushTestDID))
+	code = runPushForTest(retry, &code, "push", "--did", fixture.binding.AccountDID)
+	require.Equal(t, 3, code, stderr.String())
+	assert.Contains(t, stderr.String(), "unresolved")
+	uploads, sends = fixture.transport.counts()
+	assert.Equal(t, 1, uploads, "a retry uploaded after an ambiguous submission")
+	assert.Equal(t, 1, sends, "a retry dispatched writes after an ambiguous submission")
+}
+
+func TestPublicationProposalStoreRoundTripsAManifestRecordWithoutContent(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushTestFixture(t)
+	store, err := publicationstate.Open(fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	publicationID := [16]byte{0x41, 0x42}
+	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, service.PublicationPushRequest{
+		Store: store, Transport: fixture.transport, Reader: pushTestAcceptedSource{transport: fixture.transport},
+		Records: fixture.records, Binding: fixture.binding, Configuration: fixture.configuration,
+		Reviews: fixture.reviews, PublicationID: publicationID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, publication.PayloadFormManifest, preparation.Record.Form)
+	require.True(t, preparation.Issued)
+	records, err := fixture.records.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, preparation.Record.Form, records[0].Form)
+	assert.Equal(t, preparation.Record.CandidateEntryCount, records[0].CandidateEntryCount)
+	assert.Equal(t, preparation.Record.CandidateEntryDigest, records[0].CandidateEntryDigest)
+	assert.Empty(t, records[0].CandidatePayloadCID)
+	encoded, err := os.ReadFile(fixture.records.path(records[0].PublicationID))
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(encoded), 8<<10)
 }

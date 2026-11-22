@@ -109,6 +109,7 @@ func (source *stubAcceptedSource) set(snapshot model.Snapshot) {
 type publicationPushFixture struct {
 	binding       publicationstate.Binding
 	store         *publicationstate.Store
+	directory     string
 	transport     *materialTestTransport
 	coordinator   *Coordinator
 	paths         platform.Paths
@@ -131,7 +132,6 @@ func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 	require.NoError(t, os.Chmod(directory, 0o700))
 	store, err := publicationstate.Open(directory, binding)
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	paths := materialTestPaths(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "config"), 0o700))
 	require.NoError(
@@ -146,8 +146,9 @@ func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 		ApprovalDigest:    [32]byte{0x72},
 		ApprovalRevision:  1,
 	}
-	return &publicationPushFixture{
-		binding: binding, store: store, transport: newMaterialTestTransport(binding), coordinator: coordinator,
+	fixture := &publicationPushFixture{
+		binding: binding, store: store, directory: directory,
+		transport: newMaterialTestTransport(binding), coordinator: coordinator,
 		paths: paths, reviews: newMaterialReviewSource(review), records: newMemoryProposalStore(),
 		reader: &stubAcceptedSource{}, publicationID: [16]byte{0x73, 0x74},
 		configuration: config.Config{Version: config.Version, Targets: []config.Target{{
@@ -155,6 +156,16 @@ func newPublicationPushFixture(t *testing.T) *publicationPushFixture {
 			Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 		}}},
 	}
+	t.Cleanup(func() { _ = fixture.store.Close() })
+	return fixture
+}
+
+func (fixture *publicationPushFixture) reopenStore(t *testing.T) {
+	t.Helper()
+	require.NoError(t, fixture.store.Close())
+	reopened, err := publicationstate.Open(fixture.directory, fixture.binding)
+	require.NoError(t, err)
+	fixture.store = reopened
 }
 
 func (fixture *publicationPushFixture) request(
@@ -338,16 +349,7 @@ func TestPreparePublicationPushReportsAnUnchangedCandidateAsNoOp(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
 
-	accepted, present, err := fixture.store.Load(ctx)
-	require.NoError(t, err)
-	require.True(t, present)
-	material, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, accepted)
-	require.NoError(t, err)
-	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
-	require.NoError(t, err)
-	snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
-	require.NoError(t, err)
-	fixture.reader.set(snapshot)
+	setManifestReaderFromAccepted(t, fixture)
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x77, 0x78}, nil))
 	require.NoError(t, err)
@@ -369,15 +371,16 @@ func TestPublicationProposalRecordVerificationRefusesIncompleteRecords(t *testin
 	require.NoError(t, VerifyPublicationProposalRecord(record))
 
 	cases := map[string]func(*PublicationProposalRecord){
-		"version":            func(r *PublicationProposalRecord) { r.Version = 0 },
-		"publication id":     func(r *PublicationProposalRecord) { r.PublicationID = [16]byte{} },
-		"confirmation":       func(r *PublicationProposalRecord) { r.Confirmation = [32]byte{} },
-		"selection digest":   func(r *PublicationProposalRecord) { r.Review.SelectionDigest = [32]byte{} },
-		"approval revision":  func(r *PublicationProposalRecord) { r.Review.ApprovalRevision = 0 },
-		"binding":            func(r *PublicationProposalRecord) { r.Binding = publicationstate.Binding{} },
-		"candidate record":   func(r *PublicationProposalRecord) { r.CandidateRecordCID = nil },
-		"candidate payload":  func(r *PublicationProposalRecord) { r.CandidatePayloadSize = 0 },
-		"candidate blob cid": func(r *PublicationProposalRecord) { r.CandidatePayloadCID = nil },
+		"version":           func(r *PublicationProposalRecord) { r.Version = 0 },
+		"publication id":    func(r *PublicationProposalRecord) { r.PublicationID = [16]byte{} },
+		"confirmation":      func(r *PublicationProposalRecord) { r.Confirmation = [32]byte{} },
+		"selection digest":  func(r *PublicationProposalRecord) { r.Review.SelectionDigest = [32]byte{} },
+		"approval revision": func(r *PublicationProposalRecord) { r.Review.ApprovalRevision = 0 },
+		"binding":           func(r *PublicationProposalRecord) { r.Binding = publicationstate.Binding{} },
+		"candidate record":  func(r *PublicationProposalRecord) { r.CandidateRecordCID = nil },
+		"form":              func(r *PublicationProposalRecord) { r.Form = "archive" },
+		"entry count":       func(r *PublicationProposalRecord) { r.CandidateEntryCount = 0 },
+		"entry digest":      func(r *PublicationProposalRecord) { r.CandidateEntryDigest = [32]byte{} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -398,7 +401,10 @@ func TestPublicationProposalRecordCarriesNoPayloadBytes(t *testing.T) {
 	record := preparation.Record
 	assert.Equal(t, fixture.binding.Vault, record.Binding.Vault)
 	assert.NotEmpty(t, record.CandidateRecordCID)
-	assert.NotEmpty(t, record.CandidatePayloadCID)
+	assert.Empty(t, record.CandidatePayloadCID)
+	assert.Equal(t, publication.PayloadFormManifest, record.Form)
+	assert.Equal(t, 1, record.CandidateEntryCount)
+	assert.NotEqual(t, [32]byte{}, record.CandidateEntryDigest)
 	assert.Equal(t, 1, preparation.Targets)
 	assert.Equal(t, 1, preparation.Entries)
 }

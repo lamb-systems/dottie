@@ -358,7 +358,7 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 			},
 		},
 		{
-			name: "malformed_record", stage: "history", reason: "evidence_mismatch",
+			name: "malformed_record", stage: "input", reason: "request_invalid",
 			change: func(_ *testing.T, request *acceptedPublicationRequest) { request.snapshotRecord = []byte(canary) },
 		},
 		{

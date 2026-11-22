@@ -138,6 +138,7 @@ const (
 const (
 	PublicationApplyWrite     PublicationApplyOperation = "write"
 	PublicationApplyDelete    PublicationApplyOperation = "delete"
+	PublicationApplyMkdir     PublicationApplyOperation = "mkdir"
 	PublicationApplyUnchanged PublicationApplyOperation = "unchanged"
 )
 
@@ -154,6 +155,7 @@ type PublicationApplyRequest struct {
 	Barrier         func(PublicationApplyPhase, publicationstate.JournalEntry) error
 	ExpectedPlan    [32]byte
 	ApplyRemoteOnly bool
+	Manifest        bool
 }
 
 type PublicationApplyPlan struct {
@@ -541,6 +543,17 @@ func planPublicationApply(
 		for _, entry := range remote.entries {
 			content[entry.Identity()] = entry
 		}
+		directories := make(map[model.EntryKey]struct{})
+		if request.Manifest {
+			for _, entries := range [][]model.Entry{baseEntries, localEntries, remote.entries} {
+				for _, entry := range entries {
+					if entry.File != nil && entry.File.State == model.FilePresent &&
+						entry.File.Kind == model.FileDirectory {
+						directories[entry.Identity()] = struct{}{}
+					}
+				}
+			}
+		}
 		for _, previewEntry := range preview.Targets[0].Entries {
 			operation, err := publicationApplyOperationFor(
 				ctx,
@@ -551,6 +564,7 @@ func planPublicationApply(
 				anchor,
 				previewEntry,
 				content,
+				directories,
 			)
 			if err != nil {
 				return nil, err
@@ -576,9 +590,60 @@ func publicationApplyOperationFor(
 	anchor publicationstate.JournalAnchor,
 	previewEntry syncengine.PreviewEntry,
 	content map[model.EntryKey]model.Entry,
+	directories map[model.EntryKey]struct{},
 ) (publicationApplyOperation, error) {
 	path := previewEntry.Key.FilePath
 	operation := publicationApplyOperation{targetID: previewEntry.Key.TargetID, root: root, path: path, anchor: anchor}
+	if request.Manifest {
+		if _, directory := directories[previewEntry.Key]; directory {
+			if selection.portable.Root.Kind != model.SelectionDirectory || path == "." {
+				return publicationApplyOperation{}, publicationApplyFailure(
+					ctx,
+					publicationApplyStagePlan,
+					publicationApplyReasonPlanUnresolved,
+					nil,
+				)
+			}
+			operation.key = path
+			switch previewEntry.DecisionAction {
+			case syncengine.ActionDownload:
+				if selection.mode == config.BackupOnly {
+					return publicationApplyOperation{}, publicationApplyFailure(
+						ctx,
+						publicationApplyStagePlan,
+						publicationApplyReasonBackupOnly,
+						nil,
+					)
+				}
+				operation.kind = PublicationApplyMkdir
+				operation.mode = os.FileMode(manifestProjectionDirectoryMode)
+				operation.post = publicationstate.ObservedFile{Present: true, Mode: manifestProjectionDirectoryMode}
+			case syncengine.ActionUnchanged, syncengine.ActionUpload,
+				syncengine.ActionDeleteRemote, syncengine.ActionDeleteLocal:
+				operation.kind = PublicationApplyUnchanged
+				return operation, nil
+			default:
+				return publicationApplyOperation{}, publicationApplyFailure(
+					ctx,
+					publicationApplyStagePlan,
+					publicationApplyReasonPlanUnresolved,
+					nil,
+				)
+			}
+			destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
+			if err != nil || destinationDir != anchor.Path {
+				return publicationApplyOperation{}, publicationApplyFailure(
+					ctx,
+					publicationApplyStagePlan,
+					publicationApplyReasonContainment,
+					err,
+				)
+			}
+			operation.destinationDir = destinationDir
+			operation.destinationPath = destinationPath
+			return operation, nil
+		}
+	}
 	switch previewEntry.DecisionAction {
 	case syncengine.ActionUnchanged:
 		operation.kind = PublicationApplyUnchanged
@@ -698,13 +763,24 @@ func publicationApplyOperationFor(
 	if selection.portable.Root.Kind == model.SelectionFile {
 		operation.key = "."
 	}
-	if err := publicationApplyParents(fileSystem, root, operation.key); err != nil {
-		return publicationApplyOperation{}, publicationApplyFailure(
-			ctx,
-			publicationApplyStagePlan,
-			publicationApplyReasonParent,
-			err,
-		)
+	if request.Manifest {
+		if err := publicationApplyManifestParents(fileSystem, root, operation.key); err != nil {
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonParent,
+				err,
+			)
+		}
+	} else {
+		if err := publicationApplyParents(fileSystem, root, operation.key); err != nil {
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonParent,
+				err,
+			)
+		}
 	}
 	return operation, nil
 }
@@ -752,6 +828,18 @@ func validatePublicationApplyDestination(directory, path string) error {
 }
 
 func publicationApplyParents(fileSystem files.ApplyFileSystem, root, key string) error {
+	return publicationApplyExistingParents(fileSystem, root, key, false)
+}
+
+func publicationApplyManifestParents(fileSystem files.ApplyFileSystem, root, key string) error {
+	return publicationApplyExistingParents(fileSystem, root, key, true)
+}
+
+func publicationApplyExistingParents(
+	fileSystem files.ApplyFileSystem,
+	root, key string,
+	allowMissing bool,
+) error {
 	if key == "." {
 		parent, err := fileSystem.Lstat(filepath.Dir(root))
 		if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 {
@@ -762,6 +850,9 @@ func publicationApplyParents(fileSystem files.ApplyFileSystem, root, key string)
 	parts := strings.Split(key, "/")
 	for index := 1; index < len(parts); index++ {
 		parent, err := fileSystem.Lstat(filepath.Join(root, strings.Join(parts[:index], "/")))
+		if allowMissing && errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 {
 			return errors.New("apply destination parent is not a real directory")
 		}
@@ -787,6 +878,9 @@ func applyPublicationOperation(
 		return entry, nil
 	}
 	bound := publicationApplyBoundFileSystem{ApplyFileSystem: fileSystem, anchor: operation.anchor}
+	if operation.kind == PublicationApplyMkdir {
+		return applyPublicationMkdir(ctx, bound, operation, entry)
+	}
 	observed, err := files.ObserveFileBounded(bound, operation.root, operation.key, publicationApplyMaxObservedBytes)
 	if err != nil {
 		return entry, publicationApplyFailure(
@@ -857,6 +951,22 @@ func applyPublicationOperation(
 	if operation.kind == PublicationApplyDelete {
 		err = files.DeleteFile(bound, operation.root, operation.key, expected)
 	} else {
+		if request.Manifest {
+			if parentErr := publicationApplyEnsureParents(bound, operation.root, operation.key); parentErr != nil {
+				return publicationApplyIndeterminate(
+					ctx,
+					request.Journal,
+					written,
+					entry,
+					publicationApplyFailure(
+						ctx,
+						publicationApplyStageMutate,
+						publicationApplyMutationReason(parentErr),
+						parentErr,
+					),
+				)
+			}
+		}
 		err = files.ReplaceFile(bound, operation.root, operation.key, operation.content, operation.mode, expected)
 	}
 	if err != nil {
@@ -1069,4 +1179,72 @@ func publicationApplyFailure(
 		reason = publicationApplyReasonCanceled
 	}
 	return &publicationApplyError{stage: stage, reason: reason, cancellation: cancellation}
+}
+
+func applyPublicationMkdir(
+	ctx context.Context,
+	fileSystem files.ApplyFileSystem,
+	operation publicationApplyOperation,
+	entry PublicationApplyEntry,
+) (PublicationApplyEntry, error) {
+	if err := publicationApplyEnsureParents(fileSystem, operation.root, operation.key); err != nil {
+		return entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonMutation, err)
+	}
+	root, err := fileSystem.OpenRoot(operation.root)
+	if err != nil {
+		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyReasonUnreadable, err)
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(operation.key)
+	if err == nil {
+		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			entry.Operation = PublicationApplyUnchanged
+			return entry, nil
+		}
+		return entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonContainment, nil)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyReasonUnreadable, err)
+	}
+	if err := root.Mkdir(operation.key, os.FileMode(manifestProjectionDirectoryMode)); err != nil {
+		return entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonMutation, err)
+	}
+	entry.Operation = PublicationApplyMkdir
+	entry.Mode = manifestProjectionDirectoryMode
+	entry.State = publicationstate.JournalStateApplied
+	return entry, nil
+}
+
+func publicationApplyEnsureParents(fileSystem files.ApplyFileSystem, root, key string) error {
+	parts := strings.Split(key, "/")
+	if len(parts) < 2 {
+		return nil
+	}
+	anchored, err := fileSystem.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = anchored.Close() }()
+	parent := ""
+	for _, part := range parts[:len(parts)-1] {
+		if parent == "" {
+			parent = part
+		} else {
+			parent += "/" + part
+		}
+		info, err := anchored.Lstat(parent)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return errors.New("apply destination parent is not a real directory")
+			}
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := anchored.Mkdir(parent, os.FileMode(manifestProjectionDirectoryMode)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

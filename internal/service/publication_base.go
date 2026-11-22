@@ -26,6 +26,7 @@ type PublicationReconciliationRequest struct {
 	ExpectedFloor  publicationstate.Floor
 	SnapshotRecord []byte
 	Payload        []byte
+	Entries        []publication.PayloadEntry
 	Configuration  config.Config
 	TargetID       string
 	Local          *PublicationLocalContext
@@ -90,29 +91,30 @@ func EstablishLocalReconciliationBase(
 	if err := ctx.Err(); err != nil {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, err)
 	}
-	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxRecordBytes {
+	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxManifestRecordBytes {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, nil)
 	}
 	record := bytes.Clone(request.SnapshotRecord)
+	decoded, err := publication.DecodeSnapshot(record)
+	if err != nil || (decoded.PayloadForm() == publication.PayloadFormPacked &&
+		len(record) > publication.MaxRecordBytes) {
+		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, nil)
+	}
 
 	material, err := validateAcceptedPublication(ctx, acceptedPublicationRequest{
 		store: request.Store, binding: request.Binding, expectedFloor: request.ExpectedFloor,
-		snapshotRecord: record, payload: request.Payload,
+		snapshotRecord: record, payload: request.Payload, entries: request.Entries,
 	})
 	if err != nil {
 		return nil, err
 	}
-	var portable model.Target
-	found := false
-	for _, target := range material.snapshot.Targets {
-		if target.ID == request.TargetID {
-			portable = cloneSelectionTargetModel(target)
-			found = true
-			break
-		}
-	}
+	portable, found := publicationAcceptedTarget(request.Configuration, request.TargetID, material)
 	if !found {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonTarget, nil)
+	}
+	snapshot, err := material.snapshotFor(portable)
+	if err != nil {
+		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonPlan, err)
 	}
 
 	local := snapshotPublicationLocalContext(request.Local)
@@ -120,7 +122,7 @@ func EstablishLocalReconciliationBase(
 	if err != nil {
 		return nil, err
 	}
-	projected, err := projectPublicationSnapshot(selection, material.snapshot)
+	projected, err := projectPublicationSnapshot(selection, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +236,7 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 	floor := position.floor
 	if !validPublicationFloorInput(floor) || floor.DatabaseID == ([32]byte{}) || floor.Generation == 0 ||
 		len(position.snapshotRecord) == 0 ||
-		len(position.snapshotRecord) > publication.MaxRecordBytes {
+		len(position.snapshotRecord) > publication.MaxManifestRecordBytes {
 		return false
 	}
 	record, err := publication.DecodeSnapshot(position.snapshotRecord)
@@ -244,8 +246,15 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 	cid, err := publication.RecordCID(position.snapshotRecord)
 	if err != nil || !bytes.Equal(cid, floor.RecordCID) || record.Vault != floor.Binding.Vault ||
 		record.PublicationID != floor.PublicationID ||
-		record.PublicationSeq != floor.Sequence ||
-		!bytes.Equal(record.Blob.CID, floor.BlobCID) ||
+		record.PublicationSeq != floor.Sequence {
+		return false
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			!manifestFloorMatchesRecord(floor.Manifest, record.Entries) {
+			return false
+		}
+	} else if floor.Manifest != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
 		record.Blob.Size != floor.BlobSize {
 		return false
 	}
@@ -255,9 +264,14 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		return false
 	}
 	head, err := publication.DecodeHead(floor.Head)
-	return err == nil && head.Vault == floor.Binding.Vault && head.PublicationSeq == floor.Sequence &&
-		bytes.Equal(head.SnapshotCID, floor.RecordCID) &&
-		bytes.Equal(head.BlobCID, floor.BlobCID)
+	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence ||
+		!bytes.Equal(head.SnapshotCID, floor.RecordCID) {
+		return false
+	}
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		return len(head.BlobCID) == 0
+	}
+	return bytes.Equal(head.BlobCID, floor.BlobCID)
 }
 
 func validPublicationBaseSelection(selection publicationBaseSelection) bool {

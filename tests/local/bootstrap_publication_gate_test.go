@@ -334,6 +334,8 @@ func newBootstrapGateHome(t *testing.T, root, name string, content, sentinel []b
 	}
 	selected := filepath.Join(paths.Home, "synthetic")
 	require.NoError(t, os.MkdirAll(selected, 0o700))
+	empty := filepath.Join(paths.Home, "synthetic-empty")
+	require.NoError(t, os.MkdirAll(empty, 0o700))
 	target := config.Target{
 		ID:     bootstrapGateTargetID,
 		Source: model.SourceFiles,
@@ -346,7 +348,10 @@ func newBootstrapGateHome(t *testing.T, root, name string, content, sentinel []b
 		},
 	}
 	configuration := config.Default()
-	configuration.Targets = []config.Target{target}
+	configuration.Targets = []config.Target{target, {
+		ID: bootstrapGateTargetID + "-empty", Source: model.SourceFiles, Mode: config.Review,
+		Root: &config.Root{Base: model.RootHome, Path: "synthetic-empty", Kind: model.SelectionDirectory},
+	}}
 	require.NoError(t, configuration.Validate())
 	local, err := service.NewPublicationLocalContext(paths, service.LocalFilesCapture{}, nil)
 	require.NoError(t, err)
@@ -456,7 +461,10 @@ func pullBootstrapGate(
 	request := service.PublicationApplyRequest{
 		Vault: binding.Vault, FloorRevision: inspection.Floor.Revision, Configuration: home.configuration,
 		BaseSnapshot: material.base, RemoteSnapshot: material.remote,
-		Roots: map[string]string{home.target.ID: home.selected}, Local: home.local,
+		Roots: map[string]string{
+			home.target.ID:            home.selected,
+			home.target.ID + "-empty": filepath.Join(home.paths.Home, "synthetic-empty"),
+		}, Local: home.local,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	require.NoError(t, err)

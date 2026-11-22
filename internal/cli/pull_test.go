@@ -44,8 +44,35 @@ type pullTestReader struct {
 	mu       sync.Mutex
 	view     publicationstate.SuppliedRepositoryView
 	payloads map[uint64]model.Snapshot
+	entries  map[string][]byte
 	err      error
 	reads    int
+}
+
+func (reader *pullTestReader) ReadEntry(
+	ctx context.Context,
+	reference publication.BlobReference,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	if content, ok := reader.entries[string(reference.CID)]; ok {
+		return bytes.Clone(content), nil
+	}
+	for _, snapshot := range reader.payloads {
+		for _, entry := range snapshot.Entries {
+			if entry.File == nil || entry.File.Kind != model.FileRegular {
+				continue
+			}
+			cid, err := publication.RawPayloadCID(entry.File.Content)
+			if err == nil && bytes.Equal(cid, reference.CID) {
+				return bytes.Clone(entry.File.Content), nil
+			}
+		}
+	}
+	return nil, errors.New("synthetic manifest entry is unavailable")
 }
 
 func (reader *pullTestReader) ReadPayload(
@@ -409,6 +436,11 @@ func (fixture *pullTestFixture) unselectedTargetView(
 
 func (fixture *pullTestFixture) configure(t *testing.T, mode config.Mode) {
 	t.Helper()
+	fixture.configureRoot(t, mode, "config")
+}
+
+func (fixture *pullTestFixture) configureRoot(t *testing.T, mode config.Mode, root string) {
+	t.Helper()
 	directory := fixture.paths.AppConfigDir()
 	require.NoError(t, os.MkdirAll(directory, 0o700))
 	require.NoError(t, os.Chmod(directory, 0o700))
@@ -416,9 +448,9 @@ func (fixture *pullTestFixture) configure(t *testing.T, mode config.Mode) {
 	if mode != "" {
 		content += "mode = \"" + string(mode) + "\"\n"
 	}
-	content += "\n[targets.root]\nbase = \"home\"\npath = \"config\"\nkind = \"directory\"\n"
+	content += "\n[targets.root]\nbase = \"home\"\npath = \"" + root + "\"\nkind = \"directory\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, config.FileName), []byte(content), 0o600))
-	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "config"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, root), 0o700))
 }
 
 func (fixture *pullTestFixture) targetPath(name string) string {
@@ -514,7 +546,7 @@ func newPullTestCommandWithVaults(
 		if factoryCalls != nil {
 			*factoryCalls++
 		}
-		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Close: func() {}}, nil
+		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Entry: reader.ReadEntry, Close: func() {}}, nil
 	}
 	return newPullCommand(
 		stdout,
@@ -1204,30 +1236,30 @@ func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *t
 	plan := sha256.Sum256([]byte("prepared plan"))
 	state := sha256.Sum256([]byte("staged state"))
 	observation := sha256.Sum256([]byte("observed position"))
-	token := pullApplyConfirmationToken(binding, plan, state, observation)
+	token := pullApplyConfirmationToken(binding, plan, state, observation, pullApplyTargetBinding{})
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation),
+		pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation, pullApplyTargetBinding{}),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation),
+		pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation, pullApplyTargetBinding{}),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation"))),
+		pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation")), pullApplyTargetBinding{}),
 	)
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
-	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan, state, observation))
+	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan, state, observation, pullApplyTargetBinding{}))
 	otherAccount := binding
 	otherAccount.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc"
 	otherAccount.Repository = "at://" + otherAccount.AccountDID
-	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation))
-	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation))
+	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation, pullApplyTargetBinding{}))
+	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation, pullApplyTargetBinding{}))
 }
 
 func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t *testing.T) {
@@ -1239,35 +1271,35 @@ func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t 
 	binding.Repository = "at://" + pullTestDID
 	recordCID := []byte{0x01, 0x02, 0x03}
 	observation := sha256.Sum256([]byte("observed position"))
-	token := pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation)
+	token := pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation, pullApplyTargetBinding{})
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 4, true, recordCID, 7, observation),
+		pullAcceptPositionConfirmationToken(binding, 4, true, recordCID, 7, observation, pullApplyTargetBinding{}),
 		"the token does not bind the floor revision",
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, false, recordCID, 7, observation),
+		pullAcceptPositionConfirmationToken(binding, 3, false, recordCID, 7, observation, pullApplyTargetBinding{}),
 		"the token does not bind first use versus advance",
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, true, []byte{0x01, 0x02, 0x04}, 7, observation),
+		pullAcceptPositionConfirmationToken(binding, 3, true, []byte{0x01, 0x02, 0x04}, 7, observation, pullApplyTargetBinding{}),
 		"the token does not bind the observed record",
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 8, observation),
+		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 8, observation, pullApplyTargetBinding{}),
 		"the token does not bind the observed sequence",
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, sha256.Sum256([]byte("moved observation"))),
+		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, sha256.Sum256([]byte("moved observation")), pullApplyTargetBinding{}),
 		"the token does not bind the observation digest",
 	)
 	otherVault := binding
@@ -1275,10 +1307,10 @@ func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t 
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(otherVault, 3, true, recordCID, 7, observation),
+		pullAcceptPositionConfirmationToken(otherVault, 3, true, recordCID, 7, observation, pullApplyTargetBinding{}),
 		"the token does not bind the vault",
 	)
-	assert.Equal(t, token, pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation))
+	assert.Equal(t, token, pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation, pullApplyTargetBinding{}))
 }
 
 func TestPullOffersAcceptanceForANewcomerWhoseFilesAlreadyMatch(t *testing.T) {
@@ -2132,4 +2164,31 @@ func TestPullRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	assert.Empty(t, stdout.String())
 	assert.Equal(t, "dottie: pull refused: account session is unavailable\n", stderr.String())
 	assert.Zero(t, factoryCalls, "a missing session constructed the provider reader")
+}
+
+func TestPullApplyConfirmationBindsTheManifestTargetRootAndConfigurationRevisions(t *testing.T) {
+	binding := pullTestManifestBinding()
+	plan := sha256.Sum256([]byte("manifest plan"))
+	state := sha256.Sum256([]byte("manifest state"))
+	observation := sha256.Sum256([]byte("manifest observation"))
+	target := pullApplyTargetBinding{
+		TargetID:          "files",
+		Root:              model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		SelectionRevision: 2, ApprovalRevision: 3,
+	}
+	token := pullApplyConfirmationToken(binding, plan, state, observation, target)
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, pullApplyTargetBinding{}))
+	changedTarget := target
+	changedTarget.TargetID = "other"
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, changedTarget))
+	changedRoot := target
+	changedRoot.Root.Path = "other"
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, changedRoot))
+	changedSelection := target
+	changedSelection.SelectionRevision++
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, changedSelection))
+	changedApproval := target
+	changedApproval.ApprovalRevision++
+	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, changedApproval))
+	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation, target))
 }

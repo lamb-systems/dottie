@@ -74,13 +74,14 @@ func publicationSnapshotTargetEntries(snapshot model.Snapshot, targetID string) 
 
 func buildPublicationMaterial(
 	binding publicationstate.Binding,
+	form publication.PayloadForm,
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
 	view publicationstate.SuppliedRepositoryView,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, publication.BlobReference, MaterialWriteBatch, error) {
-	candidate, blob, err := encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
+	candidate, blob, err := encodePublicationCandidate(binding, form, snapshot, floor, present, publicationID)
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, MaterialWriteBatch{}, err
 	}
@@ -103,24 +104,12 @@ func buildPublicationMaterial(
 
 func encodePublicationCandidate(
 	binding publicationstate.Binding,
+	form publication.PayloadForm,
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, publication.BlobReference, error) {
-	packed, err := vault.Pack(snapshot)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	blobCID, err := publication.RawPayloadCID(packed.Payload)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	blob := publication.BlobReference{
-		CID:      blobCID,
-		Size:     uint64(len(packed.Payload)),
-		MIMEType: publication.SnapshotBlobMIMEType,
-	}
 	var sequence uint64
 	parent := []byte{}
 	if present {
@@ -131,30 +120,95 @@ func encodePublicationCandidate(
 	if err != nil {
 		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 	}
-	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-		PublicationSeq: sequence, Parent: parent, Blob: blob,
-	})
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+	switch form {
+	case publication.PayloadFormPacked:
+		packed, err := vault.Pack(snapshot)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		blobCID, err := publication.RawPayloadCID(packed.Payload)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		blob := publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(packed.Payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		}
+		snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
+			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
+			PublicationSeq: sequence, Parent: parent, Blob: blob,
+		})
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		snapshotCID, err := publication.RecordCID(snapshotRecord)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		headRecord, err := publication.EncodeHead(publication.HeadRecord{
+			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
+			SnapshotCID: snapshotCID, BlobCID: blobCID,
+		})
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		return publicationstate.CandidateInput{
+			SnapshotKey:    key,
+			SnapshotRecord: snapshotRecord,
+			HeadRecord:     headRecord,
+			Payload:        packed.Payload,
+		}, blob, nil
+	case publication.PayloadFormManifest:
+		snapshotEntries, err := publication.SnapshotEntries(snapshot)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
+			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
+			PublicationSeq: sequence, Parent: parent, Entries: snapshotEntries,
+		})
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		snapshotCID, err := publication.RecordCID(snapshotRecord)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		headRecord, err := publication.EncodeHead(publication.HeadRecord{
+			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
+			SnapshotCID: snapshotCID,
+		})
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
+		content := make(map[string][]byte, len(snapshot.Entries))
+		for _, entry := range snapshot.Entries {
+			if entry.File == nil || entry.File.State != model.FilePresent ||
+				entry.File.Kind != model.FileRegular || entry.File.Mode == 0 {
+				return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrInvalidRecord
+			}
+			content[entry.File.Path] = entry.File.Content
+		}
+		entries := make([]publication.PayloadEntry, 0, len(snapshotEntries))
+		for _, entry := range snapshotEntries {
+			data, present := content[entry.Path]
+			if !present {
+				return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrInvalidRecord
+			}
+			entries = append(entries, publication.PayloadEntry{
+				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: bytes.Clone(data),
+			})
+		}
+		return publicationstate.CandidateInput{
+			SnapshotKey:    key,
+			SnapshotRecord: snapshotRecord,
+			HeadRecord:     headRecord,
+			Entries:        entries,
+		}, publication.BlobReference{}, nil
+	default:
+		return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrPayloadFormMismatch
 	}
-	snapshotCID, err := publication.RecordCID(snapshotRecord)
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	headRecord, err := publication.EncodeHead(publication.HeadRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
-		SnapshotCID: snapshotCID, BlobCID: blobCID,
-	})
-	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-	}
-	return publicationstate.CandidateInput{
-		SnapshotKey:    key,
-		SnapshotRecord: snapshotRecord,
-		HeadRecord:     headRecord,
-		Payload:        packed.Payload,
-	}, blob, nil
 }
 
 type PublicationSyncSnapshotRequest struct {

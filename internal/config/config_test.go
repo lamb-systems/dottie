@@ -288,53 +288,13 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 	}
 }
 
-func TestManifestTargetRoundTripsThroughTheConfigFile(t *testing.T) {
+func TestTargetFormIsNotAConfigurationOption(t *testing.T) {
 	paths := testPaths(t)
-	configuration := Default()
-	target := filesTarget("config", model.RootHome, "config", model.SelectionDirectory)
-	target.Form = PayloadFormManifest
-	configuration.Targets = []Target{target}
-	require.NoError(t, configuration.Validate())
-	assert.True(t, configuration.HasManifestTarget(), "HasManifestTarget")
-	assert.False(t, Default().HasManifestTarget(), "absent opt-in")
-	seedConfig(t, paths, configuration)
+	writeRawConfig(t, paths, "config_version=2\n[[targets]]\nid='config'\nsource='files'\nform='manifest'\n[targets.root]\nbase='home'\npath='config'\nkind='directory'\n")
 
-	loaded, err := Load(paths)
-	require.NoError(t, err)
-	require.Len(t, loaded.Targets, 1)
-	assert.Equal(t, PayloadFormManifest, loaded.Targets[0].Form, "round trip lost the manifest form")
-}
-
-func TestPackedPayloadFormIsTheDefaultAndValidates(t *testing.T) {
-	configuration := Default()
-	implicit := filesTarget("config", model.RootHome, "config", model.SelectionDirectory)
-	explicit := filesTarget("module", model.RootXDGConfig, "foo", model.SelectionDirectory)
-	explicit.Form = PayloadFormPacked
-	configuration.Targets = []Target{implicit, explicit}
-	require.NoError(t, configuration.Validate())
-	assert.Equal(t, PayloadForm(""), configuration.Targets[0].Form, "omitted form")
-	assert.False(t, configuration.HasManifestTarget(), "HasManifestTarget")
-}
-
-func TestManifestTargetRefusesAnUnknownPayloadForm(t *testing.T) {
-	configuration := Default()
-	target := filesTarget("config", model.RootHome, "config", model.SelectionDirectory)
-	target.Form = "archive"
-	configuration.Targets = []Target{target}
-	err := configuration.Validate()
-	require.ErrorIs(t, err, ErrUnknownPayloadForm)
-	assert.Contains(t, err.Error(), `"archive"`)
-}
-
-func TestManifestTargetRequiresAFilesSource(t *testing.T) {
-	configuration := Default()
-	configuration.Targets = []Target{{
-		ID: "desktop", Source: model.SourceGNOME, Form: PayloadFormManifest,
-		GNOMEPolicy: &GNOMEPolicy{Approval: GNOMEApprovalPending},
-	}}
-	err := configuration.Validate()
+	_, err := Load(paths)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "manifest publications require a files target")
+	assert.Contains(t, err.Error(), `unknown configuration key "targets.form"`)
 }
 
 func TestUpdateLoadPermissionsAndCanonicalExcludes(t *testing.T) {

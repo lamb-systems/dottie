@@ -7,15 +7,16 @@ boundaries below to decide whether to publish configuration with this tree.
 
 ## Current v2 access model
 
-A v2 snapshot is a packed plaintext record set published in the account's own AT Protocol
-repository. Dottie does not add a client-side confidentiality layer over that payload.
+A v2 snapshot is a packed plaintext record set or an ordered plaintext file manifest published in
+the account's own AT Protocol repository. Dottie does not add a client-side confidentiality layer
+over that payload.
 
 A fresh-machine `dottie pull` resolves the publication, fetches and decodes the packed plaintext
-blob, and can apply it using the account session and the published `vaultHeadV2` record. It does not
-load a Dottie device key. The reader verifies account identity, publication scopes, record
-membership in a signed commit, the head/snapshot chain, the payload CID and size, and the payload
-format. Those checks establish repository-scoped authenticity and integrity, not global freshness or
-device authorization.
+blob or every manifest entry blob, and can apply them using the account session and the published
+`vaultHeadV2` record. It does not load a Dottie device key. The reader verifies account identity,
+publication scopes, record membership in a signed commit, the head/snapshot chain, each payload CID
+and size, and the payload format. Those checks establish repository-scoped authenticity and
+integrity, not global freshness or device authorization.
 
 `dottie push` resolves the vault it acts on from local evidence: an explicit `--vault`, the recorded local vault
 selection, or the stored publication binding recorded for the same account. It prepares a candidate under the same
@@ -47,8 +48,11 @@ one per entry that was already uploaded, and Dottie still cannot delete them. Th
 by the 64-entry manifest ceiling and the custody byte limit, it stays provider-side, and it does not
 license exposing candidate bytes locally: a manifest submission that did not succeed surfaces no
 entry content through any Dottie command, log, error, report or archive, and the accepted position
-does not advance. The local attempt remains the blocking, unresolved record of what may have been
-attempted.
+does not advance. A failure before submission is abandoned automatically by the confirmation
+wrapper; once submission may have happened, the attempt remains unresolved and blocking. Dottie
+never retries a different form after an attempt starts. The 64-object custody limit is shared across
+retained publications, not newly granted per publication, so a representable manifest successor that
+changes a CID can still be refused before any upload.
 
 ## Evidence behind a submission
 
@@ -68,9 +72,10 @@ The manifest list is strictly more evidence than the packed path has, not a subs
 ## Public metadata visibility
 
 V2 typed repository records are public plaintext metadata. The published head and snapshot records
-disclose the vault and publication identifiers, sequence, parent and CIDs; the payload itself is
-plaintext. Do not publish configuration you are unwilling to place in the account repository and
-provider storage.
+disclose the vault and publication identifiers, sequence, parent and CIDs. A manifest record also
+discloses every file path, mode, size and blob CID, although not the file content in the record
+itself; the blobs are plaintext. Do not publish configuration you are unwilling to place in the
+account repository and provider storage.
 
 Dottie has no log facility. Routine status, read, push, pull, sync and position output omits file
 contents, setting values, private keys, session material, relative entry locators and absolute
@@ -95,6 +100,14 @@ There is no cross-machine recovery path that works without a live PDS and accoun
 recovery kit and no export archive in this tree, and no command mints, reads or stores one. Losing
 account access or provider-held data can therefore lose the published position; losing Dottie device
 keys alone does not.
+
+A manifest record carries no target id or portable root. Dottie maps it only to the sole local
+directory files target and cannot detect that a publisher used a different directory. The pull
+confirmation binds the local target id, portable root and selection/approval revisions, so changing
+the local target, root or configuration between review and confirmation refuses. Multi-target
+configurations cannot consume a manifest base; they fall back to packed only when the accepted base
+is packed. The target root must exist before apply. Missing parent directories named implicitly by a
+manifest path are created with mode `0755`; directory modes are not carried in the record.
 
 Local state is plaintext on disk. The publication position database, the apply journal, journal
 preimage backups and captured payloads are readable by anyone who can read the state directory. Local
@@ -126,8 +139,9 @@ the v2 `vaultSnapshotV2`/`vaultHeadV2` collections or in any retired v1 `vault*`
 from other applications do not block bootstrap. Bootstrap writes no repository record: it derives the
 vault identity from the vault name and the freshly minted root key, stores the root device keys in
 Secret Service, and records the local vault selection. The first `push` is the only publication of
-that vault, through the v2 packed-plaintext profile. An account can hold only one published Dottie
-vault because bootstrap refuses an account that already holds one. Multi-vault selection means only
+that vault, through the v2 plaintext profile; Dottie chooses packed or manifest automatically. An
+account can hold only one published Dottie vault because bootstrap refuses an account that already
+holds one. Multi-vault selection means only
 locally recorded vaults, not multiple published vaults on one account.
 
 Bootstrap mints no secret for offline use, prints none and flushes none. A keyring or local selection

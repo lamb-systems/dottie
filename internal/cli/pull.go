@@ -50,6 +50,11 @@ const (
 
 const publicationApplyConflictLimit = 20
 
+const (
+	pullApplyMaxEntryBytes uint64 = 8 << 20
+	pullApplyMaxTotalBytes uint64 = 256 << 20
+)
+
 type pullFinding struct {
 	Kind   string
 	Reason string
@@ -62,6 +67,7 @@ type pullViewReader interface {
 type pullRemote struct {
 	Reader pullViewReader
 	Blob   func(context.Context, publication.SnapshotRecord) ([]byte, error)
+	Entry  func(context.Context, publication.BlobReference) ([]byte, error)
 	Close  func()
 }
 
@@ -76,11 +82,17 @@ type pullApplySources struct {
 type pullApplySourcesFactory func(context.Context, *urfave.Command, publicationstate.Binding) (pullApplySources, error)
 
 type pullApplyMaterial struct {
-	Base      model.Snapshot
-	Remote    model.Snapshot
-	Payload   []byte
-	RecordCID []byte
-	Sequence  uint64
+	Base        model.Snapshot
+	Remote      model.Snapshot
+	Payload     []byte
+	Form        publication.PayloadForm
+	BaseForm    publication.PayloadForm
+	Entries     []publication.PayloadEntry
+	BaseEntries []publication.PayloadEntry
+	TargetID    string
+	TargetRoot  model.FileRoot
+	RecordCID   []byte
+	Sequence    uint64
 }
 
 var (
@@ -290,7 +302,21 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
 	}
-	if floor.Manifest != nil || record.PayloadForm() == publication.PayloadFormManifest {
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.Manifest.Entries) != len(record.Entries) {
+			return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
+		}
+		for index, entry := range record.Entries {
+			reference := floor.Manifest.Entries[index]
+			if reference.Path != entry.Path || reference.Size != entry.Size ||
+				!bytes.Equal(reference.CID, entry.Blob.CID) {
+				return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
+			}
+		}
+		return pullFinding{Kind: pullFindingMatches}
+	}
+	if floor.Manifest != nil {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 	}
 	if record.Blob.Size != floor.BlobSize {
@@ -476,10 +502,40 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
+	if material.Form == publication.PayloadFormManifest || material.BaseForm == publication.PayloadFormManifest {
+		target, portable, err := service.ManifestPublicationTarget(sources.Configuration)
+		if err != nil {
+			return pullApplyPreparation{}, urfave.Exit(
+				input.label()+" refused: a manifest publication requires the sole local directory files target; nothing was changed",
+				3,
+			)
+		}
+		material.TargetID = target.ID
+		material.TargetRoot = *portable.Root
+		if material.Form == publication.PayloadFormManifest {
+			material.Remote, err = service.ProjectManifestSnapshot(portable, material.Entries)
+			if err != nil {
+				return pullApplyPreparation{}, urfave.Exit(
+					input.label()+" refused: the manifest publication entries cannot be projected onto the local target; nothing was changed",
+					3,
+				)
+			}
+		}
+		if input.Present && material.BaseForm == publication.PayloadFormManifest {
+			material.Base, err = service.ProjectManifestSnapshot(portable, material.BaseEntries)
+			if err != nil {
+				return pullApplyPreparation{}, urfave.Exit(
+					input.label()+" refused: the accepted manifest position cannot be projected onto the local target; nothing was changed",
+					3,
+				)
+			}
+		}
+	}
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
 		Configuration: sources.Configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
 		Roots: roots, Local: sources.Local, ApplyRemoteOnly: input.RemoteOnly,
+		Manifest: material.Form == publication.PayloadFormManifest,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
@@ -496,6 +552,7 @@ func preparePullApply(
 		staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 			Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
 			FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
+			Entries: material.Entries,
 		})
 		if err != nil {
 			return pullApplyPreparation{}, pullAcceptPositionStagingFailure(input.label(), err)
@@ -510,12 +567,18 @@ func preparePullApply(
 			material.RecordCID,
 			material.Sequence,
 			staged.ObservationDigest,
+			pullApplyTargetBinding{
+				TargetID: material.TargetID, Root: material.TargetRoot,
+				SelectionRevision: sources.Configuration.SelectionRevision,
+				ApprovalRevision:  sources.Configuration.ApprovalRevision,
+			},
 		)
 		return preparation, nil
 	}
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
 		FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
+		Entries: material.Entries,
 	})
 	if err != nil {
 		return pullApplyPreparation{}, pullAcceptStagingFailure(input.label(), err)
@@ -527,6 +590,11 @@ func preparePullApply(
 		plan.Digest,
 		staged.StateToken,
 		staged.ObservationDigest,
+		pullApplyTargetBinding{
+			TargetID: material.TargetID, Root: material.TargetRoot,
+			SelectionRevision: sources.Configuration.SelectionRevision,
+			ApprovalRevision:  sources.Configuration.ApprovalRevision,
+		},
 	)
 	return preparation, nil
 }
@@ -567,6 +635,7 @@ func applyPullPreparation(
 		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
 		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
 		Observation: preparation.Observation, Payload: preparation.Material.Payload,
+		Entries: preparation.Material.Entries,
 	})
 	if acceptErr != nil {
 		return output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
@@ -666,6 +735,7 @@ func acceptPullPosition(
 		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
 		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
 		Observation: preparation.Observation, Payload: preparation.Material.Payload,
+		Entries: preparation.Material.Entries,
 	})
 	if acceptErr != nil {
 		return output, pullAcceptPositionFailure(input.Command, output, acceptErr)
@@ -705,35 +775,30 @@ func pullApplySnapshots(
 	floor publicationstate.Floor,
 	present bool,
 ) (pullApplyMaterial, error) {
-	if len(view.Snapshots) == 0 || remote.Blob == nil {
+	if len(view.Snapshots) == 0 {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	terminal, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
+	terminalBlock := view.Snapshots[len(view.Snapshots)-1]
+	terminal, err := publication.DecodeSnapshot(terminalBlock.Raw)
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	if terminal.PayloadForm() == publication.PayloadFormManifest {
-		return pullApplyMaterial{}, &publication.ManifestPayloadError{
-			Reason: publication.ManifestReasonPackedRequired,
-		}
-	}
-	recordCID, err := publication.RecordCID(view.Snapshots[len(view.Snapshots)-1].Raw)
+	recordCID, err := publication.RecordCID(terminalBlock.Raw)
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	payload, err := remote.Blob(ctx, terminal)
+	payload, raw, err := pullApplyResolvedPayload(ctx, remote, terminal)
 	if err != nil {
 		return pullApplyMaterial{}, err
-	}
-	remoteSnapshot, err := publication.DecodePayload(payload, terminal.Blob)
-	if err != nil {
-		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
 	if !present {
 		return pullApplyMaterial{
 			Base:      model.Snapshot{Version: model.SnapshotVersion},
-			Remote:    remoteSnapshot,
-			Payload:   payload,
+			Remote:    payload.Snapshot,
+			Payload:   raw,
+			BaseForm:  publication.PayloadFormPacked,
+			Form:      payload.Form,
+			Entries:   payload.Entries,
 			RecordCID: recordCID,
 			Sequence:  terminal.PublicationSeq,
 		}, nil
@@ -746,33 +811,80 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	if baseRecord.PayloadForm() == publication.PayloadFormManifest {
-		return pullApplyMaterial{}, &publication.ManifestPayloadError{
-			Reason: publication.ManifestReasonPackedRequired,
-		}
-	}
 	baseCID, err := publication.RecordCID(block.Raw)
 	if err != nil || block.Key != floor.SnapshotKey || !bytes.Equal(baseCID, floor.RecordCID) ||
-		floor.Manifest != nil ||
-		!bytes.Equal(baseRecord.Blob.CID, floor.BlobCID) ||
-		baseRecord.Blob.Size != floor.BlobSize {
+		!pullApplyFloorMatchesRecord(floor, baseRecord) {
 		return pullApplyMaterial{}, errPullApplySnapshotMoved
 	}
-	basePayload, err := remote.Blob(ctx, baseRecord)
+	basePayload, _, err := pullApplyResolvedPayload(ctx, remote, baseRecord)
 	if err != nil {
 		return pullApplyMaterial{}, err
 	}
-	base, err := publication.DecodePayload(basePayload, baseRecord.Blob)
-	if err != nil {
-		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
-	}
 	return pullApplyMaterial{
-		Base:      base,
-		Remote:    remoteSnapshot,
-		Payload:   payload,
-		RecordCID: recordCID,
-		Sequence:  terminal.PublicationSeq,
+		Base:        basePayload.Snapshot,
+		Remote:      payload.Snapshot,
+		Payload:     raw,
+		Form:        payload.Form,
+		BaseForm:    basePayload.Form,
+		Entries:     payload.Entries,
+		BaseEntries: basePayload.Entries,
+		RecordCID:   recordCID,
+		Sequence:    terminal.PublicationSeq,
 	}, nil
+}
+
+func pullApplyResolvedPayload(
+	ctx context.Context,
+	remote pullRemote,
+	record publication.SnapshotRecord,
+) (publication.Payload, []byte, error) {
+	if record.PayloadForm() == publication.PayloadFormPacked {
+		if remote.Blob == nil {
+			return publication.Payload{}, nil, errPullApplySnapshotUnavailable
+		}
+		payload, err := remote.Blob(ctx, record)
+		if err != nil {
+			return publication.Payload{}, nil, err
+		}
+		snapshot, err := publication.DecodePayload(payload, record.Blob)
+		if err != nil {
+			return publication.Payload{}, nil, errPullApplySnapshotUnavailable
+		}
+		return publication.Payload{Form: publication.PayloadFormPacked, Snapshot: snapshot}, payload, nil
+	}
+	if remote.Entry == nil {
+		return publication.Payload{}, nil, errPullApplySnapshotUnavailable
+	}
+	limits := publication.PayloadLimits{
+		MaxEntries: publication.MaxSnapshotEntries, MaxEntryBytes: pullApplyMaxEntryBytes,
+		MaxTotalBytes: pullApplyMaxTotalBytes,
+	}
+	payload, err := publication.ResolvePayload(record, limits, func(blob publication.BlobReference) ([]byte, error) {
+		return remote.Entry(ctx, blob)
+	})
+	if err != nil {
+		return publication.Payload{}, nil, err
+	}
+	return payload, nil, nil
+}
+
+func pullApplyFloorMatchesRecord(floor publicationstate.Floor, record publication.SnapshotRecord) bool {
+	if record.PayloadForm() == publication.PayloadFormManifest {
+		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.Manifest.Entries) != len(record.Entries) {
+			return false
+		}
+		for index, entry := range record.Entries {
+			reference := floor.Manifest.Entries[index]
+			if reference.Path != entry.Path || reference.Size != entry.Size ||
+				!bytes.Equal(reference.CID, entry.Blob.CID) {
+				return false
+			}
+		}
+		return true
+	}
+	return floor.Manifest == nil && bytes.Equal(floor.BlobCID, record.Blob.CID) &&
+		floor.BlobSize == record.Blob.Size
 }
 
 func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicationstate.Observation {
@@ -978,6 +1090,8 @@ func renderPullApplyPlan(plan service.PublicationApplyPlan) string {
 		switch entry.Operation {
 		case service.PublicationApplyWrite:
 			fmt.Fprintf(&output, "apply: write %s size=%d\n", escapeField(entry.Path), entry.Size)
+		case service.PublicationApplyMkdir:
+			fmt.Fprintf(&output, "apply: mkdir %s\n", escapeField(entry.Path))
 		case service.PublicationApplyDelete:
 			fmt.Fprintf(&output, "apply: delete %s\n", escapeField(entry.Path))
 		case service.PublicationApplyUnchanged:
@@ -1003,11 +1117,45 @@ func renderPullApplyReport(report service.PublicationApplyReport) string {
 	)
 }
 
+type pullApplyTargetBinding struct {
+	TargetID          string
+	Root              model.FileRoot
+	SelectionRevision uint64
+	ApprovalRevision  uint64
+}
+
+func writePullApplyTargetBinding(digest hashWriter, target pullApplyTargetBinding) {
+	if target.TargetID == "" {
+		return
+	}
+	writeField := func(value string) {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	_, _ = digest.Write([]byte{1})
+	writeField(target.TargetID)
+	writeField(string(target.Root.Base))
+	writeField(target.Root.Path)
+	writeField(string(target.Root.Kind))
+	var scratch [8]byte
+	binary.BigEndian.PutUint64(scratch[:], target.SelectionRevision)
+	_, _ = digest.Write(scratch[:])
+	binary.BigEndian.PutUint64(scratch[:], target.ApprovalRevision)
+	_, _ = digest.Write(scratch[:])
+}
+
+type hashWriter interface {
+	Write([]byte) (int, error)
+}
+
 func pullApplyConfirmationToken(
 	binding publicationstate.Binding,
 	plan [32]byte,
 	stateToken [32]byte,
 	observationDigest [32]byte,
+	target pullApplyTargetBinding,
 ) [32]byte {
 	digest := sha256.New()
 	var length [4]byte
@@ -1024,6 +1172,7 @@ func pullApplyConfirmationToken(
 	_, _ = digest.Write(plan[:])
 	_, _ = digest.Write(stateToken[:])
 	_, _ = digest.Write(observationDigest[:])
+	writePullApplyTargetBinding(digest, target)
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))
 	return token
@@ -1036,6 +1185,7 @@ func pullAcceptPositionConfirmationToken(
 	recordCID []byte,
 	sequence uint64,
 	observationDigest [32]byte,
+	target pullApplyTargetBinding,
 ) [32]byte {
 	digest := sha256.New()
 	var length [4]byte
@@ -1063,6 +1213,7 @@ func pullAcceptPositionConfirmationToken(
 	binary.BigEndian.PutUint64(scratch[:], sequence)
 	_, _ = digest.Write(scratch[:])
 	_, _ = digest.Write(observationDigest[:])
+	writePullApplyTargetBinding(digest, target)
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))
 	return token
@@ -1145,7 +1296,10 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 		blob := func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
 			return blobs.FetchBlob(ctx, identity.DID, record.Blob.CID, int64(record.Blob.Size))
 		}
-		return pullRemote{Reader: publicationReader, Blob: blob, Close: closeResources}, nil
+		entry := func(ctx context.Context, reference publication.BlobReference) ([]byte, error) {
+			return blobs.FetchBlob(ctx, identity.DID, reference.CID, int64(reference.Size))
+		}
+		return pullRemote{Reader: publicationReader, Blob: blob, Entry: entry, Close: closeResources}, nil
 	}
 }
 
