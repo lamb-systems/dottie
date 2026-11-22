@@ -19,12 +19,12 @@ installs, but almost nobody has used it and the limits at the bottom of this fil
 
 Files are synced as plaintext. Dottie automatically chooses between two snapshot forms: a packed
 archive of the whole snapshot, or a manifest that names one blob per regular file. The manifest is
-used when exactly one directory files target is configured, the tree contains only non-empty regular
-files with mode `0600` or `0644`, every directory in it holds at least one published file and carries
-no mode of its own, and the change does not delete a file relative to the accepted position. Anything
-else falls back to packed, including a directory that holds no file at all. There is no per-target
-form setting. Snapshots are content addressed and chained, so a reader can tell a snapshot belongs to
-the publication it claims to.
+used when exactly one files target is configured and it holds only non-empty regular files with mode
+`0600` or `0644`: a single selected file, or a directory whose every directory holds at least one
+published file and carries no mode of its own. The change may not delete a file relative to the
+accepted position. Anything else falls back to packed, including a directory that holds no file at
+all or a selected file that is empty. There is no per-target form setting. Snapshots are content
+addressed and chained, so a reader can tell a snapshot belongs to the publication it claims to.
 
 ## Install
 
@@ -68,10 +68,13 @@ head carries no `blobCid`. `pull` reads the head, walks back through the chain, 
 verifies every payload blob against its CID and size.
 
 A manifest record has no target id or portable root. Dottie therefore maps it only to the sole local
-directory files target. It cannot prove that the publisher used the same directory; the pull
+files target, one directory or one selected file. A single-file target publishes its file under the
+basename of its configured path, for example `init.lua`, and pull maps that one entry back to the
+selected file. Dottie cannot prove that the publisher used the same directory or file; the pull
 confirmation binds the local target id, portable root and configuration revisions so a local target
 or root change between review and confirmation refuses. The target root must already exist; parent
-directories absent from the manifest are created with mode `0755` during apply.
+directories absent from a directory manifest are created with mode `0755` during apply, and a
+single-file target synthesizes none.
 
 Applying files is the part with the sharp edges, so it is journaled. Before touching a file,
 Dottie records the intent and a copy of the previous contents in a separate journal database,

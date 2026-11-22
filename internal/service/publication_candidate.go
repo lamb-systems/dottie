@@ -160,7 +160,7 @@ func encodePublicationCandidate(
 			Payload:        packed.Payload,
 		}, blob, nil
 	case publication.PayloadFormManifest:
-		snapshotEntries, err := publication.SnapshotEntries(snapshot)
+		snapshotEntries, err := manifestSnapshotEntries(snapshot)
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
@@ -182,23 +182,9 @@ func encodePublicationCandidate(
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
-		content := make(map[string][]byte, len(snapshot.Entries))
-		for _, entry := range snapshot.Entries {
-			if entry.File == nil || entry.File.State != model.FilePresent ||
-				entry.File.Kind != model.FileRegular || entry.File.Mode == 0 {
-				return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrInvalidRecord
-			}
-			content[entry.File.Path] = entry.File.Content
-		}
-		entries := make([]publication.PayloadEntry, 0, len(snapshotEntries))
-		for _, entry := range snapshotEntries {
-			data, present := content[entry.Path]
-			if !present {
-				return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrInvalidRecord
-			}
-			entries = append(entries, publication.PayloadEntry{
-				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: bytes.Clone(data),
-			})
+		entries, err := manifestPayloadEntries(snapshot, snapshotEntries)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
 		return publicationstate.CandidateInput{
 			SnapshotKey:    key,

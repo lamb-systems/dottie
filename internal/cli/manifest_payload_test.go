@@ -36,6 +36,31 @@ func newCLIManifestPublication(t *testing.T, binding publicationstate.Binding) c
 		{path: "init.lua", mode: 0o600, content: []byte("synthetic manifest init")},
 		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic manifest options")},
 	}
+	block, head := cliManifestBlock(t, binding, 0, nil, files)
+	view := publicationstate.SuppliedRepositoryView{
+		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: publicationstate.SuppliedContext{
+			RepositoryRevision: "synthetic-manifest-revision", RepositoryDigest: []byte{0x71},
+		},
+		Head:      head,
+		Snapshots: []publicationstate.SnapshotBlock{block},
+	}
+	recordCID, err := publication.RecordCID(block.Raw)
+	require.NoError(t, err)
+	floor := publicationstate.Floor{
+		Revision: 1, Generation: 1, Binding: binding, RecordCID: recordCID, SnapshotKey: block.Key,
+	}
+	return cliManifestPublication{block: block, head: head, view: view, floor: floor}
+}
+
+func cliManifestBlock(
+	t *testing.T,
+	binding publicationstate.Binding,
+	sequence uint64,
+	parent []byte,
+	files []cliManifestFile,
+) (publicationstate.SnapshotBlock, []byte) {
+	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
 	for _, file := range files {
 		blobCID, err := publication.RawPayloadCID(file.content)
@@ -50,29 +75,19 @@ func newCLIManifestPublication(t *testing.T, binding publicationstate.Binding) c
 	}
 	raw, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationID: [16]byte{0x62, 0x31}, Entries: entries,
+		PublicationID: [16]byte{0x62, 0x31}, PublicationSeq: sequence, Parent: parent, Entries: entries,
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(raw)
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
-		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, SnapshotCID: recordCID,
+		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
+		PublicationSeq: sequence, SnapshotCID: recordCID,
 	})
 	require.NoError(t, err)
-	key, err := publication.SequenceKey(0)
+	key, err := publication.SequenceKey(sequence)
 	require.NoError(t, err)
-	view := publicationstate.SuppliedRepositoryView{
-		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
-		SuppliedContext: publicationstate.SuppliedContext{
-			RepositoryRevision: "synthetic-manifest-revision", RepositoryDigest: []byte{0x71},
-		},
-		Head:      head,
-		Snapshots: []publicationstate.SnapshotBlock{{Key: key, Raw: raw}},
-	}
-	floor := publicationstate.Floor{
-		Revision: 1, Generation: 1, Binding: binding, RecordCID: recordCID, SnapshotKey: key,
-	}
-	return cliManifestPublication{block: view.Snapshots[0], head: head, view: view, floor: floor}
+	return publicationstate.SnapshotBlock{Key: key, Raw: raw}, head
 }
 
 func pullTestManifestBinding() publicationstate.Binding {
@@ -334,7 +349,7 @@ func TestSyncAcceptedSnapshotProjectsAManifestWithTheSoleTarget(t *testing.T) {
 	assert.Equal(t, []byte("synthetic manifest lua/config/options.lua"), byPath["lua/config/options.lua"].Content)
 }
 
-func TestPullRefusesAManifestWithoutASoleDirectoryTarget(t *testing.T) {
+func TestPullRefusesAManifestWithoutASoleFilesTarget(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, "")
 	require.NoError(t, os.Mkdir(filepath.Join(fixture.paths.Home, "other"), 0o700))
@@ -352,9 +367,116 @@ func TestPullRefusesAManifestWithoutASoleDirectoryTarget(t *testing.T) {
 
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code, stderr.String())
-	assert.Contains(t, stderr.String(), "manifest publication requires the sole local directory files target")
+	assert.Contains(t, stderr.String(), "manifest publication requires the sole local files target")
 	assert.NotContains(t, stdout.String(), "confirmation:")
 
 	_, err = os.Stat(fixture.targetPath("init.lua"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
+	pullManifestUmask(t)
+	fixture := newPullTestFixture(t)
+	configurePullSingleFileTarget(t, fixture, "config/init.lua")
+	accepted := []byte("synthetic single file v1")
+	published := []byte("synthetic single file v2")
+	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), accepted, 0o600))
+
+	firstBlock, firstHead := cliManifestBlock(t, fixture.binding, 0, nil, []cliManifestFile{
+		{path: "init.lua", mode: 0o600, content: accepted},
+	})
+	firstCID, err := publication.RecordCID(firstBlock.Raw)
+	require.NoError(t, err)
+	secondBlock, secondHead := cliManifestBlock(t, fixture.binding, 1, firstCID, []cliManifestFile{
+		{path: "published-elsewhere.lua", mode: 0o644, content: published},
+	})
+	context := publicationstate.SuppliedContext{
+		RepositoryRevision: "synthetic-single-file-revision", RepositoryDigest: []byte{0x72},
+	}
+	entries := map[string][]byte{}
+	for _, content := range [][]byte{accepted, published} {
+		cid, err := publication.RawPayloadCID(content)
+		require.NoError(t, err)
+		entries[string(cid)] = content
+	}
+	acceptedView := publicationstate.SuppliedRepositoryView{
+		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: context, Head: firstHead,
+		Snapshots: []publicationstate.SnapshotBlock{firstBlock},
+	}
+	movedView := publicationstate.SuppliedRepositoryView{
+		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: context, Head: secondHead,
+		Snapshots: []publicationstate.SnapshotBlock{firstBlock, secondBlock},
+	}
+	firstReader := &pullTestReader{view: acceptedView, entries: entries}
+	movedReader := &pullTestReader{view: movedView, entries: entries}
+
+	code, stdout, stderr := runPullManifestStep(t, fixture, firstReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: first-use\n")
+	assert.Contains(
+		t,
+		stdout,
+		"pull: reconciled changes=0 unchanged=1; the published position sequence=0 can be adopted without writing files",
+	)
+	assert.NotContains(t, stdout, "apply: write")
+	token := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullManifestStep(
+		t,
+		fixture,
+		firstReader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "floor: revision=1 generation=1 sequence=0\n")
+	require.Equal(t, accepted, readPullSingleFile(t, fixture))
+
+	code, stdout, stderr = runPullManifestStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "apply: changes=1 unchanged=0\n")
+	assert.Contains(t, stdout, fmt.Sprintf("apply: write . size=%d\n", len(published)))
+	assert.NotContains(t, stdout, "apply: mkdir")
+	token = pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullManifestStep(
+		t,
+		fixture,
+		movedReader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, fmt.Sprintf("pull: applied changes=1 unchanged=0 bytes=%d\n", len(published)))
+	require.Equal(t, published, readPullSingleFile(t, fixture))
+	info, err := os.Lstat(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	before := pullTestDirectoryState(t, fixture.paths.Home)
+	code, stdout, stderr = runPullManifestStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "pull: matches\n", stdout)
+	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.Home), "a matching re-pull wrote a local file")
+	assert.Equal(t, uint64(2), fixture.acceptedFloor(t).Revision)
+}
+
+func configurePullSingleFileTarget(t *testing.T, fixture *pullTestFixture, path string) {
+	t.Helper()
+	directory := fixture.paths.AppConfigDir()
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	require.NoError(t, os.Chmod(directory, 0o700))
+	content := "config_version = 2\n\n[[targets]]\nid = \"files\"\nsource = \"files\"\n" +
+		"\n[targets.root]\nbase = \"home\"\npath = \"" + path + "\"\nkind = \"file\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, config.FileName), []byte(content), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(fixture.paths.Home, path)), 0o700))
+}
+
+func readPullSingleFile(t *testing.T, fixture *pullTestFixture) []byte {
+	t.Helper()
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	return content
 }

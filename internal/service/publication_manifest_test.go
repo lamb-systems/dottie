@@ -15,6 +15,82 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
+func TestPreparePublicationPushSelectsManifestForASoleSingleFileTarget(t *testing.T) {
+	ctx := context.Background()
+	fixture := singleFilePushFixture(t)
+
+	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
+	require.NoError(t, err)
+	require.False(t, preparation.NoOp)
+	assert.Equal(t, publication.PayloadFormManifest, preparation.Form)
+	assert.Equal(t, publication.PayloadFormManifest, preparation.Proposal.Form)
+	assert.Equal(t, 1, preparation.Targets)
+	assert.Equal(t, 1, preparation.Entries)
+	assert.Empty(t, preparation.Proposal.Blob.CID)
+	assert.Empty(t, preparation.Proposal.Candidate.Payload)
+
+	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	require.Len(t, record.Entries, 1)
+	assert.Equal(t, "init.lua", record.Entries[0].Path)
+	assert.Equal(t, uint32(0o600), record.Entries[0].Mode)
+	assert.Equal(t, uint64(len("synthetic push payload")), record.Entries[0].Size)
+
+	require.Len(t, preparation.Proposal.Candidate.Entries, 1)
+	assert.Equal(t, "init.lua", preparation.Proposal.Candidate.Entries[0].Path)
+	assert.Equal(t, uint32(0o600), preparation.Proposal.Candidate.Entries[0].Mode)
+	assert.Equal(t, []byte("synthetic push payload"), preparation.Proposal.Candidate.Entries[0].Content)
+}
+
+func TestManifestPublicationNoOpUsesTheSoleSingleFileEntry(t *testing.T) {
+	ctx := context.Background()
+	fixture := singleFilePushFixture(t)
+	first := fixture.publish(t)
+	require.Equal(t, publication.PayloadFormManifest, first.Form)
+	setManifestReaderFromAccepted(t, fixture)
+
+	unchanged, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x01}, nil))
+	require.NoError(t, err)
+	assert.True(t, unchanged.NoOp)
+	assert.Equal(t, publication.PayloadFormManifest, unchanged.Form)
+
+	require.NoError(t, os.Chmod(filepath.Join(fixture.paths.Home, "config", "init.lua"), 0o644))
+	changed, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x02}, nil))
+	require.NoError(t, err)
+	assert.False(t, changed.NoOp)
+	assert.Equal(t, publication.PayloadFormManifest, changed.Form)
+	record, err := publication.DecodeSnapshot(changed.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, record.Entries, 1)
+	assert.Equal(t, "init.lua", record.Entries[0].Path)
+	assert.Equal(t, uint32(0o644), record.Entries[0].Mode)
+}
+
+func TestManifestAcceptedMaterialProjectsTheSoleSingleFileEntry(t *testing.T) {
+	ctx := context.Background()
+	fixture := singleFilePushFixture(t)
+	fixture.publish(t)
+	floor, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	material, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, floor)
+	require.NoError(t, err)
+	require.Len(t, material.Entries, 1)
+	assert.Equal(t, "init.lua", material.Entries[0].Path)
+
+	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormManifest, form)
+	require.Len(t, snapshot.Entries, 1)
+	assert.Equal(t, model.SelectionFile, snapshot.Targets[0].Root.Kind)
+	assert.Equal(t, ".", snapshot.Entries[0].File.Path)
+	assert.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
+	assert.Equal(t, []byte("synthetic push payload"), snapshot.Entries[0].File.Content)
+	require.NotNil(t, floor.Manifest)
+	assert.Empty(t, floor.BlobCID)
+}
+
 func TestPreparePublicationPushSelectsManifestForAnEligibleDirectory(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
@@ -112,6 +188,48 @@ func TestPreparePublicationPushFallsBackToPackedForUnsupportedFiles(t *testing.T
 			assert.NotEmpty(t, preparation.Proposal.Candidate.Payload)
 		})
 	}
+}
+
+func TestPreparePublicationPushFallsBackToPackedForAnUnsupportedSingleFile(t *testing.T) {
+	cases := map[string]func(t *testing.T, fixture *publicationPushFixture){
+		"empty file": func(t *testing.T, fixture *publicationPushFixture) {
+			require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "config", "init.lua"), nil, 0o600))
+		},
+		"executable mode": func(t *testing.T, fixture *publicationPushFixture) {
+			require.NoError(t, os.Chmod(filepath.Join(fixture.paths.Home, "config", "init.lua"), 0o755))
+		},
+		"unrepresentable basename": func(t *testing.T, fixture *publicationPushFixture) {
+			require.NoError(t, os.Rename(
+				filepath.Join(fixture.paths.Home, "config", "init.lua"),
+				filepath.Join(fixture.paths.Home, "config", "c:notes"),
+			))
+			fixture.configuration.Targets[0].Root.Path = "config/c:notes"
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := singleFilePushFixture(t)
+			mutate(t, fixture)
+			preparation, err := fixture.coordinator.PreparePublicationPush(
+				context.Background(),
+				fixture.request(fixture.publicationID, nil),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, publication.PayloadFormPacked, preparation.Form)
+			assert.NotEmpty(t, preparation.Proposal.Candidate.Payload)
+			record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
+			require.NoError(t, err)
+			assert.Equal(t, publication.PayloadFormPacked, record.PayloadForm())
+		})
+	}
+}
+
+func singleFilePushFixture(t *testing.T) *publicationPushFixture {
+	t.Helper()
+	fixture := newPublicationPushFixture(t)
+	fixture.configuration.Targets[0].Root.Path = "config/init.lua"
+	fixture.configuration.Targets[0].Root.Kind = model.SelectionFile
+	return fixture
 }
 
 func TestPreparePublicationPushFallsBackToPackedForADirectoryWithoutFiles(t *testing.T) {
@@ -257,18 +375,36 @@ func TestManifestProjectionSynthesizesParentDirectoriesAt0755(t *testing.T) {
 	assert.Equal(t, model.FileRegular, byPath["lua/config/options.lua"].Kind)
 }
 
-func TestManifestProjectionRequiresADirectoryFilesTarget(t *testing.T) {
+func TestManifestProjectionMapsASingleFileEntryToTheRootEntry(t *testing.T) {
 	portable := model.Target{
 		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
-		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionFile},
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config/init.lua", Kind: model.SelectionFile},
 	}
-	_, err := manifestProjection(portable, []publication.PayloadEntry{{
+	snapshot, err := manifestProjection(portable, []publication.PayloadEntry{{
 		Path: "init.lua", Mode: 0o600, Size: 4, Content: []byte("init"),
 	}})
-	require.ErrorIs(t, err, ErrManifestTarget)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Entries, 1)
+	assert.Equal(t, model.SelectionFile, snapshot.Targets[0].Root.Kind)
+	assert.Equal(t, ".", snapshot.Entries[0].File.Path)
+	assert.Equal(t, model.FileRegular, snapshot.Entries[0].File.Kind)
+	assert.Equal(t, model.FilePresent, snapshot.Entries[0].File.State)
+	assert.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
+	assert.Equal(t, []byte("init"), snapshot.Entries[0].File.Content)
+
+	_, err = manifestProjection(portable, []publication.PayloadEntry{
+		{Path: "init.lua", Mode: 0o600, Size: 4, Content: []byte("init")},
+		{Path: "other.lua", Mode: 0o600, Size: 5, Content: []byte("other")},
+	})
+	require.ErrorIs(t, err, publication.ErrInvalidRecord)
+
+	_, err = manifestProjection(portable, []publication.PayloadEntry{{
+		Path: ".", Mode: 0o600, Size: 4, Content: []byte("init"),
+	}})
+	require.ErrorIs(t, err, publication.ErrInvalidRecord)
 }
 
-func TestManifestCandidateRequiresAnExactCurrentTargetMapping(t *testing.T) {
+func TestManifestPublicationTargetAcceptsBothFilesSelectionKinds(t *testing.T) {
 	configuration := config.Config{
 		Version: config.Version,
 		Targets: []config.Target{{
@@ -279,7 +415,16 @@ func TestManifestCandidateRequiresAnExactCurrentTargetMapping(t *testing.T) {
 	_, portable, err := manifestPublicationTarget(configuration)
 	require.NoError(t, err)
 	assert.Equal(t, model.SelectionDirectory, portable.Root.Kind)
-	configuration.Targets[0].Root.Kind = model.SelectionFile
+
+	configuration.Targets[0].Root = &config.Root{
+		Base: model.RootHome, Path: "config/init.lua", Kind: model.SelectionFile,
+	}
+	_, portable, err = manifestPublicationTarget(configuration)
+	require.NoError(t, err)
+	assert.Equal(t, model.SelectionFile, portable.Root.Kind)
+	assert.Equal(t, "config/init.lua", portable.Root.Path)
+
+	configuration.Targets[0].Root.Kind = ""
 	_, _, err = manifestPublicationTarget(configuration)
 	require.ErrorIs(t, err, ErrManifestTarget)
 }
@@ -393,6 +538,47 @@ func TestManifestAcceptedPreviewAndBaseUseTheSoleDirectoryTarget(t *testing.T) {
 	require.Len(t, preview.Targets, 1)
 	require.Len(t, preview.Targets[0].Entries, 1)
 	assert.Equal(t, "init.lua", preview.Targets[0].Entries[0].Key.FilePath)
+
+	fixture.reopenStore(t)
+	request.Store = fixture.store
+	reopened, disposition, err := PreviewPublicationTarget(ctx, request, base)
+	require.NoError(t, err)
+	assert.Equal(t, PublicationPreviewBaseEstablished, disposition)
+	assert.Equal(t, preview.Targets, reopened.Targets)
+}
+
+func TestManifestAcceptedPreviewAndBaseUseTheSoleSingleFileTarget(t *testing.T) {
+	ctx := context.Background()
+	fixture := singleFilePushFixture(t)
+	fixture.publish(t)
+	floor, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	material, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, floor)
+	require.NoError(t, err)
+	entries := make([]publication.PayloadEntry, 0, len(material.Entries))
+	for _, entry := range material.Entries {
+		entries = append(entries, publication.PayloadEntry{
+			Path: entry.Path, Mode: entry.Mode, Size: uint64(len(entry.Content)), Content: entry.Content,
+		})
+	}
+	local, err := NewPublicationLocalContext(fixture.paths, LocalFilesCapture{}, nil)
+	require.NoError(t, err)
+	request := PublicationReconciliationRequest{
+		Store: fixture.store, Binding: fixture.binding, ExpectedFloor: floor,
+		SnapshotRecord: material.SnapshotRecord, Entries: entries,
+		Configuration: fixture.configuration, TargetID: "files", Local: local,
+	}
+	base, err := EstablishLocalReconciliationBase(ctx, request)
+	require.NoError(t, err)
+	assert.NotNil(t, base)
+	preview, disposition, err := PreviewPublicationTarget(ctx, request, base)
+	require.NoError(t, err)
+	assert.Equal(t, PublicationPreviewBaseEstablished, disposition)
+	assert.Zero(t, preview.UnresolvedEntries)
+	require.Len(t, preview.Targets, 1)
+	require.Len(t, preview.Targets[0].Entries, 1)
+	assert.Equal(t, ".", preview.Targets[0].Entries[0].Key.FilePath)
 
 	fixture.reopenStore(t)
 	request.Store = fixture.store

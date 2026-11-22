@@ -1284,7 +1284,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 				if err != nil {
 					return PublicationPushPreparation{}, err
 				}
-				candidateEntries, err := publication.SnapshotEntries(candidateSnapshot)
+				candidateEntries, err := manifestSnapshotEntries(candidateSnapshot)
 				if err != nil {
 					return PublicationPushPreparation{}, err
 				}

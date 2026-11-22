@@ -506,7 +506,7 @@ func preparePullApply(
 		target, portable, err := service.ManifestPublicationTarget(sources.Configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
-				input.label()+" refused: a manifest publication requires the sole local directory files target; nothing was changed",
+				input.label()+" refused: a manifest publication requires the sole local files target; nothing was changed",
 				3,
 			)
 		}

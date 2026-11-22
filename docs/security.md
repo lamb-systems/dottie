@@ -101,13 +101,16 @@ recovery kit and no export archive in this tree, and no command mints, reads or 
 account access or provider-held data can therefore lose the published position; losing Dottie device
 keys alone does not.
 
-A manifest record carries no target id or portable root. Dottie maps it only to the sole local
-directory files target and cannot detect that a publisher used a different directory. The pull
-confirmation binds the local target id, portable root and selection/approval revisions, so changing
-the local target, root or configuration between review and confirmation refuses. Multi-target
-configurations cannot consume a manifest base; they fall back to packed only when the accepted base
-is packed. The target root must exist before apply. Missing parent directories named implicitly by a
-manifest path are created with mode `0755`; directory modes are not carried in the record.
+A manifest record carries no target id or portable root. Dottie maps it only to the sole local files
+target, a single directory or a single selected file, and cannot detect that a publisher used a
+different directory or file. A single-file target publishes its file under the basename of its
+configured path, and pull maps the sole manifest entry back to that file without synthesizing parent
+directories. The pull confirmation binds the local target id, portable root and selection/approval
+revisions, so changing the local target, root or configuration between review and confirmation
+refuses. Multi-target configurations cannot consume a manifest base; they fall back to packed only
+when the accepted base is packed. The target root must exist before apply. Missing parent directories
+named implicitly by a directory manifest path are created with mode `0755`; directory modes are not
+carried in the record.
 
 Local state is plaintext on disk. The publication position database, the apply journal, journal
 preimage backups and captured payloads are readable by anyone who can read the state directory. Local

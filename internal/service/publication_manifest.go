@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"path"
 	"sort"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-var ErrManifestTarget = errors.New("manifest publication requires the sole local directory files target")
+var ErrManifestTarget = errors.New("manifest publication requires the sole local files target")
 
 const manifestProjectionDirectoryMode uint32 = 0o755
 
@@ -43,7 +44,7 @@ func manifestCandidateSnapshot(
 	}
 	target := snapshot.Targets[0]
 	if target.Source != model.SourceFiles || target.Root == nil ||
-		target.Root.Kind != model.SelectionDirectory {
+		(target.Root.Kind != model.SelectionDirectory && target.Root.Kind != model.SelectionFile) {
 		return model.Snapshot{}, false
 	}
 	files := make([]model.Entry, 0, len(snapshot.Entries))
@@ -57,6 +58,9 @@ func manifestCandidateSnapshot(
 		}
 		file := entry.File
 		if file.State != model.FilePresent {
+			return model.Snapshot{}, false
+		}
+		if target.Root.Kind == model.SelectionFile && (file.Path != "." || file.Kind != model.FileRegular) {
 			return model.Snapshot{}, false
 		}
 		if file.Kind == model.FileDirectory {
@@ -74,6 +78,9 @@ func manifestCandidateSnapshot(
 	if len(files) == 0 {
 		return model.Snapshot{}, false
 	}
+	if target.Root.Kind == model.SelectionFile && len(files) != 1 {
+		return model.Snapshot{}, false
+	}
 	candidate := publicationSnapshotPaths(files)
 	for _, directory := range directories {
 		if !publicationSnapshotHasDescendant(candidate, directory) {
@@ -88,10 +95,88 @@ func manifestCandidateSnapshot(
 		Targets: []model.Target{cloneSelectionTargetModel(target)},
 		Entries: files,
 	}
-	if _, err := publication.SnapshotEntries(projected); err != nil {
+	if _, err := manifestSnapshotEntries(projected); err != nil {
 		return model.Snapshot{}, false
 	}
 	return projected, true
+}
+
+func manifestSingleFileTarget(snapshot model.Snapshot) (model.Target, bool) {
+	if len(snapshot.Targets) != 1 {
+		return model.Target{}, false
+	}
+	target := snapshot.Targets[0]
+	if target.Root == nil || target.Root.Kind != model.SelectionFile {
+		return model.Target{}, false
+	}
+	return target, true
+}
+
+func manifestSyntheticPath(target model.Target) (string, bool) {
+	base := path.Base(target.Root.Path)
+	if base == "" || base == "." || base == ".." || base == "/" {
+		return "", false
+	}
+	return base, true
+}
+
+func manifestSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEntry, error) {
+	target, single := manifestSingleFileTarget(snapshot)
+	if !single {
+		return publication.SnapshotEntries(snapshot)
+	}
+	synthetic, ok := manifestSyntheticPath(target)
+	if !ok {
+		return nil, publication.ErrInvalidRecord
+	}
+	entries := make([]model.Entry, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if entry.File == nil {
+			return nil, publication.ErrInvalidRecord
+		}
+		file := *entry.File
+		file.Path = synthetic
+		entries = append(entries, model.Entry{TargetID: entry.TargetID, File: &file})
+	}
+	return publication.SnapshotEntries(model.Snapshot{Version: snapshot.Version, Entries: entries})
+}
+
+func manifestPayloadEntries(
+	snapshot model.Snapshot,
+	entries []publication.SnapshotEntry,
+) ([]publication.PayloadEntry, error) {
+	target, single := manifestSingleFileTarget(snapshot)
+	synthetic := ""
+	if single {
+		valid := false
+		synthetic, valid = manifestSyntheticPath(target)
+		if !valid {
+			return nil, publication.ErrInvalidRecord
+		}
+	}
+	published := make(map[string][]byte, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if entry.File == nil || entry.File.State != model.FilePresent ||
+			entry.File.Kind != model.FileRegular || entry.File.Mode == 0 {
+			return nil, publication.ErrInvalidRecord
+		}
+		entryPath := entry.File.Path
+		if single {
+			entryPath = synthetic
+		}
+		published[entryPath] = entry.File.Content
+	}
+	payload := make([]publication.PayloadEntry, 0, len(entries))
+	for _, entry := range entries {
+		content, present := published[entry.Path]
+		if !present {
+			return nil, publication.ErrInvalidRecord
+		}
+		payload = append(payload, publication.PayloadEntry{
+			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: bytes.Clone(content),
+		})
+	}
+	return payload, nil
 }
 
 func manifestSnapshotDeletesPresentFile(base model.Snapshot, targetID string, candidate map[string]struct{}) bool {
@@ -133,7 +218,7 @@ func manifestPublicationTarget(configuration config.Config) (config.Target, mode
 	}
 	target := configuration.Targets[0]
 	if target.Source != model.SourceFiles || target.Root == nil ||
-		target.Root.Kind != model.SelectionDirectory {
+		(target.Root.Kind != model.SelectionDirectory && target.Root.Kind != model.SelectionFile) {
 		return config.Target{}, model.Target{}, ErrManifestTarget
 	}
 	portable, err := target.Model()
@@ -147,10 +232,51 @@ func manifestProjection(
 	portable model.Target,
 	entries []publication.PayloadEntry,
 ) (model.Snapshot, error) {
-	if portable.Source != model.SourceFiles || portable.Root == nil ||
-		portable.Root.Kind != model.SelectionDirectory || portable.Validate() != nil {
+	if portable.Source != model.SourceFiles || portable.Root == nil || portable.Validate() != nil {
 		return model.Snapshot{}, ErrManifestTarget
 	}
+	switch portable.Root.Kind {
+	case model.SelectionDirectory:
+		return manifestDirectoryProjection(portable, entries)
+	case model.SelectionFile:
+		return manifestSingleFileProjection(portable, entries)
+	default:
+		return model.Snapshot{}, ErrManifestTarget
+	}
+}
+
+func manifestSingleFileProjection(
+	portable model.Target,
+	entries []publication.PayloadEntry,
+) (model.Snapshot, error) {
+	if len(entries) != 1 {
+		return model.Snapshot{}, publication.ErrInvalidRecord
+	}
+	entry := entries[0]
+	if entry.Path == "" || entry.Path == "." {
+		return model.Snapshot{}, publication.ErrInvalidRecord
+	}
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{cloneSelectionTargetModel(portable)},
+		Entries: []model.Entry{{
+			TargetID: portable.ID,
+			File: &model.FileEntry{
+				Path: ".", State: model.FilePresent, Kind: model.FileRegular,
+				Content: bytes.Clone(entry.Content), Mode: entry.Mode,
+			},
+		}},
+	}
+	if err := snapshot.Validate(); err != nil {
+		return model.Snapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func manifestDirectoryProjection(
+	portable model.Target,
+	entries []publication.PayloadEntry,
+) (model.Snapshot, error) {
 	byPath := make(map[string]publication.PayloadEntry, len(entries))
 	directories := make(map[string]struct{})
 	for _, entry := range entries {
