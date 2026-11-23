@@ -168,15 +168,15 @@ func validateContext(context SuppliedContext, binding Binding, limits Limits) er
 }
 
 func validateObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
-	return validateObservationWithManifest(input, binding, limits, false)
+	return validateObservationWithFileSet(input, binding, limits, false)
 }
 
 func validateFinalizationObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
-	return validateObservationWithManifest(input, binding, limits, true)
+	return validateObservationWithFileSet(input, binding, limits, true)
 }
 
 func validateMaterialObservation(input Observation, binding Binding, limits Limits) (validatedObservation, error) {
-	return validateObservationWithManifest(input, binding, limits, true)
+	return validateObservationWithFileSet(input, binding, limits, true)
 }
 
 func validateMaterialInput(
@@ -202,9 +202,9 @@ func validateMaterialInput(
 			blob:    record.Blob,
 			name:    payloadBasename(input.Payload),
 		}, nil
-	case PayloadFormManifest:
+	case PayloadFormFileSet:
 		if len(input.Entries) == 0 {
-			return materialAttachment{}, manifestPayloadUnsupported(StageInput)
+			return materialAttachment{}, fileSetPayloadUnsupported(StageInput)
 		}
 		if len(input.Payload) != 0 || len(input.Entries) != len(record.Entries) {
 			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
@@ -216,8 +216,8 @@ func validateMaterialInput(
 				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 			}
 		}
-		manifest := manifestPayloadOf(record)
-		if err := validateManifestMaterialLimits(manifest, limits); err != nil {
+		fileSet := fileSetPayloadOf(record)
+		if err := validateFileSetMaterialLimits(fileSet, limits); err != nil {
 			return materialAttachment{}, err
 		}
 		entries := make([]materialEntry, 0, len(record.Entries))
@@ -235,13 +235,13 @@ func validateMaterialInput(
 				},
 			})
 		}
-		return materialAttachment{form: PayloadFormManifest, manifest: manifest, entries: entries}, nil
+		return materialAttachment{form: PayloadFormFileSet, fileSet: fileSet, entries: entries}, nil
 	default:
 		return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
 	}
 }
 
-func validateObservationWithManifest(input Observation, binding Binding, limits Limits, allowManifest bool) (validatedObservation, error) {
+func validateObservationWithFileSet(input Observation, binding Binding, limits Limits, allowFileSet bool) (validatedObservation, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonBinding)
 	}
@@ -272,7 +272,7 @@ func validateObservationWithManifest(input Observation, binding Binding, limits 
 		if len(block.Raw) == 0 || len(block.Key) != publication.SequenceKeyLength || !utf8.ValidString(block.Key) {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if len(block.Raw) > publication.MaxManifestRecordBytes {
+		if len(block.Raw) > publication.MaxFileSetRecordBytes {
 			return validatedObservation{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 		}
 		total += uint64(len(block.Raw))
@@ -288,8 +288,8 @@ func validateObservationWithManifest(input Observation, binding Binding, limits 
 		if err != nil || record.Vault != binding.Vault || record.PublicationSeq != sequence {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if payloadFormOf(record) == PayloadFormManifest && !allowManifest {
-			return validatedObservation{}, manifestPayloadUnsupported(StageInput)
+		if payloadFormOf(record) == PayloadFormFileSet && !allowFileSet {
+			return validatedObservation{}, fileSetPayloadUnsupported(StageInput)
 		}
 		cid, err := publication.RecordCID(block.Raw)
 		if err != nil {

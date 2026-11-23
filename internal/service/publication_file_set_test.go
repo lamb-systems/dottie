@@ -15,15 +15,15 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-func TestPreparePublicationPushSelectsManifestForASoleSingleFileTarget(t *testing.T) {
+func TestPreparePublicationPushSelectsFileSetForASoleSingleFileTarget(t *testing.T) {
 	ctx := context.Background()
 	fixture := singleFilePushFixture(t)
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	require.False(t, preparation.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, preparation.Form)
-	assert.Equal(t, publication.PayloadFormManifest, preparation.Proposal.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Proposal.Form)
 	assert.Equal(t, 1, preparation.Targets)
 	assert.Equal(t, 1, preparation.Entries)
 	assert.Empty(t, preparation.Proposal.Blob.CID)
@@ -31,7 +31,7 @@ func TestPreparePublicationPushSelectsManifestForASoleSingleFileTarget(t *testin
 
 	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, record.Entries, 1)
 	assert.Equal(t, "init.lua", record.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), record.Entries[0].Mode)
@@ -43,23 +43,23 @@ func TestPreparePublicationPushSelectsManifestForASoleSingleFileTarget(t *testin
 	assert.Equal(t, []byte("synthetic push payload"), preparation.Proposal.Candidate.Entries[0].Content)
 }
 
-func TestManifestPublicationNoOpUsesTheSoleSingleFileEntry(t *testing.T) {
+func TestFileSetPublicationNoOpUsesTheSoleSingleFileEntry(t *testing.T) {
 	ctx := context.Background()
 	fixture := singleFilePushFixture(t)
 	first := fixture.publish(t)
-	require.Equal(t, publication.PayloadFormManifest, first.Form)
-	setManifestReaderFromAccepted(t, fixture)
+	require.Equal(t, publication.PayloadFormFileSet, first.Form)
+	setFileSetReaderFromAccepted(t, fixture)
 
 	unchanged, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x01}, nil))
 	require.NoError(t, err)
 	assert.True(t, unchanged.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, unchanged.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, unchanged.Form)
 
 	require.NoError(t, os.Chmod(filepath.Join(fixture.paths.Home, "config", "init.lua"), 0o644))
 	changed, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x02}, nil))
 	require.NoError(t, err)
 	assert.False(t, changed.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, changed.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, changed.Form)
 	record, err := publication.DecodeSnapshot(changed.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
 	require.Len(t, record.Entries, 1)
@@ -67,7 +67,7 @@ func TestManifestPublicationNoOpUsesTheSoleSingleFileEntry(t *testing.T) {
 	assert.Equal(t, uint32(0o644), record.Entries[0].Mode)
 }
 
-func TestManifestAcceptedMaterialProjectsTheSoleSingleFileEntry(t *testing.T) {
+func TestFileSetAcceptedMaterialProjectsTheSoleSingleFileEntry(t *testing.T) {
 	ctx := context.Background()
 	fixture := singleFilePushFixture(t)
 	fixture.publish(t)
@@ -81,25 +81,25 @@ func TestManifestAcceptedMaterialProjectsTheSoleSingleFileEntry(t *testing.T) {
 
 	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, form)
+	assert.Equal(t, publication.PayloadFormFileSet, form)
 	require.Len(t, snapshot.Entries, 1)
 	assert.Equal(t, model.SelectionFile, snapshot.Targets[0].Root.Kind)
 	assert.Equal(t, ".", snapshot.Entries[0].File.Path)
 	assert.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
 	assert.Equal(t, []byte("synthetic push payload"), snapshot.Entries[0].File.Content)
-	require.NotNil(t, floor.Manifest)
+	require.NotNil(t, floor.FileSet)
 	assert.Empty(t, floor.BlobCID)
 }
 
-func TestPreparePublicationPushSelectsManifestForAnEligibleDirectory(t *testing.T) {
+func TestPreparePublicationPushSelectsFileSetForAnEligibleDirectory(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
 	require.False(t, preparation.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, preparation.Form)
-	assert.Equal(t, publication.PayloadFormManifest, preparation.Proposal.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Proposal.Form)
 	assert.Equal(t, 1, preparation.Targets)
 	assert.Equal(t, 1, preparation.Entries)
 	assert.Empty(t, preparation.Proposal.Blob.CID)
@@ -108,7 +108,7 @@ func TestPreparePublicationPushSelectsManifestForAnEligibleDirectory(t *testing.
 
 	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, record.Entries, 1)
 	assert.Equal(t, "init.lua", record.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), record.Entries[0].Mode)
@@ -122,29 +122,29 @@ func TestPreparePublicationPushSelectsManifestForAnEligibleDirectory(t *testing.
 	assert.Empty(t, preparation.Record.CandidatePayloadCID)
 }
 
-func TestManifestPublicationNoOpUsesTheExactOrderedEntrySetIncludingMode(t *testing.T) {
+func TestFileSetPublicationNoOpUsesTheExactOrderedEntrySetIncludingMode(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
-	setManifestReaderFromAccepted(t, fixture)
+	setFileSetReaderFromAccepted(t, fixture)
 
 	unchanged, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x01}, nil))
 	require.NoError(t, err)
 	assert.True(t, unchanged.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, unchanged.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, unchanged.Form)
 
 	require.NoError(t, os.Chmod(filepath.Join(fixture.paths.Home, "config", "init.lua"), 0o644))
 	changed, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x02}, nil))
 	require.NoError(t, err)
 	assert.False(t, changed.NoOp)
-	assert.Equal(t, publication.PayloadFormManifest, changed.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, changed.Form)
 	record, err := publication.DecodeSnapshot(changed.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
 	require.Len(t, record.Entries, 1)
 	assert.Equal(t, uint32(0o644), record.Entries[0].Mode)
 }
 
-func TestPreparePublicationPushKeepsNestedFilesInTheManifest(t *testing.T) {
+func TestPreparePublicationPushKeepsNestedFilesInTheFileSet(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	require.NoError(t, os.Mkdir(filepath.Join(fixture.paths.Home, "config", "lua"), 0o755))
@@ -155,10 +155,10 @@ func TestPreparePublicationPushKeepsNestedFilesInTheManifest(t *testing.T) {
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, preparation.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Form)
 	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, record.Entries, 2)
 	assert.Equal(t, "init.lua", record.Entries[0].Path)
 	assert.Equal(t, "lua/options.lua", record.Entries[1].Path)
@@ -244,10 +244,10 @@ func TestPreparePublicationPushFallsBackToPackedForADirectoryWithoutFiles(t *tes
 	assert.NotEmpty(t, packed.Proposal.Candidate.Payload)
 
 	require.NoError(t, os.WriteFile(filepath.Join(empty, "kept.lua"), []byte("kept"), 0o600))
-	manifest, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x03}, nil))
+	fileSet, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x03}, nil))
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, manifest.Form)
-	record, err := publication.DecodeSnapshot(manifest.Proposal.Batch.SnapshotRecord)
+	assert.Equal(t, publication.PayloadFormFileSet, fileSet.Form)
+	record, err := publication.DecodeSnapshot(fileSet.Proposal.Batch.SnapshotRecord)
 	require.NoError(t, err)
 	require.Len(t, record.Entries, 2)
 	assert.Equal(
@@ -272,7 +272,7 @@ func TestPreparePublicationPushFallsBackToPackedForMultipleTargets(t *testing.T)
 	assert.Equal(t, 2, preparation.Targets)
 }
 
-func TestPreparePublicationPushFallsBackToPackedWhenTheAcceptedManifestLosesAFile(t *testing.T) {
+func TestPreparePublicationPushFallsBackToPackedWhenTheAcceptedFileSetLosesAFile(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	require.NoError(
@@ -280,7 +280,7 @@ func TestPreparePublicationPushFallsBackToPackedWhenTheAcceptedManifestLosesAFil
 		os.WriteFile(filepath.Join(fixture.paths.Home, "config", "extra.lua"), []byte("extra"), 0o600),
 	)
 	first := fixture.publish(t)
-	require.Equal(t, publication.PayloadFormManifest, first.Form)
+	require.Equal(t, publication.PayloadFormFileSet, first.Form)
 
 	require.NoError(t, os.Remove(filepath.Join(fixture.paths.Home, "config", "extra.lua")))
 	second, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x03}, nil))
@@ -292,11 +292,11 @@ func TestPreparePublicationPushFallsBackToPackedWhenTheAcceptedManifestLosesAFil
 	assert.Equal(t, publication.PayloadFormPacked, record.PayloadForm())
 }
 
-func TestPreparePublicationPushFallsBackToPackedWhenTheLastManifestFileIsDeleted(t *testing.T) {
+func TestPreparePublicationPushFallsBackToPackedWhenTheLastFileSetFileIsDeleted(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	first := fixture.publish(t)
-	require.Equal(t, publication.PayloadFormManifest, first.Form)
+	require.Equal(t, publication.PayloadFormFileSet, first.Form)
 
 	require.NoError(t, os.Remove(filepath.Join(fixture.paths.Home, "config", "init.lua")))
 	second, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x04}, nil))
@@ -305,7 +305,7 @@ func TestPreparePublicationPushFallsBackToPackedWhenTheLastManifestFileIsDeleted
 	assert.Equal(t, publication.PayloadFormPacked, second.Form)
 }
 
-func TestPreparePublicationPushRefusesToMapAManifestBaseToMultipleTargets(t *testing.T) {
+func TestPreparePublicationPushRefusesToMapAFileSetBaseToMultipleTargets(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
@@ -317,11 +317,11 @@ func TestPreparePublicationPushRefusesToMapAManifestBaseToMultipleTargets(t *tes
 
 	before := fixture.transport.uploadCount()
 	_, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x05}, nil))
-	require.ErrorIs(t, err, ErrManifestTarget)
-	assert.Equal(t, before, fixture.transport.uploadCount(), "a refused manifest mapping uploaded a payload")
+	require.ErrorIs(t, err, ErrFileSetTarget)
+	assert.Equal(t, before, fixture.transport.uploadCount(), "a refused file-set mapping uploaded a payload")
 }
 
-func TestManifestPublicationRecordJSONCarriesNoContent(t *testing.T) {
+func TestFileSetPublicationRecordJSONCarriesNoContent(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
 	preparation, err := fixture.coordinator.PreparePublicationPush(
 		context.Background(),
@@ -337,7 +337,7 @@ func TestManifestPublicationRecordJSONCarriesNoContent(t *testing.T) {
 	assert.NotContains(t, string(encoded), publication.SnapshotBlobMIMEType)
 }
 
-func TestManifestAcceptedMaterialRoundTripThroughProjection(t *testing.T) {
+func TestFileSetAcceptedMaterialRoundTripThroughProjection(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
 	floor, present, err := fixture.store.Load(context.Background())
@@ -347,20 +347,20 @@ func TestManifestAcceptedMaterialRoundTripThroughProjection(t *testing.T) {
 	require.NoError(t, err)
 	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, form)
+	assert.Equal(t, publication.PayloadFormFileSet, form)
 	require.Len(t, snapshot.Entries, 1)
 	assert.Equal(t, "init.lua", snapshot.Entries[0].File.Path)
 	assert.Equal(t, []byte("synthetic push payload"), snapshot.Entries[0].File.Content)
-	require.True(t, floor.Manifest != nil)
+	require.True(t, floor.FileSet != nil)
 	assert.Empty(t, floor.BlobCID)
 }
 
-func TestManifestProjectionSynthesizesParentDirectoriesAt0755(t *testing.T) {
+func TestFileSetProjectionSynthesizesParentDirectoriesAt0755(t *testing.T) {
 	portable := model.Target{
 		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 	}
-	snapshot, err := manifestProjection(portable, []publication.PayloadEntry{{
+	snapshot, err := fileSetProjection(portable, []publication.PayloadEntry{{
 		Path: "lua/config/options.lua", Mode: 0o644, Size: 7, Content: []byte("options"),
 	}})
 	require.NoError(t, err)
@@ -375,12 +375,12 @@ func TestManifestProjectionSynthesizesParentDirectoriesAt0755(t *testing.T) {
 	assert.Equal(t, model.FileRegular, byPath["lua/config/options.lua"].Kind)
 }
 
-func TestManifestProjectionMapsASingleFileEntryToTheRootEntry(t *testing.T) {
+func TestFileSetProjectionMapsASingleFileEntryToTheRootEntry(t *testing.T) {
 	portable := model.Target{
 		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		Root: &model.FileRoot{Base: model.RootHome, Path: "config/init.lua", Kind: model.SelectionFile},
 	}
-	snapshot, err := manifestProjection(portable, []publication.PayloadEntry{{
+	snapshot, err := fileSetProjection(portable, []publication.PayloadEntry{{
 		Path: "init.lua", Mode: 0o600, Size: 4, Content: []byte("init"),
 	}})
 	require.NoError(t, err)
@@ -392,19 +392,19 @@ func TestManifestProjectionMapsASingleFileEntryToTheRootEntry(t *testing.T) {
 	assert.Equal(t, uint32(0o600), snapshot.Entries[0].File.Mode)
 	assert.Equal(t, []byte("init"), snapshot.Entries[0].File.Content)
 
-	_, err = manifestProjection(portable, []publication.PayloadEntry{
+	_, err = fileSetProjection(portable, []publication.PayloadEntry{
 		{Path: "init.lua", Mode: 0o600, Size: 4, Content: []byte("init")},
 		{Path: "other.lua", Mode: 0o600, Size: 5, Content: []byte("other")},
 	})
 	require.ErrorIs(t, err, publication.ErrInvalidRecord)
 
-	_, err = manifestProjection(portable, []publication.PayloadEntry{{
+	_, err = fileSetProjection(portable, []publication.PayloadEntry{{
 		Path: ".", Mode: 0o600, Size: 4, Content: []byte("init"),
 	}})
 	require.ErrorIs(t, err, publication.ErrInvalidRecord)
 }
 
-func TestManifestPublicationTargetAcceptsBothFilesSelectionKinds(t *testing.T) {
+func TestFileSetPublicationTargetAcceptsBothFilesSelectionKinds(t *testing.T) {
 	configuration := config.Config{
 		Version: config.Version,
 		Targets: []config.Target{{
@@ -412,24 +412,24 @@ func TestManifestPublicationTargetAcceptsBothFilesSelectionKinds(t *testing.T) {
 			Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 		}},
 	}
-	_, portable, err := manifestPublicationTarget(configuration)
+	_, portable, err := fileSetPublicationTarget(configuration)
 	require.NoError(t, err)
 	assert.Equal(t, model.SelectionDirectory, portable.Root.Kind)
 
 	configuration.Targets[0].Root = &config.Root{
 		Base: model.RootHome, Path: "config/init.lua", Kind: model.SelectionFile,
 	}
-	_, portable, err = manifestPublicationTarget(configuration)
+	_, portable, err = fileSetPublicationTarget(configuration)
 	require.NoError(t, err)
 	assert.Equal(t, model.SelectionFile, portable.Root.Kind)
 	assert.Equal(t, "config/init.lua", portable.Root.Path)
 
 	configuration.Targets[0].Root.Kind = ""
-	_, _, err = manifestPublicationTarget(configuration)
-	require.ErrorIs(t, err, ErrManifestTarget)
+	_, _, err = fileSetPublicationTarget(configuration)
+	require.ErrorIs(t, err, ErrFileSetTarget)
 }
 
-func setManifestReaderFromAccepted(t *testing.T, fixture *publicationPushFixture) {
+func setFileSetReaderFromAccepted(t *testing.T, fixture *publicationPushFixture) {
 	t.Helper()
 	floor, present, err := fixture.store.Load(context.Background())
 	require.NoError(t, err)
@@ -442,10 +442,10 @@ func setManifestReaderFromAccepted(t *testing.T, fixture *publicationPushFixture
 			Path: entry.Path, Mode: entry.Mode, Size: uint64(len(entry.Content)), Content: entry.Content,
 		})
 	}
-	fixture.reader.setPayload(publication.Payload{Form: publication.PayloadFormManifest, Entries: entries})
+	fixture.reader.setPayload(publication.Payload{Form: publication.PayloadFormFileSet, Entries: entries})
 }
 
-func TestManifestUploadFailureIsAbandonedByTheConfirmationWrapper(t *testing.T) {
+func TestFileSetUploadFailureIsAbandonedByTheConfirmationWrapper(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	require.NoError(
@@ -456,7 +456,7 @@ func TestManifestUploadFailureIsAbandonedByTheConfirmationWrapper(t *testing.T) 
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request(fixture.publicationID, nil))
 	require.NoError(t, err)
-	require.Equal(t, publication.PayloadFormManifest, preparation.Form)
+	require.Equal(t, publication.PayloadFormFileSet, preparation.Form)
 	_, err = fixture.coordinator.ConfirmPublicationPush(
 		ctx,
 		fixture.request(fixture.publicationID, nil),
@@ -468,19 +468,19 @@ func TestManifestUploadFailureIsAbandonedByTheConfirmationWrapper(t *testing.T) 
 
 	_, active, err := fixture.store.ActiveAttempt(ctx)
 	require.NoError(t, err)
-	assert.False(t, active, "an upload-started manifest attempt was left active")
+	assert.False(t, active, "an upload-started file-set attempt was left active")
 	_, present, err := fixture.store.Load(ctx)
 	require.NoError(t, err)
-	assert.False(t, present, "a failed manifest upload advanced the accepted floor")
+	assert.False(t, present, "a failed file-set upload advanced the accepted floor")
 	_, retained := fixture.records.has(fixture.publicationID)
-	assert.False(t, retained, "a failed manifest upload retained its proposal")
+	assert.False(t, retained, "a failed file-set upload retained its proposal")
 
 	retry, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x06}, nil))
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, retry.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, retry.Form)
 }
 
-func TestManifestAmbiguousSubmissionStaysUnresolvedThroughConfirmation(t *testing.T) {
+func TestFileSetAmbiguousSubmissionStaysUnresolvedThroughConfirmation(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	fixture.transport.commitThenFail = true
@@ -499,14 +499,14 @@ func TestManifestAmbiguousSubmissionStaysUnresolvedThroughConfirmation(t *testin
 	require.True(t, present)
 	assert.Equal(t, publicationstate.AttemptMayHaveSubmitted, active.Lifecycle)
 	_, retained := fixture.records.has(fixture.publicationID)
-	assert.True(t, retained, "an ambiguous manifest submission deleted its proposal")
+	assert.True(t, retained, "an ambiguous file-set submission deleted its proposal")
 
 	_, err = fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x75, 0x07}, nil))
 	require.ErrorIs(t, err, ErrPublicationProposalActive)
 	assert.Equal(t, 1, fixture.transport.uploadCount(), "a retry uploaded after an ambiguous submission")
 }
 
-func TestManifestAcceptedPreviewAndBaseUseTheSoleDirectoryTarget(t *testing.T) {
+func TestFileSetAcceptedPreviewAndBaseUseTheSoleDirectoryTarget(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
@@ -547,7 +547,7 @@ func TestManifestAcceptedPreviewAndBaseUseTheSoleDirectoryTarget(t *testing.T) {
 	assert.Equal(t, preview.Targets, reopened.Targets)
 }
 
-func TestManifestAcceptedPreviewAndBaseUseTheSoleSingleFileTarget(t *testing.T) {
+func TestFileSetAcceptedPreviewAndBaseUseTheSoleSingleFileTarget(t *testing.T) {
 	ctx := context.Background()
 	fixture := singleFilePushFixture(t)
 	fixture.publish(t)
@@ -611,10 +611,10 @@ func TestSelectPublicationFormCrossesFormsWithoutChangingTargetIdentity(t *testi
 			Content: []byte("beta"), Mode: 0o600,
 		}}},
 	}
-	form, manifest, err := selectPublicationForm(configuration, eligible, base)
+	form, fileSet, err := selectPublicationForm(configuration, eligible, base)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, form)
-	assert.Equal(t, portable, manifest.Targets[0])
+	assert.Equal(t, publication.PayloadFormFileSet, form)
+	assert.Equal(t, portable, fileSet.Targets[0])
 
 	packedCandidate := model.Snapshot{
 		Version: model.SnapshotVersion, Targets: []model.Target{portable},

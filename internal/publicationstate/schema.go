@@ -25,7 +25,7 @@ var attemptSchemaStatements = []string{
 	"CREATE INDEX payload_objects_basename ON payload_objects(basename)",
 }
 
-const schema3RetainedPublicationsStatement = "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, manifest BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND size IS NULL AND manifest IS NOT NULL)))"
+const schema3RetainedPublicationsStatement = "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','file_set')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, file_set BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND file_set IS NULL) OR (form = 'file_set' AND blob_cid IS NULL AND size IS NULL AND file_set IS NOT NULL)))"
 
 const retainedPublicationsTable = "retained_publications"
 

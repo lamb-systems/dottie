@@ -159,8 +159,8 @@ func encodePublicationCandidate(
 			HeadRecord:     headRecord,
 			Payload:        packed.Payload,
 		}, blob, nil
-	case publication.PayloadFormManifest:
-		snapshotEntries, err := manifestSnapshotEntries(snapshot)
+	case publication.PayloadFormFileSet:
+		snapshotEntries, err := fileSetSnapshotEntries(snapshot)
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
@@ -182,7 +182,7 @@ func encodePublicationCandidate(
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
-		entries, err := manifestPayloadEntries(snapshot, snapshotEntries)
+		entries, err := fileSetPayloadEntries(snapshot, snapshotEntries)
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}

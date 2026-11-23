@@ -387,7 +387,7 @@ func (s *Store) FinalizeAttempt(
 		!bytes.Equal(validated.candidate.raw, candidate.SnapshotRecord) {
 		return Finalization{}, classified(ErrContinuity, StageFinalize, ReasonRecordSet)
 	}
-	retainedManifest, err := encodeAttemptRetainedManifest(stored.core)
+	retainedFileSet, err := encodeAttemptRetainedFileSet(stored.core)
 	if err != nil {
 		return Finalization{}, classified(ErrSchema, StageFinalize, ReasonCorrupt)
 	}
@@ -446,14 +446,14 @@ func (s *Store) FinalizeAttempt(
 		if err != nil {
 			return err
 		}
-		if retainedManifest != nil {
+		if retainedFileSet != nil {
 			if _, err := tx.ExecContext(
 				ctx,
-				"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',NULL,NULL,?,?)",
+				"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'file_set',NULL,NULL,?,?)",
 				fresh.core.SnapshotCID,
 				id[:],
 				int64(floor.Sequence),
-				retainedManifest,
+				retainedFileSet,
 				int64(floor.Revision),
 			); err != nil {
 				return classified(ErrStorage, StageFinalize, ReasonIO)
@@ -537,15 +537,15 @@ func repositoryViewToObservation(view validatedRepositoryView) Observation {
 	}
 }
 
-func encodeAttemptRetainedManifest(core attemptCoreWire) ([]byte, error) {
-	if attemptCoreForm(core) != PayloadFormManifest {
+func encodeAttemptRetainedFileSet(core attemptCoreWire) ([]byte, error) {
+	if attemptCoreForm(core) != PayloadFormFileSet {
 		return nil, nil
 	}
 	record, err := publication.DecodeSnapshot(core.SnapshotRecord)
 	if err != nil {
 		return nil, err
 	}
-	return encodeRetainedManifest(manifestPayloadOf(record))
+	return encodeRetainedFileSet(fileSetPayloadOf(record))
 }
 
 func (s *Store) attemptReservationSize() uint64 {

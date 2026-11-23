@@ -53,7 +53,7 @@ func (material acceptedPublicationMaterial) snapshotFor(portable model.Target) (
 	if material.form == publication.PayloadFormPacked {
 		return material.snapshot, nil
 	}
-	return manifestProjection(portable, material.entries)
+	return fileSetProjection(portable, material.entries)
 }
 
 const (
@@ -221,9 +221,9 @@ func validateAcceptedPublication(
 			nil,
 		)
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			!manifestFloorMatchesRecord(floor.Manifest, record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			!fileSetFloorMatchesRecord(floor.FileSet, record.Entries) {
 			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 				ctx,
 				publicationStageRecord,
@@ -231,7 +231,7 @@ func validateAcceptedPublication(
 				nil,
 			)
 		}
-	} else if floor.Manifest != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
+	} else if floor.FileSet != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
 		record.Blob.Size != floor.BlobSize {
 		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 			ctx,
@@ -261,7 +261,7 @@ func validateAcceptedPublication(
 	}
 	head, err := publication.DecodeHead(floor.Head)
 	headBlobMatches := bytes.Equal(head.BlobCID, floor.BlobCID)
-	if record.PayloadForm() == publication.PayloadFormManifest {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
 		headBlobMatches = len(head.BlobCID) == 0
 	}
 	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence ||
@@ -286,8 +286,8 @@ func validateAcceptedPublication(
 		form:    record.PayloadForm(),
 		entries: clonePublicationPayloadEntries(request.entries),
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if !manifestPayloadEntriesMatch(record.Entries, request.entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if !fileSetPayloadEntriesMatch(record.Entries, request.entries) {
 			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 				ctx,
 				publicationStagePayload,
@@ -340,7 +340,7 @@ func validAcceptedPublicationRequest(request acceptedPublicationRequest) bool {
 	if request.store == nil || !validPublicationBindingInput(request.binding) ||
 		!validPublicationFloorInput(request.expectedFloor) ||
 		len(request.snapshotRecord) == 0 ||
-		len(request.snapshotRecord) > publication.MaxManifestRecordBytes {
+		len(request.snapshotRecord) > publication.MaxFileSetRecordBytes {
 		return false
 	}
 	record, err := publication.DecodeSnapshot(request.snapshotRecord)
@@ -355,7 +355,7 @@ func validAcceptedPublicationRequest(request acceptedPublicationRequest) bool {
 		}
 		return true
 	}
-	if record.PayloadForm() != publication.PayloadFormManifest ||
+	if record.PayloadForm() != publication.PayloadFormFileSet ||
 		len(request.entries) == 0 || len(request.entries) > publication.MaxSnapshotEntries {
 		return false
 	}
@@ -390,13 +390,13 @@ func validPublicationFloorInput(floor publicationstate.Floor) bool {
 	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if floor.Manifest == nil {
+	if floor.FileSet == nil {
 		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes ||
 			floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes {
 			return false
 		}
-	} else if len(floor.BlobCID) != 0 || floor.BlobSize != 0 || len(floor.Manifest.Entries) == 0 ||
-		len(floor.Manifest.Entries) > publication.MaxSnapshotEntries {
+	} else if len(floor.BlobCID) != 0 || floor.BlobSize != 0 || len(floor.FileSet.Entries) == 0 ||
+		len(floor.FileSet.Entries) > publication.MaxSnapshotEntries {
 		return false
 	}
 	if len(floor.Head) == 0 ||
@@ -480,7 +480,7 @@ func clonePublicationFloor(floor publicationstate.Floor) publicationstate.Floor 
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
 	out.BlobCID = bytes.Clone(floor.BlobCID)
-	out.Manifest = cloneManifestPayloadReference(floor.Manifest)
+	out.FileSet = cloneFileSetPayloadReference(floor.FileSet)
 	return out
 }
 

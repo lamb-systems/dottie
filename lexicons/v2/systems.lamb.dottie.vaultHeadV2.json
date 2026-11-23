@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "The v2 current publication pointer. snapshotCid is the CID of the canonical DAG-CBOR snapshot record. blobCid is the CID of the packed raw plaintext payload and is present exactly when the pointed-at snapshot carries a packed payload; a manifest snapshot has no single payload CID, so the head record omits blobCid and snapshotCid alone identifies the position.",
+      "description": "The v2 current publication pointer. snapshotCid is the CID of the canonical DAG-CBOR snapshot record. blobCid is the CID of the packed raw plaintext payload and is present exactly when the pointed-at snapshot carries a packed payload; a file-set snapshot has no single payload CID, so the head record omits blobCid and snapshotCid alone identifies the position.",
       "key": "literal:self",
       "record": {
         "type": "object",

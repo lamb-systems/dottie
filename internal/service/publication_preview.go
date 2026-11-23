@@ -225,7 +225,7 @@ func snapshotPublicationPreviewBase(
 	base *PublicationReconciliationBase,
 ) (*PublicationReconciliationBase, publicationReconciliationReason) {
 	if !validPublicationFloorInput(base.position.floor) || len(base.position.snapshotRecord) == 0 ||
-		len(base.position.snapshotRecord) > publication.MaxManifestRecordBytes {
+		len(base.position.snapshotRecord) > publication.MaxFileSetRecordBytes {
 		return nil, publicationPreviewReasonInput
 	}
 	if !publicationPreviewBaseSelectionWithinBounds(base.selection) {

@@ -16,7 +16,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-func manifestServiceEntries(files []manifestServiceFile) []publication.PayloadEntry {
+func fileSetServiceEntries(files []fileSetServiceFile) []publication.PayloadEntry {
 	entries := make([]publication.PayloadEntry, 0, len(files))
 	for _, file := range files {
 		entries = append(entries, publication.PayloadEntry{
@@ -29,11 +29,11 @@ func manifestServiceEntries(files []manifestServiceFile) []publication.PayloadEn
 	return entries
 }
 
-func manifestServiceFilesWithContent(t *testing.T, contents ...string) []manifestServiceFile {
+func fileSetServiceFilesWithContent(t *testing.T, contents ...string) []fileSetServiceFile {
 	t.Helper()
-	files := make([]manifestServiceFile, 0, len(contents))
+	files := make([]fileSetServiceFile, 0, len(contents))
 	for index, content := range contents {
-		files = append(files, manifestServiceFile{
+		files = append(files, fileSetServiceFile{
 			path:    "synthetic/entry-" + string(rune('a'+index)) + ".lua",
 			mode:    0o600,
 			content: []byte(content),
@@ -87,7 +87,7 @@ func publicationHead(
 		SchemaVersion:  publication.SchemaVersion,
 		Vault:          binding.Vault,
 		PublicationSeq: record.PublicationSeq,
-		SnapshotCID:    mustManifestRecordCID(t, block.Raw),
+		SnapshotCID:    mustFileSetRecordCID(t, block.Raw),
 	}
 	if record.PayloadForm() == publication.PayloadFormPacked {
 		headRecord.BlobCID = record.Blob.CID
@@ -113,10 +113,10 @@ func publicationAcceptMaterial(
 	return material
 }
 
-func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.T) {
+func TestPublicationAcceptRoutesFileSetEntriesThroughMaterialIntake(t *testing.T) {
 	fixture := newPublicationAcceptFixture(t)
-	files := manifestServiceFiles()
-	genesis := newSequencedManifestServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x74}, 0, nil, files...)
+	files := fileSetServiceFiles()
+	genesis := newSequencedFileSetServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x74}, 0, nil, files...)
 	observation := publicationstate.Observation{
 		Origin: fixture.binding, SuppliedContext: fixture.context,
 		Head: genesis.head, Snapshots: []publicationstate.SnapshotBlock{genesis.block},
@@ -124,7 +124,7 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 
 	proposal, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding,
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.ModeFirstUse, proposal.Mode)
@@ -133,7 +133,7 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 	refused, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
 		Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode,
 		StateToken: proposal.StateToken, Confirmation: [32]byte{0x01},
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	assert.Equal(t, publicationstate.Floor{}, refused)
 	require.ErrorIs(t, err, ErrPublicationAccept)
@@ -143,12 +143,12 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 	accepted, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
 		Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode,
 		StateToken: proposal.StateToken, Confirmation: proposal.Confirmation,
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), accepted.Revision)
-	require.NotNil(t, accepted.Manifest)
-	require.Len(t, accepted.Manifest.Entries, len(files))
+	require.NotNil(t, accepted.FileSet)
+	require.Len(t, accepted.FileSet.Entries, len(files))
 
 	material := publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted)
 	require.Len(t, material.Entries, len(files))
@@ -158,7 +158,7 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 		assert.Equal(t, file.content, material.Entries[index].Content)
 	}
 
-	missing := manifestServiceEntries(files)[:1]
+	missing := fileSetServiceEntries(files)[:1]
 	missingProposal, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding, FloorRevision: accepted.Revision,
 		Observation: observation, Entries: missing,
@@ -168,13 +168,13 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 	require.ErrorIs(t, err, publicationstate.ErrInvalid)
 	assertPublicationAcceptFailure(t, err, "accept-prepare", "proposal_refused")
 
-	successorFiles := manifestServiceFilesWithContent(t, "synthetic successor alpha", "synthetic successor beta")
-	successor := newSequencedManifestServicePublication(
+	successorFiles := fileSetServiceFilesWithContent(t, "synthetic successor alpha", "synthetic successor beta")
+	successor := newSequencedFileSetServicePublication(
 		t,
 		fixture.binding.Vault,
 		[16]byte{0x25, 0x74},
 		1,
-		mustManifestRecordCID(t, genesis.raw),
+		mustFileSetRecordCID(t, genesis.raw),
 		successorFiles...,
 	)
 	successorObservation := publicationstate.Observation{
@@ -187,7 +187,7 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 	}
 	advance, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding, FloorRevision: accepted.Revision,
-		Observation: successorObservation, Entries: manifestServiceEntries(successorFiles),
+		Observation: successorObservation, Entries: fileSetServiceEntries(successorFiles),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.ModeAdvance, advance.Mode)
@@ -197,7 +197,7 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 		Directory: fixture.directory, Binding: fixture.binding, Mode: advance.Mode,
 		FloorRevision: accepted.Revision, StateToken: advance.StateToken,
 		Confirmation: advance.Confirmation,
-		Observation:  successorObservation, Entries: manifestServiceEntries(successorFiles),
+		Observation:  successorObservation, Entries: fileSetServiceEntries(successorFiles),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, accepted.Revision+1, advanced.Revision)
@@ -210,26 +210,26 @@ func TestPublicationAcceptRoutesManifestEntriesThroughMaterialIntake(t *testing.
 	}
 }
 
-func TestPublicationAcceptManifestRefusesDamagedCustody(t *testing.T) {
+func TestPublicationAcceptFileSetRefusesDamagedCustody(t *testing.T) {
 	fixture := newPublicationAcceptFixture(t)
-	files := manifestServiceFilesWithContent(t, "synthetic custody manifest alpha", "synthetic custody manifest beta")
-	genesis := newSequencedManifestServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x75}, 0, nil, files...)
+	files := fileSetServiceFilesWithContent(t, "synthetic custody file-set alpha", "synthetic custody file-set beta")
+	genesis := newSequencedFileSetServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x75}, 0, nil, files...)
 	observation := publicationstate.Observation{
 		Origin: fixture.binding, SuppliedContext: fixture.context,
 		Head: genesis.head, Snapshots: []publicationstate.SnapshotBlock{genesis.block},
 	}
 	proposal, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding,
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
 	accepted, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
 		Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode,
 		StateToken: proposal.StateToken, Confirmation: proposal.Confirmation,
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
-	require.NotNil(t, accepted.Manifest)
+	require.NotNil(t, accepted.FileSet)
 
 	require.NoError(t, os.Remove(filepath.Join(
 		fixture.directory,
@@ -238,7 +238,7 @@ func TestPublicationAcceptManifestRefusesDamagedCustody(t *testing.T) {
 	)))
 	replay, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 		Directory: fixture.directory, Binding: fixture.binding, FloorRevision: accepted.Revision,
-		Observation: observation, Entries: manifestServiceEntries(files),
+		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.ModeAdvance, replay.Mode)
@@ -246,7 +246,7 @@ func TestPublicationAcceptManifestRefusesDamagedCustody(t *testing.T) {
 		Directory: fixture.directory, Binding: fixture.binding, Mode: replay.Mode,
 		FloorRevision: accepted.Revision, StateToken: replay.StateToken,
 		Confirmation: replay.Confirmation,
-		Observation:  observation, Entries: manifestServiceEntries(files),
+		Observation:  observation, Entries: fileSetServiceEntries(files),
 	})
 	assert.Equal(t, publicationstate.Floor{}, floor)
 	require.ErrorIs(t, err, ErrPublicationAccept)
@@ -255,15 +255,15 @@ func TestPublicationAcceptManifestRefusesDamagedCustody(t *testing.T) {
 }
 
 func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
-	t.Run("head manifest with a later packed snapshot", func(t *testing.T) {
+	t.Run("head file-set with a later packed snapshot", func(t *testing.T) {
 		fixture := newPublicationAcceptFixture(t)
-		files := manifestServiceFilesWithContent(t, "synthetic head manifest entry")
-		genesis := newSequencedManifestServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x76}, 0, nil, files...)
+		files := fileSetServiceFilesWithContent(t, "synthetic head file-set entry")
+		genesis := newSequencedFileSetServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x76}, 0, nil, files...)
 		sibling := packedServiceBlock(
 			t,
 			fixture.binding,
 			1,
-			mustManifestRecordCID(t, genesis.raw),
+			mustFileSetRecordCID(t, genesis.raw),
 			[]byte("synthetic trailing packed sibling"),
 		)
 		observation := publicationstate.Observation{
@@ -273,30 +273,30 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 		}
 		proposal, err := StagePublicationAccept(context.Background(), PublicationAcceptStageRequest{
 			Directory: fixture.directory, Binding: fixture.binding,
-			Observation: observation, Entries: manifestServiceEntries(files),
+			Observation: observation, Entries: fileSetServiceEntries(files),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, publicationstate.ModeFirstUse, proposal.Mode)
 		accepted, err := AcceptPublication(context.Background(), PublicationAcceptRequest{
 			Directory: fixture.directory, Binding: fixture.binding, Mode: proposal.Mode,
 			StateToken: proposal.StateToken, Confirmation: proposal.Confirmation,
-			Observation: observation, Entries: manifestServiceEntries(files),
+			Observation: observation, Entries: fileSetServiceEntries(files),
 		})
 		require.NoError(t, err)
-		require.NotNil(t, accepted.Manifest)
-		require.Len(t, accepted.Manifest.Entries, 1)
+		require.NotNil(t, accepted.FileSet)
+		require.Len(t, accepted.FileSet.Entries, 1)
 	})
 
-	t.Run("head packed with a later manifest snapshot", func(t *testing.T) {
+	t.Run("head packed with a later file-set snapshot", func(t *testing.T) {
 		fixture := newPublicationAcceptFixture(t)
 		packed := fixture.append(t, "synthetic head packed payload")
-		followerFiles := manifestServiceFilesWithContent(t, "synthetic trailing manifest sibling")
-		follower := newSequencedManifestServicePublication(
+		followerFiles := fileSetServiceFilesWithContent(t, "synthetic trailing file-set sibling")
+		follower := newSequencedFileSetServicePublication(
 			t,
 			fixture.binding.Vault,
 			[16]byte{0x25, 0x77},
 			1,
-			mustManifestRecordCID(t, packed.block.Raw),
+			mustFileSetRecordCID(t, packed.block.Raw),
 			followerFiles...,
 		)
 		head := publicationHead(t, fixture.binding, packed.block)
@@ -317,7 +317,7 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 			Observation: observation, Payload: packed.payload,
 		})
 		require.NoError(t, err)
-		assert.Nil(t, accepted.Manifest)
+		assert.Nil(t, accepted.FileSet)
 		assert.Equal(t, packed.block.Raw, publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted).SnapshotRecord)
 	})
 }

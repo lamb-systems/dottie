@@ -289,7 +289,7 @@ func checkAttemptCorePayload(wire attemptCoreWire) error {
 		if len(wire.BlobCID) != 0 || wire.BlobSize != 0 {
 			return errors.New("invalid attempt core")
 		}
-		if _, err := manifestPayloadFromWire(wire.Entries); err != nil {
+		if _, err := fileSetPayloadFromWire(wire.Entries); err != nil {
 			return errors.New("invalid attempt core")
 		}
 		return nil
@@ -299,7 +299,7 @@ func checkAttemptCorePayload(wire attemptCoreWire) error {
 }
 
 func attemptCoreVersion(snapshot publication.SnapshotRecord) uint32 {
-	if payloadFormOf(snapshot) == PayloadFormManifest {
+	if payloadFormOf(snapshot) == PayloadFormFileSet {
 		return 2
 	}
 	return 1

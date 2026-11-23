@@ -18,16 +18,16 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-type manifestMaterialFile struct {
+type fileSetMaterialFile struct {
 	path    string
 	mode    uint32
 	content string
 }
 
-func manifestMaterialFiles(t *testing.T, files ...manifestMaterialFile) []manifestMaterialFile {
+func fileSetMaterialFiles(t *testing.T, files ...fileSetMaterialFile) []fileSetMaterialFile {
 	t.Helper()
 	sorted := slices.Clone(files)
-	slices.SortFunc(sorted, func(left, right manifestMaterialFile) int {
+	slices.SortFunc(sorted, func(left, right fileSetMaterialFile) int {
 		return strings.Compare(left.path, right.path)
 	})
 	for index, file := range sorted {
@@ -46,12 +46,12 @@ func manifestMaterialFiles(t *testing.T, files ...manifestMaterialFile) []manife
 	return sorted
 }
 
-func manifestMaterialBlock(
+func fileSetMaterialBlock(
 	t *testing.T,
 	binding Binding,
 	sequence uint64,
 	parent []byte,
-	files []manifestMaterialFile,
+	files []fileSetMaterialFile,
 ) SnapshotBlock {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
@@ -85,11 +85,11 @@ func manifestMaterialBlock(
 	return SnapshotBlock{Key: key, Raw: raw}
 }
 
-func manifestMaterialChain(
+func fileSetMaterialChain(
 	t *testing.T,
 	binding Binding,
 	sequences int,
-	filesPerSequence [][]manifestMaterialFile,
+	filesPerSequence [][]fileSetMaterialFile,
 ) []SnapshotBlock {
 	t.Helper()
 	require.Equal(t, sequences, len(filesPerSequence))
@@ -101,12 +101,12 @@ func manifestMaterialChain(
 			require.NoError(t, err)
 			parent = cid
 		}
-		blocks = append(blocks, manifestMaterialBlock(t, binding, uint64(index), parent, filesPerSequence[index]))
+		blocks = append(blocks, fileSetMaterialBlock(t, binding, uint64(index), parent, filesPerSequence[index]))
 	}
 	return blocks
 }
 
-func manifestMaterialObservation(t *testing.T, binding Binding, blocks ...SnapshotBlock) Observation {
+func fileSetMaterialObservation(t *testing.T, binding Binding, blocks ...SnapshotBlock) Observation {
 	t.Helper()
 	require.NotEmpty(t, blocks)
 	terminal := blocks[len(blocks)-1]
@@ -133,7 +133,7 @@ func manifestMaterialObservation(t *testing.T, binding Binding, blocks ...Snapsh
 	}
 }
 
-func manifestMaterialInput(files []manifestMaterialFile) MaterialInput {
+func fileSetMaterialInput(files []fileSetMaterialFile) MaterialInput {
 	entries := make([]publication.PayloadEntry, 0, len(files))
 	for _, file := range files {
 		entries = append(entries, publication.PayloadEntry{
@@ -146,7 +146,7 @@ func manifestMaterialInput(files []manifestMaterialFile) MaterialInput {
 	return MaterialInput{Entries: entries}
 }
 
-func manifestMaterialAccept(
+func fileSetMaterialAccept(
 	t *testing.T,
 	store *Store,
 	mode Mode,
@@ -183,13 +183,13 @@ func TestAcceptedMaterialSchemaFormUnionConstraints(t *testing.T) {
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
-	manifestBytes, err := encodeRetainedManifest(&ManifestPayload{Entries: []PayloadEntryReference{{
+	fileSetBytes, err := encodeRetainedFileSet(&FileSetPayload{Entries: []PayloadEntryReference{{
 		Path: "init.lua", CID: floor.BlobCID, Size: floor.BlobSize,
 	}}})
 	require.NoError(t, err)
 
 	revision := int64(floor.Revision)
-	const unionConstraint = "CHECK constraint failed: (form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL)"
+	const unionConstraint = "CHECK constraint failed: (form = 'packed' AND blob_cid IS NOT NULL AND file_set IS NULL)"
 	invalid := []struct {
 		name       string
 		statement  string
@@ -198,43 +198,43 @@ func TestAcceptedMaterialSchemaFormUnionConstraints(t *testing.T) {
 	}{
 		{
 			name:       "form null",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,NULL,?,NULL)",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,NULL,?,NULL)",
 			args:       []any{revision, floor.RecordCID, floor.BlobCID},
 			constraint: "NOT NULL constraint failed: accepted_material_refs.form",
 		},
 		{
 			name:       "form outside the union",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'bogus',?,NULL)",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'bogus',?,NULL)",
 			args:       []any{revision, floor.RecordCID, floor.BlobCID},
-			constraint: "CHECK constraint failed: form IN ('packed','manifest')",
+			constraint: "CHECK constraint failed: form IN ('packed','file_set')",
 		},
 		{
-			name:       "packed with a manifest",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'packed',?,?)",
-			args:       []any{revision, floor.RecordCID, floor.BlobCID, manifestBytes},
+			name:       "packed with a file-set",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',?,?)",
+			args:       []any{revision, floor.RecordCID, floor.BlobCID, fileSetBytes},
 			constraint: unionConstraint,
 		},
 		{
 			name:       "packed without a blob",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'packed',NULL,NULL)",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',NULL,NULL)",
 			args:       []any{revision, floor.RecordCID},
 			constraint: unionConstraint,
 		},
 		{
-			name:       "packed with a manifest and no blob",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'packed',NULL,?)",
-			args:       []any{revision, floor.RecordCID, manifestBytes},
+			name:       "packed with a file-set and no blob",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',NULL,?)",
+			args:       []any{revision, floor.RecordCID, fileSetBytes},
 			constraint: unionConstraint,
 		},
 		{
-			name:       "manifest with a blob",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'manifest',?,?)",
-			args:       []any{revision, floor.RecordCID, floor.BlobCID, manifestBytes},
+			name:       "file-set with a blob",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'file_set',?,?)",
+			args:       []any{revision, floor.RecordCID, floor.BlobCID, fileSetBytes},
 			constraint: unionConstraint,
 		},
 		{
-			name:       "manifest without a manifest",
-			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'manifest',NULL,NULL)",
+			name:       "file-set without a file-set",
+			statement:  "INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'file_set',NULL,NULL)",
 			args:       []any{revision, floor.RecordCID},
 			constraint: unionConstraint,
 		},
@@ -277,25 +277,25 @@ func TestAcceptedMaterialSchemaFormUnionConstraints(t *testing.T) {
 	incomingMaterialRollback(t, txContext, store, tx)
 }
 
-func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
-	newManifest := func(t *testing.T) (*Store, Floor) {
+func TestAcceptedMaterialFileSetRefAuditRefusals(t *testing.T) {
+	newFileSet := func(t *testing.T) (*Store, Floor) {
 		t.Helper()
 		f := newFixture(t, BackendPublicRepo)
 		f.appendRecord(t, 0)
 		store, _ := newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic audit alpha"},
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic audit beta"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic audit alpha"},
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic audit beta"},
 		)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
-		require.NotNil(t, floor.Manifest)
-		require.Len(t, floor.Manifest.Entries, 2)
+		floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
+		require.NotNil(t, floor.FileSet)
+		require.Len(t, floor.FileSet.Entries, 2)
 		return store, floor
 	}
 	newPacked := func(t *testing.T) (*Store, Floor) {
@@ -316,7 +316,7 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 			proposal.Confirmation,
 		)
 		require.NoError(t, err)
-		require.Nil(t, floor.Manifest)
+		require.Nil(t, floor.FileSet)
 		require.NotEmpty(t, floor.BlobCID)
 		return store, floor
 	}
@@ -327,22 +327,22 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 		detail func(t *testing.T, store *Store, ctx context.Context, tx *sql.Tx, floor Floor)
 	}{
 		{
-			name:  "manifest rewritten to a different canonical manifest",
-			setup: newManifest,
+			name:  "file-set rewritten to a different canonical file-set",
+			setup: newFileSet,
 			mutate: func(t *testing.T, ctx context.Context, tx *sql.Tx, floor Floor) {
 				t.Helper()
-				other, err := encodeRetainedManifest(&ManifestPayload{Entries: []PayloadEntryReference{{
-					Path: floor.Manifest.Entries[0].Path,
-					CID:  floor.Manifest.Entries[0].CID,
-					Size: floor.Manifest.Entries[0].Size,
+				other, err := encodeRetainedFileSet(&FileSetPayload{Entries: []PayloadEntryReference{{
+					Path: floor.FileSet.Entries[0].Path,
+					CID:  floor.FileSet.Entries[0].CID,
+					Size: floor.FileSet.Entries[0].Size,
 				}}})
 				require.NoError(t, err)
-				expected, err := encodeRetainedManifest(floor.Manifest)
+				expected, err := encodeRetainedFileSet(floor.FileSet)
 				require.NoError(t, err)
 				require.NotEqual(t, expected, other)
 				_, err = tx.ExecContext(
 					ctx,
-					"UPDATE accepted_material_refs SET manifest=? WHERE accepted_revision=?",
+					"UPDATE accepted_material_refs SET file_set=? WHERE accepted_revision=?",
 					other,
 					int64(floor.Revision),
 				)
@@ -351,32 +351,32 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 					t,
 					ctx,
 					tx,
-					"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=? AND manifest=?",
+					"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=? AND file_set=?",
 					int64(floor.Revision),
 					expected,
 				))
 			},
 		},
 		{
-			name:  "manifest ref form flipped to packed",
-			setup: newManifest,
+			name:  "file-set ref form flipped to packed",
+			setup: newFileSet,
 			mutate: func(t *testing.T, ctx context.Context, tx *sql.Tx, floor Floor) {
 				t.Helper()
 				_, err := tx.ExecContext(
 					ctx,
-					"UPDATE accepted_material_refs SET form='packed',blob_cid=?,manifest=NULL WHERE accepted_revision=?",
-					floor.Manifest.Entries[1].CID,
+					"UPDATE accepted_material_refs SET form='packed',blob_cid=?,file_set=NULL WHERE accepted_revision=?",
+					floor.FileSet.Entries[1].CID,
 					int64(floor.Revision),
 				)
 				require.NoError(t, err)
 			},
 		},
 		{
-			name:  "packed ref form flipped to manifest",
+			name:  "packed ref form flipped to file-set",
 			setup: newPacked,
 			mutate: func(t *testing.T, ctx context.Context, tx *sql.Tx, floor Floor) {
 				t.Helper()
-				manifestBytes, err := encodeRetainedManifest(&ManifestPayload{Entries: []PayloadEntryReference{{
+				fileSetBytes, err := encodeRetainedFileSet(&FileSetPayload{Entries: []PayloadEntryReference{{
 					Path: "init.lua",
 					CID:  floor.BlobCID,
 					Size: floor.BlobSize,
@@ -384,22 +384,22 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 				require.NoError(t, err)
 				_, err = tx.ExecContext(
 					ctx,
-					"UPDATE accepted_material_refs SET form='manifest',blob_cid=NULL,manifest=? WHERE accepted_revision=?",
-					manifestBytes,
+					"UPDATE accepted_material_refs SET form='file_set',blob_cid=NULL,file_set=? WHERE accepted_revision=?",
+					fileSetBytes,
 					int64(floor.Revision),
 				)
 				require.NoError(t, err)
 			},
 		},
 		{
-			name:  "manifest entry catalog row removed",
-			setup: newManifest,
+			name:  "file-set entry catalog row removed",
+			setup: newFileSet,
 			mutate: func(t *testing.T, ctx context.Context, tx *sql.Tx, floor Floor) {
 				t.Helper()
 				result, err := tx.ExecContext(
 					ctx,
 					"DELETE FROM payload_objects WHERE blob_cid=?",
-					floor.Manifest.Entries[1].CID,
+					floor.FileSet.Entries[1].CID,
 				)
 				require.NoError(t, err)
 				deleted, err := result.RowsAffected()
@@ -410,12 +410,12 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 				t.Helper()
 				requireErrorMetadata(
 					t,
-					store.checkIncomingManifestCatalog(
+					store.checkIncomingFileSetCatalog(
 						ctx,
 						tx,
-						floor.Manifest,
+						floor.FileSet,
 						StageLoad,
-						make(manifestCatalogCache),
+						make(fileSetCatalogCache),
 					),
 					ErrSchema,
 					StageLoad,
@@ -440,7 +440,7 @@ func TestAcceptedMaterialManifestRefAuditRefusals(t *testing.T) {
 	}
 }
 
-func TestSchema3MigrationCreatesAcceptedMaterialManifestUnion(t *testing.T) {
+func TestSchema3MigrationCreatesAcceptedMaterialFileSetUnion(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
@@ -470,58 +470,58 @@ func TestSchema3MigrationCreatesAcceptedMaterialManifestUnion(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	require.NoError(t, rows.Close())
-	assert.Equal(t, []string{"accepted_revision", "record_cid", "form", "blob_cid", "manifest"}, columns)
+	assert.Equal(t, []string{"accepted_revision", "record_cid", "form", "blob_cid", "file_set"}, columns)
 	require.NoError(t, checkSchemaVersion(ctx, migrated.conn, 3))
 }
 
-func TestReadAcceptedMaterialFinalizedManifest(t *testing.T) {
+func TestReadAcceptedMaterialFinalizedFileSet(t *testing.T) {
 	ctx := context.Background()
-	manifestFixtureValue := manifestFixture(t)
-	store, directory := newStore(t, fixture{t: t, binding: manifestFixtureValue.binding})
+	fileSetFixtureValue := fileSetFixture(t)
+	store, directory := newStore(t, fixture{t: t, binding: fileSetFixtureValue.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	review := attemptReview()
-	submitted := submitManifestAttempt(t, store, manifestFixtureValue, manifestFixtureValue.view(), review)
+	submitted := submitFileSetAttempt(t, store, fileSetFixtureValue, fileSetFixtureValue.view(), review)
 	finalized, err := store.FinalizeAttempt(
 		ctx,
 		submitted.ID,
 		submitted.StateDigest,
-		manifestFixtureValue.currentView(),
+		fileSetFixtureValue.currentView(),
 	)
 	require.NoError(t, err)
 
-	material, err := store.ReadAcceptedMaterial(ctx, manifestFixtureValue.binding, finalized.Floor)
+	material, err := store.ReadAcceptedMaterial(ctx, fileSetFixtureValue.binding, finalized.Floor)
 	require.NoError(t, err)
 	assert.Equal(t, finalized.Floor, material.Floor)
-	assert.Equal(t, manifestFixtureValue.raw, material.SnapshotRecord)
+	assert.Equal(t, fileSetFixtureValue.raw, material.SnapshotRecord)
 	assert.Empty(t, material.Payload)
-	require.Len(t, material.Entries, len(manifestFixtureValue.entries))
-	for index, entry := range manifestFixtureValue.entries {
+	require.Len(t, material.Entries, len(fileSetFixtureValue.entries))
+	for index, entry := range fileSetFixtureValue.entries {
 		assert.Equal(t, entry.Path, material.Entries[index].Path)
 		assert.Equal(t, entry.Mode, material.Entries[index].Mode)
 		assert.Equal(t, entry.Content, material.Entries[index].Content)
 	}
-	for _, entry := range manifestFixtureValue.entries {
+	for _, entry := range fileSetFixtureValue.entries {
 		_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename(entry.Content)))
 		assert.NoError(t, statErr)
 	}
 }
 
-func TestReadAcceptedMaterialIncomingManifest(t *testing.T) {
+func TestReadAcceptedMaterialIncomingFileSet(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, directory := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", content: "synthetic manifest init"},
-		manifestMaterialFile{path: "config/plugins.lua", mode: 0o644, content: "synthetic manifest plugins"},
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", content: "synthetic file-set init"},
+		fileSetMaterialFile{path: "config/plugins.lua", mode: 0o644, content: "synthetic file-set plugins"},
 	)
-	block := manifestMaterialBlock(t, f.binding, 0, nil, files)
-	observation := manifestMaterialObservation(t, f.binding, block)
-	floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
-	require.NotNil(t, floor.Manifest)
+	block := fileSetMaterialBlock(t, f.binding, 0, nil, files)
+	observation := fileSetMaterialObservation(t, f.binding, block)
+	floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
+	require.NotNil(t, floor.FileSet)
 	assert.Empty(t, floor.BlobCID)
-	assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs WHERE form='manifest'"))
+	assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs WHERE form='file_set'"))
 
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
 	require.NoError(t, err)
@@ -531,35 +531,35 @@ func TestReadAcceptedMaterialIncomingManifest(t *testing.T) {
 	require.Len(t, material.Entries, 2)
 	assert.Equal(t, "config/init.lua", material.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), material.Entries[0].Mode)
-	assert.Equal(t, []byte("synthetic manifest init"), material.Entries[0].Content)
+	assert.Equal(t, []byte("synthetic file-set init"), material.Entries[0].Content)
 	assert.Equal(t, "config/plugins.lua", material.Entries[1].Path)
 	assert.Equal(t, uint32(0o644), material.Entries[1].Mode)
-	assert.Equal(t, []byte("synthetic manifest plugins"), material.Entries[1].Content)
+	assert.Equal(t, []byte("synthetic file-set plugins"), material.Entries[1].Content)
 	for _, file := range files {
 		_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename([]byte(file.content))))
 		assert.NoError(t, statErr)
 	}
 }
 
-func TestReadAcceptedMaterialManifestRecordAboveThePackedCeiling(t *testing.T) {
+func TestReadAcceptedMaterialFileSetRecordAboveThePackedCeiling(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, _ := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	files := make([]manifestMaterialFile, 0, 8)
+	files := make([]fileSetMaterialFile, 0, 8)
 	for index := range 8 {
-		files = append(files, manifestMaterialFile{
+		files = append(files, fileSetMaterialFile{
 			path:    strings.Repeat(string(rune('a'+index)), 1024),
-			content: "synthetic oversized manifest entry " + string(rune('a'+index)),
+			content: "synthetic oversized file-set entry " + string(rune('a'+index)),
 		})
 	}
-	sorted := manifestMaterialFiles(t, files...)
-	block := manifestMaterialBlock(t, f.binding, 0, nil, sorted)
+	sorted := fileSetMaterialFiles(t, files...)
+	block := fileSetMaterialBlock(t, f.binding, 0, nil, sorted)
 	require.Greater(t, len(block.Raw), publication.MaxRecordBytes)
-	require.LessOrEqual(t, len(block.Raw), publication.MaxManifestRecordBytes)
-	observation := manifestMaterialObservation(t, f.binding, block)
-	floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(sorted))
+	require.LessOrEqual(t, len(block.Raw), publication.MaxFileSetRecordBytes)
+	observation := fileSetMaterialObservation(t, f.binding, block)
+	floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(sorted))
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
 	require.NoError(t, err)
 	require.Len(t, material.Entries, len(sorted))
@@ -569,19 +569,19 @@ func TestReadAcceptedMaterialManifestRecordAboveThePackedCeiling(t *testing.T) {
 	}
 }
 
-func TestReadAcceptedMaterialManifestOwnerSelection(t *testing.T) {
+func TestReadAcceptedMaterialFileSetOwnerSelection(t *testing.T) {
 	t.Run("neither owner", func(t *testing.T) {
 		f := newFixture(t, BackendPublicRepo)
 		f.appendRecord(t, 0)
 		store, _ := newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t, manifestMaterialFile{path: "init.lua", content: "synthetic manifest material"})
-		observation := manifestMaterialObservation(
+		files := fileSetMaterialFiles(t, fileSetMaterialFile{path: "init.lua", content: "synthetic file-set material"})
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+		floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 		tx, txContext := incomingMaterialTransaction(t, store, false)
 		_, err := tx.ExecContext(txContext, "DELETE FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision))
 		require.NoError(t, err)
@@ -602,7 +602,7 @@ func TestReadAcceptedMaterialManifestOwnerSelection(t *testing.T) {
 		tx, txContext := incomingMaterialTransaction(t, store, false)
 		_, err := tx.ExecContext(
 			txContext,
-			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'packed',?,NULL)",
+			"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',?,NULL)",
 			int64(finalized.Floor.Revision),
 			finalized.Floor.RecordCID,
 			finalized.Floor.BlobCID,
@@ -615,25 +615,25 @@ func TestReadAcceptedMaterialManifestOwnerSelection(t *testing.T) {
 	})
 }
 
-func TestReadAcceptedMaterialManifestSharedCIDReturnsEachSnapshotMode(t *testing.T) {
+func TestReadAcceptedMaterialFileSetSharedCIDReturnsEachSnapshotMode(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, _ := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/private.lua", mode: 0o600, content: "synthetic shared manifest content"},
-		manifestMaterialFile{path: "config/shared.lua", mode: 0o644, content: "synthetic shared manifest content"},
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/private.lua", mode: 0o600, content: "synthetic shared file-set content"},
+		fileSetMaterialFile{path: "config/shared.lua", mode: 0o644, content: "synthetic shared file-set content"},
 	)
-	observation := manifestMaterialObservation(
+	observation := fileSetMaterialObservation(
 		t,
 		f.binding,
-		manifestMaterialBlock(t, f.binding, 0, nil, files),
+		fileSetMaterialBlock(t, f.binding, 0, nil, files),
 	)
-	floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
-	require.NotNil(t, floor.Manifest)
-	require.Len(t, floor.Manifest.Entries, 2)
-	assert.Equal(t, floor.Manifest.Entries[0].CID, floor.Manifest.Entries[1].CID)
+	floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
+	require.NotNil(t, floor.FileSet)
+	require.Len(t, floor.FileSet.Entries, 2)
+	assert.Equal(t, floor.FileSet.Entries[0].CID, floor.FileSet.Entries[1].CID)
 	assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
@@ -644,28 +644,28 @@ func TestReadAcceptedMaterialManifestSharedCIDReturnsEachSnapshotMode(t *testing
 	assert.Equal(t, material.Entries[0].Content, material.Entries[1].Content)
 }
 
-func TestReadAcceptedMaterialManifestRefusesDamagedSelectedFiles(t *testing.T) {
-	newStoreWithManifest := func(t *testing.T) (*Store, Floor, string, []manifestMaterialFile) {
+func TestReadAcceptedMaterialFileSetRefusesDamagedSelectedFiles(t *testing.T) {
+	newStoreWithFileSet := func(t *testing.T) (*Store, Floor, string, []fileSetMaterialFile) {
 		t.Helper()
 		f := newFixture(t, BackendPublicRepo)
 		f.appendRecord(t, 0)
 		store, directory := newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic first selected entry"},
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic second selected entry"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic first selected entry"},
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic second selected entry"},
 		)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+		floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 		return store, floor, directory, files
 	}
 
 	t.Run("missing", func(t *testing.T) {
-		store, floor, directory, files := newStoreWithManifest(t)
+		store, floor, directory, files := newStoreWithFileSet(t)
 		require.NoError(t, os.Remove(filepath.Join(directory, payloadDirectoryName, payloadBasename([]byte(files[1].content)))))
 		material, err := store.ReadAcceptedMaterial(context.Background(), store.binding, floor)
 		assert.Equal(t, AcceptedMaterial{}, material)
@@ -673,7 +673,7 @@ func TestReadAcceptedMaterialManifestRefusesDamagedSelectedFiles(t *testing.T) {
 	})
 
 	t.Run("corrupt", func(t *testing.T) {
-		store, floor, directory, files := newStoreWithManifest(t)
+		store, floor, directory, files := newStoreWithFileSet(t)
 		path := filepath.Join(directory, payloadDirectoryName, payloadBasename([]byte(files[1].content)))
 		require.NoError(t, os.WriteFile(path, bytes.Repeat([]byte{'x'}, len(files[1].content)), 0o600))
 		material, err := store.ReadAcceptedMaterial(context.Background(), store.binding, floor)
@@ -682,7 +682,7 @@ func TestReadAcceptedMaterialManifestRefusesDamagedSelectedFiles(t *testing.T) {
 	})
 
 	t.Run("unsafe", func(t *testing.T) {
-		store, floor, directory, files := newStoreWithManifest(t)
+		store, floor, directory, files := newStoreWithFileSet(t)
 		path := filepath.Join(directory, payloadDirectoryName, payloadBasename([]byte(files[1].content)))
 		require.NoError(t, os.Remove(path))
 		require.NoError(t, os.Symlink(

@@ -155,7 +155,7 @@ type PublicationApplyRequest struct {
 	Barrier         func(PublicationApplyPhase, publicationstate.JournalEntry) error
 	ExpectedPlan    [32]byte
 	ApplyRemoteOnly bool
-	Manifest        bool
+	FileSet         bool
 }
 
 type PublicationApplyPlan struct {
@@ -544,7 +544,7 @@ func planPublicationApply(
 			content[entry.Identity()] = entry
 		}
 		directories := make(map[model.EntryKey]struct{})
-		if request.Manifest {
+		if request.FileSet {
 			for _, entries := range [][]model.Entry{baseEntries, localEntries, remote.entries} {
 				for _, entry := range entries {
 					if entry.File != nil && entry.File.State == model.FilePresent &&
@@ -594,7 +594,7 @@ func publicationApplyOperationFor(
 ) (publicationApplyOperation, error) {
 	path := previewEntry.Key.FilePath
 	operation := publicationApplyOperation{targetID: previewEntry.Key.TargetID, root: root, path: path, anchor: anchor}
-	if request.Manifest {
+	if request.FileSet {
 		if _, directory := directories[previewEntry.Key]; directory {
 			if selection.portable.Root.Kind != model.SelectionDirectory || path == "." {
 				return publicationApplyOperation{}, publicationApplyFailure(
@@ -616,8 +616,8 @@ func publicationApplyOperationFor(
 					)
 				}
 				operation.kind = PublicationApplyMkdir
-				operation.mode = os.FileMode(manifestProjectionDirectoryMode)
-				operation.post = publicationstate.ObservedFile{Present: true, Mode: manifestProjectionDirectoryMode}
+				operation.mode = os.FileMode(fileSetProjectionDirectoryMode)
+				operation.post = publicationstate.ObservedFile{Present: true, Mode: fileSetProjectionDirectoryMode}
 			case syncengine.ActionUnchanged, syncengine.ActionUpload,
 				syncengine.ActionDeleteRemote, syncengine.ActionDeleteLocal:
 				operation.kind = PublicationApplyUnchanged
@@ -763,8 +763,8 @@ func publicationApplyOperationFor(
 	if selection.portable.Root.Kind == model.SelectionFile {
 		operation.key = "."
 	}
-	if request.Manifest {
-		if err := publicationApplyManifestParents(fileSystem, root, operation.key); err != nil {
+	if request.FileSet {
+		if err := publicationApplyFileSetParents(fileSystem, root, operation.key); err != nil {
 			return publicationApplyOperation{}, publicationApplyFailure(
 				ctx,
 				publicationApplyStagePlan,
@@ -831,7 +831,7 @@ func publicationApplyParents(fileSystem files.ApplyFileSystem, root, key string)
 	return publicationApplyExistingParents(fileSystem, root, key, false)
 }
 
-func publicationApplyManifestParents(fileSystem files.ApplyFileSystem, root, key string) error {
+func publicationApplyFileSetParents(fileSystem files.ApplyFileSystem, root, key string) error {
 	return publicationApplyExistingParents(fileSystem, root, key, true)
 }
 
@@ -951,7 +951,7 @@ func applyPublicationOperation(
 	if operation.kind == PublicationApplyDelete {
 		err = files.DeleteFile(bound, operation.root, operation.key, expected)
 	} else {
-		if request.Manifest {
+		if request.FileSet {
 			if parentErr := publicationApplyEnsureParents(bound, operation.root, operation.key); parentErr != nil {
 				return publicationApplyIndeterminate(
 					ctx,
@@ -1206,11 +1206,11 @@ func applyPublicationMkdir(
 	if !errors.Is(err, os.ErrNotExist) {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyReasonUnreadable, err)
 	}
-	if err := root.Mkdir(operation.key, os.FileMode(manifestProjectionDirectoryMode)); err != nil {
+	if err := root.Mkdir(operation.key, os.FileMode(fileSetProjectionDirectoryMode)); err != nil {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonMutation, err)
 	}
 	entry.Operation = PublicationApplyMkdir
-	entry.Mode = manifestProjectionDirectoryMode
+	entry.Mode = fileSetProjectionDirectoryMode
 	entry.State = publicationstate.JournalStateApplied
 	return entry, nil
 }
@@ -1242,7 +1242,7 @@ func publicationApplyEnsureParents(fileSystem files.ApplyFileSystem, root, key s
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := anchored.Mkdir(parent, os.FileMode(manifestProjectionDirectoryMode)); err != nil {
+		if err := anchored.Mkdir(parent, os.FileMode(fileSetProjectionDirectoryMode)); err != nil {
 			return err
 		}
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-func TestStoredAttemptWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T) {
+func TestStoredAttemptWireKeepsPackedGoldenAndCarriesFileSetEntries(t *testing.T) {
 	packed := attemptCoreWire{
 		Version:               1,
 		AttemptID:             bytes.Repeat([]byte{1}, 16),
@@ -42,12 +42,12 @@ func TestStoredAttemptWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, encodedPacked, reencodedPacked)
 
-	manifest := packed
-	manifest.Version = 2
-	manifest.BlobCID = nil
-	manifest.BlobSize = 0
-	manifest.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}
-	encodedManifest, err := encodeAttemptCore(manifest)
+	fileSet := packed
+	fileSet.Version = 2
+	fileSet.BlobCID = nil
+	fileSet.BlobSize = 0
+	fileSet.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}
+	encodedFileSet, err := encodeAttemptCore(fileSet)
 	require.NoError(t, err)
 	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
 	assert.Equal(
@@ -57,15 +57,15 @@ func TestStoredAttemptWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.
 				`ssorKey":"","predecessorRecord":null,"predecessorCid":null,"snapshotKey":"","snapshotRecord":null,"snapshotCid":"Aw==","headRecord":null,"headCid":"BA==","entries":[{"path":"init.lua","cid":"BQ==","size":9}],"initialContext":{"repositoryRevision":"","repositoryDigest":null,"pol`+
 				`icy":null},"initialViewDigest":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","review":{"selectionDigest":null,"selectionRevision":0,"approvalDigest":null,"approvalRevision":0},"candidateConfirmation":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=","reservedCompletionBytes":0}`,
 		),
-		encodedManifest,
+		encodedFileSet,
 	)
-	decodedManifest, err := decodeAttemptCore(encodedManifest)
+	decodedFileSet, err := decodeAttemptCore(encodedFileSet)
 	require.NoError(t, err)
-	assert.Equal(t, manifest, decodedManifest)
-	assert.Equal(t, []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}, decodedManifest.Entries)
+	assert.Equal(t, fileSet, decodedFileSet)
+	assert.Equal(t, []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}, decodedFileSet.Entries)
 }
 
-func TestStoredFloorWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T) {
+func TestStoredFloorWireKeepsPackedGoldenAndCarriesFileSetEntries(t *testing.T) {
 	packed := payloadUnionFloor(t)
 	encodedPacked, err := encodeFloor(packed)
 	require.NoError(t, err)
@@ -82,15 +82,15 @@ func TestStoredFloorWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T)
 	decodedPacked, err := decodeFloor(encodedPacked)
 	require.NoError(t, err)
 	assert.Equal(t, packed, decodedPacked)
-	assert.Nil(t, decodedPacked.Manifest)
+	assert.Nil(t, decodedPacked.FileSet)
 
-	manifest := packed
-	manifest.BlobCID = nil
-	manifest.BlobSize = 0
-	manifest.Manifest = &ManifestPayload{
+	fileSet := packed
+	fileSet.BlobCID = nil
+	fileSet.BlobSize = 0
+	fileSet.FileSet = &FileSetPayload{
 		Entries: []PayloadEntryReference{{Path: "init.lua", CID: []byte{4}, Size: 5}},
 	}
-	encodedManifest, err := encodeFloor(manifest)
+	encodedFileSet, err := encodeFloor(fileSet)
 	require.NoError(t, err)
 	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
 	assert.Equal(
@@ -100,18 +100,18 @@ func TestStoredFloorWireKeepsPackedGoldenAndCarriesManifestEntries(t *testing.T)
 				`AAAAAAAAAAAAAAAAAAAAAAAAAAAA=","profile":"systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"},"suppliedContext":{"repositoryRevision":"r","repositoryDigest":"AQ==","policy":null},"head":"Ag==","snapshotKey":"0000000000000001","se`+
 				`quence":1,"publicationId":"AgAAAAAAAAAAAAAAAAAAAA==","recordCid":"Aw==","entries":[{"path":"init.lua","cid":"BA==","size":5}],"observationDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","acceptedEventDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`,
 		),
-		encodedManifest,
+		encodedFileSet,
 	)
-	decodedManifest, err := decodeFloor(encodedManifest)
+	decodedFileSet, err := decodeFloor(encodedFileSet)
 	require.NoError(t, err)
-	require.NotNil(t, decodedManifest.Manifest)
-	assert.Equal(t, manifest.Manifest.Entries, decodedManifest.Manifest.Entries)
-	assert.Nil(t, decodedManifest.BlobCID)
-	assert.Equal(t, uint64(0), decodedManifest.BlobSize)
-	require.NoError(t, validateFloorPayload(decodedManifest))
+	require.NotNil(t, decodedFileSet.FileSet)
+	assert.Equal(t, fileSet.FileSet.Entries, decodedFileSet.FileSet.Entries)
+	assert.Nil(t, decodedFileSet.BlobCID)
+	assert.Equal(t, uint64(0), decodedFileSet.BlobSize)
+	require.NoError(t, validateFloorPayload(decodedFileSet))
 }
 
-func TestManifestPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) {
+func TestFileSetPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) {
 	limits := DefaultAttemptLimits()
 	assert.Equal(t, uint32(64), limits.ManagedObjects)
 	assert.Equal(t, uint64(1610612736), limits.CustodyBytes)
@@ -124,8 +124,8 @@ func TestManifestPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	for index := range int(limits.ManagedObjects) {
 		atObjectBound = append(atObjectBound, entry(index, 1))
 	}
-	require.NoError(t, validateManifestPayloadCustody(&ManifestPayload{Entries: atObjectBound}, limits))
-	assert.Equal(t, uint32(64), (&ManifestPayload{Entries: atObjectBound}).EntryCount())
+	require.NoError(t, validateFileSetPayloadCustody(&FileSetPayload{Entries: atObjectBound}, limits))
+	assert.Equal(t, uint32(64), (&FileSetPayload{Entries: atObjectBound}).EntryCount())
 
 	overObjectBound := append([]PayloadEntryReference{}, atObjectBound...)
 	tightened := limits
@@ -136,19 +136,19 @@ func TestManifestPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	}
 	requireErrorMetadata(
 		t,
-		validateManifestPayloadCustody(&ManifestPayload{Entries: tightenedEntries}, tightened),
+		validateFileSetPayloadCustody(&FileSetPayload{Entries: tightenedEntries}, tightened),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
 	)
 	assert.Contains(
 		t,
-		validateManifestPayloadCustody(&ManifestPayload{Entries: tightenedEntries}, tightened).Error(),
-		"manifest managed objects: 9 exceeds 8",
+		validateFileSetPayloadCustody(&FileSetPayload{Entries: tightenedEntries}, tightened).Error(),
+		"file-set managed objects: 9 exceeds 8",
 	)
 	requireErrorMetadata(
 		t,
-		validateManifestPayloadCustody(&ManifestPayload{Entries: overObjectBound}, tightened),
+		validateFileSetPayloadCustody(&FileSetPayload{Entries: overObjectBound}, tightened),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
@@ -158,37 +158,37 @@ func TestManifestPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) 
 	for index := range int(limits.ManagedObjects) {
 		overCustodyBytes = append(overCustodyBytes, entry(index, 30_000_000))
 	}
-	aggregate := (&ManifestPayload{Entries: overCustodyBytes}).TotalBytes()
+	aggregate := (&FileSetPayload{Entries: overCustodyBytes}).TotalBytes()
 	require.Greater(t, aggregate, limits.CustodyBytes)
 	requireErrorMetadata(
 		t,
-		validateManifestPayloadCustody(&ManifestPayload{Entries: overCustodyBytes}, limits),
+		validateFileSetPayloadCustody(&FileSetPayload{Entries: overCustodyBytes}, limits),
 		ErrLimit,
 		StageInput,
 		ReasonCapacity,
 	)
 	assert.Contains(
 		t,
-		validateManifestPayloadCustody(&ManifestPayload{Entries: overCustodyBytes}, limits).Error(),
-		fmt.Sprintf("manifest custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
+		validateFileSetPayloadCustody(&FileSetPayload{Entries: overCustodyBytes}, limits).Error(),
+		fmt.Sprintf("file-set custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
 	)
 
 	tooManyEntries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
 	for index := range publication.MaxSnapshotEntries + 1 {
 		tooManyEntries = append(tooManyEntries, entry(index, 1))
 	}
-	tooMany := validateManifestPayloadCustody(&ManifestPayload{Entries: tooManyEntries}, limits)
+	tooMany := validateFileSetPayloadCustody(&FileSetPayload{Entries: tooManyEntries}, limits)
 	requireErrorMetadata(t, tooMany, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, tooMany.Error(), "manifest entry count: 65 exceeds 64")
-	require.ErrorIs(t, validateManifestPayload(&ManifestPayload{Entries: tooManyEntries}), ErrLimit)
-	require.Error(t, validateManifestPayload(&ManifestPayload{}))
+	assert.Contains(t, tooMany.Error(), "file-set entry count: 65 exceeds 64")
+	require.ErrorIs(t, validateFileSetPayload(&FileSetPayload{Entries: tooManyEntries}), ErrLimit)
+	require.Error(t, validateFileSetPayload(&FileSetPayload{}))
 }
 
-func TestManifestAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
-	snapshot, encoded := payloadUnionManifestSnapshot(t)
+func TestFileSetAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
+	snapshot, encoded := payloadUnionFileSetSnapshot(t)
 	core := attemptCoreWire{
 		Version:        attemptCoreVersion(snapshot),
-		Entries:        manifestPayloadToWire(manifestPayloadOf(snapshot)),
+		Entries:        fileSetPayloadToWire(fileSetPayloadOf(snapshot)),
 		SnapshotRecord: encoded,
 		SnapshotCID:    mustPayloadUnionRecordCID(t, encoded),
 	}
@@ -206,13 +206,13 @@ func TestManifestAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
 	require.Error(t, validateAttemptCorePayload(packedForm, snapshot, DefaultAttemptLimits()))
 
 	projected := projectAttempt(core, AttemptPrepared, OutcomeNotSubmitted, "", 1, AvailabilityUnchecked)
-	require.NotNil(t, projected.Manifest)
-	assert.Equal(t, uint32(2), projected.Manifest.EntryCount())
+	require.NotNil(t, projected.FileSet)
+	assert.Equal(t, uint32(2), projected.FileSet.EntryCount())
 	assert.Nil(t, projected.BlobCID)
 }
 
-func TestManifestPayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
-	snapshot, encoded := payloadUnionManifestSnapshot(t)
+func TestFileSetPayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
+	snapshot, encoded := payloadUnionFileSetSnapshot(t)
 	key, err := publication.SequenceKey(snapshot.PublicationSeq)
 	require.NoError(t, err)
 	head := publication.HeadRecord{
@@ -291,15 +291,15 @@ func TestManifestPayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
 	)
 }
 
-func TestManifestEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
-	snapshot, _ := payloadUnionManifestSnapshot(t)
-	manifestHead := publication.HeadRecord{
+func TestFileSetEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
+	snapshot, _ := payloadUnionFileSetSnapshot(t)
+	fileSetHead := publication.HeadRecord{
 		SchemaVersion:  publication.SchemaVersion,
 		Vault:          snapshot.Vault,
 		PublicationSeq: snapshot.PublicationSeq,
 	}
-	require.NoError(t, headPayloadMatchesRecord(manifestHead, snapshot))
-	packedHead := manifestHead
+	require.NoError(t, headPayloadMatchesRecord(fileSetHead, snapshot))
+	packedHead := fileSetHead
 	packedHead.BlobCID = []byte{9}
 	require.Error(t, headPayloadMatchesRecord(packedHead, snapshot))
 
@@ -319,7 +319,7 @@ func TestManifestEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
 	require.NoError(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
 	packedHeader.BlobCID = []byte{8}
 	require.Error(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
-	require.Error(t, headPayloadMatchesRecord(manifestHead, packedSnapshot))
+	require.Error(t, headPayloadMatchesRecord(fileSetHead, packedSnapshot))
 }
 
 func payloadUnionFloor(t *testing.T) Floor {
@@ -351,10 +351,10 @@ func payloadUnionFloor(t *testing.T) Floor {
 	}
 }
 
-func payloadUnionManifestSnapshot(t *testing.T) (publication.SnapshotRecord, []byte) {
+func payloadUnionFileSetSnapshot(t *testing.T) (publication.SnapshotRecord, []byte) {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, 2)
-	for index, content := range [][]byte{[]byte("manifest init"), []byte("manifest options")} {
+	for index, content := range [][]byte{[]byte("file-set init"), []byte("file-set options")} {
 		cid, err := publication.RawPayloadCID(content)
 		require.NoError(t, err)
 		entries = append(entries, publication.SnapshotEntry{

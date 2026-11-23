@@ -399,7 +399,7 @@ func rebuildRetainedPublicationsTx(ctx context.Context, tx *sql.Tx, sourceVersio
 	if _, err := tx.ExecContext(
 		ctx,
 		"INSERT INTO "+retainedPublicationsTable+
-			"(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision)"+
+			"(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision)"+
 			" SELECT record_cid,attempt_id,sequence,'packed',blob_cid,size,NULL,accepted_revision FROM "+
 			retainedPublicationsSchema2ScratchTable+" ORDER BY record_cid",
 	); err != nil {

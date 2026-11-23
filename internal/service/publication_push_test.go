@@ -349,7 +349,7 @@ func TestPreparePublicationPushReportsAnUnchangedCandidateAsNoOp(t *testing.T) {
 	fixture := newPublicationPushFixture(t)
 	fixture.publish(t)
 
-	setManifestReaderFromAccepted(t, fixture)
+	setFileSetReaderFromAccepted(t, fixture)
 
 	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x77, 0x78}, nil))
 	require.NoError(t, err)
@@ -402,7 +402,7 @@ func TestPublicationProposalRecordCarriesNoPayloadBytes(t *testing.T) {
 	assert.Equal(t, fixture.binding.Vault, record.Binding.Vault)
 	assert.NotEmpty(t, record.CandidateRecordCID)
 	assert.Empty(t, record.CandidatePayloadCID)
-	assert.Equal(t, publication.PayloadFormManifest, record.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, record.Form)
 	assert.Equal(t, 1, record.CandidateEntryCount)
 	assert.NotEqual(t, [32]byte{}, record.CandidateEntryDigest)
 	assert.Equal(t, 1, preparation.Targets)

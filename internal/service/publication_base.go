@@ -91,7 +91,7 @@ func EstablishLocalReconciliationBase(
 	if err := ctx.Err(); err != nil {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, err)
 	}
-	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxManifestRecordBytes {
+	if len(request.SnapshotRecord) == 0 || len(request.SnapshotRecord) > publication.MaxFileSetRecordBytes {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonInput, nil)
 	}
 	record := bytes.Clone(request.SnapshotRecord)
@@ -236,7 +236,7 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 	floor := position.floor
 	if !validPublicationFloorInput(floor) || floor.DatabaseID == ([32]byte{}) || floor.Generation == 0 ||
 		len(position.snapshotRecord) == 0 ||
-		len(position.snapshotRecord) > publication.MaxManifestRecordBytes {
+		len(position.snapshotRecord) > publication.MaxFileSetRecordBytes {
 		return false
 	}
 	record, err := publication.DecodeSnapshot(position.snapshotRecord)
@@ -249,12 +249,12 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		record.PublicationSeq != floor.Sequence {
 		return false
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			!manifestFloorMatchesRecord(floor.Manifest, record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			!fileSetFloorMatchesRecord(floor.FileSet, record.Entries) {
 			return false
 		}
-	} else if floor.Manifest != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
+	} else if floor.FileSet != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
 		record.Blob.Size != floor.BlobSize {
 		return false
 	}
@@ -268,7 +268,7 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		!bytes.Equal(head.SnapshotCID, floor.RecordCID) {
 		return false
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
 		return len(head.BlobCID) == 0
 	}
 	return bytes.Equal(head.BlobCID, floor.BlobCID)

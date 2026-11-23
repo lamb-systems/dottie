@@ -15,9 +15,9 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
 
-var ErrManifestTarget = errors.New("manifest publication requires the sole local files target")
+var ErrFileSetTarget = errors.New("file-set publication requires the sole local files target")
 
-const manifestProjectionDirectoryMode uint32 = 0o755
+const fileSetProjectionDirectoryMode uint32 = 0o755
 
 func selectPublicationForm(
 	configuration config.Config,
@@ -27,14 +27,14 @@ func selectPublicationForm(
 	if err := configuration.Validate(); err != nil {
 		return "", model.Snapshot{}, err
 	}
-	manifestSnapshot, ok := manifestCandidateSnapshot(configuration, snapshot, base)
+	fileSetSnapshot, ok := fileSetCandidateSnapshot(configuration, snapshot, base)
 	if !ok {
 		return publication.PayloadFormPacked, snapshot, nil
 	}
-	return publication.PayloadFormManifest, manifestSnapshot, nil
+	return publication.PayloadFormFileSet, fileSetSnapshot, nil
 }
 
-func manifestCandidateSnapshot(
+func fileSetCandidateSnapshot(
 	configuration config.Config,
 	snapshot model.Snapshot,
 	base model.Snapshot,
@@ -87,7 +87,7 @@ func manifestCandidateSnapshot(
 			return model.Snapshot{}, false
 		}
 	}
-	if manifestSnapshotDeletesPresentFile(base, target.ID, candidate) {
+	if fileSetSnapshotDeletesPresentFile(base, target.ID, candidate) {
 		return model.Snapshot{}, false
 	}
 	projected := model.Snapshot{
@@ -95,13 +95,13 @@ func manifestCandidateSnapshot(
 		Targets: []model.Target{cloneSelectionTargetModel(target)},
 		Entries: files,
 	}
-	if _, err := manifestSnapshotEntries(projected); err != nil {
+	if _, err := fileSetSnapshotEntries(projected); err != nil {
 		return model.Snapshot{}, false
 	}
 	return projected, true
 }
 
-func manifestSingleFileTarget(snapshot model.Snapshot) (model.Target, bool) {
+func fileSetSingleFileTarget(snapshot model.Snapshot) (model.Target, bool) {
 	if len(snapshot.Targets) != 1 {
 		return model.Target{}, false
 	}
@@ -112,7 +112,7 @@ func manifestSingleFileTarget(snapshot model.Snapshot) (model.Target, bool) {
 	return target, true
 }
 
-func manifestSyntheticPath(target model.Target) (string, bool) {
+func fileSetSyntheticPath(target model.Target) (string, bool) {
 	base := path.Base(target.Root.Path)
 	if base == "" || base == "." || base == ".." || base == "/" {
 		return "", false
@@ -120,12 +120,12 @@ func manifestSyntheticPath(target model.Target) (string, bool) {
 	return base, true
 }
 
-func manifestSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEntry, error) {
-	target, single := manifestSingleFileTarget(snapshot)
+func fileSetSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEntry, error) {
+	target, single := fileSetSingleFileTarget(snapshot)
 	if !single {
 		return publication.SnapshotEntries(snapshot)
 	}
-	synthetic, ok := manifestSyntheticPath(target)
+	synthetic, ok := fileSetSyntheticPath(target)
 	if !ok {
 		return nil, publication.ErrInvalidRecord
 	}
@@ -141,15 +141,15 @@ func manifestSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEnt
 	return publication.SnapshotEntries(model.Snapshot{Version: snapshot.Version, Entries: entries})
 }
 
-func manifestPayloadEntries(
+func fileSetPayloadEntries(
 	snapshot model.Snapshot,
 	entries []publication.SnapshotEntry,
 ) ([]publication.PayloadEntry, error) {
-	target, single := manifestSingleFileTarget(snapshot)
+	target, single := fileSetSingleFileTarget(snapshot)
 	synthetic := ""
 	if single {
 		valid := false
-		synthetic, valid = manifestSyntheticPath(target)
+		synthetic, valid = fileSetSyntheticPath(target)
 		if !valid {
 			return nil, publication.ErrInvalidRecord
 		}
@@ -179,7 +179,7 @@ func manifestPayloadEntries(
 	return payload, nil
 }
 
-func manifestSnapshotDeletesPresentFile(base model.Snapshot, targetID string, candidate map[string]struct{}) bool {
+func fileSetSnapshotDeletesPresentFile(base model.Snapshot, targetID string, candidate map[string]struct{}) bool {
 	for _, entry := range base.Entries {
 		if entry.TargetID != targetID || entry.File == nil ||
 			entry.File.State != model.FilePresent || entry.File.Kind == model.FileDirectory {
@@ -212,40 +212,40 @@ func publicationSnapshotPaths(entries []model.Entry) map[string]struct{} {
 	return paths
 }
 
-func manifestPublicationTarget(configuration config.Config) (config.Target, model.Target, error) {
+func fileSetPublicationTarget(configuration config.Config) (config.Target, model.Target, error) {
 	if len(configuration.Targets) != 1 {
-		return config.Target{}, model.Target{}, ErrManifestTarget
+		return config.Target{}, model.Target{}, ErrFileSetTarget
 	}
 	target := configuration.Targets[0]
 	if target.Source != model.SourceFiles || target.Root == nil ||
 		(target.Root.Kind != model.SelectionDirectory && target.Root.Kind != model.SelectionFile) {
-		return config.Target{}, model.Target{}, ErrManifestTarget
+		return config.Target{}, model.Target{}, ErrFileSetTarget
 	}
 	portable, err := target.Model()
 	if err != nil {
-		return config.Target{}, model.Target{}, ErrManifestTarget
+		return config.Target{}, model.Target{}, ErrFileSetTarget
 	}
 	return cloneSelectionTarget(target), cloneSelectionTargetModel(portable), nil
 }
 
-func manifestProjection(
+func fileSetProjection(
 	portable model.Target,
 	entries []publication.PayloadEntry,
 ) (model.Snapshot, error) {
 	if portable.Source != model.SourceFiles || portable.Root == nil || portable.Validate() != nil {
-		return model.Snapshot{}, ErrManifestTarget
+		return model.Snapshot{}, ErrFileSetTarget
 	}
 	switch portable.Root.Kind {
 	case model.SelectionDirectory:
-		return manifestDirectoryProjection(portable, entries)
+		return fileSetDirectoryProjection(portable, entries)
 	case model.SelectionFile:
-		return manifestSingleFileProjection(portable, entries)
+		return fileSetSingleFileProjection(portable, entries)
 	default:
-		return model.Snapshot{}, ErrManifestTarget
+		return model.Snapshot{}, ErrFileSetTarget
 	}
 }
 
-func manifestSingleFileProjection(
+func fileSetSingleFileProjection(
 	portable model.Target,
 	entries []publication.PayloadEntry,
 ) (model.Snapshot, error) {
@@ -273,7 +273,7 @@ func manifestSingleFileProjection(
 	return snapshot, nil
 }
 
-func manifestDirectoryProjection(
+func fileSetDirectoryProjection(
 	portable model.Target,
 	entries []publication.PayloadEntry,
 ) (model.Snapshot, error) {
@@ -290,7 +290,7 @@ func manifestDirectoryProjection(
 			return model.Snapshot{}, publication.ErrInvalidRecord
 		}
 		byPath[entry.Path] = entry
-		for parent := publicationManifestParent(entry.Path); parent != "."; parent = publicationManifestParent(parent) {
+		for parent := publicationFileSetParent(entry.Path); parent != "."; parent = publicationFileSetParent(parent) {
 			if _, conflict := byPath[parent]; conflict {
 				return model.Snapshot{}, publication.ErrInvalidRecord
 			}
@@ -319,12 +319,12 @@ func manifestDirectoryProjection(
 			TargetID: portable.ID,
 			File: &model.FileEntry{
 				Path: path, State: model.FilePresent, Kind: model.FileDirectory,
-				Mode: manifestProjectionDirectoryMode,
+				Mode: fileSetProjectionDirectoryMode,
 			},
 		})
 	}
 	sort.Slice(projected, func(left, right int) bool {
-		return publicationManifestPathLess(
+		return publicationFileSetPathLess(
 			projected[left].File.Path,
 			projected[right].File.Path,
 		)
@@ -340,7 +340,7 @@ func manifestDirectoryProjection(
 	return snapshot, nil
 }
 
-func publicationManifestParent(path string) string {
+func publicationFileSetParent(path string) string {
 	index := strings.LastIndexByte(path, '/')
 	if index < 0 {
 		return "."
@@ -348,7 +348,7 @@ func publicationManifestParent(path string) string {
 	return path[:index]
 }
 
-func publicationManifestPathLess(left, right string) bool {
+func publicationFileSetPathLess(left, right string) bool {
 	leftDepth := strings.Count(left, "/")
 	rightDepth := strings.Count(right, "/")
 	if leftDepth != rightDepth {
@@ -357,7 +357,7 @@ func publicationManifestPathLess(left, right string) bool {
 	return left < right
 }
 
-func manifestEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
+func fileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
 	digest := sha256.New()
 	var scratch [8]byte
 	writeField := func(value string) {
@@ -393,7 +393,7 @@ func acceptedPublicationSnapshot(
 		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
 		return snapshot, publication.PayloadFormPacked, err
 	}
-	_, portable, err := manifestPublicationTarget(configuration)
+	_, portable, err := fileSetPublicationTarget(configuration)
 	if err != nil {
 		return model.Snapshot{}, "", err
 	}
@@ -404,8 +404,8 @@ func acceptedPublicationSnapshot(
 			Content: bytes.Clone(entry.Content),
 		})
 	}
-	snapshot, err := manifestProjection(portable, entries)
-	return snapshot, publication.PayloadFormManifest, err
+	snapshot, err := fileSetProjection(portable, entries)
+	return snapshot, publication.PayloadFormFileSet, err
 }
 
 func publicationPayloadSnapshot(
@@ -415,14 +415,14 @@ func publicationPayloadSnapshot(
 	if payload.Form == publication.PayloadFormPacked {
 		return payload.Snapshot, nil
 	}
-	_, portable, err := manifestPublicationTarget(configuration)
+	_, portable, err := fileSetPublicationTarget(configuration)
 	if err != nil {
 		return model.Snapshot{}, err
 	}
-	return manifestProjection(portable, payload.Entries)
+	return fileSetProjection(portable, payload.Entries)
 }
 
-func manifestPayloadEntriesMatch(record []publication.SnapshotEntry, entries []publication.PayloadEntry) bool {
+func fileSetPayloadEntriesMatch(record []publication.SnapshotEntry, entries []publication.PayloadEntry) bool {
 	if len(record) != len(entries) {
 		return false
 	}
@@ -440,7 +440,7 @@ func manifestPayloadEntriesMatch(record []publication.SnapshotEntry, entries []p
 	return true
 }
 
-func manifestFloorMatchesRecord(floor *publicationstate.ManifestPayload, record []publication.SnapshotEntry) bool {
+func fileSetFloorMatchesRecord(floor *publicationstate.FileSetPayload, record []publication.SnapshotEntry) bool {
 	if floor == nil || len(floor.Entries) != len(record) {
 		return false
 	}
@@ -471,8 +471,8 @@ func publicationAcceptedTarget(
 	targetID string,
 	material acceptedPublicationMaterial,
 ) (model.Target, bool) {
-	if material.form == publication.PayloadFormManifest {
-		target, portable, err := manifestPublicationTarget(configuration)
+	if material.form == publication.PayloadFormFileSet {
+		target, portable, err := fileSetPublicationTarget(configuration)
 		if err != nil || target.ID != targetID {
 			return model.Target{}, false
 		}
@@ -488,7 +488,7 @@ func publicationAcceptedTarget(
 
 func validPreviewMaterialInput(request PublicationReconciliationRequest) error {
 	if len(request.SnapshotRecord) == 0 ||
-		len(request.SnapshotRecord) > publication.MaxManifestRecordBytes ||
+		len(request.SnapshotRecord) > publication.MaxFileSetRecordBytes ||
 		!validPublicationFloorInput(request.ExpectedFloor) {
 		return ErrPublicationReconciliation
 	}
@@ -504,7 +504,7 @@ func validPreviewMaterialInput(request PublicationReconciliationRequest) error {
 		}
 		return nil
 	}
-	if record.PayloadForm() != publication.PayloadFormManifest {
+	if record.PayloadForm() != publication.PayloadFormFileSet {
 		return ErrPublicationReconciliation
 	}
 	if len(request.Entries) == 0 || len(request.Entries) > publication.MaxSnapshotEntries {
@@ -521,12 +521,12 @@ func validPreviewMaterialInput(request PublicationReconciliationRequest) error {
 	return nil
 }
 
-func ManifestPublicationTarget(configuration config.Config) (config.Target, model.Target, error) {
-	return manifestPublicationTarget(configuration)
+func FileSetPublicationTarget(configuration config.Config) (config.Target, model.Target, error) {
+	return fileSetPublicationTarget(configuration)
 }
 
-func ProjectManifestSnapshot(portable model.Target, entries []publication.PayloadEntry) (model.Snapshot, error) {
-	return manifestProjection(portable, entries)
+func ProjectFileSetSnapshot(portable model.Target, entries []publication.PayloadEntry) (model.Snapshot, error) {
+	return fileSetProjection(portable, entries)
 }
 
 func SelectPublicationForm(
@@ -548,8 +548,8 @@ func EncodePublicationCandidate(
 	return encodePublicationCandidate(binding, form, snapshot, floor, present, publicationID)
 }
 
-func ManifestEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
-	return manifestEntrySetDigest(entries)
+func FileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
+	return fileSetEntrySetDigest(entries)
 }
 
 func AcceptedPublicationSnapshot(

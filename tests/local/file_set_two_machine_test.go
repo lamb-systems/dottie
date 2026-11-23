@@ -20,7 +20,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/service"
 )
 
-func newManifestTwoMachineFixture(t *testing.T) *publicationTwoMachineFixture {
+func newFileSetTwoMachineFixture(t *testing.T) *publicationTwoMachineFixture {
 	t.Helper()
 	fixture := newPublicationTwoMachineFixture(t)
 	for _, machine := range []*publicationTwoMachine{fixture.a, fixture.b} {
@@ -29,7 +29,7 @@ func newManifestTwoMachineFixture(t *testing.T) *publicationTwoMachineFixture {
 	return fixture
 }
 
-func manifestTwoMachineSnapshot(
+func fileSetTwoMachineSnapshot(
 	t *testing.T,
 	fixture *publicationTwoMachineFixture,
 	machine *publicationTwoMachine,
@@ -56,12 +56,12 @@ func manifestTwoMachineSnapshot(
 			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
 		})
 	}
-	snapshot, err := service.ProjectManifestSnapshot(portable, entries)
+	snapshot, err := service.ProjectFileSetSnapshot(portable, entries)
 	require.NoError(t, err)
 	return snapshot, entries, nil
 }
 
-func manifestTwoMachineFinding(floor publicationstate.Floor, view publicationstate.SuppliedRepositoryView) string {
+func fileSetTwoMachineFinding(floor publicationstate.Floor, view publicationstate.SuppliedRepositoryView) string {
 	if len(view.Snapshots) == 0 {
 		return "absent"
 	}
@@ -74,12 +74,12 @@ func manifestTwoMachineFinding(floor publicationstate.Floor, view publicationsta
 	if err != nil {
 		return "unreadable"
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.Manifest.Entries) != len(record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.FileSet.Entries) != len(record.Entries) {
 			return "diverges"
 		}
 		for index, entry := range record.Entries {
-			reference := floor.Manifest.Entries[index]
+			reference := floor.FileSet.Entries[index]
 			if reference.Path != entry.Path || reference.Size != entry.Size ||
 				!bytes.Equal(reference.CID, entry.Blob.CID) {
 				return "diverges"
@@ -87,13 +87,13 @@ func manifestTwoMachineFinding(floor publicationstate.Floor, view publicationsta
 		}
 		return "matches"
 	}
-	if floor.Manifest != nil || record.Blob.Size != floor.BlobSize {
+	if floor.FileSet != nil || record.Blob.Size != floor.BlobSize {
 		return "diverges"
 	}
 	return "matches"
 }
 
-func manifestTwoMachineJoin(
+func fileSetTwoMachineJoin(
 	t *testing.T,
 	fixture *publicationTwoMachineFixture,
 	machine *publicationTwoMachine,
@@ -105,7 +105,7 @@ func manifestTwoMachineJoin(
 	require.NotEmpty(t, view.Snapshots)
 	record, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	require.NoError(t, err)
-	_, entries, _ := manifestTwoMachineSnapshot(t, fixture, machine, record)
+	_, entries, _ := fileSetTwoMachineSnapshot(t, fixture, machine, record)
 	store, err := publicationstate.Open(machine.storeDir, fixture.binding)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -123,7 +123,7 @@ func manifestTwoMachineJoin(
 	return accepted
 }
 
-func manifestTwoMachinePull(t *testing.T, fixture *publicationTwoMachineFixture, machine *publicationTwoMachine) error {
+func fileSetTwoMachinePull(t *testing.T, fixture *publicationTwoMachineFixture, machine *publicationTwoMachine) error {
 	t.Helper()
 	ctx := context.Background()
 	inspection, err := publicationstate.Inspect(ctx, machine.storeDir, fixture.binding)
@@ -131,22 +131,22 @@ func manifestTwoMachinePull(t *testing.T, fixture *publicationTwoMachineFixture,
 	require.True(t, inspection.Present)
 	view, err := fixture.adapter.ReadView(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "diverges", manifestTwoMachineFinding(inspection.Floor, view))
+	require.Equal(t, "diverges", fileSetTwoMachineFinding(inspection.Floor, view))
 
 	baseBlock := view.Snapshots[inspection.Floor.Sequence]
 	baseRecord, err := publication.DecodeSnapshot(baseBlock.Raw)
 	require.NoError(t, err)
-	base, _, _ := manifestTwoMachineSnapshot(t, fixture, machine, baseRecord)
+	base, _, _ := fileSetTwoMachineSnapshot(t, fixture, machine, baseRecord)
 	terminalRecord, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	require.NoError(t, err)
-	remote, remoteEntries, remotePayload := manifestTwoMachineSnapshot(t, fixture, machine, terminalRecord)
-	require.Equal(t, publication.PayloadFormManifest, terminalRecord.PayloadForm())
+	remote, remoteEntries, remotePayload := fileSetTwoMachineSnapshot(t, fixture, machine, terminalRecord)
+	require.Equal(t, publication.PayloadFormFileSet, terminalRecord.PayloadForm())
 
 	request := service.PublicationApplyRequest{
 		Vault: fixture.binding.Vault, FloorRevision: inspection.Floor.Revision,
 		Configuration: machine.configuration, BaseSnapshot: base, RemoteSnapshot: remote,
 		Roots: map[string]string{machine.target.ID: machine.selected}, Local: machine.local,
-		Manifest: true,
+		FileSet: true,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
@@ -177,17 +177,17 @@ func manifestTwoMachinePull(t *testing.T, fixture *publicationTwoMachineFixture,
 	return nil
 }
 
-func TestManifestPublicationTwoMachinePullApplyGate(t *testing.T) {
-	manifestTwoMachineUmask(t)
-	fixture := newManifestTwoMachineFixture(t)
+func TestFileSetPublicationTwoMachinePullApplyGate(t *testing.T) {
+	fileSetTwoMachineUmask(t)
+	fixture := newFileSetTwoMachineFixture(t)
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineAlpha)
 	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineAlpha)
 
 	first := fixture.push(t, fixture.a)
-	require.NotNil(t, first.Floor.Manifest)
-	require.Len(t, first.Floor.Manifest.Entries, 1)
+	require.NotNil(t, first.Floor.FileSet)
+	require.Len(t, first.Floor.FileSet.Entries, 1)
 
-	joined := manifestTwoMachineJoin(t, fixture, fixture.b)
+	joined := fileSetTwoMachineJoin(t, fixture, fixture.b)
 	assert.Equal(t, first.Floor.Revision, joined.Revision)
 	require.NoDirExists(t, filepath.Join(fixture.b.selected, "nested"))
 
@@ -195,10 +195,10 @@ func TestManifestPublicationTwoMachinePullApplyGate(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(fixture.a.selected, "nested", "app.conf"), []byte("nested alpha"), 0o600))
 	second := fixture.push(t, fixture.a)
-	require.NotNil(t, second.Floor.Manifest)
-	require.Len(t, second.Floor.Manifest.Entries, 2)
+	require.NotNil(t, second.Floor.FileSet)
+	require.Len(t, second.Floor.FileSet.Entries, 2)
 
-	require.NoError(t, manifestTwoMachinePull(t, fixture, fixture.b))
+	require.NoError(t, fileSetTwoMachinePull(t, fixture, fixture.b))
 	content, err := os.ReadFile(filepath.Join(fixture.b.selected, "nested", "app.conf"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("nested alpha"), content)
@@ -215,7 +215,7 @@ func TestManifestPublicationTwoMachinePullApplyGate(t *testing.T) {
 	require.NoError(t, os.Chmod(filepath.Join(fixture.a.selected, "nested", "app.conf"), 0o644))
 	fixture.push(t, fixture.a)
 
-	require.NoError(t, manifestTwoMachinePull(t, fixture, fixture.b))
+	require.NoError(t, fileSetTwoMachinePull(t, fixture, fixture.b))
 	content, err = os.ReadFile(filepath.Join(fixture.b.selected, "nested", "app.conf"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("nested beta"), content)
@@ -230,49 +230,49 @@ func TestManifestPublicationTwoMachinePullApplyGate(t *testing.T) {
 	require.NoError(t, err)
 	inspection, err := publicationstate.Inspect(context.Background(), fixture.b.storeDir, fixture.binding)
 	require.NoError(t, err)
-	assert.Equal(t, "matches", manifestTwoMachineFinding(inspection.Floor, view))
+	assert.Equal(t, "matches", fileSetTwoMachineFinding(inspection.Floor, view))
 }
 
-func manifestTwoMachineUmask(t *testing.T) {
+func fileSetTwoMachineUmask(t *testing.T) {
 	t.Helper()
 	previous := syscall.Umask(0o022)
 	t.Cleanup(func() { syscall.Umask(previous) })
 }
 
-func TestManifestPublicationTwoMachineConflictRefusesWithoutMutation(t *testing.T) {
-	fixture := newManifestTwoMachineFixture(t)
+func TestFileSetPublicationTwoMachineConflictRefusesWithoutMutation(t *testing.T) {
+	fixture := newFileSetTwoMachineFixture(t)
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineAlpha)
 	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineAlpha)
 	fixture.push(t, fixture.a)
-	manifestTwoMachineJoin(t, fixture, fixture.b)
+	fileSetTwoMachineJoin(t, fixture, fixture.b)
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineBeta)
 	fixture.push(t, fixture.a)
-	require.NoError(t, manifestTwoMachinePull(t, fixture, fixture.b))
+	require.NoError(t, fileSetTwoMachinePull(t, fixture, fixture.b))
 
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineConflictA)
 	fixture.push(t, fixture.a)
 	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineConflictB)
 	before := readPublicationTwoMachineFile(t, fixture.b)
 
-	err := manifestTwoMachinePull(t, fixture, fixture.b)
+	err := fileSetTwoMachinePull(t, fixture, fixture.b)
 	require.Error(t, err)
 	assert.Equal(t, before, readPublicationTwoMachineFile(t, fixture.b))
 }
 
 func TestAutomaticPackedFallbackPublishesAndAppliesSupportedContent(t *testing.T) {
-	fixture := newManifestTwoMachineFixture(t)
+	fixture := newFileSetTwoMachineFixture(t)
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineAlpha)
 	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineAlpha)
 	require.NoError(t, os.WriteFile(filepath.Join(fixture.a.selected, "empty"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(fixture.b.selected, "empty"), nil, 0o600))
 
 	first := fixture.push(t, fixture.a)
-	assert.Nil(t, first.Floor.Manifest, "an empty file did not force the packed fallback")
+	assert.Nil(t, first.Floor.FileSet, "an empty file did not force the packed fallback")
 	fixture.joinFirstUse(t, fixture.b)
 
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineBeta)
 	second := fixture.push(t, fixture.a)
-	assert.Nil(t, second.Floor.Manifest)
+	assert.Nil(t, second.Floor.FileSet)
 	pulled := fixture.pull(t, fixture.b)
 	assert.Equal(t, 1, pulled.Plan.Changes)
 	assert.Equal(t, publicationTwoMachineBeta, readPublicationTwoMachineFile(t, fixture.b))

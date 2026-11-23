@@ -221,7 +221,7 @@ func readCustodyPayloadFD(fd int, blob publication.BlobReference, form PayloadFo
 	if err != nil {
 		return nil, err
 	}
-	if form == PayloadFormManifest {
+	if form == PayloadFormFileSet {
 		return data, nil
 	}
 	if _, err := publication.DecodePayload(data, blob); err != nil {
@@ -575,7 +575,7 @@ func validatePayloadForCustody(payload []byte, blob publication.BlobReference, n
 	return nil
 }
 
-func validateManifestEntryForCustody(payload []byte, blob publication.BlobReference, name string) error {
+func validateFileSetEntryForCustody(payload []byte, blob publication.BlobReference, name string) error {
 	return validateOwnedPayloadObject(payload, blob, name)
 }
 
@@ -608,7 +608,7 @@ func (s *Store) persistCandidatePayloads(
 	ctx context.Context,
 	candidate validatedCandidate,
 ) ([]stagedPayload, error) {
-	if candidate.form == PayloadFormManifest {
+	if candidate.form == PayloadFormFileSet {
 		staged := make([]stagedPayload, 0, len(candidate.entries))
 		for _, entry := range candidate.entries {
 			reference := publication.BlobReference{
@@ -622,7 +622,7 @@ func (s *Store) persistCandidatePayloads(
 				entry.content,
 				reference,
 				payloadBasename(entry.content),
-				PayloadFormManifest,
+				PayloadFormFileSet,
 			)
 			if err != nil {
 				return nil, err
@@ -662,8 +662,8 @@ func (s *Store) persistPayloadObject(
 	name string,
 	form PayloadForm,
 ) (string, []byte, error) {
-	if form == PayloadFormManifest {
-		if err := validateManifestEntryForCustody(payload, blob, name); err != nil {
+	if form == PayloadFormFileSet {
+		if err := validateFileSetEntryForCustody(payload, blob, name); err != nil {
 			return "", nil, err
 		}
 	} else if err := validatePayloadForCustody(payload, blob, name); err != nil {

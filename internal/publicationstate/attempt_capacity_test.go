@@ -1309,7 +1309,7 @@ func finalizationHistoryBound(
 	candidate CandidateInput,
 	view SuppliedRepositoryView,
 	review LocalReviewContext,
-	modelManifest bool,
+	modelFileSet bool,
 ) uint64 {
 	t.Helper()
 	ctx := context.Background()
@@ -1350,8 +1350,8 @@ func finalizationHistoryBound(
 		trace.records = append(trace.records, cloneValidatedRecord(*validatedCandidate.predecessor))
 	}
 	floor := buildFloor(store.databaseID, store.binding, validatedObservation, state, trace, mode)
-	if !modelManifest {
-		floor.Manifest = nil
+	if !modelFileSet {
+		floor.FileSet = nil
 	}
 	body := oracleJSON(
 		t,

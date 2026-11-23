@@ -209,7 +209,7 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 	if err != nil {
 		return service.AcceptedPublication{}, err
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
 		entries := make([]publication.PayloadEntry, 0, len(record.Entries))
 		for _, entry := range record.Entries {
 			content, err := source.transport.blob(ctx, entry.Blob)
@@ -223,7 +223,7 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 		return service.AcceptedPublication{
 			View: view,
 			Payload: publication.Payload{
-				Form: publication.PayloadFormManifest, Entries: entries,
+				Form: publication.PayloadFormFileSet, Entries: entries,
 			},
 		}, nil
 	}
@@ -1554,7 +1554,7 @@ func TestPushStillRejectsTheHandleSelector(t *testing.T) {
 	)
 }
 
-func TestPushKeepsAnAmbiguousManifestSubmissionBlockingAfterTheCliReturns(t *testing.T) {
+func TestPushKeepsAnAmbiguousFileSetSubmissionBlockingAfterTheCliReturns(t *testing.T) {
 	fixture := newPublicationPushTestFixture(t)
 	fixture.transport.commitThenFail = true
 	var stdout, stderr bytes.Buffer
@@ -1591,7 +1591,7 @@ func TestPushKeepsAnAmbiguousManifestSubmissionBlockingAfterTheCliReturns(t *tes
 	assert.Equal(t, 1, sends, "a retry dispatched writes after an ambiguous submission")
 }
 
-func TestPublicationProposalStoreRoundTripsAManifestRecordWithoutContent(t *testing.T) {
+func TestPublicationProposalStoreRoundTripsAFileSetRecordWithoutContent(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationPushTestFixture(t)
 	store, err := publicationstate.Open(fixture.paths.PublicationStateDir(), fixture.binding)
@@ -1604,7 +1604,7 @@ func TestPublicationProposalStoreRoundTripsAManifestRecordWithoutContent(t *test
 		Reviews: fixture.reviews, PublicationID: publicationID,
 	})
 	require.NoError(t, err)
-	require.Equal(t, publication.PayloadFormManifest, preparation.Record.Form)
+	require.Equal(t, publication.PayloadFormFileSet, preparation.Record.Form)
 	require.True(t, preparation.Issued)
 	records, err := fixture.records.List(ctx)
 	require.NoError(t, err)

@@ -880,7 +880,7 @@ func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, valid, decoded)
 
-	manifest := attemptCoreWire{
+	fileSet := attemptCoreWire{
 		Version:               2,
 		AttemptID:             bytes.Repeat([]byte{1}, 16),
 		DatabaseID:            bytes.Repeat([]byte{2}, 32),
@@ -890,27 +890,27 @@ func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
 		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
 	}
-	manifestBytes, err := encodeAttemptCore(manifest)
+	fileSetBytes, err := encodeAttemptCore(fileSet)
 	require.NoError(t, err)
-	manifestDecoded, err := decodeAttemptCore(manifestBytes)
+	fileSetDecoded, err := decodeAttemptCore(fileSetBytes)
 	require.NoError(t, err)
-	assert.Equal(t, manifest, manifestDecoded)
+	assert.Equal(t, fileSet, fileSetDecoded)
 
-	wrongVersion := manifest
+	wrongVersion := fileSet
 	wrongVersion.Version = 3
 	wrongVersionBytes, err := encodeAttemptCore(wrongVersion)
 	require.NoError(t, err)
 	_, err = decodeAttemptCore(wrongVersionBytes)
 	require.Error(t, err)
-	manifestWithBlob := manifest
-	manifestWithBlob.BlobCID = []byte{8}
-	manifestWithBlob.BlobSize = 9
-	manifestWithBlobBytes, err := encodeAttemptCore(manifestWithBlob)
+	fileSetWithBlob := fileSet
+	fileSetWithBlob.BlobCID = []byte{8}
+	fileSetWithBlob.BlobSize = 9
+	fileSetWithBlobBytes, err := encodeAttemptCore(fileSetWithBlob)
 	require.NoError(t, err)
-	_, err = decodeAttemptCore(manifestWithBlobBytes)
+	_, err = decodeAttemptCore(fileSetWithBlobBytes)
 	require.Error(t, err)
 	packedWithEntries := valid
-	packedWithEntries.Entries = manifest.Entries
+	packedWithEntries.Entries = fileSet.Entries
 	packedWithEntriesBytes, err := encodeAttemptCore(packedWithEntries)
 	require.NoError(t, err)
 	_, err = decodeAttemptCore(packedWithEntriesBytes)

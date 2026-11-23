@@ -160,7 +160,7 @@ func (s *Store) BeginUpload(
 	}
 	s.attemptMutationRevision = nextMutation
 	material := UploadMaterial{AttemptID: id}
-	if attemptCoreForm(stored.core) == PayloadFormManifest {
+	if attemptCoreForm(stored.core) == PayloadFormFileSet {
 		record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
 		if err != nil || len(candidate.Entries) != len(record.Entries) {
 			return UploadMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
@@ -195,7 +195,7 @@ func (s *Store) BeginSubmission(
 	return s.beginSubmission(ctx, id, expectedToken, view, review, confirmation, nil)
 }
 
-func (s *Store) BeginManifestSubmission(
+func (s *Store) BeginFileSetSubmission(
 	ctx context.Context,
 	id [16]byte,
 	expectedToken [32]byte,
@@ -232,9 +232,9 @@ func (s *Store) beginSubmission(
 	if err != nil {
 		return SubmissionMaterial{}, err
 	}
-	manifest := attemptCoreForm(stored.core) == PayloadFormManifest
-	if manifest != (uploaded != nil) {
-		return SubmissionMaterial{}, manifestPayloadUnsupported(StageDispatch)
+	fileSet := attemptCoreForm(stored.core) == PayloadFormFileSet
+	if fileSet != (uploaded != nil) {
+		return SubmissionMaterial{}, fileSetPayloadUnsupported(StageDispatch)
 	}
 	if err := s.validateDispatchReview(
 		ctx,
@@ -279,12 +279,12 @@ func (s *Store) beginSubmission(
 	if err != nil {
 		return SubmissionMaterial{}, err
 	}
-	if manifest {
-		manifest, err := manifestPayloadFromWire(stored.core.Entries)
+	if fileSet {
+		fileSet, err := fileSetPayloadFromWire(stored.core.Entries)
 		if err != nil {
 			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
 		}
-		if !uploadedEntriesMatch(uploaded, manifest) {
+		if !uploadedEntriesMatch(uploaded, fileSet) {
 			return SubmissionMaterial{}, classified(ErrConsent, StageDispatch, ReasonUploadIncomplete)
 		}
 	}
@@ -364,12 +364,12 @@ func (s *Store) beginSubmission(
 		RequiresPolicyCheck:   s.binding.Backend == BackendSpaces,
 		PayloadForm:           attemptCoreForm(stored.core),
 	}
-	if manifest {
-		manifest, err := manifestPayloadFromWire(stored.core.Entries)
+	if fileSet {
+		fileSet, err := fileSetPayloadFromWire(stored.core.Entries)
 		if err != nil {
 			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
 		}
-		material.Entries = manifest.Entries
+		material.Entries = fileSet.Entries
 	}
 	if len(stored.core.PredecessorCID) > 0 {
 		material.ExpectedPredecessor = &RecordReference{
@@ -381,11 +381,11 @@ func (s *Store) beginSubmission(
 	return material, nil
 }
 
-func uploadedEntriesMatch(uploaded []PayloadEntryReference, manifest *ManifestPayload) bool {
-	if manifest == nil || len(uploaded) != len(manifest.Entries) {
+func uploadedEntriesMatch(uploaded []PayloadEntryReference, fileSet *FileSetPayload) bool {
+	if fileSet == nil || len(uploaded) != len(fileSet.Entries) {
 		return false
 	}
-	for index, entry := range manifest.Entries {
+	for index, entry := range fileSet.Entries {
 		supplied := uploaded[index]
 		if supplied.Path != entry.Path || supplied.Size != entry.Size ||
 			!bytes.Equal(supplied.CID, entry.CID) {
@@ -492,13 +492,13 @@ func samePolicy(left, right *Policy) bool {
 		bytes.Equal(left.Identity, right.Identity)
 }
 
-func (s *Store) readManifestCandidate(
+func (s *Store) readFileSetCandidate(
 	ctx context.Context,
 	stored storedAttempt,
 	stage Stage,
 ) (CandidateMaterial, error) {
 	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
-	if err != nil || payloadFormOf(record) != PayloadFormManifest {
+	if err != nil || payloadFormOf(record) != PayloadFormFileSet {
 		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
@@ -529,7 +529,7 @@ func (s *Store) readManifestCandidate(
 			Size:     entry.Size,
 			MIMEType: entry.Blob.MIMEType,
 		}
-		content, err := s.inspectCustodyObject(basename, nil, blob, PayloadFormManifest)
+		content, err := s.inspectCustodyObject(basename, nil, blob, PayloadFormFileSet)
 		if err != nil {
 			return CandidateMaterial{}, classifyCandidateRead(err, stage)
 		}
@@ -548,8 +548,8 @@ func (s *Store) readCandidateUnlocked(
 	stored storedAttempt,
 	stage Stage,
 ) (CandidateMaterial, error) {
-	if attemptCoreForm(stored.core) == PayloadFormManifest {
-		return s.readManifestCandidate(ctx, stored, stage)
+	if attemptCoreForm(stored.core) == PayloadFormFileSet {
+		return s.readFileSetCandidate(ctx, stored, stage)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)

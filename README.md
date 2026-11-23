@@ -18,13 +18,14 @@ installs, but almost nobody has used it and the limits at the bottom of this fil
 - `position status` reads the publication position without changing anything.
 
 Files are synced as plaintext. Dottie automatically chooses between two snapshot forms: a packed
-archive of the whole snapshot, or a manifest that names one blob per regular file. The manifest is
-used when exactly one files target is configured and it holds only non-empty regular files with mode
-`0600` or `0644`: a single selected file, or a directory whose every directory holds at least one
-published file and carries no mode of its own. The change may not delete a file relative to the
-accepted position. Anything else falls back to packed, including a directory that holds no file at
-all or a selected file that is empty. There is no per-target form setting. Snapshots are content
-addressed and chained, so a reader can tell a snapshot belongs to the publication it claims to.
+archive of the whole snapshot, or a file-set that names one blob per regular file. The file-set
+form is used when exactly one files target is configured and it holds only non-empty regular
+files with mode `0600` or `0644`: a single selected file, or a directory whose every directory
+holds at least one published file and carries no mode of its own. The change may not delete a file
+relative to the accepted position. Anything else falls back to packed, including a directory that
+holds no file at all or a selected file that is empty. There is no per-target form setting.
+Snapshots are content addressed and chained, so a reader can tell a snapshot belongs to the
+publication it claims to.
 
 ## Install
 
@@ -63,17 +64,17 @@ for installs that know several vaults.
 A publication is two records in your repository. `vaultSnapshotV2` is an immutable link in a
 chain: it names either one packed payload blob or an ordered list of file entries with their paths,
 modes, sizes and blob CIDs, points at its predecessor, and carries a publication id and sequence.
-`vaultHeadV2` is the single mutable pointer at `self` naming the current snapshot record; a manifest
+`vaultHeadV2` is the single mutable pointer at `self` naming the current snapshot record; a file-set
 head carries no `blobCid`. `pull` reads the head, walks back through the chain, then fetches and
 verifies every payload blob against its CID and size.
 
-A manifest record has no target id or portable root. Dottie therefore maps it only to the sole local
+A file-set record has no target id or portable root. Dottie therefore maps it only to the sole local
 files target, one directory or one selected file. A single-file target publishes its file under the
 basename of its configured path, for example `init.lua`, and pull maps that one entry back to the
 selected file. Dottie cannot prove that the publisher used the same directory or file; the pull
 confirmation binds the local target id, portable root and configuration revisions so a local target
 or root change between review and confirmation refuses. The target root must already exist; parent
-directories absent from a directory manifest are created with mode `0755` during apply, and a
+directories absent from the published entries are created with mode `0755` during apply, and a
 single-file target synthesizes none.
 
 Applying files is the part with the sharp edges, so it is journaled. Before touching a file,
@@ -92,7 +93,7 @@ account can read it back.
 
 ## Limits
 
-- Plaintext. A packed payload is uploaded as one blob before any record references it. A manifest
+- Plaintext. A packed payload is uploaded as one blob before any record references it. A file-set
   uploads up to one blob per entry, then its record batch. A rejected or ambiguous batch can leave
   unattached, retrievable plaintext blobs at the provider; Dottie cannot delete them, and it never
   prints candidate bytes for a publication that failed. The custody object limit is shared across

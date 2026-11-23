@@ -17,30 +17,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type cliManifestFile struct {
+type cliFileSetFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-type cliManifestPublication struct {
+type cliFileSetPublication struct {
 	block publicationstate.SnapshotBlock
 	head  []byte
 	view  publicationstate.SuppliedRepositoryView
 	floor publicationstate.Floor
 }
 
-func newCLIManifestPublication(t *testing.T, binding publicationstate.Binding) cliManifestPublication {
+func newCLIFileSetPublication(t *testing.T, binding publicationstate.Binding) cliFileSetPublication {
 	t.Helper()
-	files := []cliManifestFile{
-		{path: "init.lua", mode: 0o600, content: []byte("synthetic manifest init")},
-		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic manifest options")},
+	files := []cliFileSetFile{
+		{path: "init.lua", mode: 0o600, content: []byte("synthetic file-set init")},
+		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic file-set options")},
 	}
-	block, head := cliManifestBlock(t, binding, 0, nil, files)
+	block, head := cliFileSetBlock(t, binding, 0, nil, files)
 	view := publicationstate.SuppliedRepositoryView{
 		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
 		SuppliedContext: publicationstate.SuppliedContext{
-			RepositoryRevision: "synthetic-manifest-revision", RepositoryDigest: []byte{0x71},
+			RepositoryRevision: "synthetic-file-set-revision", RepositoryDigest: []byte{0x71},
 		},
 		Head:      head,
 		Snapshots: []publicationstate.SnapshotBlock{block},
@@ -50,15 +50,15 @@ func newCLIManifestPublication(t *testing.T, binding publicationstate.Binding) c
 	floor := publicationstate.Floor{
 		Revision: 1, Generation: 1, Binding: binding, RecordCID: recordCID, SnapshotKey: block.Key,
 	}
-	return cliManifestPublication{block: block, head: head, view: view, floor: floor}
+	return cliFileSetPublication{block: block, head: head, view: view, floor: floor}
 }
 
-func cliManifestBlock(
+func cliFileSetBlock(
 	t *testing.T,
 	binding publicationstate.Binding,
 	sequence uint64,
 	parent []byte,
-	files []cliManifestFile,
+	files []cliFileSetFile,
 ) (publicationstate.SnapshotBlock, []byte) {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
@@ -90,7 +90,7 @@ func cliManifestBlock(
 	return publicationstate.SnapshotBlock{Key: key, Raw: raw}, head
 }
 
-func pullTestManifestBinding() publicationstate.Binding {
+func pullTestFileSetBinding() publicationstate.Binding {
 	binding := publicationstate.Binding{
 		AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62},
 	}
@@ -98,17 +98,17 @@ func pullTestManifestBinding() publicationstate.Binding {
 	return binding
 }
 
-func manifestTestReader(manifest cliManifestPublication) *pullTestReader {
+func fileSetTestReader(fileSet cliFileSetPublication) *pullTestReader {
 	return &pullTestReader{
-		view: manifest.view,
+		view: fileSet.view,
 		entries: map[string][]byte{
-			string(mustCLIManifestCID(manifest.block.Raw, 0)): []byte("synthetic manifest init"),
-			string(mustCLIManifestCID(manifest.block.Raw, 1)): []byte("synthetic manifest options"),
+			string(mustCLIFileSetCID(fileSet.block.Raw, 0)): []byte("synthetic file-set init"),
+			string(mustCLIFileSetCID(fileSet.block.Raw, 1)): []byte("synthetic file-set options"),
 		},
 	}
 }
 
-func mustCLIManifestCID(raw []byte, index int) []byte {
+func mustCLIFileSetCID(raw []byte, index int) []byte {
 	record, err := publication.DecodeSnapshot(raw)
 	if err != nil {
 		panic(err)
@@ -116,54 +116,54 @@ func mustCLIManifestCID(raw []byte, index int) []byte {
 	return record.Entries[index].Blob.CID
 }
 
-func TestPullApplySnapshotsResolvesAManifestProviderPayload(t *testing.T) {
-	binding := pullTestManifestBinding()
-	manifest := newCLIManifestPublication(t, binding)
-	reader := manifestTestReader(manifest)
+func TestPullApplySnapshotsResolvesAFileSetProviderPayload(t *testing.T) {
+	binding := pullTestFileSetBinding()
+	fileSet := newCLIFileSetPublication(t, binding)
+	reader := fileSetTestReader(fileSet)
 
 	material, err := pullApplySnapshots(context.Background(), pullRemote{
 		Reader: reader, Entry: reader.ReadEntry,
-	}, manifest.view, manifest.floor, false)
+	}, fileSet.view, fileSet.floor, false)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, material.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, material.Form)
 	require.Len(t, material.Entries, 2)
 	assert.Equal(t, "init.lua", material.Entries[0].Path)
-	assert.Equal(t, []byte("synthetic manifest init"), material.Entries[0].Content)
+	assert.Equal(t, []byte("synthetic file-set init"), material.Entries[0].Content)
 	assert.Empty(t, material.Payload)
 }
 
-func TestPullPositionComparisonAcceptsAManifestFloor(t *testing.T) {
-	binding := pullTestManifestBinding()
-	manifest := newCLIManifestPublication(t, binding)
-	floor := manifest.floor
-	record, err := publication.DecodeSnapshot(manifest.block.Raw)
+func TestPullPositionComparisonAcceptsAFileSetFloor(t *testing.T) {
+	binding := pullTestFileSetBinding()
+	fileSet := newCLIFileSetPublication(t, binding)
+	floor := fileSet.floor
+	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
-	floor.Manifest = &publicationstate.ManifestPayload{}
+	floor.FileSet = &publicationstate.FileSetPayload{}
 	for _, entry := range record.Entries {
-		floor.Manifest.Entries = append(floor.Manifest.Entries, publicationstate.PayloadEntryReference{
+		floor.FileSet.Entries = append(floor.FileSet.Entries, publicationstate.PayloadEntryReference{
 			Path: entry.Path, CID: entry.Blob.CID, Size: entry.Size,
 		})
 	}
-	assert.Equal(t, pullFinding{Kind: pullFindingMatches}, comparePullPosition(floor, manifest.view))
-	require.NoError(t, syncViewMatchesFloor(floor, manifest.view))
+	assert.Equal(t, pullFinding{Kind: pullFindingMatches}, comparePullPosition(floor, fileSet.view))
+	require.NoError(t, syncViewMatchesFloor(floor, fileSet.view))
 }
 
-func TestPullAppliesANestedManifestOntoAFreshTarget(t *testing.T) {
-	pullManifestUmask(t)
+func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
+	pullFileSetUmask(t)
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, "")
-	manifest := newCLIManifestPublication(t, fixture.binding)
-	reader := manifestTestReader(manifest)
-	record, err := publication.DecodeSnapshot(manifest.block.Raw)
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, record.Entries, 2)
-	require.Len(t, reader.entries, len(record.Entries), "the reader fixture did not supply every manifest entry")
+	require.Len(t, reader.entries, len(record.Entries), "the reader fixture did not supply every file-set entry")
 	for _, entry := range record.Entries {
 		require.Contains(t, reader.entries, string(entry.Blob.CID), entry.Path)
 	}
 
-	code, stdout, stderr := runPullManifestStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: first-use\n")
 	assert.Contains(t, stdout, "apply: changes=4 unchanged=0\n")
@@ -172,48 +172,48 @@ func TestPullAppliesANestedManifestOntoAFreshTarget(t *testing.T) {
 	assert.Contains(
 		t,
 		stdout,
-		fmt.Sprintf("apply: write init.lua size=%d\n", len("synthetic manifest init")),
+		fmt.Sprintf("apply: write init.lua size=%d\n", len("synthetic file-set init")),
 	)
 	assert.Contains(
 		t,
 		stdout,
-		fmt.Sprintf("apply: write lua/config/options.lua size=%d\n", len("synthetic manifest options")),
+		fmt.Sprintf("apply: write lua/config/options.lua size=%d\n", len("synthetic file-set options")),
 	)
 	assert.Contains(t, stdout, "pull: plan only; nothing was applied; repeat with --confirm ")
 	assert.NotContains(t, stdout, "pull: applied")
 	token := pullTestConfirmation(t, stdout)
 	require.NoDirExists(t, fixture.targetPath("lua"))
 	require.NoFileExists(t, fixture.targetPath("init.lua"))
-	assert.False(t, pullManifestFloorPresent(t, fixture), "the unconfirmed plan accepted a floor")
+	assert.False(t, pullFileSetFloorPresent(t, fixture), "the unconfirmed plan accepted a floor")
 
 	fixture.configureRoot(t, "", "config-moved")
-	code, stdout, stderr = runPullManifestStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	assert.NotContains(t, stdout, "pull: applied")
 	require.NoDirExists(t, filepath.Join(fixture.paths.Home, "config-moved", "lua"))
 	require.NoFileExists(t, fixture.targetPath("init.lua"))
-	assert.False(t, pullManifestFloorPresent(t, fixture), "a stale target root accepted a floor")
+	assert.False(t, pullFileSetFloorPresent(t, fixture), "a stale target root accepted a floor")
 	fixture.configureRoot(t, "", "config")
 
-	pullManifestConfigureRevision(t, fixture, 2)
-	code, stdout, stderr = runPullManifestStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	pullFileSetConfigureRevision(t, fixture, 2)
+	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	assert.NotContains(t, stdout, "pull: applied")
 	require.NoDirExists(t, fixture.targetPath("lua"))
 	require.NoFileExists(t, fixture.targetPath("init.lua"))
-	assert.False(t, pullManifestFloorPresent(t, fixture), "a changed configuration revision accepted a floor")
+	assert.False(t, pullFileSetFloorPresent(t, fixture), "a changed configuration revision accepted a floor")
 	fixture.configureRoot(t, "", "config")
 
-	code, stdout, stderr = runPullManifestStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(
 		t,
 		stdout,
 		fmt.Sprintf(
 			"pull: applied changes=4 unchanged=0 bytes=%d\n",
-			len("synthetic manifest init")+len("synthetic manifest options"),
+			len("synthetic file-set init")+len("synthetic file-set options"),
 		),
 	)
 	assert.Contains(t, stdout, "floor: revision=1 generation=1 sequence=0\n")
@@ -222,8 +222,8 @@ func TestPullAppliesANestedManifestOntoAFreshTarget(t *testing.T) {
 		content string
 		mode    os.FileMode
 	}{
-		"init.lua":               {content: "synthetic manifest init", mode: 0o600},
-		"lua/config/options.lua": {content: "synthetic manifest options", mode: 0o644},
+		"init.lua":               {content: "synthetic file-set init", mode: 0o600},
+		"lua/config/options.lua": {content: "synthetic file-set options", mode: 0o644},
 	} {
 		content, err := os.ReadFile(fixture.targetPath(path))
 		require.NoError(t, err)
@@ -238,16 +238,16 @@ func TestPullAppliesANestedManifestOntoAFreshTarget(t *testing.T) {
 		assert.True(t, info.IsDir(), path)
 		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), path)
 	}
-	assert.Equal(t, int64(2), pullManifestJournalRows(t, fixture), "a synthesized directory was journaled")
+	assert.Equal(t, int64(2), pullFileSetJournalRows(t, fixture), "a synthesized directory was journaled")
 	accepted := fixture.acceptedFloor(t)
-	require.NotNil(t, accepted.Manifest, "the accepted floor did not record the manifest payload")
+	require.NotNil(t, accepted.FileSet, "the accepted floor did not record the file-set payload")
 	assert.Empty(t, accepted.BlobCID)
 	assert.Zero(t, accepted.BlobSize)
-	require.Len(t, accepted.Manifest.Entries, len(record.Entries))
+	require.Len(t, accepted.FileSet.Entries, len(record.Entries))
 	for index, entry := range record.Entries {
-		assert.Equal(t, entry.Path, accepted.Manifest.Entries[index].Path)
-		assert.Equal(t, entry.Size, accepted.Manifest.Entries[index].Size)
-		assert.Equal(t, entry.Blob.CID, accepted.Manifest.Entries[index].CID)
+		assert.Equal(t, entry.Path, accepted.FileSet.Entries[index].Path)
+		assert.Equal(t, entry.Size, accepted.FileSet.Entries[index].Size)
+		assert.Equal(t, entry.Blob.CID, accepted.FileSet.Entries[index].CID)
 	}
 	store := fixture.openStore(t)
 	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, accepted)
@@ -258,19 +258,19 @@ func TestPullAppliesANestedManifestOntoAFreshTarget(t *testing.T) {
 		assert.Equal(t, record.Entries[index].Mode, entry.Mode)
 		assert.Equal(t, reader.entries[string(record.Entries[index].Blob.CID)], entry.Content)
 	}
-	assert.Empty(t, material.Payload, "a manifest floor retained a packed payload")
+	assert.Empty(t, material.Payload, "a file-set floor retained a packed payload")
 	require.NoError(t, store.Close())
 
 	before := pullTestDirectoryState(t, fixture.paths.Home)
-	code, stdout, stderr = runPullManifestStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "pull: matches\n", stdout)
 	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.Home), "a matching re-pull wrote a local file")
-	assert.Equal(t, int64(2), pullManifestJournalRows(t, fixture), "a matching re-pull journaled an apply")
+	assert.Equal(t, int64(2), pullFileSetJournalRows(t, fixture), "a matching re-pull journaled an apply")
 	assert.Equal(t, uint64(1), fixture.acceptedFloor(t).Revision)
 }
 
-func runPullManifestStep(
+func runPullFileSetStep(
 	t *testing.T,
 	fixture *pullTestFixture,
 	reader *pullTestReader,
@@ -284,7 +284,7 @@ func runPullManifestStep(
 	return code, stdout.String(), stderr.String()
 }
 
-func pullManifestFloorPresent(t *testing.T, fixture *pullTestFixture) bool {
+func pullFileSetFloorPresent(t *testing.T, fixture *pullTestFixture) bool {
 	t.Helper()
 	inspection, err := publicationstate.Inspect(
 		context.Background(),
@@ -295,7 +295,7 @@ func pullManifestFloorPresent(t *testing.T, fixture *pullTestFixture) bool {
 	return inspection.Present
 }
 
-func pullManifestConfigureRevision(t *testing.T, fixture *pullTestFixture, revision uint64) {
+func pullFileSetConfigureRevision(t *testing.T, fixture *pullTestFixture, revision uint64) {
 	t.Helper()
 	path := filepath.Join(fixture.paths.AppConfigDir(), config.FileName)
 	content, err := os.ReadFile(path)
@@ -304,7 +304,7 @@ func pullManifestConfigureRevision(t *testing.T, fixture *pullTestFixture, revis
 	require.NoError(t, os.WriteFile(path, append([]byte(header), content...), 0o600))
 }
 
-func pullManifestJournalRows(t *testing.T, fixture *pullTestFixture) int64 {
+func pullFileSetJournalRows(t *testing.T, fixture *pullTestFixture) int64 {
 	t.Helper()
 	journal, err := publicationstate.OpenJournal(fixture.paths.PublicationStateDir())
 	require.NoError(t, err)
@@ -314,23 +314,23 @@ func pullManifestJournalRows(t *testing.T, fixture *pullTestFixture) int64 {
 	return count
 }
 
-func pullManifestUmask(t *testing.T) {
+func pullFileSetUmask(t *testing.T) {
 	t.Helper()
 	previous := syscall.Umask(0o022)
 	t.Cleanup(func() { syscall.Umask(previous) })
 }
 
-func TestSyncAcceptedSnapshotProjectsAManifestWithTheSoleTarget(t *testing.T) {
-	binding := pullTestManifestBinding()
-	manifest := newCLIManifestPublication(t, binding)
-	record, err := publication.DecodeSnapshot(manifest.block.Raw)
+func TestSyncAcceptedSnapshotProjectsAFileSetWithTheSoleTarget(t *testing.T) {
+	binding := pullTestFileSetBinding()
+	fileSet := newCLIFileSetPublication(t, binding)
+	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
 	accepted := publicationstate.AcceptedMaterial{
-		Floor: manifest.floor, SnapshotRecord: manifest.block.Raw,
+		Floor: fileSet.floor, SnapshotRecord: fileSet.block.Raw,
 	}
 	for _, entry := range record.Entries {
 		accepted.Entries = append(accepted.Entries, publicationstate.AcceptedMaterialEntry{
-			Path: entry.Path, Mode: entry.Mode, Content: []byte("synthetic manifest " + entry.Path),
+			Path: entry.Path, Mode: entry.Mode, Content: []byte("synthetic file-set " + entry.Path),
 		})
 	}
 	configuration := config.Config{Version: config.Version, Targets: []config.Target{{
@@ -346,10 +346,10 @@ func TestSyncAcceptedSnapshotProjectsAManifestWithTheSoleTarget(t *testing.T) {
 	}
 	assert.Equal(t, model.FileDirectory, byPath["lua"].Kind)
 	assert.Equal(t, model.FileDirectory, byPath["lua/config"].Kind)
-	assert.Equal(t, []byte("synthetic manifest lua/config/options.lua"), byPath["lua/config/options.lua"].Content)
+	assert.Equal(t, []byte("synthetic file-set lua/config/options.lua"), byPath["lua/config/options.lua"].Content)
 }
 
-func TestPullRefusesAManifestWithoutASoleFilesTarget(t *testing.T) {
+func TestPullRefusesAFileSetWithoutASoleFilesTarget(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, "")
 	require.NoError(t, os.Mkdir(filepath.Join(fixture.paths.Home, "other"), 0o700))
@@ -359,35 +359,35 @@ func TestPullRefusesAManifestWithoutASoleFilesTarget(t *testing.T) {
 	_, err = file.WriteString("\n[[targets]]\nid = \"other\"\nsource = \"files\"\n\n[targets.root]\nbase = \"home\"\npath = \"other\"\nkind = \"directory\"\n")
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
-	manifest := newCLIManifestPublication(t, fixture.binding)
-	reader := manifestTestReader(manifest)
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code, stderr.String())
-	assert.Contains(t, stderr.String(), "manifest publication requires the sole local files target")
+	assert.Contains(t, stderr.String(), "file-set publication requires the sole local files target")
 	assert.NotContains(t, stdout.String(), "confirmation:")
 
 	_, err = os.Stat(fixture.targetPath("init.lua"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
-	pullManifestUmask(t)
+func TestPullAppliesASoleSingleFileFileSetOntoAFileTarget(t *testing.T) {
+	pullFileSetUmask(t)
 	fixture := newPullTestFixture(t)
 	configurePullSingleFileTarget(t, fixture, "config/init.lua")
 	accepted := []byte("synthetic single file v1")
 	published := []byte("synthetic single file v2")
 	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), accepted, 0o600))
 
-	firstBlock, firstHead := cliManifestBlock(t, fixture.binding, 0, nil, []cliManifestFile{
+	firstBlock, firstHead := cliFileSetBlock(t, fixture.binding, 0, nil, []cliFileSetFile{
 		{path: "init.lua", mode: 0o600, content: accepted},
 	})
 	firstCID, err := publication.RecordCID(firstBlock.Raw)
 	require.NoError(t, err)
-	secondBlock, secondHead := cliManifestBlock(t, fixture.binding, 1, firstCID, []cliManifestFile{
+	secondBlock, secondHead := cliFileSetBlock(t, fixture.binding, 1, firstCID, []cliFileSetFile{
 		{path: "published-elsewhere.lua", mode: 0o644, content: published},
 	})
 	context := publicationstate.SuppliedContext{
@@ -412,7 +412,7 @@ func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
 	firstReader := &pullTestReader{view: acceptedView, entries: entries}
 	movedReader := &pullTestReader{view: movedView, entries: entries}
 
-	code, stdout, stderr := runPullManifestStep(t, fixture, firstReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runPullFileSetStep(t, fixture, firstReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: first-use\n")
 	assert.Contains(
@@ -422,7 +422,7 @@ func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
 	)
 	assert.NotContains(t, stdout, "apply: write")
 	token := pullTestConfirmation(t, stdout)
-	code, stdout, stderr = runPullManifestStep(
+	code, stdout, stderr = runPullFileSetStep(
 		t,
 		fixture,
 		firstReader,
@@ -434,13 +434,13 @@ func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
 	assert.Contains(t, stdout, "floor: revision=1 generation=1 sequence=0\n")
 	require.Equal(t, accepted, readPullSingleFile(t, fixture))
 
-	code, stdout, stderr = runPullManifestStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr = runPullFileSetStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=0\n")
 	assert.Contains(t, stdout, fmt.Sprintf("apply: write . size=%d\n", len(published)))
 	assert.NotContains(t, stdout, "apply: mkdir")
 	token = pullTestConfirmation(t, stdout)
-	code, stdout, stderr = runPullManifestStep(
+	code, stdout, stderr = runPullFileSetStep(
 		t,
 		fixture,
 		movedReader,
@@ -456,7 +456,7 @@ func TestPullAppliesASoleSingleFileManifestOntoAFileTarget(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
 	before := pullTestDirectoryState(t, fixture.paths.Home)
-	code, stdout, stderr = runPullManifestStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr = runPullFileSetStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "pull: matches\n", stdout)
 	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.Home), "a matching re-pull wrote a local file")

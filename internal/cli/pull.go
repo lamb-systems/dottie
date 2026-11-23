@@ -302,13 +302,13 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			len(floor.Manifest.Entries) != len(record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.FileSet.Entries) != len(record.Entries) {
 			return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 		}
 		for index, entry := range record.Entries {
-			reference := floor.Manifest.Entries[index]
+			reference := floor.FileSet.Entries[index]
 			if reference.Path != entry.Path || reference.Size != entry.Size ||
 				!bytes.Equal(reference.CID, entry.Blob.CID) {
 				return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
@@ -316,7 +316,7 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 		}
 		return pullFinding{Kind: pullFindingMatches}
 	}
-	if floor.Manifest != nil {
+	if floor.FileSet != nil {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
 	}
 	if record.Blob.Size != floor.BlobSize {
@@ -502,30 +502,30 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
-	if material.Form == publication.PayloadFormManifest || material.BaseForm == publication.PayloadFormManifest {
-		target, portable, err := service.ManifestPublicationTarget(sources.Configuration)
+	if material.Form == publication.PayloadFormFileSet || material.BaseForm == publication.PayloadFormFileSet {
+		target, portable, err := service.FileSetPublicationTarget(sources.Configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
-				input.label()+" refused: a manifest publication requires the sole local files target; nothing was changed",
+				input.label()+" refused: a file-set publication requires the sole local files target; nothing was changed",
 				3,
 			)
 		}
 		material.TargetID = target.ID
 		material.TargetRoot = *portable.Root
-		if material.Form == publication.PayloadFormManifest {
-			material.Remote, err = service.ProjectManifestSnapshot(portable, material.Entries)
+		if material.Form == publication.PayloadFormFileSet {
+			material.Remote, err = service.ProjectFileSetSnapshot(portable, material.Entries)
 			if err != nil {
 				return pullApplyPreparation{}, urfave.Exit(
-					input.label()+" refused: the manifest publication entries cannot be projected onto the local target; nothing was changed",
+					input.label()+" refused: the file-set publication entries cannot be projected onto the local target; nothing was changed",
 					3,
 				)
 			}
 		}
-		if input.Present && material.BaseForm == publication.PayloadFormManifest {
-			material.Base, err = service.ProjectManifestSnapshot(portable, material.BaseEntries)
+		if input.Present && material.BaseForm == publication.PayloadFormFileSet {
+			material.Base, err = service.ProjectFileSetSnapshot(portable, material.BaseEntries)
 			if err != nil {
 				return pullApplyPreparation{}, urfave.Exit(
-					input.label()+" refused: the accepted manifest position cannot be projected onto the local target; nothing was changed",
+					input.label()+" refused: the accepted file-set position cannot be projected onto the local target; nothing was changed",
 					3,
 				)
 			}
@@ -535,7 +535,7 @@ func preparePullApply(
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
 		Configuration: sources.Configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
 		Roots: roots, Local: sources.Local, ApplyRemoteOnly: input.RemoteOnly,
-		Manifest: material.Form == publication.PayloadFormManifest,
+		FileSet: material.Form == publication.PayloadFormFileSet,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
@@ -869,13 +869,13 @@ func pullApplyResolvedPayload(
 }
 
 func pullApplyFloorMatchesRecord(floor publicationstate.Floor, record publication.SnapshotRecord) bool {
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			len(floor.Manifest.Entries) != len(record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.FileSet.Entries) != len(record.Entries) {
 			return false
 		}
 		for index, entry := range record.Entries {
-			reference := floor.Manifest.Entries[index]
+			reference := floor.FileSet.Entries[index]
 			if reference.Path != entry.Path || reference.Size != entry.Size ||
 				!bytes.Equal(reference.CID, entry.Blob.CID) {
 				return false
@@ -883,7 +883,7 @@ func pullApplyFloorMatchesRecord(floor publicationstate.Floor, record publicatio
 		}
 		return true
 	}
-	return floor.Manifest == nil && bytes.Equal(floor.BlobCID, record.Blob.CID) &&
+	return floor.FileSet == nil && bytes.Equal(floor.BlobCID, record.Blob.CID) &&
 		floor.BlobSize == record.Blob.Size
 }
 
@@ -894,9 +894,9 @@ func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicat
 }
 
 func pullApplyRemoteFailure(label string, err error) error {
-	if errors.Is(err, publication.ErrManifestPayload) {
+	if errors.Is(err, publication.ErrFileSetPayload) {
 		return urfave.Exit(
-			label+" refused: the provider position carries a manifest publication that this build cannot apply; nothing was changed",
+			label+" refused: the provider position carries a file-set publication that this build cannot apply; nothing was changed",
 			3,
 		)
 	}

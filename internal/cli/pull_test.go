@@ -72,7 +72,7 @@ func (reader *pullTestReader) ReadEntry(
 			}
 		}
 	}
-	return nil, errors.New("synthetic manifest entry is unavailable")
+	return nil, errors.New("synthetic file-set entry is unavailable")
 }
 
 func (reader *pullTestReader) ReadPayload(
@@ -2166,11 +2166,11 @@ func TestPullRefusesAnExplicitDIDWithNoStoredSession(t *testing.T) {
 	assert.Zero(t, factoryCalls, "a missing session constructed the provider reader")
 }
 
-func TestPullApplyConfirmationBindsTheManifestTargetRootAndConfigurationRevisions(t *testing.T) {
-	binding := pullTestManifestBinding()
-	plan := sha256.Sum256([]byte("manifest plan"))
-	state := sha256.Sum256([]byte("manifest state"))
-	observation := sha256.Sum256([]byte("manifest observation"))
+func TestPullApplyConfirmationBindsTheFileSetTargetRootAndConfigurationRevisions(t *testing.T) {
+	binding := pullTestFileSetBinding()
+	plan := sha256.Sum256([]byte("file-set plan"))
+	state := sha256.Sum256([]byte("file-set state"))
+	observation := sha256.Sum256([]byte("file-set observation"))
 	target := pullApplyTargetBinding{
 		TargetID:          "files",
 		Root:              model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},

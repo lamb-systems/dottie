@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	maxRecordJSONBytes         = 8192
-	maxManifestRecordJSONBytes = 2 * MaxManifestRecordBytes
+	maxRecordJSONBytes        = 8192
+	maxFileSetRecordJSONBytes = 2 * MaxFileSetRecordBytes
 )
 
 var ErrRecordJSON = errors.New("publication record JSON conversion failed")
@@ -88,7 +88,7 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 			"publicationSeq": int64(record.PublicationSeq),
 			"parent":         atdata.Bytes(cloneRecordBytes(record.Parent)),
 		}
-		if record.PayloadForm() == PayloadFormManifest {
+		if record.PayloadForm() == PayloadFormFileSet {
 			entries, err := encodeSnapshotEntries(record.Entries)
 			if err != nil {
 				return nil, err
@@ -132,8 +132,8 @@ func recordJSONLimit(record []byte) int {
 	if err != nil {
 		return maxRecordJSONBytes
 	}
-	if _, manifest := object["entries"]; manifest {
-		return maxManifestRecordJSONBytes
+	if _, fileSet := object["entries"]; fileSet {
+		return maxFileSetRecordJSONBytes
 	}
 	return maxRecordJSONBytes
 }

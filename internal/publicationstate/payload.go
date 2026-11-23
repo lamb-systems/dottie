@@ -11,8 +11,8 @@ import (
 type PayloadForm string
 
 const (
-	PayloadFormPacked   PayloadForm = PayloadForm(publication.PayloadFormPacked)
-	PayloadFormManifest PayloadForm = PayloadForm(publication.PayloadFormManifest)
+	PayloadFormPacked  PayloadForm = PayloadForm(publication.PayloadFormPacked)
+	PayloadFormFileSet PayloadForm = PayloadForm(publication.PayloadFormFileSet)
 )
 
 type PayloadEntryReference struct {
@@ -21,7 +21,7 @@ type PayloadEntryReference struct {
 	Size uint64
 }
 
-type ManifestPayload struct {
+type FileSetPayload struct {
 	Entries []PayloadEntryReference
 }
 
@@ -30,9 +30,9 @@ type MaterialInput struct {
 	Entries []publication.PayloadEntry
 }
 
-func (p ManifestPayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
+func (p FileSetPayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
 
-func (p ManifestPayload) TotalBytes() uint64 {
+func (p FileSetPayload) TotalBytes() uint64 {
 	var total uint64
 	for _, entry := range p.Entries {
 		total += entry.Size
@@ -40,7 +40,7 @@ func (p ManifestPayload) TotalBytes() uint64 {
 	return total
 }
 
-func cloneManifestPayload(payload *ManifestPayload) *ManifestPayload {
+func cloneFileSetPayload(payload *FileSetPayload) *FileSetPayload {
 	if payload == nil {
 		return nil
 	}
@@ -52,14 +52,14 @@ func cloneManifestPayload(payload *ManifestPayload) *ManifestPayload {
 			Size: entry.Size,
 		})
 	}
-	return &ManifestPayload{Entries: entries}
+	return &FileSetPayload{Entries: entries}
 }
 
 func payloadFormOf(record publication.SnapshotRecord) PayloadForm {
 	return PayloadForm(record.PayloadForm())
 }
 
-func manifestPayloadOf(record publication.SnapshotRecord) *ManifestPayload {
+func fileSetPayloadOf(record publication.SnapshotRecord) *FileSetPayload {
 	if len(record.Entries) == 0 {
 		return nil
 	}
@@ -71,16 +71,16 @@ func manifestPayloadOf(record publication.SnapshotRecord) *ManifestPayload {
 			Size: entry.Size,
 		})
 	}
-	return &ManifestPayload{Entries: entries}
+	return &FileSetPayload{Entries: entries}
 }
 
-func validateManifestPayload(payload *ManifestPayload) error {
+func validateFileSetPayload(payload *FileSetPayload) error {
 	if payload == nil || len(payload.Entries) == 0 {
-		return errors.New("manifest payload")
+		return errors.New("file-set payload")
 	}
 	if len(payload.Entries) > publication.MaxSnapshotEntries {
-		return &manifestCapacityError{
-			element: manifestCapacityEntryCount,
+		return &fileSetCapacityError{
+			element: fileSetCapacityEntryCount,
 			have:    uint64(len(payload.Entries)),
 			limit:   publication.MaxSnapshotEntries,
 		}
@@ -88,26 +88,26 @@ func validateManifestPayload(payload *ManifestPayload) error {
 	for _, entry := range payload.Entries {
 		if entry.Path == "" || len(entry.Path) > publication.MaxEntryPathBytes || entry.Size == 0 ||
 			entry.Size > publication.MaxBlobBytes || len(entry.CID) == 0 || len(entry.CID) > publication.MaxCIDBytes {
-			return errors.New("manifest payload")
+			return errors.New("file-set payload")
 		}
 	}
 	return nil
 }
 
-func validateManifestPayloadCustody(payload *ManifestPayload, limits AttemptLimits) error {
-	if err := validateManifestPayload(payload); err != nil {
+func validateFileSetPayloadCustody(payload *FileSetPayload, limits AttemptLimits) error {
+	if err := validateFileSetPayload(payload); err != nil {
 		return err
 	}
 	if uint64(len(payload.Entries)) > uint64(limits.ManagedObjects) {
-		return &manifestCapacityError{
-			element: manifestCapacityManagedObjects,
+		return &fileSetCapacityError{
+			element: fileSetCapacityManagedObjects,
 			have:    uint64(len(payload.Entries)),
 			limit:   uint64(limits.ManagedObjects),
 		}
 	}
 	if payload.TotalBytes() > limits.CustodyBytes {
-		return &manifestCapacityError{
-			element: manifestCapacityCustodyBytes,
+		return &fileSetCapacityError{
+			element: fileSetCapacityCustodyBytes,
 			have:    payload.TotalBytes(),
 			limit:   limits.CustodyBytes,
 		}
@@ -115,8 +115,8 @@ func validateManifestPayloadCustody(payload *ManifestPayload, limits AttemptLimi
 	return nil
 }
 
-func validateManifestMaterialLimits(payload *ManifestPayload, limits AttemptLimits) error {
-	if err := validateManifestPayload(payload); err != nil {
+func validateFileSetMaterialLimits(payload *FileSetPayload, limits AttemptLimits) error {
+	if err := validateFileSetPayload(payload); err != nil {
 		return err
 	}
 	distinct := make(map[string]bool, len(payload.Entries))
@@ -124,15 +124,15 @@ func validateManifestMaterialLimits(payload *ManifestPayload, limits AttemptLimi
 		distinct[string(entry.CID)] = true
 	}
 	if uint64(len(distinct)) > uint64(limits.ManagedObjects) {
-		return &manifestCapacityError{
-			element: manifestCapacityManagedObjects,
+		return &fileSetCapacityError{
+			element: fileSetCapacityManagedObjects,
 			have:    uint64(len(distinct)),
 			limit:   uint64(limits.ManagedObjects),
 		}
 	}
 	if payload.TotalBytes() > limits.CustodyBytes {
-		return &manifestCapacityError{
-			element: manifestCapacityCustodyBytes,
+		return &fileSetCapacityError{
+			element: fileSetCapacityCustodyBytes,
 			have:    payload.TotalBytes(),
 			limit:   limits.CustodyBytes,
 		}
@@ -140,7 +140,7 @@ func validateManifestMaterialLimits(payload *ManifestPayload, limits AttemptLimi
 	return nil
 }
 
-func manifestPayloadToWire(payload *ManifestPayload) []payloadEntryWire {
+func fileSetPayloadToWire(payload *FileSetPayload) []payloadEntryWire {
 	if payload == nil {
 		return nil
 	}
@@ -155,15 +155,15 @@ func manifestPayloadToWire(payload *ManifestPayload) []payloadEntryWire {
 	return entries
 }
 
-func manifestPayloadFromWire(entries []payloadEntryWire) (*ManifestPayload, error) {
+func fileSetPayloadFromWire(entries []payloadEntryWire) (*FileSetPayload, error) {
 	if len(entries) == 0 {
-		return nil, errors.New("manifest payload")
+		return nil, errors.New("file-set payload")
 	}
-	payload := &ManifestPayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
+	payload := &FileSetPayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
 	for _, entry := range entries {
 		if entry.Path == "" || len(entry.Path) > publication.MaxEntryPathBytes || entry.Size == 0 ||
 			entry.Size > publication.MaxBlobBytes || len(entry.CID) == 0 || len(entry.CID) > publication.MaxCIDBytes {
-			return nil, errors.New("manifest payload")
+			return nil, errors.New("file-set payload")
 		}
 		payload.Entries = append(payload.Entries, PayloadEntryReference{
 			Path: entry.Path,
@@ -174,7 +174,7 @@ func manifestPayloadFromWire(entries []payloadEntryWire) (*ManifestPayload, erro
 	return payload, nil
 }
 
-func sameManifestPayload(left, right *ManifestPayload) bool {
+func sameFileSetPayload(left, right *FileSetPayload) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -190,20 +190,20 @@ func sameManifestPayload(left, right *ManifestPayload) bool {
 	return true
 }
 
-func manifestPayloadMatchesRecord(snapshot *ManifestPayload, record publication.SnapshotRecord) bool {
-	return sameManifestPayload(snapshot, manifestPayloadOf(record))
+func fileSetPayloadMatchesRecord(snapshot *FileSetPayload, record publication.SnapshotRecord) bool {
+	return sameFileSetPayload(snapshot, fileSetPayloadOf(record))
 }
 
 func floorPayloadMatchesRecord(floor Floor, record publication.SnapshotRecord) bool {
-	if payloadFormOf(record) == PayloadFormManifest {
-		return floor.Manifest != nil && len(floor.BlobCID) == 0 && floor.BlobSize == 0 &&
-			manifestPayloadMatchesRecord(floor.Manifest, record)
+	if payloadFormOf(record) == PayloadFormFileSet {
+		return floor.FileSet != nil && len(floor.BlobCID) == 0 && floor.BlobSize == 0 &&
+			fileSetPayloadMatchesRecord(floor.FileSet, record)
 	}
-	return floor.Manifest == nil && bytes.Equal(record.Blob.CID, floor.BlobCID) && record.Blob.Size == floor.BlobSize
+	return floor.FileSet == nil && bytes.Equal(record.Blob.CID, floor.BlobCID) && record.Blob.Size == floor.BlobSize
 }
 
 func validateFloorPayload(floor Floor) error {
-	if floor.Manifest == nil {
+	if floor.FileSet == nil {
 		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes {
 			return errors.New("floor payload")
 		}
@@ -212,40 +212,40 @@ func validateFloorPayload(floor Floor) error {
 	if len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
 		return errors.New("floor payload")
 	}
-	return validateManifestPayload(floor.Manifest)
+	return validateFileSetPayload(floor.FileSet)
 }
 
-func manifestPayloadUnsupported(stage Stage) error {
+func fileSetPayloadUnsupported(stage Stage) error {
 	return classified(ErrUnsupported, stage, ReasonPayloadForm)
 }
 
 func attemptCoreForm(core attemptCoreWire) PayloadForm {
 	if core.Version == 2 {
-		return PayloadFormManifest
+		return PayloadFormFileSet
 	}
 	return PayloadFormPacked
 }
 
 func requirePackedAttemptCore(core attemptCoreWire, stage Stage) error {
 	if attemptCoreForm(core) != PayloadFormPacked {
-		return manifestPayloadUnsupported(stage)
+		return fileSetPayloadUnsupported(stage)
 	}
 	return nil
 }
 
 const (
-	manifestCapacityEntryCount     = "manifest entry count"
-	manifestCapacityManagedObjects = "manifest managed objects"
-	manifestCapacityCustodyBytes   = "manifest custody bytes"
+	fileSetCapacityEntryCount     = "file-set entry count"
+	fileSetCapacityManagedObjects = "file-set managed objects"
+	fileSetCapacityCustodyBytes   = "file-set custody bytes"
 )
 
-type manifestCapacityError struct {
+type fileSetCapacityError struct {
 	element string
 	have    uint64
 	limit   uint64
 }
 
-func (e *manifestCapacityError) Error() string {
+func (e *fileSetCapacityError) Error() string {
 	return fmt.Sprintf(
 		"publication state: %s/%s/%s: %s: %d exceeds %d",
 		className(ErrLimit),
@@ -257,35 +257,35 @@ func (e *manifestCapacityError) Error() string {
 	)
 }
 
-func (e *manifestCapacityError) Unwrap() error {
+func (e *fileSetCapacityError) Unwrap() error {
 	return classified(ErrLimit, StageInput, ReasonCapacity)
 }
 
-func encodeRetainedManifest(payload *ManifestPayload) ([]byte, error) {
-	if err := validateManifestPayload(payload); err != nil {
+func encodeRetainedFileSet(payload *FileSetPayload) ([]byte, error) {
+	if err := validateFileSetPayload(payload); err != nil {
 		return nil, err
 	}
-	encoded, err := canonicalJSON(manifestPayloadToWire(payload))
-	if err != nil || len(encoded) == 0 || len(encoded) > publication.MaxManifestRecordBytes {
-		return nil, errors.New("retained manifest")
+	encoded, err := canonicalJSON(fileSetPayloadToWire(payload))
+	if err != nil || len(encoded) == 0 || len(encoded) > publication.MaxFileSetRecordBytes {
+		return nil, errors.New("retained file-set")
 	}
 	return encoded, nil
 }
 
-func decodeRetainedManifest(encoded []byte) (*ManifestPayload, error) {
-	if len(encoded) == 0 || len(encoded) > publication.MaxManifestRecordBytes {
-		return nil, errors.New("retained manifest")
+func decodeRetainedFileSet(encoded []byte) (*FileSetPayload, error) {
+	if len(encoded) == 0 || len(encoded) > publication.MaxFileSetRecordBytes {
+		return nil, errors.New("retained file-set")
 	}
 	var entries []payloadEntryWire
 	if err := strictJSON(encoded, &entries); err != nil {
-		return nil, errors.New("retained manifest")
+		return nil, errors.New("retained file-set")
 	}
-	payload, err := manifestPayloadFromWire(entries)
+	payload, err := fileSetPayloadFromWire(entries)
 	if err != nil {
-		return nil, errors.New("retained manifest")
+		return nil, errors.New("retained file-set")
 	}
-	if err := validateManifestPayload(payload); err != nil {
-		return nil, errors.New("retained manifest")
+	if err := validateFileSetPayload(payload); err != nil {
+		return nil, errors.New("retained file-set")
 	}
 	return payload, nil
 }

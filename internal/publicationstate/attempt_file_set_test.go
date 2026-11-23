@@ -13,7 +13,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-type manifestAttemptFixture struct {
+type fileSetAttemptFixture struct {
 	binding Binding
 	raw     []byte
 	head    []byte
@@ -21,12 +21,12 @@ type manifestAttemptFixture struct {
 	entries []publication.PayloadEntry
 }
 
-func newManifestAttemptFixture(t *testing.T, paths []string) manifestAttemptFixture {
+func newFileSetAttemptFixture(t *testing.T, paths []string) fileSetAttemptFixture {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(paths))
 	supplied := make([]publication.PayloadEntry, 0, len(paths))
 	for _, path := range paths {
-		content := []byte("synthetic manifest entry for " + path)
+		content := []byte("synthetic file-set entry for " + path)
 		cid, err := publication.RawPayloadCID(content)
 		require.NoError(t, err)
 		entries = append(entries, publication.SnapshotEntry{
@@ -64,7 +64,7 @@ func newManifestAttemptFixture(t *testing.T, paths []string) manifestAttemptFixt
 	require.NoError(t, err)
 	key, err := publication.SequenceKey(0)
 	require.NoError(t, err)
-	return manifestAttemptFixture{
+	return fileSetAttemptFixture{
 		binding: binding,
 		raw:     raw,
 		head:    head,
@@ -73,7 +73,7 @@ func newManifestAttemptFixture(t *testing.T, paths []string) manifestAttemptFixt
 	}
 }
 
-func (f manifestAttemptFixture) view() SuppliedRepositoryView {
+func (f fileSetAttemptFixture) view() SuppliedRepositoryView {
 	return SuppliedRepositoryView{
 		Origin:          f.binding,
 		Scope:           ViewScopeWholeRepository,
@@ -81,14 +81,14 @@ func (f manifestAttemptFixture) view() SuppliedRepositoryView {
 	}
 }
 
-func (f manifestAttemptFixture) currentView() SuppliedRepositoryView {
+func (f fileSetAttemptFixture) currentView() SuppliedRepositoryView {
 	view := f.view()
 	view.Head = bytes.Clone(f.head)
 	view.Snapshots = []SnapshotBlock{{Key: f.key, Raw: bytes.Clone(f.raw)}}
 	return view
 }
 
-func (f manifestAttemptFixture) candidate() CandidateInput {
+func (f fileSetAttemptFixture) candidate() CandidateInput {
 	entries := make([]publication.PayloadEntry, 0, len(f.entries))
 	for _, entry := range f.entries {
 		entries = append(entries, publication.PayloadEntry{
@@ -103,7 +103,7 @@ func (f manifestAttemptFixture) candidate() CandidateInput {
 	}
 }
 
-func (f manifestAttemptFixture) references() []PayloadEntryReference {
+func (f fileSetAttemptFixture) references() []PayloadEntryReference {
 	references := make([]PayloadEntryReference, 0, len(f.entries))
 	for _, entry := range f.entries {
 		cid, err := publication.RawPayloadCID(entry.Content)
@@ -117,14 +117,14 @@ func (f manifestAttemptFixture) references() []PayloadEntryReference {
 	return references
 }
 
-func manifestFixture(t *testing.T) manifestAttemptFixture {
-	return newManifestAttemptFixture(t, []string{"init.lua", "lua/config/options.lua", "lua/plugin/init.lua"})
+func fileSetFixture(t *testing.T) fileSetAttemptFixture {
+	return newFileSetAttemptFixture(t, []string{"init.lua", "lua/config/options.lua", "lua/plugin/init.lua"})
 }
 
-func stageManifestAttempt(
+func stageFileSetAttempt(
 	t *testing.T,
 	store *Store,
-	f manifestAttemptFixture,
+	f fileSetAttemptFixture,
 	view SuppliedRepositoryView,
 	review LocalReviewContext,
 ) Attempt {
@@ -144,13 +144,13 @@ func stageManifestAttempt(
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
-	require.NotNil(t, attempt.Manifest)
+	require.NotNil(t, attempt.FileSet)
 	assert.Nil(t, attempt.BlobCID)
 	assert.Equal(t, uint64(0), attempt.BlobSize)
 	return attempt
 }
 
-func beginManifestUpload(
+func beginFileSetUpload(
 	t *testing.T,
 	store *Store,
 	attempt Attempt,
@@ -172,15 +172,15 @@ func beginManifestUpload(
 	return material
 }
 
-func TestManifestAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
+func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageManifestAttempt(t, store, f, view, review)
-	require.Len(t, attempt.Manifest.Entries, 3)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
+	require.Len(t, attempt.FileSet.Entries, 3)
 
 	for _, entry := range f.entries {
 		info, err := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename(entry.Content)))
@@ -203,7 +203,7 @@ func TestManifestAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 		assert.Equal(t, entry.Content, staged.Entries[index].Content)
 	}
 
-	upload := beginManifestUpload(t, store, attempt, view, review)
+	upload := beginFileSetUpload(t, store, attempt, view, review)
 	assert.Empty(t, upload.Payload)
 	assert.Empty(t, upload.Blob.CID)
 	require.Len(t, upload.Entries, 3)
@@ -222,7 +222,7 @@ func TestManifestAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	submission, err := store.BeginManifestSubmission(
+	submission, err := store.BeginFileSetSubmission(
 		ctx,
 		attempt.ID,
 		submissionProposal.StateToken,
@@ -232,7 +232,7 @@ func TestManifestAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 		f.references(),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormManifest, submission.PayloadForm)
+	assert.Equal(t, PayloadFormFileSet, submission.PayloadForm)
 	assert.Equal(t, f.references(), submission.Entries)
 	assert.Equal(t, f.raw, submission.SnapshotRecord)
 	assert.Equal(t, f.head, submission.HeadRecord)
@@ -281,9 +281,9 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	assert.Equal(t, uint64(len(candidate.Payload)), proposal.CandidateBlobSize)
 	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, empty, review, proposal.Confirmation)
 	require.NoError(t, err)
-	assert.Nil(t, attempt.Manifest)
+	assert.Nil(t, attempt.FileSet)
 
-	upload := beginManifestPackedUpload(t, store, attempt, empty, review)
+	upload := beginFileSetPackedUpload(t, store, attempt, empty, review)
 	assert.Empty(t, upload.Entries)
 	assert.Equal(t, candidate.Payload, upload.Payload)
 	assert.NotEmpty(t, upload.Blob.CID)
@@ -303,7 +303,7 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	assert.Empty(t, submission.Entries)
 }
 
-func beginManifestPackedUpload(
+func beginFileSetPackedUpload(
 	t *testing.T,
 	store *Store,
 	attempt Attempt,
@@ -325,15 +325,15 @@ func beginManifestPackedUpload(
 	return material
 }
 
-func TestManifestSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
+func TestFileSetSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageManifestAttempt(t, store, f, view, review)
-	beginManifestUpload(t, store, attempt, view, review)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
+	beginFileSetUpload(t, store, attempt, view, review)
 
 	references := f.references()
 	partial := [][]PayloadEntryReference{
@@ -349,7 +349,7 @@ func TestManifestSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	for index, uploaded := range partial {
 		proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 		require.NoError(t, err)
-		_, err = store.BeginManifestSubmission(
+		_, err = store.BeginFileSetSubmission(
 			ctx,
 			attempt.ID,
 			proposal.StateToken,
@@ -382,7 +382,7 @@ func TestManifestSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 	)
 	requireErrorMetadata(t, err, ErrUnsupported, StageDispatch, ReasonPayloadForm)
 
-	submitted, err := store.BeginManifestSubmission(
+	submitted, err := store.BeginFileSetSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -392,24 +392,24 @@ func TestManifestSubmissionRefusesAnIncompleteUploadedEntryList(t *testing.T) {
 		references,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormManifest, submitted.PayloadForm)
+	assert.Equal(t, PayloadFormFileSet, submitted.PayloadForm)
 	after, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptMayHaveSubmitted, after.Lifecycle)
 }
 
-func TestManifestAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
+func TestFileSetAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageManifestAttempt(t, store, f, view, review)
-	beginManifestUpload(t, store, attempt, view, review)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
+	beginFileSetUpload(t, store, attempt, view, review)
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginManifestSubmission(
+	_, err = store.BeginFileSetSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -433,15 +433,15 @@ func TestManifestAttemptRejectionRetiresAfterSuccessfulUploads(t *testing.T) {
 	assert.Equal(t, 0, retained)
 }
 
-func TestManifestAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T) {
+func TestFileSetAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageManifestAttempt(t, store, f, view, review)
-	upload := beginManifestUpload(t, store, attempt, view, review)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
+	upload := beginFileSetUpload(t, store, attempt, view, review)
 	require.Len(t, upload.Entries, 3)
 
 	failed, err := store.LoadAttempt(ctx, attempt.ID)
@@ -454,7 +454,7 @@ func TestManifestAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T
 
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginManifestSubmission(
+	_, err = store.BeginFileSetSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -482,14 +482,14 @@ func TestManifestAttemptMidUploadFailureStaysBlockingAndAbandonable(t *testing.T
 	assert.False(t, present)
 }
 
-func TestManifestCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T) {
+func TestFileSetCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	defer store.Close()
 	view := f.view()
 	review := attemptReview()
-	attempt := stageManifestAttempt(t, store, f, view, review)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
 
 	target := f.entries[1]
 	path := filepath.Join(directory, payloadDirectoryName, payloadBasename(target.Content))
@@ -507,13 +507,13 @@ func TestManifestCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T
 	cid, err := publication.RawPayloadCID(original)
 	require.NoError(t, err)
 	name := payloadBasename(original)
-	require.NoError(t, validateManifestEntryForCustody(original, publication.BlobReference{
+	require.NoError(t, validateFileSetEntryForCustody(original, publication.BlobReference{
 		CID: cid, Size: uint64(len(original)), MIMEType: publication.BlobMIMEType,
 	}, name))
-	require.ErrorIs(t, validateManifestEntryForCustody(original, publication.BlobReference{
+	require.ErrorIs(t, validateFileSetEntryForCustody(original, publication.BlobReference{
 		CID: f.entries[0].Content, Size: uint64(len(original)),
 	}, name), errInvalidPayloadInput)
-	require.ErrorIs(t, validateManifestEntryForCustody(original, publication.BlobReference{
+	require.ErrorIs(t, validateFileSetEntryForCustody(original, publication.BlobReference{
 		CID: cid, Size: uint64(len(original)) + 1,
 	}, name), errInvalidPayloadInput)
 
@@ -525,7 +525,7 @@ func TestManifestCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T
 	}
 }
 
-func TestManifestEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
+func TestFileSetEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	f := newFixture(t, BackendPublicRepo)
 	cid, err := publication.RawPayloadCID(f.payload)
 	require.NoError(t, err)
@@ -533,7 +533,7 @@ func TestManifestEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 		CID: cid, Size: uint64(len(f.payload)), MIMEType: publication.SnapshotBlobMIMEType,
 	}
 	require.NoError(t, validatePayloadForCustody(f.payload, blob, payloadBasename(f.payload)))
-	require.NoError(t, validateManifestEntryForCustody(f.payload, blob, payloadBasename(f.payload)))
+	require.NoError(t, validateFileSetEntryForCustody(f.payload, blob, payloadBasename(f.payload)))
 
 	plain := []byte("synthetic plain entry")
 	plainCID, err := publication.RawPayloadCID(plain)
@@ -541,7 +541,7 @@ func TestManifestEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	plainBlob := publication.BlobReference{
 		CID: plainCID, Size: uint64(len(plain)), MIMEType: publication.BlobMIMEType,
 	}
-	require.NoError(t, validateManifestEntryForCustody(plain, plainBlob, payloadBasename(plain)))
+	require.NoError(t, validateFileSetEntryForCustody(plain, plainBlob, payloadBasename(plain)))
 	require.ErrorIs(
 		t,
 		validatePayloadForCustody(plain, plainBlob, payloadBasename(plain)),
@@ -549,17 +549,17 @@ func TestManifestEntryCustodyProofKeepsThePackedDecode(t *testing.T) {
 	)
 }
 
-func TestManifestAttemptFinalizesAndReopensRetainedPosition(t *testing.T) {
+func TestFileSetAttemptFinalizesAndReopensRetainedPosition(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	review := attemptReview()
-	submitted := submitManifestAttempt(t, store, f, f.view(), review)
+	submitted := submitFileSetAttempt(t, store, f, f.view(), review)
 	finalized, err := store.FinalizeAttempt(ctx, submitted.ID, submitted.StateDigest, f.currentView())
 	require.NoError(t, err)
-	assertManifestRetainedPosition(t, store, f, directory, submitted.ID, finalized.Floor)
+	assertFileSetRetainedPosition(t, store, f, directory, submitted.ID, finalized.Floor)
 
-	reopened := reopenManifestStore(t, store, directory, f.binding)
+	reopened := reopenFileSetStore(t, store, directory, f.binding)
 	loaded, present, err := reopened.Load(ctx)
 	require.NoError(t, err)
 	require.True(t, present)
@@ -570,41 +570,41 @@ func TestManifestAttemptFinalizesAndReopensRetainedPosition(t *testing.T) {
 	assert.Equal(t, finalized.Floor, *state.floor)
 }
 
-func TestLargeManifestAttemptFinalizesWithEncodedFloorUnderTheCap(t *testing.T) {
+func TestLargeFileSetAttemptFinalizesWithEncodedFloorUnderTheCap(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
+	f := newLargeFileSetFixture(t)
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	review := attemptReview()
-	submitted := submitManifestAttempt(t, store, f, f.view(), review)
+	submitted := submitFileSetAttempt(t, store, f, f.view(), review)
 	finalized, err := store.FinalizeAttempt(ctx, submitted.ID, submitted.StateDigest, f.currentView())
 	require.NoError(t, err)
 	encodedFloor, err := encodeFloor(finalized.Floor)
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(encodedFloor), 65536)
-	assertManifestRetainedPosition(t, store, f, directory, submitted.ID, finalized.Floor)
+	assertFileSetRetainedPosition(t, store, f, directory, submitted.ID, finalized.Floor)
 
-	reopened := reopenManifestStore(t, store, directory, f.binding)
+	reopened := reopenFileSetStore(t, store, directory, f.binding)
 	loaded, present, err := reopened.Load(ctx)
 	require.NoError(t, err)
 	require.True(t, present)
 	assert.Equal(t, finalized.Floor, loaded)
 }
 
-func submitManifestAttempt(
+func submitFileSetAttempt(
 	t *testing.T,
 	store *Store,
-	f manifestAttemptFixture,
+	f fileSetAttemptFixture,
 	view SuppliedRepositoryView,
 	review LocalReviewContext,
 ) Attempt {
 	t.Helper()
 	ctx := context.Background()
-	attempt := stageManifestAttempt(t, store, f, view, review)
-	beginManifestUpload(t, store, attempt, view, review)
+	attempt := stageFileSetAttempt(t, store, f, view, review)
+	beginFileSetUpload(t, store, attempt, view, review)
 	proposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
 	require.NoError(t, err)
-	_, err = store.BeginManifestSubmission(
+	_, err = store.BeginFileSetSubmission(
 		ctx,
 		attempt.ID,
 		proposal.StateToken,
@@ -620,10 +620,10 @@ func submitManifestAttempt(
 	return submitted
 }
 
-func assertManifestRetainedPosition(
+func assertFileSetRetainedPosition(
 	t *testing.T,
 	store *Store,
-	f manifestAttemptFixture,
+	f fileSetAttemptFixture,
 	directory string,
 	id [16]byte,
 	floor Floor,
@@ -634,31 +634,31 @@ func assertManifestRetainedPosition(
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredSuccess, attempt.Lifecycle)
 	assert.Equal(t, OutcomeCurrent, attempt.Outcome)
-	require.NotNil(t, attempt.Manifest)
-	assert.Equal(t, f.references(), attempt.Manifest.Entries)
+	require.NotNil(t, attempt.FileSet)
+	assert.Equal(t, f.references(), attempt.FileSet.Entries)
 	assert.Empty(t, attempt.BlobCID)
 	assert.Equal(t, uint64(0), attempt.BlobSize)
 
 	assert.Equal(t, f.key, floor.SnapshotKey)
-	require.NotNil(t, floor.Manifest)
-	assert.Equal(t, f.references(), floor.Manifest.Entries)
+	require.NotNil(t, floor.FileSet)
+	assert.Equal(t, f.references(), floor.FileSet.Entries)
 	assert.Empty(t, floor.BlobCID)
 	assert.Equal(t, uint64(0), floor.BlobSize)
 
-	var formValue, blobValue, sizeValue, manifestValue any
+	var formValue, blobValue, sizeValue, fileSetValue any
 	require.NoError(t, store.conn.QueryRowContext(
 		ctx,
-		"SELECT form,blob_cid,size,manifest FROM retained_publications WHERE attempt_id=?",
+		"SELECT form,blob_cid,size,file_set FROM retained_publications WHERE attempt_id=?",
 		id[:],
-	).Scan(&formValue, &blobValue, &sizeValue, &manifestValue))
-	assert.Equal(t, string(PayloadFormManifest), formValue)
+	).Scan(&formValue, &blobValue, &sizeValue, &fileSetValue))
+	assert.Equal(t, string(PayloadFormFileSet), formValue)
 	assert.Nil(t, blobValue)
 	assert.Nil(t, sizeValue)
-	encodedManifest, manifestOK := manifestValue.([]byte)
-	require.True(t, manifestOK)
-	retainedManifest, err := decodeRetainedManifest(encodedManifest)
+	encodedFileSet, fileSetOK := fileSetValue.([]byte)
+	require.True(t, fileSetOK)
+	retainedFileSet, err := decodeRetainedFileSet(encodedFileSet)
 	require.NoError(t, err)
-	assert.Equal(t, f.references(), retainedManifest.Entries)
+	assert.Equal(t, f.references(), retainedFileSet.Entries)
 
 	for _, query := range []string{
 		"SELECT COUNT(*) FROM accepted_material_refs",
@@ -689,7 +689,7 @@ func assertManifestRetainedPosition(
 	assert.False(t, present)
 }
 
-func reopenManifestStore(t *testing.T, store *Store, directory string, binding Binding) *Store {
+func reopenFileSetStore(t *testing.T, store *Store, directory string, binding Binding) *Store {
 	t.Helper()
 	require.NoError(t, store.Close())
 	reopened, err := Open(directory, binding)
@@ -698,19 +698,19 @@ func reopenManifestStore(t *testing.T, store *Store, directory string, binding B
 	return reopened
 }
 
-func TestManifestAttemptFinalizationAdmissionBudgetsTheManifestFloor(t *testing.T) {
+func TestFileSetAttemptFinalizationAdmissionBudgetsTheFileSetFloor(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
+	f := newLargeFileSetFixture(t)
 	candidate := f.candidate()
 	view := f.view()
 	review := attemptReview()
 
 	baseline, _ := newStore(t, fixture{t: t, binding: f.binding})
 	unmodeled := finalizationHistoryBound(t, baseline, candidate, view, review, false)
-	submitted := submitManifestAttempt(t, baseline, f, view, review)
+	submitted := submitFileSetAttempt(t, baseline, f, view, review)
 	_, err := baseline.FinalizeAttempt(ctx, submitted.ID, submitted.StateDigest, f.currentView())
 	require.NoError(t, err)
-	modeled := manifestCompletionHistoryBytes(t, baseline, f)
+	modeled := fileSetCompletionHistoryBytes(t, baseline, f)
 	require.Greater(t, modeled, unmodeled)
 	require.NoError(t, baseline.Close())
 
@@ -725,7 +725,7 @@ func TestManifestAttemptFinalizationAdmissionBudgetsTheManifestFloor(t *testing.
 	exactLimits := DefaultLimits()
 	exactLimits.HistoryEvidenceBytes = modeled
 	exact, exactDirectory := openAttemptStoreWithLimits(t, fixture{t: t, binding: f.binding}, exactLimits)
-	exactSubmitted := submitManifestAttempt(t, exact, f, view, review)
+	exactSubmitted := submitFileSetAttempt(t, exact, f, view, review)
 	finalized, err := exact.FinalizeAttempt(
 		ctx,
 		exactSubmitted.ID,
@@ -733,7 +733,7 @@ func TestManifestAttemptFinalizationAdmissionBudgetsTheManifestFloor(t *testing.
 		f.currentView(),
 	)
 	require.NoError(t, err)
-	assertManifestRetainedPosition(t, exact, f, exactDirectory, exactSubmitted.ID, finalized.Floor)
+	assertFileSetRetainedPosition(t, exact, f, exactDirectory, exactSubmitted.ID, finalized.Floor)
 	require.NoError(t, exact.Close())
 
 	reopened, err := OpenWithLimits(exactDirectory, f.binding, exactLimits)
@@ -745,7 +745,7 @@ func TestManifestAttemptFinalizationAdmissionBudgetsTheManifestFloor(t *testing.
 	assert.Equal(t, finalized.Floor, loaded)
 }
 
-func manifestCompletionHistoryBytes(t *testing.T, store *Store, f manifestAttemptFixture) uint64 {
+func fileSetCompletionHistoryBytes(t *testing.T, store *Store, f fileSetAttemptFixture) uint64 {
 	t.Helper()
 	var bodyValue any
 	require.NoError(t,
@@ -767,8 +767,8 @@ func manifestCompletionHistoryBytes(t *testing.T, store *Store, f manifestAttemp
 		uint64(limits.SuppliedContextBytes) - uint64(len(encodedContext))
 }
 
-func TestFinalizationObservationAcceptsManifestWhileOrdinaryObservationRefuses(t *testing.T) {
-	f := manifestFixture(t)
+func TestFinalizationObservationAcceptsFileSetWhileOrdinaryObservationRefuses(t *testing.T) {
+	f := fileSetFixture(t)
 	observation := Observation{
 		Origin:          f.binding,
 		SuppliedContext: SuppliedContext{RepositoryRevision: "revision-1", RepositoryDigest: []byte{1, 2, 3}},
@@ -783,9 +783,9 @@ func TestFinalizationObservationAcceptsManifestWhileOrdinaryObservationRefuses(t
 	assert.Equal(t, f.key, validated.candidate.ref.Key)
 }
 
-func TestOversizedManifestAttemptRefusesFinalizationAdmission(t *testing.T) {
+func TestOversizedFileSetAttemptRefusesFinalizationAdmission(t *testing.T) {
 	ctx := context.Background()
-	f := newManifestAttemptFixture(t, oversizedFloorManifestPaths())
+	f := newFileSetAttemptFixture(t, oversizedFloorFileSetPaths())
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	_, err := store.PrepareAttempt(ctx, f.candidate(), f.view(), attemptReview())
@@ -794,9 +794,9 @@ func TestOversizedManifestAttemptRefusesFinalizationAdmission(t *testing.T) {
 	require.NoError(t, store.Close())
 }
 
-func TestAcceptedFloorRefusesOversizedEncodedManifestFloor(t *testing.T) {
+func TestAcceptedFloorRefusesOversizedEncodedFileSetFloor(t *testing.T) {
 	ctx := context.Background()
-	f := newManifestAttemptFixture(t, oversizedFloorManifestPaths())
+	f := newFileSetAttemptFixture(t, oversizedFloorFileSetPaths())
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	state, err := store.readState(ctx, store.conn, StageFinalize)
@@ -820,7 +820,7 @@ func TestAcceptedFloorRefusesOversizedEncodedManifestFloor(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 	assertEmptyPublicationFloorState(t, store)
 
-	reopened := reopenManifestStore(t, store, directory, f.binding)
+	reopened := reopenFileSetStore(t, store, directory, f.binding)
 	loaded, present, err := reopened.Load(ctx)
 	require.NoError(t, err)
 	assert.False(t, present)
@@ -843,8 +843,8 @@ func assertEmptyPublicationFloorState(t *testing.T, store *Store) {
 	assert.Nil(t, state.floor)
 }
 
-func TestManifestCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
-	f := manifestFixture(t)
+func TestFileSetCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
+	f := fileSetFixture(t)
 	binding := f.binding
 	limits := DefaultAttemptLimits()
 
@@ -868,7 +868,7 @@ func TestManifestCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
 	packedMaterial := f.candidate()
-	packedMaterial.Payload = []byte("packed payload supplied for a manifest record")
+	packedMaterial.Payload = []byte("packed payload supplied for a file-set record")
 	_, err = validateCandidateInput(packedMaterial, binding, limits)
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
@@ -876,10 +876,10 @@ func TestManifestCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
 	tightened.ManagedObjects = 2
 	_, err = validateCandidateInput(f.candidate(), binding, tightened)
 	requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, err.Error(), "manifest managed objects: 3 exceeds 2")
+	assert.Contains(t, err.Error(), "file-set managed objects: 3 exceeds 2")
 }
 
-func TestManifestEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing.T) {
+func TestFileSetEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing.T) {
 	limits := DefaultAttemptLimits()
 	entries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
 	for index := range publication.MaxSnapshotEntries + 1 {
@@ -889,8 +889,8 @@ func TestManifestEntryCapacityRefusesTheSixtyFifthEntryNamingTheLimit(t *testing
 			Size: 1,
 		})
 	}
-	err := validateManifestPayloadCustody(&ManifestPayload{Entries: entries}, limits)
+	err := validateFileSetPayloadCustody(&FileSetPayload{Entries: entries}, limits)
 	requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, err.Error(), "manifest entry count: 65 exceeds 64")
+	assert.Contains(t, err.Error(), "file-set entry count: 65 exceeds 64")
 	assert.Equal(t, uint32(64), limits.ManagedObjects)
 }

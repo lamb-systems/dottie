@@ -22,37 +22,37 @@ func DecodePayload(payload []byte, reference BlobReference) (model.Snapshot, err
 type PayloadForm string
 
 const (
-	PayloadFormPacked   PayloadForm = "packed"
-	PayloadFormManifest PayloadForm = "manifest"
+	PayloadFormPacked  PayloadForm = "packed"
+	PayloadFormFileSet PayloadForm = "file_set"
 
-	ManifestReasonPackedRequired = "packed_payload_required"
-	ManifestReasonEntryCount     = "entry_count"
-	ManifestReasonEntryBytes     = "entry_bytes"
-	ManifestReasonTotalBytes     = "total_bytes"
-	ManifestReasonUnavailable    = "entry_unavailable"
-	ManifestReasonMismatch       = "entry_mismatch"
+	FileSetReasonPackedRequired = "packed_payload_required"
+	FileSetReasonEntryCount     = "entry_count"
+	FileSetReasonEntryBytes     = "entry_bytes"
+	FileSetReasonTotalBytes     = "total_bytes"
+	FileSetReasonUnavailable    = "entry_unavailable"
+	FileSetReasonMismatch       = "entry_mismatch"
 )
 
-var ErrManifestPayload = errors.New("publication manifest payload")
+var ErrFileSetPayload = errors.New("publication file-set payload")
 
-type ManifestPayloadError struct {
+type FileSetPayloadError struct {
 	Entry  string
 	Reason string
 	cause  error
 }
 
-func (e *ManifestPayloadError) Error() string {
+func (e *FileSetPayloadError) Error() string {
 	if e.Entry == "" {
-		return "publication manifest payload: " + e.Reason
+		return "publication file-set payload: " + e.Reason
 	}
-	return "publication manifest payload: " + strconv.Quote(e.Entry) + ": " + e.Reason
+	return "publication file-set payload: " + strconv.Quote(e.Entry) + ": " + e.Reason
 }
 
-func (e *ManifestPayloadError) Is(target error) bool { return target == ErrManifestPayload }
+func (e *FileSetPayloadError) Is(target error) bool { return target == ErrFileSetPayload }
 
-func (e *ManifestPayloadError) Unwrap() error { return e.cause }
+func (e *FileSetPayloadError) Unwrap() error { return e.cause }
 
-func (e *ManifestPayloadError) EntryPath() string { return e.Entry }
+func (e *FileSetPayloadError) EntryPath() string { return e.Entry }
 
 type PayloadEntry struct {
 	Path    string
@@ -69,7 +69,7 @@ type Payload struct {
 
 func (payload Payload) PackedSnapshot() (model.Snapshot, error) {
 	if payload.Form != PayloadFormPacked {
-		return model.Snapshot{}, &ManifestPayloadError{Reason: ManifestReasonPackedRequired}
+		return model.Snapshot{}, &FileSetPayloadError{Reason: FileSetReasonPackedRequired}
 	}
 	return payload.Snapshot, nil
 }
@@ -84,7 +84,7 @@ type PayloadFetch func(reference BlobReference) ([]byte, error)
 
 func (record SnapshotRecord) PayloadForm() PayloadForm {
 	if len(record.Entries) != 0 {
-		return PayloadFormManifest
+		return PayloadFormFileSet
 	}
 	return PayloadFormPacked
 }
@@ -101,40 +101,40 @@ func ResolvePayload(record SnapshotRecord, limits PayloadLimits, fetch PayloadFe
 		}
 		return Payload{Form: PayloadFormPacked, Snapshot: snapshot}, nil
 	}
-	return resolveManifestPayload(record.Entries, limits, fetch)
+	return resolveFileSetPayload(record.Entries, limits, fetch)
 }
 
-func resolveManifestPayload(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
+func resolveFileSetPayload(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
 	if len(entries) == 0 {
-		return Payload{}, &ManifestPayloadError{Reason: ManifestReasonEntryCount}
+		return Payload{}, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
 	}
 	if limits.MaxEntries > 0 && len(entries) > limits.MaxEntries {
-		return Payload{}, &ManifestPayloadError{Reason: ManifestReasonEntryCount}
+		return Payload{}, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
 	}
 	resolved := make([]PayloadEntry, 0, len(entries))
 	var total uint64
 	for _, entry := range entries {
 		if limits.MaxEntryBytes != 0 && entry.Size > limits.MaxEntryBytes {
-			return Payload{}, &ManifestPayloadError{Entry: entry.Path, Reason: ManifestReasonEntryBytes}
+			return Payload{}, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonEntryBytes}
 		}
 		total += entry.Size
 		if limits.MaxTotalBytes != 0 && total > limits.MaxTotalBytes {
-			return Payload{}, &ManifestPayloadError{Entry: entry.Path, Reason: ManifestReasonTotalBytes}
+			return Payload{}, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonTotalBytes}
 		}
 		content, err := fetch(entry.Blob)
 		if err != nil {
-			return Payload{}, &ManifestPayloadError{
-				Entry: entry.Path, Reason: ManifestReasonUnavailable, cause: err,
+			return Payload{}, &FileSetPayloadError{
+				Entry: entry.Path, Reason: FileSetReasonUnavailable, cause: err,
 			}
 		}
 		if err := VerifyPayload(content, entry.Blob); err != nil {
-			return Payload{}, &ManifestPayloadError{
-				Entry: entry.Path, Reason: ManifestReasonMismatch, cause: err,
+			return Payload{}, &FileSetPayloadError{
+				Entry: entry.Path, Reason: FileSetReasonMismatch, cause: err,
 			}
 		}
 		resolved = append(resolved, PayloadEntry{
 			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
 		})
 	}
-	return Payload{Form: PayloadFormManifest, Entries: resolved}, nil
+	return Payload{Form: PayloadFormFileSet, Entries: resolved}, nil
 }

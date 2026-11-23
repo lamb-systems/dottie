@@ -113,7 +113,7 @@ func (transport *materialTestTransport) UploadPayload(
 		if transport.uploadErr != nil {
 			return publication.BlobReference{}, transport.uploadErr
 		}
-		return publication.BlobReference{}, errors.New("synthetic manifest upload failure")
+		return publication.BlobReference{}, errors.New("synthetic file-set upload failure")
 	}
 	cid, err := publication.RawPayloadCID(payload)
 	if err != nil {
@@ -306,7 +306,7 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 	if err != nil {
 		return errMaterialTestBatchShape
 	}
-	if snapshot.PayloadForm() == publication.PayloadFormManifest {
+	if snapshot.PayloadForm() == publication.PayloadFormFileSet {
 		for _, entry := range snapshot.Entries {
 			payload, uploaded := transport.blobs[string(entry.Blob.CID)]
 			if !uploaded {

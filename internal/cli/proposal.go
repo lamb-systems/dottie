@@ -152,7 +152,7 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 	if record.CandidateRecordCID, err = decodeHexField(file.CandidateRecordCID); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
-	if record.Form == publication.PayloadFormManifest {
+	if record.Form == publication.PayloadFormFileSet {
 		digest, err := decodeFixedHex(file.CandidateEntryDigest, 32)
 		if err != nil {
 			return service.PublicationProposalRecord{}, errProposalRecordInvalid

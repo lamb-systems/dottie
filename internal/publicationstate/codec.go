@@ -278,13 +278,13 @@ func floorCoreToWire(f Floor) floorCoreWire {
 		RecordCID:         bytes.Clone(f.RecordCID),
 		BlobCID:           bytes.Clone(f.BlobCID),
 		BlobSize:          f.BlobSize,
-		Entries:           manifestPayloadToWire(f.Manifest),
+		Entries:           fileSetPayloadToWire(f.FileSet),
 		ObservationDigest: bytes.Clone(f.ObservationDigest[:]),
 	}
 }
 
 func floorWireVersion(f Floor) uint32 {
-	if f.Manifest != nil {
+	if f.FileSet != nil {
 		return 2
 	}
 	return 1
@@ -353,7 +353,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 		!validText(w.Provenance) {
 		return Floor{}, errors.New("invalid floor")
 	}
-	var manifest *ManifestPayload
+	var fileSet *FileSetPayload
 	switch w.Version {
 	case 1:
 		if len(w.BlobCID) == 0 || w.BlobSize == 0 || len(w.Entries) != 0 {
@@ -363,7 +363,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 		if len(w.BlobCID) != 0 || w.BlobSize != 0 || len(w.Entries) == 0 {
 			return Floor{}, errors.New("invalid floor")
 		}
-		manifest, err = manifestPayloadFromWire(w.Entries)
+		fileSet, err = fileSetPayloadFromWire(w.Entries)
 		if err != nil {
 			return Floor{}, errors.New("invalid floor")
 		}
@@ -390,7 +390,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	floor.RecordCID = bytes.Clone(w.RecordCID)
 	floor.BlobCID = bytes.Clone(w.BlobCID)
 	floor.BlobSize = w.BlobSize
-	floor.Manifest = manifest
+	floor.FileSet = fileSet
 	return floor, nil
 }
 

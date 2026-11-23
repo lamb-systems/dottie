@@ -437,10 +437,10 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 		output.WriteString("accepted floor: none (first publication)\n")
 	}
 	fmt.Fprintf(&output, "candidate record: %x\n", preparation.Proposal.Proposal.CandidateRecordCID)
-	if preparation.Form == publication.PayloadFormManifest {
+	if preparation.Form == publication.PayloadFormFileSet {
 		fmt.Fprintf(
 			&output,
-			"candidate manifest: entries=%d entry-set=%x\n",
+			"candidate file-set: entries=%d entry-set=%x\n",
 			preparation.Record.CandidateEntryCount,
 			preparation.Record.CandidateEntryDigest,
 		)

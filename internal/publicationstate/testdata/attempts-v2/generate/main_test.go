@@ -79,13 +79,13 @@ func generatorPreflightRetainedRow(
 	require.NoError(t, db.Close())
 }
 
-func generatorPreflightManifestRow(t *testing.T, databasePath string) {
+func generatorPreflightFileSetRow(t *testing.T, databasePath string) {
 	t.Helper()
 	cid := make([]byte, 36)
 	cid[0] = 0x01
 	generatorPreflightRetainedRow(t,
 		databasePath,
-		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'manifest',NULL,NULL,?,1)",
+		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'file_set',NULL,NULL,?,1)",
 		cid,
 		generatorPreflightAttemptID(),
 		[]byte("manifest"),
@@ -99,18 +99,18 @@ func generatorPreflightSchema2Statements(t *testing.T) []string {
 	return statements
 }
 
-func TestSchema2RebuildRefusesManifestRetainedRows(t *testing.T) {
+func TestSchema2RebuildRefusesFileSetRetainedRows(t *testing.T) {
 	databasePath := generatorPreflightSource(t)
-	generatorPreflightManifestRow(t, databasePath)
+	generatorPreflightFileSetRow(t, databasePath)
 	_, err := rebuildSchema2(databasePath, generatorPreflightSchema2Statements(t), func(rowInventory) error { return nil })
 	require.ErrorIs(t, err, errUnrepresentableRetainedPublication)
 	_, statErr := os.Stat(databasePath + ".schema2")
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
-func TestSchema2RebuildRefusesManifestRetainedRowsBeforeDestinationCreation(t *testing.T) {
+func TestSchema2RebuildRefusesFileSetRetainedRowsBeforeDestinationCreation(t *testing.T) {
 	databasePath := generatorPreflightSource(t)
-	generatorPreflightManifestRow(t, databasePath)
+	generatorPreflightFileSetRow(t, databasePath)
 	sentinelPath := databasePath + ".schema2"
 	sentinel := []byte("pre-existing schema-2 destination sentinel")
 	require.NoError(t, os.WriteFile(sentinelPath, sentinel, 0o600))
@@ -132,7 +132,7 @@ func TestSchema2RebuildAcceptsPackedRetainedRows(t *testing.T) {
 	)
 	generatorPreflightRetainedRow(t,
 		databasePath,
-		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'packed',?,1,NULL,1)",
+		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'packed',?,1,NULL,1)",
 		cid,
 		generatorPreflightAttemptID(),
 		cid,

@@ -768,10 +768,10 @@ func runSyncPushHalf(
 				"post_pull_candidate_mismatch",
 			)
 		}
-	case publication.PayloadFormManifest:
+	case publication.PayloadFormFileSet:
 		record, err := publication.DecodeSnapshot(candidateMaterial.SnapshotRecord)
 		if err != nil || len(record.Entries) != identity.EntryCount ||
-			service.ManifestEntrySetDigest(record.Entries) != identity.EntrySetDigest {
+			service.FileSetEntrySetDigest(record.Entries) != identity.EntrySetDigest {
 			return syncPushRefusal(
 				command,
 				output,
@@ -895,13 +895,13 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 		floor.SnapshotKey != terminal.Key {
 		return errSyncFloorMismatch
 	}
-	if record.PayloadForm() == publication.PayloadFormManifest {
-		if floor.Manifest == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			len(floor.Manifest.Entries) != len(record.Entries) {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
+		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
+			len(floor.FileSet.Entries) != len(record.Entries) {
 			return errSyncFloorMismatch
 		}
 		for index, entry := range record.Entries {
-			reference := floor.Manifest.Entries[index]
+			reference := floor.FileSet.Entries[index]
 			if reference.Path != entry.Path || reference.Size != entry.Size ||
 				!bytes.Equal(reference.CID, entry.Blob.CID) {
 				return errSyncFloorMismatch
@@ -909,7 +909,7 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 		}
 		return nil
 	}
-	if floor.Manifest != nil || !bytes.Equal(floor.BlobCID, record.Blob.CID) ||
+	if floor.FileSet != nil || !bytes.Equal(floor.BlobCID, record.Blob.CID) ||
 		floor.BlobSize != record.Blob.Size {
 		return errSyncFloorMismatch
 	}
@@ -941,8 +941,8 @@ func syncPreparedMatches(
 		return (record.Form == "" || record.Form == publication.PayloadFormPacked) &&
 			bytes.Equal(record.CandidatePayloadCID, identity.PayloadCID) &&
 			record.CandidatePayloadSize == identity.PayloadSize
-	case publication.PayloadFormManifest:
-		return record.Form == publication.PayloadFormManifest &&
+	case publication.PayloadFormFileSet:
+		return record.Form == publication.PayloadFormFileSet &&
 			record.CandidateEntryCount == identity.EntryCount &&
 			record.CandidateEntryDigest == identity.EntrySetDigest
 	default:
@@ -953,10 +953,10 @@ func syncPreparedMatches(
 func renderSyncPushPreview(identity syncPushIdentity) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "push: form=%s targets=%d entries=%d\n", identity.Form, identity.Targets, identity.Entries)
-	if identity.Form == publication.PayloadFormManifest {
+	if identity.Form == publication.PayloadFormFileSet {
 		fmt.Fprintf(
 			&output,
-			"push: candidate manifest: entries=%d entry-set=%x\n",
+			"push: candidate file-set: entries=%d entry-set=%x\n",
 			identity.EntryCount,
 			identity.EntrySetDigest,
 		)
@@ -1037,7 +1037,7 @@ func prepareSyncPushIdentity(
 	switch form {
 	case publication.PayloadFormPacked:
 		identity.PayloadDigest = syncPayloadDigest(material.Payload)
-	case publication.PayloadFormManifest:
+	case publication.PayloadFormFileSet:
 		record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 		if err != nil {
 			return syncPushIdentity{}, urfave.Exit(
@@ -1046,7 +1046,7 @@ func prepareSyncPushIdentity(
 			)
 		}
 		identity.EntryCount = len(record.Entries)
-		identity.EntrySetDigest = service.ManifestEntrySetDigest(record.Entries)
+		identity.EntrySetDigest = service.FileSetEntrySetDigest(record.Entries)
 	}
 	review, _, guard, err := preview.Reviews.Acquire(ctx)
 	if err != nil {
@@ -1082,8 +1082,8 @@ func syncConfirmationToken(
 	_, _ = digest.Write(observationDigest[:])
 	_, _ = digest.Write(viewDigest[:])
 	var scratch [8]byte
-	if identity.Form == publication.PayloadFormManifest {
-		writeField("dottie/sync/manifest/v1")
+	if identity.Form == publication.PayloadFormFileSet {
+		writeField("dottie/sync/file-set/v1")
 		writeField(string(identity.Form))
 		binary.BigEndian.PutUint64(scratch[:], uint64(identity.EntryCount))
 		_, _ = digest.Write(scratch[:])

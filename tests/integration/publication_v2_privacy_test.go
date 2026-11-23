@@ -1097,7 +1097,7 @@ type publicationPrivacyGuard struct{}
 
 func (publicationPrivacyGuard) Release() {}
 
-func TestPublicationV2ManifestPrivacyGate(t *testing.T) {
+func TestPublicationV2FileSetPrivacyGate(t *testing.T) {
 	nonce := publicationPrivacyNonce(t)
 	fixture := newPublicationPrivacyFixture(t, publicationPrivacyReviewAnchor(nonce), nil)
 	fixture.configuration.Targets = fixture.configuration.Targets[:1]
@@ -1107,9 +1107,9 @@ func TestPublicationV2ManifestPrivacyGate(t *testing.T) {
 
 	result, preparation, err := fixture.publish(t)
 	require.NoError(t, err)
-	require.NotNil(t, result.Floor.Manifest)
+	require.NotNil(t, result.Floor.FileSet)
 	record := fixture.terminalSnapshot(t)
-	assert.Equal(t, publication.PayloadFormManifest, record.PayloadForm())
+	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, record.Entries, 1)
 	assert.Equal(t, publicationPrivacyTrackedFile, record.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), record.Entries[0].Mode)
@@ -1124,13 +1124,13 @@ func TestPublicationV2ManifestPrivacyGate(t *testing.T) {
 
 	for _, stored := range fixture.pds.CurrentRevision().Records {
 		for _, canary := range canaries.allCanaries {
-			assert.NotContains(t, string(stored.Data), string(canary.value), "manifest record exposed candidate bytes")
+			assert.NotContains(t, string(stored.Data), string(canary.value), "file-set record exposed candidate bytes")
 		}
 	}
 	encoded, err := publication.RecordToJSON(fixture.terminalRaw(t))
 	require.NoError(t, err)
 	for _, canary := range canaries.allCanaries {
-		assert.NotContains(t, string(encoded), string(canary.value), "manifest record JSON exposed candidate bytes")
+		assert.NotContains(t, string(encoded), string(canary.value), "file-set record JSON exposed candidate bytes")
 	}
 	assert.Contains(t, string(encoded), `"path":"`+publicationPrivacyTrackedFile+`"`)
 	assert.Contains(t, string(encoded), `"mode":384`)

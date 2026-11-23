@@ -198,12 +198,12 @@ func TestHeadBindingChecksEveryRecordAndPayloadJoin(t *testing.T) {
 }
 
 func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
-	manifest := fixtureManifestRecord(t)
-	manifestBytes, err := EncodeSnapshot(manifest)
+	fileSet := fixtureFileSetRecord(t)
+	fileSetBytes, err := EncodeSnapshot(fileSet)
 	require.NoError(t, err)
-	manifestCID, err := RecordCID(manifestBytes)
+	fileSetCID, err := RecordCID(fileSetBytes)
 	require.NoError(t, err)
-	manifestKey, err := SequenceKey(manifest.PublicationSeq)
+	fileSetKey, err := SequenceKey(fileSet.PublicationSeq)
 	require.NoError(t, err)
 	packed := fixtureSnapshotValue(t)
 	packedBytes, err := EncodeSnapshot(packed)
@@ -213,15 +213,15 @@ func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
 	packedKey, err := SequenceKey(packed.PublicationSeq)
 	require.NoError(t, err)
 
-	manifestHead := HeadRecord{
+	fileSetHead := HeadRecord{
 		SchemaVersion:  SchemaVersion,
-		Vault:          manifest.Vault,
-		PublicationSeq: manifest.PublicationSeq,
-		SnapshotCID:    manifestCID,
+		Vault:          fileSet.Vault,
+		PublicationSeq: fileSet.PublicationSeq,
+		SnapshotCID:    fileSetCID,
 	}
-	manifestHeadBytes, err := EncodeHead(manifestHead)
+	fileSetHeadBytes, err := EncodeHead(fileSetHead)
 	require.NoError(t, err)
-	assert.NoError(t, VerifyHeadBinding(manifestHeadBytes, manifestBytes, manifestKey))
+	assert.NoError(t, VerifyHeadBinding(fileSetHeadBytes, fileSetBytes, fileSetKey))
 
 	packedHead := HeadRecord{
 		SchemaVersion:  SchemaVersion,
@@ -234,29 +234,29 @@ func TestHeadBindingRefusesPayloadFormDisagreement(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, VerifyHeadBinding(packedHeadBytes, packedBytes, packedKey))
 
-	packedHeadOnManifest := packedHead
-	packedHeadOnManifest.Vault = manifest.Vault
-	packedHeadOnManifest.PublicationSeq = manifest.PublicationSeq
-	packedHeadOnManifest.SnapshotCID = manifestCID
-	packedHeadOnManifestBytes, err := EncodeHead(packedHeadOnManifest)
+	packedHeadOnFileSet := packedHead
+	packedHeadOnFileSet.Vault = fileSet.Vault
+	packedHeadOnFileSet.PublicationSeq = fileSet.PublicationSeq
+	packedHeadOnFileSet.SnapshotCID = fileSetCID
+	packedHeadOnFileSetBytes, err := EncodeHead(packedHeadOnFileSet)
 	require.NoError(t, err)
 	requireViolation(
 		t,
-		VerifyHeadBinding(packedHeadOnManifestBytes, manifestBytes, manifestKey),
+		VerifyHeadBinding(packedHeadOnFileSetBytes, fileSetBytes, fileSetKey),
 		ErrPayloadFormMismatch,
 		"blobCid",
-		"manifest_payload",
+		"file_set_payload",
 	)
 
-	manifestHeadOnPacked := manifestHead
-	manifestHeadOnPacked.Vault = packed.Vault
-	manifestHeadOnPacked.PublicationSeq = packed.PublicationSeq
-	manifestHeadOnPacked.SnapshotCID = packedCID
-	manifestHeadOnPackedBytes, err := EncodeHead(manifestHeadOnPacked)
+	fileSetHeadOnPacked := fileSetHead
+	fileSetHeadOnPacked.Vault = packed.Vault
+	fileSetHeadOnPacked.PublicationSeq = packed.PublicationSeq
+	fileSetHeadOnPacked.SnapshotCID = packedCID
+	fileSetHeadOnPackedBytes, err := EncodeHead(fileSetHeadOnPacked)
 	require.NoError(t, err)
 	requireViolation(
 		t,
-		VerifyHeadBinding(manifestHeadOnPackedBytes, packedBytes, packedKey),
+		VerifyHeadBinding(fileSetHeadOnPackedBytes, packedBytes, packedKey),
 		ErrPayloadFormMismatch,
 		"blobCid",
 		"packed_payload",

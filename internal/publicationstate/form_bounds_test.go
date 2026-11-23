@@ -15,30 +15,30 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-const largeManifestEntryCount = int(publication.MaxSnapshotEntries)
+const largeFileSetEntryCount = int(publication.MaxSnapshotEntries)
 
-func largeManifestPaths() []string {
-	paths := make([]string, 0, largeManifestEntryCount)
-	for index := range largeManifestEntryCount {
+func largeFileSetPaths() []string {
+	paths := make([]string, 0, largeFileSetEntryCount)
+	for index := range largeFileSetEntryCount {
 		paths = append(paths, fmt.Sprintf("d%02d.conf", index))
 	}
 	return paths
 }
 
-func oversizedFloorManifestPaths() []string {
-	paths := make([]string, 0, largeManifestEntryCount)
-	for index := range largeManifestEntryCount {
+func oversizedFloorFileSetPaths() []string {
+	paths := make([]string, 0, largeFileSetEntryCount)
+	for index := range largeFileSetEntryCount {
 		paths = append(paths, fmt.Sprintf("%03d-%s.lua", index, strings.Repeat("x", 1010)))
 	}
 	return paths
 }
 
-func newLargeManifestFixture(t *testing.T) manifestAttemptFixture {
+func newLargeFileSetFixture(t *testing.T) fileSetAttemptFixture {
 	t.Helper()
-	return newManifestAttemptFixture(t, largeManifestPaths())
+	return newFileSetAttemptFixture(t, largeFileSetPaths())
 }
 
-func largeManifestRecord(t *testing.T, f manifestAttemptFixture) validatedRecord {
+func largeFileSetRecord(t *testing.T, f fileSetAttemptFixture) validatedRecord {
 	t.Helper()
 	record, err := publication.DecodeSnapshot(f.raw)
 	require.NoError(t, err)
@@ -64,7 +64,7 @@ func insertStoredRecord(t *testing.T, store *Store, table string, record validat
 	require.NoError(t, err)
 }
 
-func seedManifestAcceptedPosition(t *testing.T, store *Store, f manifestAttemptFixture) (Floor, []byte) {
+func seedFileSetAcceptedPosition(t *testing.T, store *Store, f fileSetAttemptFixture) (Floor, []byte) {
 	t.Helper()
 	ctx := context.Background()
 	record, err := publication.DecodeSnapshot(f.raw)
@@ -90,7 +90,7 @@ func seedManifestAcceptedPosition(t *testing.T, store *Store, f manifestAttemptF
 		PublicationID:     record.PublicationID,
 		RecordCID:         bytes.Clone(recordCID),
 		ObservationDigest: observationDigest,
-		Manifest:          manifestPayloadOf(record),
+		FileSet:           fileSetPayloadOf(record),
 	}
 	body, err := makeEventBody(
 		ModeFirstUse,
@@ -141,16 +141,16 @@ func seedManifestAcceptedPosition(t *testing.T, store *Store, f manifestAttemptF
 	return expected, encodedFloor
 }
 
-func TestManifestAcceptedPositionLoadsAfterStoreReopen(t *testing.T) {
+func TestFileSetAcceptedPositionLoadsAfterStoreReopen(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
+	f := newLargeFileSetFixture(t)
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	record, err := publication.DecodeSnapshot(f.raw)
 	require.NoError(t, err)
-	require.Len(t, record.Entries, largeManifestEntryCount)
+	require.Len(t, record.Entries, largeFileSetEntryCount)
 
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
-	expected, encodedFloor := seedManifestAcceptedPosition(t, store, f)
+	expected, encodedFloor := seedFileSetAcceptedPosition(t, store, f)
 	require.LessOrEqual(t, len(encodedFloor), 65536)
 
 	loaded, present, err := store.Load(ctx)
@@ -172,24 +172,24 @@ func TestManifestAcceptedPositionLoadsAfterStoreReopen(t *testing.T) {
 	assert.Equal(t, expected, *state.floor)
 }
 
-func TestManifestAcceptedPositionRefusesOversizedFloor(t *testing.T) {
+func TestFileSetAcceptedPositionRefusesOversizedFloor(t *testing.T) {
 	ctx := context.Background()
-	f := newManifestAttemptFixture(t, oversizedFloorManifestPaths())
+	f := newFileSetAttemptFixture(t, oversizedFloorFileSetPaths())
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	_, encodedFloor := seedManifestAcceptedPosition(t, store, f)
+	_, encodedFloor := seedFileSetAcceptedPosition(t, store, f)
 	require.Greater(t, len(encodedFloor), 65536)
 
 	_, _, err := store.Load(ctx)
 	requireErrorMetadata(t, err, ErrSchema, StageLoad, ReasonCorrupt)
 }
 
-func TestLargeManifestRecordReadsThroughQueryAndVerify(t *testing.T) {
+func TestLargeFileSetRecordReadsThroughQueryAndVerify(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
-	record := largeManifestRecord(t, f)
+	f := newLargeFileSetFixture(t)
+	record := largeFileSetRecord(t, f)
 	require.Greater(t, len(record.raw), publication.MaxRecordBytes)
 
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
@@ -207,15 +207,15 @@ func TestLargeManifestRecordReadsThroughQueryAndVerify(t *testing.T) {
 	}
 }
 
-func TestStoredRecordAboveManifestCeilingIsRefusedBeforeFetch(t *testing.T) {
+func TestStoredRecordAboveFileSetCeilingIsRefusedBeforeFetch(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
-	record := largeManifestRecord(t, f)
+	f := newLargeFileSetFixture(t)
+	record := largeFileSetRecord(t, f)
 
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	oversized := record
-	oversized.raw = make([]byte, publication.MaxManifestRecordBytes+1)
+	oversized.raw = make([]byte, publication.MaxFileSetRecordBytes+1)
 	insertStoredRecord(t, store, "accepted_records", oversized)
 
 	_, err := store.queryRecord(ctx, store.conn, "accepted_records", record.ref.CID, StageLoad)
@@ -249,7 +249,7 @@ func TestPackedShapedRecordAbovePackedLimitIsRefused(t *testing.T) {
 	ctx := context.Background()
 	raw := oversizedPackedShapedRecord(t)
 	require.Greater(t, len(raw), publication.MaxRecordBytes)
-	require.LessOrEqual(t, len(raw), publication.MaxManifestRecordBytes)
+	require.LessOrEqual(t, len(raw), publication.MaxFileSetRecordBytes)
 
 	_, err := publication.DecodeSnapshot(raw)
 	require.Error(t, err)
@@ -258,7 +258,7 @@ func TestPackedShapedRecordAbovePackedLimitIsRefused(t *testing.T) {
 	assert.Equal(t, "record", violation.Field())
 	assert.Equal(t, "size_limit", violation.Reason())
 
-	f := newLargeManifestFixture(t)
+	f := newLargeFileSetFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	packedCID, err := publication.RawPayloadCID(raw)
@@ -291,10 +291,10 @@ func TestPackedShapedRecordAbovePackedLimitIsRefused(t *testing.T) {
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 }
 
-func TestVerifyAcceptedRecordsAuditsLargeManifestReference(t *testing.T) {
+func TestVerifyAcceptedRecordsAuditsLargeFileSetReference(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
-	record := largeManifestRecord(t, f)
+	f := newLargeFileSetFixture(t)
+	record := largeFileSetRecord(t, f)
 	require.Greater(t, len(record.raw), publication.MaxRecordBytes)
 
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
@@ -319,8 +319,8 @@ func TestVerifyAcceptedRecordsAuditsLargeManifestReference(t *testing.T) {
 	)
 }
 
-func TestSuppliedViewAcceptsLargeManifestBlock(t *testing.T) {
-	f := newLargeManifestFixture(t)
+func TestSuppliedViewAcceptsLargeFileSetBlock(t *testing.T) {
+	f := newLargeFileSetFixture(t)
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	view, err := validateSuppliedRepositoryView(
 		SuppliedRepositoryView{
@@ -340,10 +340,10 @@ func TestSuppliedViewAcceptsLargeManifestBlock(t *testing.T) {
 	assert.Equal(t, f.key, view.blocks[0].ref.Key)
 }
 
-func TestLargeManifestRecordReusesAcrossCapacityAndInsert(t *testing.T) {
+func TestLargeFileSetRecordReusesAcrossCapacityAndInsert(t *testing.T) {
 	ctx := context.Background()
-	f := newLargeManifestFixture(t)
-	record := largeManifestRecord(t, f)
+	f := newLargeFileSetFixture(t)
+	record := largeFileSetRecord(t, f)
 	require.Greater(t, len(record.raw), publication.MaxRecordBytes)
 	logical := recordLogicalBytes(record)
 
@@ -402,8 +402,8 @@ func TestLargeManifestRecordReusesAcrossCapacityAndInsert(t *testing.T) {
 	)
 }
 
-func TestObservationRefusesLargeManifestWithTypedPayloadFormError(t *testing.T) {
-	f := newLargeManifestFixture(t)
+func TestObservationRefusesLargeFileSetWithTypedPayloadFormError(t *testing.T) {
+	f := newLargeFileSetFixture(t)
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	_, err := validateObservation(
 		Observation{

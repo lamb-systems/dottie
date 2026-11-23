@@ -671,8 +671,8 @@ func TestSyncUnconfirmedPrintsBothHalvesAndChangesNothing(t *testing.T) {
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=1")
 	assert.Contains(t, stdout, "apply: write a.txt")
-	assert.Contains(t, stdout, "push: form=manifest targets=1 entries=2")
-	assert.Contains(t, stdout, "push: candidate manifest:")
+	assert.Contains(t, stdout, "push: form=file_set targets=1 entries=2")
+	assert.Contains(t, stdout, "push: candidate file-set:")
 	assert.Contains(t, stdout, "confirmation: ")
 	assert.Contains(t, stdout, "sync: plan only; nothing was applied or published; repeat with --confirm ")
 	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"), "the unconfirmed run applied the pull half")
@@ -1212,7 +1212,7 @@ func syncTestTerminalSnapshot(t *testing.T, fixture *syncTestFixture) model.Snap
 	raw := fixture.terminal(t)
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
-	if record.PayloadForm() == publication.PayloadFormManifest {
+	if record.PayloadForm() == publication.PayloadFormFileSet {
 		target := model.Target{
 			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
@@ -1226,7 +1226,7 @@ func syncTestTerminalSnapshot(t *testing.T, fixture *syncTestFixture) model.Snap
 				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
 			})
 		}
-		snapshot, err := service.ProjectManifestSnapshot(target, entries)
+		snapshot, err := service.ProjectFileSetSnapshot(target, entries)
 		require.NoError(t, err)
 		return snapshot
 	}
@@ -1488,17 +1488,17 @@ func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 	)
 }
 
-func TestSyncConfirmationTokenBindsTheManifestEntrySet(t *testing.T) {
+func TestSyncConfirmationTokenBindsTheFileSetEntrySet(t *testing.T) {
 	binding := publicationstate.Binding{
 		AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62},
 	}
 	binding.Repository = "at://" + binding.AccountDID
-	plan := sha256.Sum256([]byte("manifest plan"))
-	stateToken := sha256.Sum256([]byte("manifest state"))
-	observation := sha256.Sum256([]byte("manifest observation"))
-	view := sha256.Sum256([]byte("manifest view"))
+	plan := sha256.Sum256([]byte("file-set plan"))
+	stateToken := sha256.Sum256([]byte("file-set state"))
+	observation := sha256.Sum256([]byte("file-set observation"))
+	view := sha256.Sum256([]byte("file-set view"))
 	identity := syncPushIdentity{
-		Form:           publication.PayloadFormManifest,
+		Form:           publication.PayloadFormFileSet,
 		EntryCount:     2,
 		EntrySetDigest: [32]byte{0x01},
 		Targets:        1,

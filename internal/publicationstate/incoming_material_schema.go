@@ -10,14 +10,14 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-const incomingMaterialSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), manifest BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND manifest IS NOT NULL)))"
+const incomingMaterialSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','file_set')), blob_cid BLOB REFERENCES payload_objects(blob_cid), file_set BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND file_set IS NULL) OR (form = 'file_set' AND blob_cid IS NULL AND file_set IS NOT NULL)))"
 
 type incomingMaterialRef struct {
-	revision       int64
-	recordCID      []byte
-	form           PayloadForm
-	blobCID        []byte
-	manifestLength int64
+	revision      int64
+	recordCID     []byte
+	form          PayloadForm
+	blobCID       []byte
+	fileSetLength int64
 }
 
 func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage Stage) error {
@@ -40,7 +40,7 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 	}
 	rows, err := q.QueryContext(
 		ctx,
-		"SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(manifest),length(CAST(manifest AS BLOB)) FROM accepted_material_refs ORDER BY accepted_revision LIMIT ?",
+		"SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(file_set),length(CAST(file_set AS BLOB)) FROM accepted_material_refs ORDER BY accepted_revision LIMIT ?",
 		int64(s.limits.AcceptedEventCount)+1,
 	)
 	if err != nil {
@@ -69,8 +69,8 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 		blobType, blobTypeOK := values[8].(string)
 		blobLength, blobLengthOK := rawInt64(values[9])
 		blobCID, blobCIDOK := rawBytes(values[10])
-		manifestType, manifestTypeOK := values[11].(string)
-		manifestLength, manifestLengthOK := rawInt64(values[12])
+		fileSetType, fileSetTypeOK := values[11].(string)
+		fileSetLength, fileSetLengthOK := rawInt64(values[12])
 		if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 ||
 			uint64(revision) > publication.MaxSequence {
 			return classified(ErrSchema, stage, ReasonCorrupt)
@@ -91,16 +91,16 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 				blobLength > publication.MaxCIDBytes ||
 				!blobCIDOK ||
 				int64(len(blobCID)) != blobLength ||
-				!manifestTypeOK || manifestType != "null" {
+				!fileSetTypeOK || fileSetType != "null" {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
 			ref.blobCID = bytes.Clone(blobCID)
-		case PayloadFormManifest:
-			if blobType != "null" || !manifestTypeOK || manifestType != "blob" ||
-				!manifestLengthOK || manifestLength < 1 || manifestLength > publication.MaxManifestRecordBytes {
+		case PayloadFormFileSet:
+			if blobType != "null" || !fileSetTypeOK || fileSetType != "blob" ||
+				!fileSetLengthOK || fileSetLength < 1 || fileSetLength > publication.MaxFileSetRecordBytes {
 				return classified(ErrSchema, stage, ReasonCorrupt)
 			}
-			ref.manifestLength = manifestLength
+			ref.fileSetLength = fileSetLength
 		default:
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
@@ -119,7 +119,7 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 	if len(refs) != int(refCount) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	cache := make(manifestCatalogCache)
+	cache := make(fileSetCatalogCache)
 	for _, ref := range refs {
 		if err := s.checkIncomingMaterialRef(ctx, q, ref, stage, cache); err != nil {
 			return err
@@ -133,7 +133,7 @@ func (s *Store) checkIncomingMaterialRef(
 	q queryer,
 	ref incomingMaterialRef,
 	stage Stage,
-	cache manifestCatalogCache,
+	cache fileSetCatalogCache,
 ) error {
 	retainedCount, err := queryInt64(
 		ctx,
@@ -178,22 +178,22 @@ func (s *Store) checkIncomingMaterialRef(
 		!bytes.Equal(floor.AcceptedEventDigest[:], digestRaw) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if floor.Manifest == nil {
+	if floor.FileSet == nil {
 		if ref.form != PayloadFormPacked || !bytes.Equal(floor.BlobCID, ref.blobCID) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 	} else {
-		if ref.form != PayloadFormManifest || len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
+		if ref.form != PayloadFormFileSet || len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		expected, err := encodeRetainedManifest(floor.Manifest)
+		expected, err := encodeRetainedFileSet(floor.FileSet)
 		if err != nil {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		stored, err := queryInt64(
 			ctx,
 			q,
-			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=? AND manifest=?",
+			"SELECT COUNT(*) FROM accepted_material_refs WHERE accepted_revision=? AND file_set=?",
 			ref.revision,
 			expected,
 		)
@@ -209,7 +209,7 @@ func (s *Store) checkIncomingMaterialRef(
 		ctx,
 		fmt.Sprintf(
 			"SELECT typeof(cid),length(CAST(cid AS BLOB)),substr(CAST(cid AS BLOB),1,129),typeof(record_key),length(CAST(record_key AS BLOB)),substr(CAST(record_key AS BLOB),1,17),typeof(sequence),CASE WHEN typeof(sequence)='integer' THEN sequence END,typeof(raw),length(CAST(raw AS BLOB)),substr(CAST(raw AS BLOB),1,%d),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM accepted_records WHERE cid=?",
-			publication.MaxManifestRecordBytes+1,
+			publication.MaxFileSetRecordBytes+1,
 		),
 		ref.recordCID,
 	).
@@ -247,7 +247,7 @@ func (s *Store) checkIncomingMaterialRef(
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if !recordRawTypeOK || recordRawType != "blob" || !recordRawLengthOK || recordRawLength < 1 ||
-		recordRawLength > publication.MaxManifestRecordBytes ||
+		recordRawLength > publication.MaxFileSetRecordBytes ||
 		!recordRawOK ||
 		int64(len(recordRaw)) != recordRawLength {
 		return classified(ErrSchema, stage, ReasonCorrupt)
@@ -279,8 +279,8 @@ func (s *Store) checkIncomingMaterialRef(
 	if publication.VerifyHeadBinding(floor.Head, record.raw, floor.SnapshotKey) != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if ref.form == PayloadFormManifest {
-		return s.checkIncomingManifestCatalog(ctx, q, floor.Manifest, stage, cache)
+	if ref.form == PayloadFormFileSet {
+		return s.checkIncomingFileSetCatalog(ctx, q, floor.FileSet, stage, cache)
 	}
 	object, err := s.readPayloadCatalogRow(ctx, q, ref.blobCID, stage)
 	if err != nil {
@@ -303,7 +303,7 @@ type payloadCatalogObject struct {
 	name string
 }
 
-type manifestCatalogCache map[string]payloadCatalogObject
+type fileSetCatalogCache map[string]payloadCatalogObject
 
 func (s *Store) readPayloadCatalogRow(ctx context.Context, q queryer, blobCID []byte, stage Stage) (payloadCatalogObject, error) {
 	var cidTypeValue, cidLengthValue, cidValue, sizeTypeValue, sizeValue, nameTypeValue, nameLengthValue, nameValue, logicalTypeValue, logicalValue any
@@ -345,19 +345,19 @@ func (s *Store) readPayloadCatalogRow(ctx context.Context, q queryer, blobCID []
 	return payloadCatalogObject{cid: bytes.Clone(cid), size: size, name: string(nameBytes)}, nil
 }
 
-func (s *Store) checkIncomingManifestCatalog(
+func (s *Store) checkIncomingFileSetCatalog(
 	ctx context.Context,
 	q queryer,
-	manifest *ManifestPayload,
+	fileSet *FileSetPayload,
 	stage Stage,
-	cache manifestCatalogCache,
+	cache fileSetCatalogCache,
 ) error {
-	if manifest == nil || len(manifest.Entries) == 0 || len(manifest.Entries) > publication.MaxSnapshotEntries {
+	if fileSet == nil || len(fileSet.Entries) == 0 || len(fileSet.Entries) > publication.MaxSnapshotEntries {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	seen := cache
-	for _, entry := range manifest.Entries {
-		key := manifestCatalogKey(entry)
+	for _, entry := range fileSet.Entries {
+		key := fileSetCatalogKey(entry)
 		if _, verified := seen[key]; verified {
 			continue
 		}
@@ -377,6 +377,6 @@ func (s *Store) checkIncomingManifestCatalog(
 	return nil
 }
 
-func manifestCatalogKey(entry PayloadEntryReference) string {
+func fileSetCatalogKey(entry PayloadEntryReference) string {
 	return string(entry.CID) + "\x00" + fmt.Sprint(entry.Size)
 }

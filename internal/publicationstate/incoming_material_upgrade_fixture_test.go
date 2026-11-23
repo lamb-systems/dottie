@@ -1214,21 +1214,21 @@ func incomingMaterialUpgradeFixtureSchema2RetainedDDL() string {
 
 func incomingMaterialUpgradeFixtureRequirePackedRetained(t *testing.T, ctx context.Context, q queryer) {
 	t.Helper()
-	rows, err := q.QueryContext(ctx, "SELECT record_cid,form,blob_cid,size,manifest FROM retained_publications ORDER BY record_cid")
+	rows, err := q.QueryContext(ctx, "SELECT record_cid,form,blob_cid,size,file_set FROM retained_publications ORDER BY record_cid")
 	require.NoError(t, err)
 	seen := 0
 	for rows.Next() {
 		var recordCID []byte
 		var form string
-		var blobCID, size, manifest any
-		require.NoError(t, rows.Scan(&recordCID, &form, &blobCID, &size, &manifest))
+		var blobCID, size, fileSet any
+		require.NoError(t, rows.Scan(&recordCID, &form, &blobCID, &size, &fileSet))
 		require.NotEmpty(t, recordCID)
 		require.Equal(t, string(PayloadFormPacked), form)
 		require.IsType(t, []byte{}, blobCID)
 		require.NotEmpty(t, blobCID)
 		require.IsType(t, int64(0), size)
 		require.Positive(t, size)
-		require.Nil(t, manifest)
+		require.Nil(t, fileSet)
 		seen++
 	}
 	require.NoError(t, rows.Err())

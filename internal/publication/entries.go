@@ -13,32 +13,32 @@ import (
 )
 
 const (
-	MaxSnapshotEntries     = 64
-	MaxEntryPathBytes      = 1024
-	MaxManifestRecordBytes = 1 << 20
-	SnapshotEntryKindFile  = "file"
+	MaxSnapshotEntries    = 64
+	MaxEntryPathBytes     = 1024
+	MaxFileSetRecordBytes = 1 << 20
+	SnapshotEntryKindFile = "file"
 
 	maxEntryModeBits = 0o777
 	entryModePrivate = 0o600
 	entryModeShared  = 0o644
 )
 
-var ErrManifestEntryUnsupported = errors.New("publication manifest entry unsupported")
+var ErrFileSetEntryUnsupported = errors.New("publication file-set entry unsupported")
 
-type ManifestEntryError struct {
+type FileSetEntryError struct {
 	Entry  model.EntryKey
 	Field  string
 	Reason string
 	cause  error
 }
 
-func (e *ManifestEntryError) Error() string {
-	return "publication manifest entry: " + e.Field + ": " + e.Reason
+func (e *FileSetEntryError) Error() string {
+	return "publication file-set entry: " + e.Field + ": " + e.Reason
 }
 
-func (e *ManifestEntryError) Is(target error) bool { return target == ErrManifestEntryUnsupported }
+func (e *FileSetEntryError) Is(target error) bool { return target == ErrFileSetEntryUnsupported }
 
-func (e *ManifestEntryError) Unwrap() error { return e.cause }
+func (e *FileSetEntryError) Unwrap() error { return e.cause }
 
 type SnapshotEntry struct {
 	Path string
@@ -53,7 +53,7 @@ func SnapshotEntries(snapshot model.Snapshot) ([]SnapshotEntry, error) {
 	for _, entry := range snapshot.Entries {
 		representable, err := snapshotEntry(entry)
 		if err != nil {
-			return nil, manifestEntryViolationFor(entry, err)
+			return nil, fileSetEntryViolationFor(entry, err)
 		}
 		entries = append(entries, representable)
 	}
@@ -61,37 +61,37 @@ func SnapshotEntries(snapshot model.Snapshot) ([]SnapshotEntry, error) {
 		return strings.Compare(left.Path, right.Path)
 	})
 	if err := validateEntries(entries); err != nil {
-		return nil, manifestEntryViolation(err)
+		return nil, fileSetEntryViolation(err)
 	}
 	return entries, nil
 }
 
 func snapshotEntry(entry model.Entry) (SnapshotEntry, error) {
 	if entry.Setting != nil {
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.setting", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.setting", "unsupported")
 	}
 	file := entry.File
 	if file == nil {
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.entry", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.entry", "unsupported")
 	}
 	switch file.State {
 	case model.FileDeleted:
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.deleted", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.deleted", "unsupported")
 	case model.FilePresent:
 	default:
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.state", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.state", "unsupported")
 	}
 	switch file.Kind {
 	case model.FileRegular:
 	case model.FileDirectory:
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.directory", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.directory", "unsupported")
 	case model.FileSymlink:
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.symlink", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.symlink", "unsupported")
 	default:
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.kind", "unsupported")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.kind", "unsupported")
 	}
 	if len(file.Content) == 0 {
-		return SnapshotEntry{}, violation(ErrManifestEntryUnsupported, "entries.size", "empty")
+		return SnapshotEntry{}, violation(ErrFileSetEntryUnsupported, "entries.size", "empty")
 	}
 	blobCID, err := RawPayloadCID(file.Content)
 	if err != nil {
@@ -291,19 +291,19 @@ func decodeSnapshotEntry(value any) (SnapshotEntry, error) {
 	}, nil
 }
 
-func manifestEntryViolation(err error) error {
+func fileSetEntryViolation(err error) error {
 	if violationErr, ok := errors.AsType[*ViolationError](err); ok {
-		return violation(ErrManifestEntryUnsupported, violationErr.Field(), violationErr.Reason())
+		return violation(ErrFileSetEntryUnsupported, violationErr.Field(), violationErr.Reason())
 	}
 	return err
 }
 
-func manifestEntryViolationFor(entry model.Entry, err error) error {
+func fileSetEntryViolationFor(entry model.Entry, err error) error {
 	violationErr, ok := errors.AsType[*ViolationError](err)
 	if !ok {
 		return err
 	}
-	return &ManifestEntryError{
+	return &FileSetEntryError{
 		Entry: entry.Identity(), Field: violationErr.Field(), Reason: violationErr.Reason(), cause: err,
 	}
 }

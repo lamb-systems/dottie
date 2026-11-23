@@ -20,12 +20,12 @@ type materialEntry struct {
 }
 
 type materialAttachment struct {
-	form     PayloadForm
-	payload  []byte
-	blob     publication.BlobReference
-	name     string
-	manifest *ManifestPayload
-	entries  []materialEntry
+	form    PayloadForm
+	payload []byte
+	blob    publication.BlobReference
+	name    string
+	fileSet *FileSetPayload
+	entries []materialEntry
 }
 
 func (s *Store) AcceptMaterial(
@@ -211,8 +211,8 @@ func (s *Store) verifyOwnedMaterial(
 	if owner.form != material.form || !bytes.Equal(owner.record, expectedRecord) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if owner.form == PayloadFormManifest {
-		if !sameManifestPayload(owner.manifest, material.manifest) {
+	if owner.form == PayloadFormFileSet {
+		if !sameFileSetPayload(owner.fileSet, material.fileSet) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 	} else if owner.name != material.name || !bytes.Equal(owner.blob.CID, material.blob.CID) ||
@@ -222,8 +222,8 @@ func (s *Store) verifyOwnedMaterial(
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return classifyAcceptedMaterialDirectory(err, stage)
 	}
-	if owner.form == PayloadFormManifest {
-		return s.verifyManifestMaterialCustody(ctx, material)
+	if owner.form == PayloadFormFileSet {
+		return s.verifyFileSetMaterialCustody(ctx, material)
 	}
 	if _, err := s.inspectPayloadFile(owner.name, nil, owner.blob); err != nil {
 		return classifyMaterialCustody(err)
@@ -231,7 +231,7 @@ func (s *Store) verifyOwnedMaterial(
 	return nil
 }
 
-func (s *Store) verifyManifestMaterialCustody(ctx context.Context, material materialAttachment) error {
+func (s *Store) verifyFileSetMaterialCustody(ctx context.Context, material materialAttachment) error {
 	seen := make(map[string]bool, len(material.entries))
 	for _, entry := range material.entries {
 		key := string(entry.blob.CID)
@@ -246,7 +246,7 @@ func (s *Store) verifyManifestMaterialCustody(ctx context.Context, material mate
 		if err != nil || !validPayloadBasename(name) {
 			return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 		}
-		if _, err := s.inspectCustodyObject(name, nil, entry.blob, PayloadFormManifest); err != nil {
+		if _, err := s.inspectCustodyObject(name, nil, entry.blob, PayloadFormFileSet); err != nil {
 			return classifyMaterialCustody(err)
 		}
 	}
@@ -259,8 +259,8 @@ func (s *Store) attachIncomingMaterialTx(
 	floor Floor,
 	material materialAttachment,
 ) error {
-	if material.form == PayloadFormManifest {
-		return s.attachIncomingManifestTx(ctx, tx, floor, material)
+	if material.form == PayloadFormFileSet {
+		return s.attachIncomingFileSetTx(ctx, tx, floor, material)
 	}
 	if err := s.checkPayloadCapacityWithQueryer(ctx, tx, material.name, material.blob.Size, true); err != nil {
 		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)
@@ -283,7 +283,7 @@ func (s *Store) attachIncomingMaterialTx(
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'packed',?,NULL)",
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',?,NULL)",
 		int64(floor.Revision),
 		floor.RecordCID,
 		floor.BlobCID,
@@ -293,13 +293,13 @@ func (s *Store) attachIncomingMaterialTx(
 	return nil
 }
 
-func (s *Store) attachIncomingManifestTx(
+func (s *Store) attachIncomingFileSetTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	floor Floor,
 	material materialAttachment,
 ) error {
-	if err := s.checkIncomingManifestCapacity(ctx, tx, material); err != nil {
+	if err := s.checkIncomingFileSetCapacity(ctx, tx, material); err != nil {
 		return err
 	}
 	seen := make(map[string]bool, len(material.entries))
@@ -310,7 +310,7 @@ func (s *Store) attachIncomingManifestTx(
 		}
 		seen[key] = true
 		name := payloadBasename(entry.content)
-		if _, _, err := s.persistPayloadObject(ctx, tx, entry.content, entry.blob, name, PayloadFormManifest); err != nil {
+		if _, _, err := s.persistPayloadObject(ctx, tx, entry.content, entry.blob, name, PayloadFormFileSet); err != nil {
 			return classifyMaterialCustody(err)
 		}
 		if _, err := tx.ExecContext(
@@ -327,23 +327,23 @@ func (s *Store) attachIncomingManifestTx(
 			return err
 		}
 	}
-	manifest, err := encodeRetainedManifest(material.manifest)
+	fileSet, err := encodeRetainedFileSet(material.fileSet)
 	if err != nil {
 		return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,manifest) VALUES(?,?,'manifest',NULL,?)",
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'file_set',NULL,?)",
 		int64(floor.Revision),
 		floor.RecordCID,
-		manifest,
+		fileSet,
 	); err != nil {
 		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	return nil
 }
 
-func (s *Store) checkIncomingManifestCapacity(ctx context.Context, q queryer, material materialAttachment) error {
+func (s *Store) checkIncomingFileSetCapacity(ctx context.Context, q queryer, material materialAttachment) error {
 	objects := make(map[string]uint64, len(material.entries))
 	for _, entry := range material.entries {
 		name := payloadBasename(entry.content)

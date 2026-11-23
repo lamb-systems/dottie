@@ -109,7 +109,7 @@ func validateSuppliedRepositoryView(
 	publicBlocks := make([]SnapshotBlock, 0, len(input.Snapshots))
 	var vault [32]byte
 	for index, block := range input.Snapshots {
-		if len(block.Raw) == 0 || len(block.Raw) > publication.MaxManifestRecordBytes {
+		if len(block.Raw) == 0 || len(block.Raw) > publication.MaxFileSetRecordBytes {
 			return validatedRepositoryView{}, classified(ErrLimit, StageInput, ReasonRecordSet)
 		}
 		total += uint64(len(block.Raw))
@@ -230,11 +230,11 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 		snapshotRaw: bytes.Clone(input.SnapshotRecord),
 		headRaw:     bytes.Clone(input.HeadRecord),
 	}
-	if form == PayloadFormManifest {
+	if form == PayloadFormFileSet {
 		if len(input.Payload) != 0 {
 			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		entries, err := validateManifestCandidateEntries(input, snapshot, limits)
+		entries, err := validateFileSetCandidateEntries(input, snapshot, limits)
 		if err != nil {
 			return validatedCandidate{}, err
 		}
@@ -256,20 +256,20 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 	return candidate, nil
 }
 
-func validateManifestCandidateEntries(
+func validateFileSetCandidateEntries(
 	input CandidateInput,
 	snapshot publication.SnapshotRecord,
 	limits AttemptLimits,
 ) ([]validatedPayloadEntry, error) {
-	manifest := &ManifestPayload{Entries: make([]PayloadEntryReference, 0, len(snapshot.Entries))}
+	fileSet := &FileSetPayload{Entries: make([]PayloadEntryReference, 0, len(snapshot.Entries))}
 	for _, entry := range snapshot.Entries {
-		manifest.Entries = append(manifest.Entries, PayloadEntryReference{
+		fileSet.Entries = append(fileSet.Entries, PayloadEntryReference{
 			Path: entry.Path,
 			CID:  bytes.Clone(entry.Blob.CID),
 			Size: entry.Size,
 		})
 	}
-	if err := validateManifestPayloadCustody(manifest, limits); err != nil {
+	if err := validateFileSetPayloadCustody(fileSet, limits); err != nil {
 		return nil, err
 	}
 	if len(input.Entries) != len(snapshot.Entries) {
@@ -473,7 +473,7 @@ func (s *Store) checkFirstConflictSlotFeasibility(
 	stage Stage,
 ) error {
 	occupant := candidate.snapshot
-	if candidate.form == PayloadFormManifest {
+	if candidate.form == PayloadFormFileSet {
 		occupant.Entries = append([]publication.SnapshotEntry(nil), occupant.Entries...)
 		for index := range occupant.Entries {
 			occupant.Entries[index].Size = publication.MaxBlobBytes
@@ -576,8 +576,8 @@ func (s *Store) checkFinalizationFeasibility(
 		BlobSize:          candidate.snapshot.Blob.Size,
 		ObservationDigest: [32]byte{1},
 	}
-	if candidate.form == PayloadFormManifest {
-		next.Manifest = manifestPayloadOf(candidate.snapshot)
+	if candidate.form == PayloadFormFileSet {
+		next.FileSet = fileSetPayloadOf(candidate.snapshot)
 	}
 	if state.floor == nil {
 		next.Generation = 1

@@ -108,12 +108,12 @@ var indexSpecs = []schemaObjectSpec{
 
 var schema3AcceptedMaterialRefsSpec = tableSpec{
 	Name: "accepted_material_refs",
-	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), manifest BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND manifest IS NOT NULL)))",
+	DDL:  "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','file_set')), blob_cid BLOB REFERENCES payload_objects(blob_cid), file_set BLOB, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND file_set IS NULL) OR (form = 'file_set' AND blob_cid IS NULL AND file_set IS NOT NULL)))",
 }
 
 var schema3RetainedPublicationsSpec = tableSpec{
 	Name: "retained_publications",
-	DDL:  "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','manifest')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, manifest BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND manifest IS NULL) OR (form = 'manifest' AND blob_cid IS NULL AND size IS NULL AND manifest IS NOT NULL)))",
+	DDL:  "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','file_set')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, file_set BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND file_set IS NULL) OR (form = 'file_set' AND blob_cid IS NULL AND size IS NULL AND file_set IS NOT NULL)))",
 	Columns: []columnSpec{
 		{"record_cid", "BLOB"},
 		{"attempt_id", "BLOB"},
@@ -121,7 +121,7 @@ var schema3RetainedPublicationsSpec = tableSpec{
 		{"form", "TEXT"},
 		{"blob_cid", "BLOB"},
 		{"size", "INTEGER"},
-		{"manifest", "BLOB"},
+		{"file_set", "BLOB"},
 		{"accepted_revision", "INTEGER"},
 	},
 	OrderBy: "record_cid",
@@ -6858,7 +6858,7 @@ func inspectSchema3Source(databasePath string) error {
 		return errors.New("lifecycle engine database holds material references that schema 2 cannot represent")
 	}
 	var unrepresentable int64
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE form <> 'packed' OR blob_cid IS NULL OR size IS NULL OR manifest IS NOT NULL").Scan(&unrepresentable); err != nil || unrepresentable != 0 {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE form <> 'packed' OR blob_cid IS NULL OR size IS NULL OR file_set IS NOT NULL").Scan(&unrepresentable); err != nil || unrepresentable != 0 {
 		return errUnrepresentableRetainedPublication
 	}
 	return nil

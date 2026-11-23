@@ -30,7 +30,7 @@ func newPayloadFetchMap() *payloadFetchMap {
 	return &payloadFetchMap{blobs: map[string][]byte{}, fails: map[string]error{}}
 }
 
-func (source *payloadFetchMap) serveManifest(record SnapshotRecord, contents map[string][]byte) {
+func (source *payloadFetchMap) serveFileSet(record SnapshotRecord, contents map[string][]byte) {
 	for _, entry := range record.Entries {
 		source.blobs[string(entry.Blob.CID)] = bytes.Clone(contents[entry.Path])
 	}
@@ -52,16 +52,16 @@ func payloadLimits() PayloadLimits {
 	return PayloadLimits{MaxEntries: 512, MaxEntryBytes: 8 << 20, MaxTotalBytes: 64 << 20}
 }
 
-type manifestFile struct {
+type fileSetFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-func newManifestPayloadFixture(t *testing.T, files ...manifestFile) (SnapshotRecord, map[string][]byte) {
+func newFileSetPayloadFixture(t *testing.T, files ...fileSetFile) (SnapshotRecord, map[string][]byte) {
 	t.Helper()
 	sorted := slices.Clone(files)
-	slices.SortFunc(sorted, func(left, right manifestFile) int {
+	slices.SortFunc(sorted, func(left, right fileSetFile) int {
 		return strings.Compare(left.path, right.path)
 	})
 	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID()}
@@ -73,12 +73,12 @@ func newManifestPayloadFixture(t *testing.T, files ...manifestFile) (SnapshotRec
 	return record, contents
 }
 
-func defaultManifestPayloadFixture(t *testing.T) (SnapshotRecord, map[string][]byte) {
+func defaultFileSetPayloadFixture(t *testing.T) (SnapshotRecord, map[string][]byte) {
 	t.Helper()
-	return newManifestPayloadFixture(
+	return newFileSetPayloadFixture(
 		t,
-		manifestFile{path: "init.lua", mode: 0o600, content: []byte("manifest init")},
-		manifestFile{path: "lua/config/options.lua", mode: 0o644, content: []byte("manifest options")},
+		fileSetFile{path: "init.lua", mode: 0o600, content: []byte("file-set init")},
+		fileSetFile{path: "lua/config/options.lua", mode: 0o644, content: []byte("file-set options")},
 	)
 }
 
@@ -120,14 +120,14 @@ func TestResolvePayloadReadsPackedThroughTheBlobReference(t *testing.T) {
 	assert.Equal(t, snapshot, resolved)
 }
 
-func TestResolvePayloadReadsManifestEntriesWithPathsModesAndSizes(t *testing.T) {
-	record, contents := defaultManifestPayloadFixture(t)
+func TestResolvePayloadReadsFileSetEntriesWithPathsModesAndSizes(t *testing.T) {
+	record, contents := defaultFileSetPayloadFixture(t)
 	source := newPayloadFetchMap()
-	source.serveManifest(record, contents)
+	source.serveFileSet(record, contents)
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	require.NoError(t, err)
-	assert.Equal(t, PayloadFormManifest, payload.Form)
+	assert.Equal(t, PayloadFormFileSet, payload.Form)
 	assert.Equal(t, model.Snapshot{}, payload.Snapshot)
 	require.Len(t, payload.Entries, len(record.Entries))
 	for index, entry := range record.Entries {
@@ -140,11 +140,11 @@ func TestResolvePayloadReadsManifestEntriesWithPathsModesAndSizes(t *testing.T) 
 
 	snapshot, err := payload.PackedSnapshot()
 	assert.Equal(t, model.Snapshot{}, snapshot)
-	require.ErrorIs(t, err, ErrManifestPayload)
+	require.ErrorIs(t, err, ErrFileSetPayload)
 }
 
-func TestResolvePayloadRefusesAMissingManifestEntryNamingThePath(t *testing.T) {
-	record, contents := defaultManifestPayloadFixture(t)
+func TestResolvePayloadRefusesAMissingFileSetEntryNamingThePath(t *testing.T) {
+	record, contents := defaultFileSetPayloadFixture(t)
 	missing := record.Entries[1]
 	source := newPayloadFetchMap()
 	source.blobs[string(record.Entries[0].Blob.CID)] = contents[record.Entries[0].Path]
@@ -152,18 +152,18 @@ func TestResolvePayloadRefusesAMissingManifestEntryNamingThePath(t *testing.T) {
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrManifestPayload)
+	require.ErrorIs(t, err, ErrFileSetPayload)
 	require.ErrorIs(t, err, errPayloadFetchMissing)
-	var refusal *ManifestPayloadError
+	var refusal *FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, missing.Path, refusal.EntryPath())
-	assert.Equal(t, ManifestReasonUnavailable, refusal.Reason)
+	assert.Equal(t, FileSetReasonUnavailable, refusal.Reason)
 	assert.Contains(t, err.Error(), missing.Path)
 	require.Len(t, source.fetched, 2)
 }
 
-func TestResolvePayloadRefusesAManifestEntrySizeMismatchNamingTheEntry(t *testing.T) {
-	record, contents := defaultManifestPayloadFixture(t)
+func TestResolvePayloadRefusesAFileSetEntrySizeMismatchNamingTheEntry(t *testing.T) {
+	record, contents := defaultFileSetPayloadFixture(t)
 	mismatched := record.Entries[1]
 	short := bytes.Clone(contents[mismatched.Path])
 	short = short[:len(short)-1]
@@ -173,20 +173,20 @@ func TestResolvePayloadRefusesAManifestEntrySizeMismatchNamingTheEntry(t *testin
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrManifestPayload)
+	require.ErrorIs(t, err, ErrFileSetPayload)
 	require.ErrorIs(t, err, ErrPayload)
-	var refusal *ManifestPayloadError
+	var refusal *FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, mismatched.Path, refusal.EntryPath())
-	assert.Equal(t, ManifestReasonMismatch, refusal.Reason)
+	assert.Equal(t, FileSetReasonMismatch, refusal.Reason)
 	var violationErr *ViolationError
 	require.ErrorAs(t, err, &violationErr)
 	assert.Equal(t, "blob.size", violationErr.Field())
 	assert.Equal(t, "mismatch", violationErr.Reason())
 }
 
-func TestResolvePayloadRefusesAManifestEntryCIDMismatchNamingTheEntry(t *testing.T) {
-	record, contents := defaultManifestPayloadFixture(t)
+func TestResolvePayloadRefusesAFileSetEntryCIDMismatchNamingTheEntry(t *testing.T) {
+	record, contents := defaultFileSetPayloadFixture(t)
 	mismatched := record.Entries[1]
 	substitute := bytes.Clone(contents[mismatched.Path])
 	substitute[0] ^= 0xff
@@ -196,26 +196,26 @@ func TestResolvePayloadRefusesAManifestEntryCIDMismatchNamingTheEntry(t *testing
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	assert.Equal(t, Payload{}, payload)
-	require.ErrorIs(t, err, ErrManifestPayload)
-	var refusal *ManifestPayloadError
+	require.ErrorIs(t, err, ErrFileSetPayload)
+	var refusal *FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, mismatched.Path, refusal.EntryPath())
-	assert.Equal(t, ManifestReasonMismatch, refusal.Reason)
+	assert.Equal(t, FileSetReasonMismatch, refusal.Reason)
 	var violationErr *ViolationError
 	require.ErrorAs(t, err, &violationErr)
 	assert.Equal(t, "blob.ref", violationErr.Field())
 }
 
-func TestResolvePayloadRefusesManifestPayloadsBeyondItsBounds(t *testing.T) {
-	record, contents := defaultManifestPayloadFixture(t)
+func TestResolvePayloadRefusesFileSetPayloadsBeyondItsBounds(t *testing.T) {
+	record, contents := defaultFileSetPayloadFixture(t)
 	source := newPayloadFetchMap()
-	source.serveManifest(record, contents)
-	var refusal *ManifestPayloadError
+	source.serveFileSet(record, contents)
+	var refusal *FileSetPayloadError
 
 	payload, err := ResolvePayload(record, PayloadLimits{MaxEntries: 1}, source.fetch)
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, ManifestReasonEntryCount, refusal.Reason)
+	assert.Equal(t, FileSetReasonEntryCount, refusal.Reason)
 	assert.Empty(t, source.fetched)
 
 	source.fetched = nil
@@ -223,7 +223,7 @@ func TestResolvePayloadRefusesManifestPayloadsBeyondItsBounds(t *testing.T) {
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
-	assert.Equal(t, ManifestReasonEntryBytes, refusal.Reason)
+	assert.Equal(t, FileSetReasonEntryBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
 	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
 
@@ -236,7 +236,7 @@ func TestResolvePayloadRefusesManifestPayloadsBeyondItsBounds(t *testing.T) {
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
-	assert.Equal(t, ManifestReasonTotalBytes, refusal.Reason)
+	assert.Equal(t, FileSetReasonTotalBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
 	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
 }

@@ -47,8 +47,8 @@ func retainedValidationFloor(
 		ObservationDigest: [32]byte{4, 5, 6},
 	}
 	copy(floor.AcceptedEventDigest[:], digest)
-	if payloadFormOf(snapshot) == PayloadFormManifest {
-		floor.Manifest = manifestPayloadOf(snapshot)
+	if payloadFormOf(snapshot) == PayloadFormFileSet {
+		floor.FileSet = fileSetPayloadOf(snapshot)
 		return floor
 	}
 	floor.BlobCID = bytes.Clone(stored.core.BlobCID)
@@ -65,11 +65,11 @@ func newRetainedValidationFixture(t *testing.T, form PayloadForm) retainedValida
 	var head []byte
 	var key string
 	switch form {
-	case PayloadFormManifest:
-		fixtureValue := manifestFixture(t)
+	case PayloadFormFileSet:
+		fixtureValue := fileSetFixture(t)
 		store, _ = newStore(t, fixture{t: t, binding: fixtureValue.binding})
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		attempt := stageManifestAttempt(t, store, fixtureValue, fixtureValue.view(), attemptReview())
+		attempt := stageFileSetAttempt(t, store, fixtureValue, fixtureValue.view(), attemptReview())
 		loaded, err := store.loadStoredAttempt(ctx, store.conn, attempt.ID, StageOpen)
 		require.NoError(t, err)
 		stored = loaded
@@ -131,9 +131,9 @@ func newRetainedValidationFixture(t *testing.T, form PayloadForm) retainedValida
 	}
 }
 
-func (f retainedValidationFixture) manifestBytes(t *testing.T) []byte {
+func (f retainedValidationFixture) fileSetBytes(t *testing.T) []byte {
 	t.Helper()
-	encoded, err := encodeRetainedManifest(manifestPayloadOf(f.snapshot))
+	encoded, err := encodeRetainedFileSet(fileSetPayloadOf(f.snapshot))
 	require.NoError(t, err)
 	return encoded
 }
@@ -142,7 +142,7 @@ func (f retainedValidationFixture) insertPacked(t *testing.T) {
 	t.Helper()
 	_, err := f.store.conn.ExecContext(
 		context.Background(),
-		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'packed',?,?,NULL,1)",
+		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'packed',?,?,NULL,1)",
 		f.stored.core.SnapshotCID,
 		f.stored.core.AttemptID,
 		int64(f.snapshot.PublicationSeq),
@@ -152,28 +152,28 @@ func (f retainedValidationFixture) insertPacked(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func (f retainedValidationFixture) insertManifest(t *testing.T, manifest []byte) {
+func (f retainedValidationFixture) insertFileSet(t *testing.T, fileSet []byte) {
 	t.Helper()
 	_, err := f.store.conn.ExecContext(
 		context.Background(),
-		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',NULL,NULL,?,1)",
+		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'file_set',NULL,NULL,?,1)",
 		f.stored.core.SnapshotCID,
 		f.stored.core.AttemptID,
 		int64(f.snapshot.PublicationSeq),
-		manifest,
+		fileSet,
 	)
 	require.NoError(t, err)
 }
 
-func (f retainedValidationFixture) insertManifestText(t *testing.T, manifest string) {
+func (f retainedValidationFixture) insertFileSetText(t *testing.T, fileSet string) {
 	t.Helper()
 	_, err := f.store.conn.ExecContext(
 		context.Background(),
-		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',NULL,NULL,?,1)",
+		"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'file_set',NULL,NULL,?,1)",
 		f.stored.core.SnapshotCID,
 		f.stored.core.AttemptID,
 		int64(f.snapshot.PublicationSeq),
-		manifest,
+		fileSet,
 	)
 	require.NoError(t, err)
 }
@@ -217,35 +217,35 @@ func TestRetainedPublicationValidatorAcceptsBothPayloadForms(t *testing.T) {
 		f.insertPacked(t)
 		require.NoError(t, f.validate(t))
 	})
-	t.Run("manifest", func(t *testing.T) {
-		f := newRetainedValidationFixture(t, PayloadFormManifest)
-		f.insertManifest(t, f.manifestBytes(t))
+	t.Run("file-set", func(t *testing.T) {
+		f := newRetainedValidationFixture(t, PayloadFormFileSet)
+		f.insertFileSet(t, f.fileSetBytes(t))
 		require.NoError(t, f.validate(t))
 	})
 }
 
-func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.T) {
+func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(t *testing.T, f retainedValidationFixture)
 	}{
 		{
-			name: "row manifest differs from the snapshot",
+			name: "row file-set differs from the snapshot",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				entries := manifestPayloadOf(f.snapshot)
+				entries := fileSetPayloadOf(f.snapshot)
 				entries.Entries[0].Size++
-				encoded, err := encodeRetainedManifest(entries)
+				encoded, err := encodeRetainedFileSet(entries)
 				require.NoError(t, err)
-				f.insertManifest(t, encoded)
+				f.insertFileSet(t, encoded)
 			},
 		},
 		{
-			name: "row manifest differs from the accepted floor",
+			name: "row file-set differs from the accepted floor",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				mutated := f.floor
-				mutated.Manifest = cloneManifestPayload(f.floor.Manifest)
-				mutated.Manifest.Entries[1].Size++
+				mutated.FileSet = cloneFileSetPayload(f.floor.FileSet)
+				mutated.FileSet.Entries[1].Size++
 				retainedValidationSetFloor(t, f.store, mutated)
 			},
 		},
@@ -255,77 +255,77 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 				retainedValidationIgnoreChecks(t, f.store)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
-					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'hybrid',NULL,NULL,?,1)",
+					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'hybrid',NULL,NULL,?,1)",
 					f.stored.core.SnapshotCID,
 					f.stored.core.AttemptID,
 					int64(f.snapshot.PublicationSeq),
-					f.manifestBytes(t),
+					f.fileSetBytes(t),
 				)
 				require.NoError(t, err)
 			},
 		},
 		{
-			name: "packed position carries a manifest",
+			name: "packed position carries a file-set",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
 				retainedValidationIgnoreChecks(t, f.store)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
-					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'packed',?,?,?,1)",
+					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'packed',?,?,?,1)",
 					f.stored.core.SnapshotCID,
 					f.stored.core.AttemptID,
 					int64(f.snapshot.PublicationSeq),
 					f.stored.core.BlobCID,
 					int64(f.stored.core.BlobSize),
-					f.manifestBytes(t),
+					f.fileSetBytes(t),
 				)
 				require.NoError(t, err)
 			},
 		},
 		{
-			name: "manifest position carries packed bytes",
+			name: "file-set position carries packed bytes",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
 				retainedValidationIgnoreChecks(t, f.store)
-				other := manifestFixture(t)
+				other := fileSetFixture(t)
 				cid, err := publication.RawPayloadCID(other.entries[0].Content)
 				require.NoError(t, err)
 				_, err = f.store.conn.ExecContext(
 					context.Background(),
-					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',?,?,?,1)",
+					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'file_set',?,?,?,1)",
 					f.stored.core.SnapshotCID,
 					f.stored.core.AttemptID,
 					int64(f.snapshot.PublicationSeq),
 					cid,
 					int64(len(other.entries[0].Content)),
-					f.manifestBytes(t),
+					f.fileSetBytes(t),
 				)
 				require.NoError(t, err)
 			},
 		},
 		{
-			name: "manifest is not canonical json",
+			name: "file-set is not canonical json",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, []byte("{"))
+				f.insertFileSet(t, []byte("{"))
 			},
 		},
 		{
-			name: "manifest json is not canonical",
+			name: "file-set json is not canonical",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, []byte(`[{"size":1,"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE"}]`))
+				f.insertFileSet(t, []byte(`[{"size":1,"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE"}]`))
 			},
 		},
 		{
-			name: "manifest is oversized",
+			name: "file-set is oversized",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, bytes.Repeat([]byte("a"), publication.MaxManifestRecordBytes+1))
+				f.insertFileSet(t, bytes.Repeat([]byte("a"), publication.MaxFileSetRecordBytes+1))
 			},
 		},
 		{
-			name: "manifest is null",
+			name: "file-set is null",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
 				retainedValidationIgnoreChecks(t, f.store)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
-					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'manifest',NULL,NULL,NULL,1)",
+					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'file_set',NULL,NULL,NULL,1)",
 					f.stored.core.SnapshotCID,
 					f.stored.core.AttemptID,
 					int64(f.snapshot.PublicationSeq),
@@ -334,17 +334,17 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 			},
 		},
 		{
-			name: "manifest is stored as text",
+			name: "file-set is stored as text",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifestText(t, string(f.manifestBytes(t)))
-				require.Equal(t, "text", retainedValidationColumnType(t, f.store, "manifest"))
+				f.insertFileSetText(t, string(f.fileSetBytes(t)))
+				require.Equal(t, "text", retainedValidationColumnType(t, f.store, "file_set"))
 			},
 		},
 		{
-			name: "manifest entry is missing from the catalog",
+			name: "file-set entry is missing from the catalog",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
-				entries := manifestPayloadOf(f.snapshot)
+				f.insertFileSet(t, f.fileSetBytes(t))
+				entries := fileSetPayloadOf(f.snapshot)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"DELETE FROM payload_objects WHERE blob_cid=?",
@@ -354,10 +354,10 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 			},
 		},
 		{
-			name: "manifest entry size differs from the catalog",
+			name: "file-set entry size differs from the catalog",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
-				entries := manifestPayloadOf(f.snapshot)
+				f.insertFileSet(t, f.fileSetBytes(t))
+				entries := fileSetPayloadOf(f.snapshot)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"UPDATE payload_objects SET size=size+1 WHERE blob_cid=?",
@@ -367,10 +367,10 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 			},
 		},
 		{
-			name: "manifest entry basename differs from the catalog",
+			name: "file-set entry basename differs from the catalog",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
-				entries := manifestPayloadOf(f.snapshot)
+				f.insertFileSet(t, f.fileSetBytes(t))
+				entries := fileSetPayloadOf(f.snapshot)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"UPDATE payload_objects SET basename=? WHERE blob_cid=?",
@@ -383,7 +383,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "retained record differs from the snapshot",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				other := bytes.Clone(f.stored.core.SnapshotCID)
 				other[len(other)-1] ^= 0xff
 				_, err := f.store.conn.ExecContext(
@@ -397,7 +397,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "retained sequence differs from the snapshot",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"UPDATE retained_publications SET sequence=sequence+1",
@@ -408,7 +408,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "retained acceptance revision has no event",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"UPDATE retained_publications SET accepted_revision=2",
@@ -419,7 +419,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "accepted floor carries a foreign binding",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				mutated := f.floor
 				mutated.Binding.AccountDID = "did:plc:other"
 				retainedValidationSetFloor(t, f.store, mutated)
@@ -428,7 +428,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "accepted event digest differs from the floor",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
 					"UPDATE accepted_events SET digest=? WHERE revision=1",
@@ -440,7 +440,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 		{
 			name: "accepted record differs from the retained snapshot",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
-				f.insertManifest(t, f.manifestBytes(t))
+				f.insertFileSet(t, f.fileSetBytes(t))
 				other := bytes.Clone(f.stored.core.SnapshotRecord)
 				other[len(other)-1] ^= 0xff
 				_, err := f.store.conn.ExecContext(
@@ -454,7 +454,7 @@ func TestRetainedPublicationValidatorRefusesCorruptManifestPositions(t *testing.
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			f := newRetainedValidationFixture(t, PayloadFormManifest)
+			f := newRetainedValidationFixture(t, PayloadFormFileSet)
 			testCase.mutate(t, f)
 			requireErrorMetadata(t, f.validate(t), ErrSchema, StageOpen, ReasonCorrupt)
 		})
@@ -489,13 +489,13 @@ func TestRetainedPublicationValidatorRefusesCorruptPackedPositions(t *testing.T)
 			},
 		},
 		{
-			name: "packed position carries a manifest",
+			name: "packed position carries a file-set",
 			mutate: func(t *testing.T, f retainedValidationFixture) {
 				retainedValidationIgnoreChecks(t, f.store)
 				f.insertPacked(t)
 				_, err := f.store.conn.ExecContext(
 					context.Background(),
-					"UPDATE retained_publications SET manifest=?",
+					"UPDATE retained_publications SET file_set=?",
 					[]byte("x"),
 				)
 				require.NoError(t, err)
@@ -529,7 +529,7 @@ func TestRetainedPublicationValidatorRefusesCorruptPackedPositions(t *testing.T)
 				require.NoError(t, err)
 				_, err = f.store.conn.ExecContext(
 					context.Background(),
-					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,?,'packed',?,?,NULL,1)",
+					"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,?,'packed',?,?,NULL,1)",
 					f.stored.core.SnapshotCID,
 					f.stored.core.AttemptID,
 					int64(f.snapshot.PublicationSeq),
@@ -550,35 +550,35 @@ func TestRetainedPublicationValidatorRefusesCorruptPackedPositions(t *testing.T)
 	}
 }
 
-func TestRetainedManifestCodecRoundTripsCanonicalEntries(t *testing.T) {
-	snapshot := manifestFixture(t)
+func TestRetainedFileSetCodecRoundTripsCanonicalEntries(t *testing.T) {
+	snapshot := fileSetFixture(t)
 	snapshotRecord, err := publication.DecodeSnapshot(snapshot.raw)
 	require.NoError(t, err)
-	payload := manifestPayloadOf(snapshotRecord)
-	encoded, err := encodeRetainedManifest(payload)
+	payload := fileSetPayloadOf(snapshotRecord)
+	encoded, err := encodeRetainedFileSet(payload)
 	require.NoError(t, err)
 	require.NotEmpty(t, encoded)
-	require.LessOrEqual(t, len(encoded), publication.MaxManifestRecordBytes)
-	canonical, err := canonicalJSON(manifestPayloadToWire(payload))
+	require.LessOrEqual(t, len(encoded), publication.MaxFileSetRecordBytes)
+	canonical, err := canonicalJSON(fileSetPayloadToWire(payload))
 	require.NoError(t, err)
 	assert.Equal(t, canonical, encoded)
-	decoded, err := decodeRetainedManifest(encoded)
+	decoded, err := decodeRetainedFileSet(encoded)
 	require.NoError(t, err)
-	assert.True(t, sameManifestPayload(payload, decoded))
+	assert.True(t, sameFileSetPayload(payload, decoded))
 }
 
-func TestRetainedManifestCodecRefusesInvalidEncodings(t *testing.T) {
-	snapshot := manifestFixture(t)
+func TestRetainedFileSetCodecRefusesInvalidEncodings(t *testing.T) {
+	snapshot := fileSetFixture(t)
 	snapshotRecord, err := publication.DecodeSnapshot(snapshot.raw)
 	require.NoError(t, err)
-	valid, err := encodeRetainedManifest(manifestPayloadOf(snapshotRecord))
+	valid, err := encodeRetainedFileSet(fileSetPayloadOf(snapshotRecord))
 	require.NoError(t, err)
 	cases := []struct {
 		name  string
 		input []byte
 	}{
 		{name: "empty", input: []byte{}},
-		{name: "oversized", input: bytes.Repeat([]byte("a"), publication.MaxManifestRecordBytes+1)},
+		{name: "oversized", input: bytes.Repeat([]byte("a"), publication.MaxFileSetRecordBytes+1)},
 		{name: "malformed", input: []byte("{")},
 		{name: "empty list", input: []byte("[]")},
 		{name: "null list", input: []byte("null")},
@@ -591,13 +591,13 @@ func TestRetainedManifestCodecRefusesInvalidEncodings(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := decodeRetainedManifest(testCase.input)
+			_, err := decodeRetainedFileSet(testCase.input)
 			require.Error(t, err)
 		})
 	}
 }
 
-func retainedManifestCeilingPayload(count int) *ManifestPayload {
+func retainedFileSetCeilingPayload(count int) *FileSetPayload {
 	entries := make([]PayloadEntryReference, 0, count)
 	for index := 0; index < count; index++ {
 		entries = append(entries, PayloadEntryReference{
@@ -606,43 +606,43 @@ func retainedManifestCeilingPayload(count int) *ManifestPayload {
 			Size: 1,
 		})
 	}
-	return &ManifestPayload{Entries: entries}
+	return &FileSetPayload{Entries: entries}
 }
 
-func retainedManifestCeilingJSON(t *testing.T, count int) []byte {
+func retainedFileSetCeilingJSON(t *testing.T, count int) []byte {
 	t.Helper()
-	encoded, err := canonicalJSON(manifestPayloadToWire(retainedManifestCeilingPayload(count)))
+	encoded, err := canonicalJSON(fileSetPayloadToWire(retainedFileSetCeilingPayload(count)))
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(encoded), publication.MaxManifestRecordBytes)
+	require.LessOrEqual(t, len(encoded), publication.MaxFileSetRecordBytes)
 	return encoded
 }
 
-func TestRetainedManifestCodecAcceptsTheSnapshotEntryCeiling(t *testing.T) {
-	encoded := retainedManifestCeilingJSON(t, publication.MaxSnapshotEntries)
-	decoded, err := decodeRetainedManifest(encoded)
+func TestRetainedFileSetCodecAcceptsTheSnapshotEntryCeiling(t *testing.T) {
+	encoded := retainedFileSetCeilingJSON(t, publication.MaxSnapshotEntries)
+	decoded, err := decodeRetainedFileSet(encoded)
 	require.NoError(t, err)
 	require.Len(t, decoded.Entries, publication.MaxSnapshotEntries)
-	reencoded, err := encodeRetainedManifest(decoded)
+	reencoded, err := encodeRetainedFileSet(decoded)
 	require.NoError(t, err)
 	assert.Equal(t, encoded, reencoded)
 }
 
-func TestRetainedManifestCodecRefusesEntriesAboveTheSnapshotCeiling(t *testing.T) {
-	_, err := encodeRetainedManifest(retainedManifestCeilingPayload(publication.MaxSnapshotEntries + 1))
+func TestRetainedFileSetCodecRefusesEntriesAboveTheSnapshotCeiling(t *testing.T) {
+	_, err := encodeRetainedFileSet(retainedFileSetCeilingPayload(publication.MaxSnapshotEntries + 1))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLimit)
-	encoded := retainedManifestCeilingJSON(t, publication.MaxSnapshotEntries+1)
-	_, err = decodeRetainedManifest(encoded)
+	encoded := retainedFileSetCeilingJSON(t, publication.MaxSnapshotEntries+1)
+	_, err = decodeRetainedFileSet(encoded)
 	require.Error(t, err)
 }
 
-func TestRetainedManifestCodecDefersPublicationValidity(t *testing.T) {
-	payload := &ManifestPayload{Entries: []PayloadEntryReference{
+func TestRetainedFileSetCodecDefersPublicationValidity(t *testing.T) {
+	payload := &FileSetPayload{Entries: []PayloadEntryReference{
 		{Path: "../escape", CID: []byte{1}, Size: 1},
 	}}
-	encoded, err := encodeRetainedManifest(payload)
+	encoded, err := encodeRetainedFileSet(payload)
 	require.NoError(t, err)
-	decoded, err := decodeRetainedManifest(encoded)
+	decoded, err := decodeRetainedFileSet(encoded)
 	require.NoError(t, err)
-	assert.True(t, sameManifestPayload(payload, decoded))
+	assert.True(t, sameFileSetPayload(payload, decoded))
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-func manifestMaterialPrepare(
+func fileSetMaterialPrepare(
 	t *testing.T,
 	store *Store,
 	mode Mode,
@@ -30,7 +30,7 @@ func manifestMaterialPrepare(
 	return proposal
 }
 
-func requireManifestMaterialRowsAbsent(t *testing.T, store *Store) {
+func requireFileSetMaterialRowsAbsent(t *testing.T, store *Store) {
 	t.Helper()
 	ctx := context.Background()
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
@@ -38,28 +38,28 @@ func requireManifestMaterialRowsAbsent(t *testing.T, store *Store) {
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 }
 
-func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
+func TestFileSetMaterialAcceptanceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, _ := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	genesisFiles := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", content: "synthetic genesis manifest entry"},
+	genesisFiles := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", content: "synthetic genesis file-set entry"},
 	)
-	successorFiles := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", content: "synthetic genesis manifest entry"},
-		manifestMaterialFile{path: "config/plugins.lua", content: "synthetic successor manifest entry"},
+	successorFiles := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", content: "synthetic genesis file-set entry"},
+		fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic successor file-set entry"},
 	)
-	forkFiles := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/other.lua", content: "synthetic fork manifest entry"},
+	forkFiles := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/other.lua", content: "synthetic fork file-set entry"},
 	)
-	genesisBlock := manifestMaterialBlock(t, f.binding, 0, nil, genesisFiles)
-	successorBlock := manifestMaterialBlock(t, f.binding, 1, mustRecordCID(t, genesisBlock.Raw), successorFiles)
-	genesisObservation := manifestMaterialObservation(t, f.binding, genesisBlock)
-	successorObservation := manifestMaterialObservation(t, f.binding, genesisObservation.Snapshots[0], successorBlock)
+	genesisBlock := fileSetMaterialBlock(t, f.binding, 0, nil, genesisFiles)
+	successorBlock := fileSetMaterialBlock(t, f.binding, 1, mustRecordCID(t, genesisBlock.Raw), successorFiles)
+	genesisObservation := fileSetMaterialObservation(t, f.binding, genesisBlock)
+	successorObservation := fileSetMaterialObservation(t, f.binding, genesisObservation.Snapshots[0], successorBlock)
 
-	proposal := manifestMaterialPrepare(t, store, ModeFirstUse, genesisObservation, manifestMaterialInput(genesisFiles))
+	proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, genesisObservation, fileSetMaterialInput(genesisFiles))
 	assert.Equal(t, ModeFirstUse, proposal.Mode)
 	assert.Equal(t, WarningFirstUse, proposal.Warning)
 	assert.Equal(t, "first_use", proposal.Stop)
@@ -70,20 +70,20 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 		ModeFirstUse,
 		proposal.StateToken,
 		genesisObservation,
-		manifestMaterialInput(genesisFiles),
+		fileSetMaterialInput(genesisFiles),
 		[32]byte{1},
 	)
 	assert.Equal(t, Floor{}, floor)
 	requireErrorMetadata(t, err, ErrConsent, StageAcceptMaterial, ReasonConfirmation)
-	requireManifestMaterialRowsAbsent(t, store)
+	requireFileSetMaterialRowsAbsent(t, store)
 
-	competing := manifestMaterialPrepare(t, store, ModeFirstUse, genesisObservation, manifestMaterialInput(genesisFiles))
+	competing := fileSetMaterialPrepare(t, store, ModeFirstUse, genesisObservation, fileSetMaterialInput(genesisFiles))
 	accepted, err := store.AcceptMaterialInput(
 		ctx,
 		ModeFirstUse,
 		proposal.StateToken,
 		genesisObservation,
-		manifestMaterialInput(genesisFiles),
+		fileSetMaterialInput(genesisFiles),
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
@@ -95,15 +95,15 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 		ModeFirstUse,
 		competing.StateToken,
 		genesisObservation,
-		manifestMaterialInput(genesisFiles),
+		fileSetMaterialInput(genesisFiles),
 		competing.Confirmation,
 	)
 	requireErrorMetadata(t, err, ErrConsent, StageAcceptMaterial, ReasonStale)
 
-	_, err = store.PrepareMaterial(ctx, ModeFirstUse, genesisObservation, manifestMaterialInput(genesisFiles))
+	_, err = store.PrepareMaterial(ctx, ModeFirstUse, genesisObservation, fileSetMaterialInput(genesisFiles))
 	requireErrorMetadata(t, err, ErrConsent, StagePrepare, ReasonMode)
 
-	advance := manifestMaterialPrepare(t, store, ModeAdvance, successorObservation, manifestMaterialInput(successorFiles))
+	advance := fileSetMaterialPrepare(t, store, ModeAdvance, successorObservation, fileSetMaterialInput(successorFiles))
 	assert.Equal(t, ModeAdvance, advance.Mode)
 	assert.Equal(t, "joined", advance.Stop)
 	assert.Equal(t, [32]byte{}, advance.Confirmation)
@@ -113,23 +113,23 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 		ModeAdvance,
 		advance.StateToken,
 		successorObservation,
-		manifestMaterialInput(successorFiles),
+		fileSetMaterialInput(successorFiles),
 		[32]byte{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, accepted.Revision+1, advanced.Revision)
 	assert.Equal(t, accepted.Generation, advanced.Generation)
-	require.NotNil(t, advanced.Manifest)
-	require.Len(t, advanced.Manifest.Entries, 2)
+	require.NotNil(t, advanced.FileSet)
+	require.Len(t, advanced.FileSet.Entries, 2)
 	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 	assert.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 
 	current, err := store.ReadAcceptedMaterial(ctx, f.binding, advanced)
 	require.NoError(t, err)
 	require.Len(t, current.Entries, 2)
-	assert.Equal(t, []byte("synthetic successor manifest entry"), current.Entries[1].Content)
+	assert.Equal(t, []byte("synthetic successor file-set entry"), current.Entries[1].Content)
 
-	replay := manifestMaterialPrepare(t, store, ModeAdvance, successorObservation, manifestMaterialInput(successorFiles))
+	replay := fileSetMaterialPrepare(t, store, ModeAdvance, successorObservation, fileSetMaterialInput(successorFiles))
 	assert.Equal(t, "same", replay.Stop)
 	assert.Equal(t, [32]byte{}, replay.Confirmation)
 	repeated, err := store.AcceptMaterialInput(
@@ -137,7 +137,7 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 		ModeAdvance,
 		replay.StateToken,
 		successorObservation,
-		manifestMaterialInput(successorFiles),
+		fileSetMaterialInput(successorFiles),
 		[32]byte{},
 	)
 	require.NoError(t, err)
@@ -145,9 +145,9 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
 	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 
-	forkBlock := manifestMaterialBlock(t, f.binding, 0, nil, forkFiles)
-	forkObservation := manifestMaterialObservation(t, f.binding, forkBlock)
-	replacement := manifestMaterialPrepare(t, store, ModeReplaceFloor, forkObservation, manifestMaterialInput(forkFiles))
+	forkBlock := fileSetMaterialBlock(t, f.binding, 0, nil, forkFiles)
+	forkObservation := fileSetMaterialObservation(t, f.binding, forkBlock)
+	replacement := fileSetMaterialPrepare(t, store, ModeReplaceFloor, forkObservation, fileSetMaterialInput(forkFiles))
 	assert.Equal(t, ModeReplaceFloor, replacement.Mode)
 	assert.Equal(t, WarningReplacement, replacement.Warning)
 	assert.Equal(t, ReasonRollback, replacement.Reason)
@@ -156,7 +156,7 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 		ModeReplaceFloor,
 		replacement.StateToken,
 		forkObservation,
-		manifestMaterialInput(forkFiles),
+		fileSetMaterialInput(forkFiles),
 		replacement.Confirmation,
 	)
 	require.NoError(t, err)
@@ -169,10 +169,10 @@ func TestManifestMaterialAcceptanceLifecycle(t *testing.T) {
 	}())
 }
 
-func TestManifestMaterialAcceptsReplacementBytesOnlyWhenTheyMatchTheObservation(t *testing.T) {
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", mode: 0o600, content: "synthetic first manifest entry"},
-		manifestMaterialFile{path: "config/plugins.lua", mode: 0o644, content: "synthetic second manifest entry"},
+func TestFileSetMaterialAcceptsReplacementBytesOnlyWhenTheyMatchTheObservation(t *testing.T) {
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", mode: 0o600, content: "synthetic first file-set entry"},
+		fileSetMaterialFile{path: "config/plugins.lua", mode: 0o644, content: "synthetic second file-set entry"},
 	)
 	cases := []struct {
 		name   string
@@ -181,44 +181,44 @@ func TestManifestMaterialAcceptsReplacementBytesOnlyWhenTheyMatchTheObservation(
 		reason Reason
 	}{
 		{name: "mode mismatch", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries[0].Mode = 0o644
 			return input
 		}()},
 		{name: "path mismatch", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries[0].Path = "config/other.lua"
 			return input
 		}()},
 		{name: "declared size mismatch", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries[0].Size--
 			return input
 		}()},
 		{name: "content mismatch", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries[1].Content = bytes.Clone(input.Entries[1].Content)
 			input.Entries[1].Content[0] ^= 0xff
 			return input
 		}()},
 		{name: "missing entry", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries = input.Entries[:1]
 			return input
 		}()},
 		{name: "reordered entries", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Entries[0], input.Entries[1] = input.Entries[1], input.Entries[0]
 			return input
 		}()},
 		{
-			name:   "packed payload for a manifest observation",
+			name:   "packed payload for a file-set observation",
 			class:  ErrUnsupported,
 			reason: ReasonPayloadForm,
 			input:  MaterialInput{Payload: []byte("synthetic packed replacement")},
 		},
 		{name: "mixed payload and entries", class: ErrInvalid, reason: ReasonRecordSet, input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			input.Payload = []byte("synthetic packed replacement")
 			return input
 		}()},
@@ -230,12 +230,12 @@ func TestManifestMaterialAcceptsReplacementBytesOnlyWhenTheyMatchTheObservation(
 			f.appendRecord(t, 0)
 			store, directory := newStore(t, f)
 			t.Cleanup(func() { assert.NoError(t, store.Close()) })
-			observation := manifestMaterialObservation(
+			observation := fileSetMaterialObservation(
 				t,
 				f.binding,
-				manifestMaterialBlock(t, f.binding, 0, nil, files),
+				fileSetMaterialBlock(t, f.binding, 0, nil, files),
 			)
-			proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+			proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 			floor, err := store.AcceptMaterialInput(
 				ctx,
 				ModeFirstUse,
@@ -246,14 +246,14 @@ func TestManifestMaterialAcceptsReplacementBytesOnlyWhenTheyMatchTheObservation(
 			)
 			assert.Equal(t, Floor{}, floor)
 			requireErrorMetadata(t, err, test.class, StageInput, test.reason)
-			requireManifestMaterialRowsAbsent(t, store)
+			requireFileSetMaterialRowsAbsent(t, store)
 			_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName))
 			assert.ErrorIs(t, statErr, os.ErrNotExist)
 		})
 	}
 }
 
-func TestPackedMaterialInputRefusesManifestEntries(t *testing.T) {
+func TestPackedMaterialInputRefusesFileSetEntries(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
@@ -274,20 +274,20 @@ func TestPackedMaterialInputRefusesManifestEntries(t *testing.T) {
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 	_, err = store.PrepareMaterial(ctx, ModeFirstUse, observation, MaterialInput{Entries: entries})
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
-	requireManifestMaterialRowsAbsent(t, store)
+	requireFileSetMaterialRowsAbsent(t, store)
 }
 
-func TestPackedMaterialObservationStillRefusesOrdinaryManifestPreparation(t *testing.T) {
+func TestPackedMaterialObservationStillRefusesOrdinaryFileSetPreparation(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, _ := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	files := manifestMaterialFiles(t, manifestMaterialFile{path: "config/init.lua", content: "synthetic boundary manifest entry"})
-	observation := manifestMaterialObservation(
+	files := fileSetMaterialFiles(t, fileSetMaterialFile{path: "config/init.lua", content: "synthetic boundary file-set entry"})
+	observation := fileSetMaterialObservation(
 		t,
 		f.binding,
-		manifestMaterialBlock(t, f.binding, 0, nil, files),
+		fileSetMaterialBlock(t, f.binding, 0, nil, files),
 	)
 	_, err := store.Prepare(ctx, ModeFirstUse, observation, f.payload)
 	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
@@ -296,23 +296,23 @@ func TestPackedMaterialObservationStillRefusesOrdinaryManifestPreparation(t *tes
 	_, err = store.AcceptMaterial(ctx, ModeFirstUse, [32]byte{}, observation, f.payload, [32]byte{})
 	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
 
-	proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+	proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 	floor, err := store.AcceptMaterialInput(
 		ctx,
 		ModeFirstUse,
 		proposal.StateToken,
 		observation,
-		manifestMaterialInput(files),
+		fileSetMaterialInput(files),
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), floor.Revision)
 }
 
-func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", content: "synthetic first faulted manifest entry"},
-		manifestMaterialFile{path: "config/plugins.lua", content: "synthetic second faulted manifest entry"},
+func TestFileSetMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", content: "synthetic first faulted file-set entry"},
+		fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic second faulted file-set entry"},
 	)
 	cases := []struct {
 		name  string
@@ -367,12 +367,12 @@ func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
 			f.appendRecord(t, 0)
 			store, directory := newStore(t, f)
 			t.Cleanup(func() { assert.NoError(t, store.Close()) })
-			observation := manifestMaterialObservation(
+			observation := fileSetMaterialObservation(
 				t,
 				f.binding,
-				manifestMaterialBlock(t, f.binding, 0, nil, files),
+				fileSetMaterialBlock(t, f.binding, 0, nil, files),
 			)
-			proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+			proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 			original := store.custodyOps
 			t.Cleanup(func() { store.custodyOps = original })
 			observer := test.apply(t, store, original, []byte(files[1].content))
@@ -382,7 +382,7 @@ func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
 				ModeFirstUse,
 				proposal.StateToken,
 				observation,
-				manifestMaterialInput(files),
+				fileSetMaterialInput(files),
 				proposal.Confirmation,
 			)
 			assert.Equal(t, Floor{}, floor)
@@ -391,7 +391,7 @@ func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
 			if observer != nil {
 				assert.Equal(t, 1, observer.fired)
 			}
-			requireManifestMaterialRowsAbsent(t, store)
+			requireFileSetMaterialRowsAbsent(t, store)
 			requireIncomingMaterialLoadAbsent(t, ctx, store)
 			firstResidue := requireIncomingMaterialOrphan(t, directory, []byte(files[0].content))
 
@@ -401,7 +401,7 @@ func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
 				ModeFirstUse,
 				proposal.StateToken,
 				observation,
-				manifestMaterialInput(files),
+				fileSetMaterialInput(files),
 				proposal.Confirmation,
 			)
 			require.NoError(t, err)
@@ -422,23 +422,23 @@ func TestManifestMaterialEntryFaultsLeaveBoundedResidue(t *testing.T) {
 	}
 }
 
-func TestManifestMaterialCommitUnknownOutcomes(t *testing.T) {
+func TestFileSetMaterialCommitUnknownOutcomes(t *testing.T) {
 	genesis := func(t *testing.T) (*Store, fixture, Observation, MaterialInput, Proposal) {
 		t.Helper()
 		f := newFixture(t, BackendPublicRepo)
 		f.appendRecord(t, 0)
 		store, _ := newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic commit manifest entry"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic commit file-set entry"},
 		)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		input := manifestMaterialInput(files)
-		proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, input)
+		input := fileSetMaterialInput(files)
+		proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, input)
 		return store, f, observation, input, proposal
 	}
 
@@ -485,7 +485,7 @@ func TestManifestMaterialCommitUnknownOutcomes(t *testing.T) {
 		material, err := store.ReadAcceptedMaterial(ctx, f.binding, loaded)
 		require.NoError(t, err)
 		require.Len(t, material.Entries, 1)
-		assert.Equal(t, []byte("synthetic commit manifest entry"), material.Entries[0].Content)
+		assert.Equal(t, []byte("synthetic commit file-set entry"), material.Entries[0].Content)
 		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 	})
 
@@ -507,7 +507,7 @@ func TestManifestMaterialCommitUnknownOutcomes(t *testing.T) {
 		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 		assert.Equal(t, 1, *commits)
 		assert.True(t, store.needsReadback)
-		requireManifestMaterialRowsAbsent(t, store)
+		requireFileSetMaterialRowsAbsent(t, store)
 
 		removeIncomingCommitFailure(t, store)
 		probe, err := store.AcceptMaterialInput(
@@ -521,7 +521,7 @@ func TestManifestMaterialCommitUnknownOutcomes(t *testing.T) {
 		assert.Equal(t, Floor{}, probe)
 		requireErrorMetadata(t, err, ErrStorage, StageAcceptMaterial, ReasonCommitUnknown)
 		assert.Equal(t, 1, *commits)
-		requireManifestMaterialRowsAbsent(t, store)
+		requireFileSetMaterialRowsAbsent(t, store)
 
 		requireIncomingMaterialLoadAbsent(t, ctx, store)
 		assert.False(t, store.needsReadback)
@@ -540,7 +540,7 @@ func TestManifestMaterialCommitUnknownOutcomes(t *testing.T) {
 	})
 }
 
-type manifestReplaySetup struct {
+type fileSetReplaySetup struct {
 	store       *Store
 	directory   string
 	observation Observation
@@ -549,61 +549,61 @@ type manifestReplaySetup struct {
 	target      []byte
 }
 
-func manifestReplayIncomingOwner(t *testing.T) manifestReplaySetup {
+func fileSetReplayIncomingOwner(t *testing.T) fileSetReplaySetup {
 	t.Helper()
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, directory := newStore(t, f)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/init.lua", content: "synthetic replay first entry"},
-		manifestMaterialFile{path: "config/plugins.lua", content: "synthetic replay second entry"},
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/init.lua", content: "synthetic replay first entry"},
+		fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic replay second entry"},
 	)
-	observation := manifestMaterialObservation(
+	observation := fileSetMaterialObservation(
 		t,
 		f.binding,
-		manifestMaterialBlock(t, f.binding, 0, nil, files),
+		fileSetMaterialBlock(t, f.binding, 0, nil, files),
 	)
-	floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
-	return manifestReplaySetup{
+	floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
+	return fileSetReplaySetup{
 		store:       store,
 		directory:   directory,
 		observation: observation,
-		input:       manifestMaterialInput(files),
+		input:       fileSetMaterialInput(files),
 		floor:       floor,
 		target:      []byte(files[1].content),
 	}
 }
 
-func manifestReplayFinalizedOwner(t *testing.T) manifestReplaySetup {
+func fileSetReplayFinalizedOwner(t *testing.T) fileSetReplaySetup {
 	t.Helper()
-	manifestFixtureValue := manifestFixture(t)
-	store, directory := newStore(t, fixture{t: t, binding: manifestFixtureValue.binding})
+	fileSetFixtureValue := fileSetFixture(t)
+	store, directory := newStore(t, fixture{t: t, binding: fileSetFixtureValue.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	review := attemptReview()
-	submitted := submitManifestAttempt(t, store, manifestFixtureValue, manifestFixtureValue.view(), review)
+	submitted := submitFileSetAttempt(t, store, fileSetFixtureValue, fileSetFixtureValue.view(), review)
 	finalized, err := store.FinalizeAttempt(
 		context.Background(),
 		submitted.ID,
 		submitted.StateDigest,
-		manifestFixtureValue.currentView(),
+		fileSetFixtureValue.currentView(),
 	)
 	require.NoError(t, err)
-	return manifestReplaySetup{
+	return fileSetReplaySetup{
 		store:     store,
 		directory: directory,
-		observation: manifestMaterialObservation(
+		observation: fileSetMaterialObservation(
 			t,
-			manifestFixtureValue.binding,
-			SnapshotBlock{Key: manifestFixtureValue.key, Raw: manifestFixtureValue.raw},
+			fileSetFixtureValue.binding,
+			SnapshotBlock{Key: fileSetFixtureValue.key, Raw: fileSetFixtureValue.raw},
 		),
-		input:  MaterialInput{Entries: manifestFixtureValue.entries},
+		input:  MaterialInput{Entries: fileSetFixtureValue.entries},
 		floor:  finalized.Floor,
-		target: manifestFixtureValue.entries[1].Content,
+		target: fileSetFixtureValue.entries[1].Content,
 	}
 }
 
-func TestManifestMaterialReplayVerifiesOwnershipThroughBothOwners(t *testing.T) {
+func TestFileSetMaterialReplayVerifiesOwnershipThroughBothOwners(t *testing.T) {
 	damageCases := []struct {
 		name   string
 		damage func(t *testing.T, path string, target []byte)
@@ -636,18 +636,18 @@ func TestManifestMaterialReplayVerifiesOwnershipThroughBothOwners(t *testing.T) 
 	}
 	owners := []struct {
 		name  string
-		setup func(t *testing.T) manifestReplaySetup
+		setup func(t *testing.T) fileSetReplaySetup
 		stop  string
 	}{
-		{name: "incoming owner", setup: manifestReplayIncomingOwner, stop: "same"},
-		{name: "finalized owner", setup: manifestReplayFinalizedOwner, stop: "same"},
+		{name: "incoming owner", setup: fileSetReplayIncomingOwner, stop: "same"},
+		{name: "finalized owner", setup: fileSetReplayFinalizedOwner, stop: "same"},
 	}
 	for _, owner := range owners {
 		for _, damage := range damageCases {
 			t.Run(owner.name+" "+damage.name, func(t *testing.T) {
 				ctx := context.Background()
 				setup := owner.setup(t)
-				replay := manifestMaterialPrepare(t, setup.store, ModeAdvance, setup.observation, setup.input)
+				replay := fileSetMaterialPrepare(t, setup.store, ModeAdvance, setup.observation, setup.input)
 				assert.Equal(t, owner.stop, replay.Stop)
 				repeated, err := setup.store.AcceptMaterialInput(
 					ctx,
@@ -684,12 +684,12 @@ func TestManifestMaterialReplayVerifiesOwnershipThroughBothOwners(t *testing.T) 
 
 	t.Run("finalized owner refuses caller bytes that contradict custody", func(t *testing.T) {
 		ctx := context.Background()
-		setup := manifestReplayFinalizedOwner(t)
-		replay := manifestMaterialPrepare(t, setup.store, ModeAdvance, setup.observation, setup.input)
+		setup := fileSetReplayFinalizedOwner(t)
+		replay := fileSetMaterialPrepare(t, setup.store, ModeAdvance, setup.observation, setup.input)
 		target := filepath.Join(setup.directory, payloadDirectoryName, payloadBasename(setup.target))
 		require.NoError(t, os.WriteFile(target, bytes.Repeat([]byte{'x'}, len(setup.target)), 0o600))
 		repaired := MaterialInput{Entries: append([]publication.PayloadEntry(nil), setup.input.Entries...)}
-		repaired.Entries[1].Content = []byte("synthetic repaired manifest entry")
+		repaired.Entries[1].Content = []byte("synthetic repaired file-set entry")
 		repaired.Entries[1].Size = uint64(len(repaired.Entries[1].Content))
 		repeated, err := setup.store.AcceptMaterialInput(
 			ctx,
@@ -707,7 +707,7 @@ func TestManifestMaterialReplayVerifiesOwnershipThroughBothOwners(t *testing.T) 
 	})
 }
 
-func TestManifestMaterialBatchCapacity(t *testing.T) {
+func TestFileSetMaterialBatchCapacity(t *testing.T) {
 	t.Run("shared CID counts one object", func(t *testing.T) {
 		ctx := context.Background()
 		f := newFixture(t, BackendPublicRepo)
@@ -716,19 +716,19 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 		attemptLimits.ManagedObjects = 1
 		store, _ := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/private.lua", mode: 0o600, content: "synthetic shared capacity content"},
-			manifestMaterialFile{path: "config/shared.lua", mode: 0o644, content: "synthetic shared capacity content"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/private.lua", mode: 0o600, content: "synthetic shared capacity content"},
+			fileSetMaterialFile{path: "config/shared.lua", mode: 0o644, content: "synthetic shared capacity content"},
 		)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
-		require.NotNil(t, floor.Manifest)
-		require.Len(t, floor.Manifest.Entries, 2)
-		assert.Equal(t, floor.Manifest.Entries[0].CID, floor.Manifest.Entries[1].CID)
+		floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
+		require.NotNil(t, floor.FileSet)
+		require.Len(t, floor.FileSet.Entries, 2)
+		assert.Equal(t, floor.FileSet.Entries[0].CID, floor.FileSet.Entries[1].CID)
 		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 		material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
 		require.NoError(t, err)
@@ -743,36 +743,36 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 		attemptLimits.ManagedObjects = 1
 		store, directory := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic distinct capacity alpha"},
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic distinct capacity beta"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic distinct capacity alpha"},
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic distinct capacity beta"},
 		)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		_, err := store.PrepareMaterial(ctx, ModeFirstUse, observation, manifestMaterialInput(files))
+		_, err := store.PrepareMaterial(ctx, ModeFirstUse, observation, fileSetMaterialInput(files))
 		requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
 		floor, err := store.AcceptMaterialInput(
 			ctx,
 			ModeFirstUse,
 			[32]byte{},
 			observation,
-			manifestMaterialInput(files),
+			fileSetMaterialInput(files),
 			[32]byte{},
 		)
 		assert.Equal(t, Floor{}, floor)
 		requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-		requireManifestMaterialRowsAbsent(t, store)
+		requireFileSetMaterialRowsAbsent(t, store)
 		_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName))
 		assert.ErrorIs(t, statErr, os.ErrNotExist)
 	})
 
 	t.Run("aggregate bytes exact boundary", func(t *testing.T) {
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic aggregate boundary alpha"},
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic aggregate boundary beta"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic aggregate boundary alpha"},
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic aggregate boundary beta"},
 		)
 		total := uint64(len(files[0].content) + len(files[1].content))
 		for _, test := range []struct {
@@ -791,12 +791,12 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 				attemptLimits.CustodyBytes = test.custody
 				store, _ := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 				t.Cleanup(func() { assert.NoError(t, store.Close()) })
-				observation := manifestMaterialObservation(
+				observation := fileSetMaterialObservation(
 					t,
 					f.binding,
-					manifestMaterialBlock(t, f.binding, 0, nil, files),
+					fileSetMaterialBlock(t, f.binding, 0, nil, files),
 				)
-				input := manifestMaterialInput(files)
+				input := fileSetMaterialInput(files)
 				if !test.acceptance {
 					_, err := store.PrepareMaterial(ctx, ModeFirstUse, observation, input)
 					requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
@@ -810,10 +810,10 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 					)
 					assert.Equal(t, Floor{}, floor)
 					requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-					requireManifestMaterialRowsAbsent(t, store)
+					requireFileSetMaterialRowsAbsent(t, store)
 					return
 				}
-				proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, input)
+				proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, input)
 				floor, err := store.AcceptMaterialInput(
 					ctx,
 					ModeFirstUse,
@@ -836,25 +836,25 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 		attemptLimits.ManagedObjects = 1
 		store, directory := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		genesisFiles := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic catalogued capacity alpha"},
+		genesisFiles := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic catalogued capacity alpha"},
 		)
-		successorFiles := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic catalogued capacity beta"},
+		successorFiles := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic catalogued capacity beta"},
 		)
-		genesisBlock := manifestMaterialBlock(t, f.binding, 0, nil, genesisFiles)
-		genesisObservation := manifestMaterialObservation(t, f.binding, genesisBlock)
-		accepted := manifestMaterialAccept(t, store, ModeFirstUse, genesisObservation, manifestMaterialInput(genesisFiles))
-		successorBlock := manifestMaterialBlock(t, f.binding, 1, mustRecordCID(t, genesisBlock.Raw), successorFiles)
-		successorObservation := manifestMaterialObservation(t, f.binding, genesisBlock, successorBlock)
-		proposal := manifestMaterialPrepare(t, store, ModeAdvance, successorObservation, manifestMaterialInput(successorFiles))
+		genesisBlock := fileSetMaterialBlock(t, f.binding, 0, nil, genesisFiles)
+		genesisObservation := fileSetMaterialObservation(t, f.binding, genesisBlock)
+		accepted := fileSetMaterialAccept(t, store, ModeFirstUse, genesisObservation, fileSetMaterialInput(genesisFiles))
+		successorBlock := fileSetMaterialBlock(t, f.binding, 1, mustRecordCID(t, genesisBlock.Raw), successorFiles)
+		successorObservation := fileSetMaterialObservation(t, f.binding, genesisBlock, successorBlock)
+		proposal := fileSetMaterialPrepare(t, store, ModeAdvance, successorObservation, fileSetMaterialInput(successorFiles))
 		assert.Equal(t, "joined", proposal.Stop)
 		floor, err := store.AcceptMaterialInput(
 			ctx,
 			ModeAdvance,
 			proposal.StateToken,
 			successorObservation,
-			manifestMaterialInput(successorFiles),
+			fileSetMaterialInput(successorFiles),
 			[32]byte{},
 		)
 		assert.Equal(t, Floor{}, floor)
@@ -877,23 +877,23 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 		f.appendRecord(t, 0)
 		store, _ := newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := make([]manifestMaterialFile, 0, publication.MaxSnapshotEntries)
+		files := make([]fileSetMaterialFile, 0, publication.MaxSnapshotEntries)
 		for index := range publication.MaxSnapshotEntries {
-			files = append(files, manifestMaterialFile{
+			files = append(files, fileSetMaterialFile{
 				path:    "config/entry-" + string(rune('a'+index%26)) + "-" + string(rune('0'+index/26)) + ".lua",
-				content: "synthetic bounded manifest entry " + string(rune('a'+index%26)) + string(rune('0'+index/26)),
+				content: "synthetic bounded file-set entry " + string(rune('a'+index%26)) + string(rune('0'+index/26)),
 			})
 		}
-		sorted := manifestMaterialFiles(t, files...)
+		sorted := fileSetMaterialFiles(t, files...)
 		require.Len(t, sorted, publication.MaxSnapshotEntries)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, sorted),
+			fileSetMaterialBlock(t, f.binding, 0, nil, sorted),
 		)
-		floor := manifestMaterialAccept(t, store, ModeFirstUse, observation, manifestMaterialInput(sorted))
-		require.NotNil(t, floor.Manifest)
-		require.Len(t, floor.Manifest.Entries, publication.MaxSnapshotEntries)
+		floor := fileSetMaterialAccept(t, store, ModeFirstUse, observation, fileSetMaterialInput(sorted))
+		require.NotNil(t, floor.FileSet)
+		require.Len(t, floor.FileSet.Entries, publication.MaxSnapshotEntries)
 		require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
 		material, err := store.ReadAcceptedMaterial(ctx, f.binding, floor)
 		require.NoError(t, err)
@@ -908,29 +908,29 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 		attemptLimits.ManagedObjects = 2
 		store, directory := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		files := manifestMaterialFiles(t,
-			manifestMaterialFile{path: "config/init.lua", content: "synthetic residue capacity alpha"},
-			manifestMaterialFile{path: "config/plugins.lua", content: "synthetic residue capacity beta"},
+		files := fileSetMaterialFiles(t,
+			fileSetMaterialFile{path: "config/init.lua", content: "synthetic residue capacity alpha"},
+			fileSetMaterialFile{path: "config/plugins.lua", content: "synthetic residue capacity beta"},
 		)
 		residue := []byte("synthetic unrelated residue object")
 		incomingCustodyPlaceOrphan(t, directory, residue)
-		observation := manifestMaterialObservation(
+		observation := fileSetMaterialObservation(
 			t,
 			f.binding,
-			manifestMaterialBlock(t, f.binding, 0, nil, files),
+			fileSetMaterialBlock(t, f.binding, 0, nil, files),
 		)
-		proposal := manifestMaterialPrepare(t, store, ModeFirstUse, observation, manifestMaterialInput(files))
+		proposal := fileSetMaterialPrepare(t, store, ModeFirstUse, observation, fileSetMaterialInput(files))
 		floor, err := store.AcceptMaterialInput(
 			ctx,
 			ModeFirstUse,
 			proposal.StateToken,
 			observation,
-			manifestMaterialInput(files),
+			fileSetMaterialInput(files),
 			proposal.Confirmation,
 		)
 		assert.Equal(t, Floor{}, floor)
 		requireErrorMetadata(t, err, ErrLimit, StageAcceptMaterial, ReasonCapacity)
-		requireManifestMaterialRowsAbsent(t, store)
+		requireFileSetMaterialRowsAbsent(t, store)
 		entries, err := os.ReadDir(filepath.Join(directory, payloadDirectoryName))
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
@@ -938,7 +938,7 @@ func TestManifestMaterialBatchCapacity(t *testing.T) {
 	})
 }
 
-func TestManifestSnapshotEncodingRefusesASixtyFifthEntry(t *testing.T) {
+func TestFileSetSnapshotEncodingRefusesASixtyFifthEntry(t *testing.T) {
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	store, _ := newStore(t, f)
@@ -967,14 +967,14 @@ func TestManifestSnapshotEncodingRefusesASixtyFifthEntry(t *testing.T) {
 	require.ErrorAs(t, err, &violation)
 	assert.Equal(t, "entries", violation.Field())
 	assert.Equal(t, "count", violation.Reason())
-	requireManifestMaterialRowsAbsent(t, store)
+	requireFileSetMaterialRowsAbsent(t, store)
 }
 
-func TestManifestMaterialRefusesOverLimitEntriesBeforeHashing(t *testing.T) {
+func TestFileSetMaterialRefusesOverLimitEntriesBeforeHashing(t *testing.T) {
 	content := "synthetic shared over-limit entry"
-	files := manifestMaterialFiles(t,
-		manifestMaterialFile{path: "config/private.lua", mode: 0o600, content: content},
-		manifestMaterialFile{path: "config/shared.lua", mode: 0o644, content: content},
+	files := fileSetMaterialFiles(t,
+		fileSetMaterialFile{path: "config/private.lua", mode: 0o600, content: content},
+		fileSetMaterialFile{path: "config/shared.lua", mode: 0o644, content: content},
 	)
 	attemptLimits := DefaultAttemptLimits()
 	attemptLimits.ManagedObjects = 1
@@ -983,9 +983,9 @@ func TestManifestMaterialRefusesOverLimitEntriesBeforeHashing(t *testing.T) {
 		name  string
 		input MaterialInput
 	}{
-		{name: "matching entries", input: manifestMaterialInput(files)},
+		{name: "matching entries", input: fileSetMaterialInput(files)},
 		{name: "entries whose bytes contradict the observation", input: func() MaterialInput {
-			input := manifestMaterialInput(files)
+			input := fileSetMaterialInput(files)
 			for index := range input.Entries {
 				input.Entries[index].Content = bytes.Repeat([]byte{'x'}, len(content))
 			}
@@ -999,12 +999,12 @@ func TestManifestMaterialRefusesOverLimitEntriesBeforeHashing(t *testing.T) {
 			f.appendRecord(t, 0)
 			store, directory := openAttemptStoreWithAttemptLimits(t, f, DefaultLimits(), attemptLimits)
 			t.Cleanup(func() { assert.NoError(t, store.Close()) })
-			block := manifestMaterialBlock(t, f.binding, 0, nil, files)
+			block := fileSetMaterialBlock(t, f.binding, 0, nil, files)
 			record, err := publication.DecodeSnapshot(block.Raw)
 			require.NoError(t, err)
 			require.Len(t, record.Entries, 2)
 			require.Equal(t, record.Entries[0].Blob.CID, record.Entries[1].Blob.CID)
-			observation := manifestMaterialObservation(t, f.binding, block)
+			observation := fileSetMaterialObservation(t, f.binding, block)
 
 			_, err = store.PrepareMaterial(ctx, ModeFirstUse, observation, test.input)
 			requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
@@ -1018,7 +1018,7 @@ func TestManifestMaterialRefusesOverLimitEntriesBeforeHashing(t *testing.T) {
 			)
 			assert.Equal(t, Floor{}, floor)
 			requireErrorMetadata(t, err, ErrLimit, StageInput, ReasonCapacity)
-			requireManifestMaterialRowsAbsent(t, store)
+			requireFileSetMaterialRowsAbsent(t, store)
 			_, statErr := os.Stat(filepath.Join(directory, payloadDirectoryName))
 			assert.ErrorIs(t, statErr, os.ErrNotExist)
 		})

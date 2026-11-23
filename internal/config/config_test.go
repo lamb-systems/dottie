@@ -290,7 +290,7 @@ func TestLoadClosedSchemaAndValidation(t *testing.T) {
 
 func TestTargetFormIsNotAConfigurationOption(t *testing.T) {
 	paths := testPaths(t)
-	writeRawConfig(t, paths, "config_version=2\n[[targets]]\nid='config'\nsource='files'\nform='manifest'\n[targets.root]\nbase='home'\npath='config'\nkind='directory'\n")
+	writeRawConfig(t, paths, "config_version=2\n[[targets]]\nid='config'\nsource='files'\nform='file_set'\n[targets.root]\nbase='home'\npath='config'\nkind='directory'\n")
 
 	_, err := Load(paths)
 	require.Error(t, err)

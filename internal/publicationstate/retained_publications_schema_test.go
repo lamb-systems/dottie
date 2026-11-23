@@ -33,15 +33,15 @@ func retainedPublicationsSixColumnRows(t *testing.T, ctx context.Context, q quer
 
 func TestRetainedPublicationsSchema3Constraints(t *testing.T) {
 	ctx := context.Background()
-	f := manifestFixture(t)
+	f := fileSetFixture(t)
 	store, _ := newStore(t, fixture{t: t, binding: f.binding})
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	attempt := stageManifestAttempt(t, store, f, f.view(), attemptReview())
-	require.Len(t, attempt.Manifest.Entries, 3)
+	attempt := stageFileSetAttempt(t, store, f, f.view(), attemptReview())
+	require.Len(t, attempt.FileSet.Entries, 3)
 	cid, err := publication.RawPayloadCID(f.entries[0].Content)
 	require.NoError(t, err)
 	size := int64(len(f.entries[0].Content))
-	manifest, err := encodeRetainedManifest(attempt.Manifest)
+	fileSet, err := encodeRetainedFileSet(attempt.FileSet)
 	require.NoError(t, err)
 	recordCID := attempt.SnapshotRecordCID
 	attemptID := attempt.ID[:]
@@ -67,17 +67,17 @@ func TestRetainedPublicationsSchema3Constraints(t *testing.T) {
 			size,
 		))
 		var form string
-		var manifestValue any
-		require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT form,manifest FROM retained_publications").Scan(&form, &manifestValue))
+		var fileSetValue any
+		require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT form,file_set FROM retained_publications").Scan(&form, &fileSetValue))
 		assert.Equal(t, string(PayloadFormPacked), form)
-		assert.Nil(t, manifestValue)
+		assert.Nil(t, fileSetValue)
 	})
 
 	t.Run("packed explicit form", func(t *testing.T) {
 		reset(t)
 		require.NoError(t, insert(
 			t,
-			"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'packed',?,?,NULL,1)",
+			"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'packed',?,?,NULL,1)",
 			recordCID,
 			attemptID,
 			cid,
@@ -85,14 +85,14 @@ func TestRetainedPublicationsSchema3Constraints(t *testing.T) {
 		))
 	})
 
-	t.Run("manifest form", func(t *testing.T) {
+	t.Run("file-set form", func(t *testing.T) {
 		reset(t)
 		require.NoError(t, insert(
 			t,
-			"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'manifest',NULL,NULL,?,1)",
+			"INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'file_set',NULL,NULL,?,1)",
 			recordCID,
 			attemptID,
-			manifest,
+			fileSet,
 		))
 	})
 
@@ -102,39 +102,39 @@ func TestRetainedPublicationsSchema3Constraints(t *testing.T) {
 		args      []any
 	}{
 		{
-			name:      "packed form with a manifest",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'packed',?,?,?,1)",
-			args:      []any{recordCID, attemptID, cid, size, manifest},
+			name:      "packed form with a file-set",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'packed',?,?,?,1)",
+			args:      []any{recordCID, attemptID, cid, size, fileSet},
 		},
 		{
 			name:      "packed form without packed bytes",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'packed',NULL,NULL,NULL,1)",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'packed',NULL,NULL,NULL,1)",
 			args:      []any{recordCID, attemptID},
 		},
 		{
 			name:      "packed form without a size",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'packed',?,NULL,NULL,1)",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'packed',?,NULL,NULL,1)",
 			args:      []any{recordCID, attemptID, cid},
 		},
 		{
-			name:      "manifest form with packed bytes",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'manifest',?,?,?,1)",
-			args:      []any{recordCID, attemptID, cid, size, manifest},
+			name:      "file-set form with packed bytes",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'file_set',?,?,?,1)",
+			args:      []any{recordCID, attemptID, cid, size, fileSet},
 		},
 		{
-			name:      "manifest form with a size",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'manifest',NULL,?,?,1)",
-			args:      []any{recordCID, attemptID, size, manifest},
+			name:      "file-set form with a size",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'file_set',NULL,?,?,1)",
+			args:      []any{recordCID, attemptID, size, fileSet},
 		},
 		{
-			name:      "manifest form without a manifest",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'manifest',NULL,NULL,NULL,1)",
+			name:      "file-set form without a file-set",
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'file_set',NULL,NULL,NULL,1)",
 			args:      []any{recordCID, attemptID},
 		},
 		{
 			name:      "unknown form",
-			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,manifest,accepted_revision) VALUES(?,?,0,'hybrid',NULL,NULL,?,1)",
-			args:      []any{recordCID, attemptID, manifest},
+			statement: "INSERT INTO retained_publications(record_cid,attempt_id,sequence,form,blob_cid,size,file_set,accepted_revision) VALUES(?,?,0,'hybrid',NULL,NULL,?,1)",
+			args:      []any{recordCID, attemptID, fileSet},
 		},
 	}
 	for _, refusal := range refusals {

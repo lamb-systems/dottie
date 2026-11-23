@@ -429,7 +429,7 @@ func (s *Store) checkCandidatePayloadCapacity(
 	candidate validatedCandidate,
 	createDirectory bool,
 ) error {
-	if candidate.form == PayloadFormManifest {
+	if candidate.form == PayloadFormFileSet {
 		for _, entry := range candidate.entries {
 			if err := s.checkPayloadCapacity(
 				ctx,
@@ -530,7 +530,7 @@ func (s *Store) makeAttemptCore(
 		HeadCID:                 bytes.Clone(candidate.headCID),
 		BlobCID:                 bytes.Clone(candidate.blobCID),
 		BlobSize:                candidate.snapshot.Blob.Size,
-		Entries:                 manifestPayloadToWire(manifestPayloadOf(candidate.snapshot)),
+		Entries:                 fileSetPayloadToWire(fileSetPayloadOf(candidate.snapshot)),
 		InitialContext:          contextToWire(candidate.view.input.SuppliedContext),
 		InitialViewDigest:       bytes.Clone(candidate.view.digest[:]),
 		Review:                  reviewToWire(review),
@@ -978,8 +978,8 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if err != nil {
 		return CandidateMaterial{}, err
 	}
-	if attemptCoreForm(stored.core) == PayloadFormManifest {
-		return s.readManifestCandidate(ctx, stored, StageCustody)
+	if attemptCoreForm(stored.core) == PayloadFormFileSet {
+		return s.readFileSetCandidate(ctx, stored, StageCustody)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, StageCustody)
@@ -1065,7 +1065,7 @@ func projectAttempt(
 		HeadRecordCID:      bytes.Clone(core.HeadCID),
 		BlobCID:            bytes.Clone(core.BlobCID),
 		BlobSize:           core.BlobSize,
-		Manifest:           manifestPayloadOf(snapshot),
+		FileSet:            fileSetPayloadOf(snapshot),
 		CapturedFloor:      floor,
 		CapturedRevision:   core.CapturedRevision,
 		CapturedGeneration: core.CapturedGeneration,
@@ -1285,12 +1285,12 @@ func validateAttemptCorePayload(
 	if attemptCoreVersion(snapshot) != core.Version {
 		return errors.New("payload form")
 	}
-	if payloadFormOf(snapshot) == PayloadFormManifest {
-		manifest, err := manifestPayloadFromWire(core.Entries)
-		if err != nil || !manifestPayloadMatchesRecord(manifest, snapshot) {
+	if payloadFormOf(snapshot) == PayloadFormFileSet {
+		fileSet, err := fileSetPayloadFromWire(core.Entries)
+		if err != nil || !fileSetPayloadMatchesRecord(fileSet, snapshot) {
 			return errors.New("payload form")
 		}
-		return validateManifestPayloadCustody(manifest, attemptLimits)
+		return validateFileSetPayloadCustody(fileSet, attemptLimits)
 	}
 	if !bytes.Equal(snapshot.Blob.CID, core.BlobCID) || snapshot.Blob.Size != core.BlobSize {
 		return errors.New("snapshot")
@@ -1474,7 +1474,7 @@ func (s *Store) checkAttemptGraph(ctx context.Context, q queryer, stage Stage) e
 		if active {
 			nonretired++
 			wantedRefCount := int64(1)
-			if attemptCoreForm(attempt.core) == PayloadFormManifest {
+			if attemptCoreForm(attempt.core) == PayloadFormFileSet {
 				wantedRefCount = 0
 			}
 			if activeCount != 1 || id != activeID || refCount != wantedRefCount || reservationCount != 1 ||
@@ -1956,8 +1956,8 @@ func (s *Store) validateAttemptPayloadReference(
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	if attemptCoreForm(attempt.core) == PayloadFormManifest {
-		return s.validateManifestAttemptPayloadReference(ctx, q, attempt, stage)
+	if attemptCoreForm(attempt.core) == PayloadFormFileSet {
+		return s.validateFileSetAttemptPayloadReference(ctx, q, attempt, stage)
 	}
 	var refCIDValue, objectCIDValue, sizeValue, basenameValue any
 	if err := q.QueryRowContext(ctx, "SELECT attempt_payload_refs.blob_cid,payload_objects.blob_cid,payload_objects.size,payload_objects.basename FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", attempt.core.AttemptID).
@@ -1983,26 +1983,26 @@ func (s *Store) validateAttemptPayloadReference(
 	return nil
 }
 
-func (s *Store) validateManifestAttemptPayloadReference(
+func (s *Store) validateFileSetAttemptPayloadReference(
 	ctx context.Context,
 	q queryer,
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	manifest, err := manifestPayloadFromWire(attempt.core.Entries)
+	fileSet, err := fileSetPayloadFromWire(attempt.core.Entries)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return s.checkManifestPayloadReferences(ctx, q, manifest, stage)
+	return s.checkFileSetPayloadReferences(ctx, q, fileSet, stage)
 }
 
-func (s *Store) checkManifestPayloadReferences(
+func (s *Store) checkFileSetPayloadReferences(
 	ctx context.Context,
 	q queryer,
-	manifest *ManifestPayload,
+	fileSet *FileSetPayload,
 	stage Stage,
 ) error {
-	for _, entry := range manifest.Entries {
+	for _, entry := range fileSet.Entries {
 		var objectCIDValue, sizeValue, basenameValue any
 		if err := q.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", entry.CID).
 			Scan(&objectCIDValue, &sizeValue, &basenameValue); err != nil {
@@ -2021,14 +2021,14 @@ func (s *Store) checkManifestPayloadReferences(
 }
 
 type retainedPublicationRow struct {
-	recordCID      []byte
-	sequence       int64
-	revision       int64
-	form           PayloadForm
-	blobCID        []byte
-	size           int64
-	hasManifest    bool
-	manifestLength int64
+	recordCID     []byte
+	sequence      int64
+	revision      int64
+	form          PayloadForm
+	blobCID       []byte
+	size          int64
+	hasFileSet    bool
+	fileSetLength int64
 }
 
 func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, attempt storedAttempt, stage Stage) error {
@@ -2078,27 +2078,27 @@ func (s *Store) validateRetainedPayload(
 ) error {
 	switch row.form {
 	case PayloadFormPacked:
-		if row.hasManifest || !bytes.Equal(row.blobCID, attempt.core.BlobCID) || row.size <= 0 ||
+		if row.hasFileSet || !bytes.Equal(row.blobCID, attempt.core.BlobCID) || row.size <= 0 ||
 			uint64(row.size) != attempt.core.BlobSize ||
 			!bytes.Equal(acceptedFloor.BlobCID, attempt.core.BlobCID) ||
-			acceptedFloor.BlobSize != attempt.core.BlobSize || acceptedFloor.Manifest != nil {
+			acceptedFloor.BlobSize != attempt.core.BlobSize || acceptedFloor.FileSet != nil {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		return nil
-	case PayloadFormManifest:
+	case PayloadFormFileSet:
 		if len(row.blobCID) != 0 || row.size != 0 || len(attempt.core.BlobCID) != 0 ||
 			attempt.core.BlobSize != 0 || !floorPayloadMatchesRecord(acceptedFloor, *snapshot) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		manifest, err := s.readRetainedManifest(ctx, q, attempt, row.manifestLength, stage)
+		fileSet, err := s.readRetainedFileSet(ctx, q, attempt, row.fileSetLength, stage)
 		if err != nil {
 			return err
 		}
-		if !sameManifestPayload(manifest, manifestPayloadOf(*snapshot)) ||
-			!sameManifestPayload(manifest, acceptedFloor.Manifest) {
+		if !sameFileSetPayload(fileSet, fileSetPayloadOf(*snapshot)) ||
+			!sameFileSetPayload(fileSet, acceptedFloor.FileSet) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		return s.checkManifestPayloadReferences(ctx, q, manifest, stage)
+		return s.checkFileSetPayloadReferences(ctx, q, fileSet, stage)
 	}
 	return classified(ErrSchema, stage, ReasonCorrupt)
 }
@@ -2161,10 +2161,10 @@ func (s *Store) readUnionRetainedPublication(
 	var formTypeValue, formValue, formLengthValue any
 	var blobTypeValue, blobValue, blobLengthValue any
 	var sizeTypeValue, sizeValue any
-	var manifestTypeValue, manifestLengthValue any
+	var fileSetTypeValue, fileSetLengthValue any
 	var seqValue, revisionValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),substr(blob_cid,1,129),length(blob_cid),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(manifest),length(CAST(manifest AS BLOB)),sequence,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
-		Scan(&recordValue, &recordLengthValue, &formTypeValue, &formValue, &formLengthValue, &blobTypeValue, &blobValue, &blobLengthValue, &sizeTypeValue, &sizeValue, &manifestTypeValue, &manifestLengthValue, &seqValue, &revisionValue); err != nil {
+	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),substr(blob_cid,1,129),length(blob_cid),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(file_set),length(CAST(file_set AS BLOB)),sequence,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
+		Scan(&recordValue, &recordLengthValue, &formTypeValue, &formValue, &formLengthValue, &blobTypeValue, &blobValue, &blobLengthValue, &sizeTypeValue, &sizeValue, &fileSetTypeValue, &fileSetLengthValue, &seqValue, &revisionValue); err != nil {
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	record, recordOK := rawBytes(recordValue)
@@ -2177,14 +2177,14 @@ func (s *Store) readUnionRetainedPublication(
 	blobLength, blobLengthOK := rawInt64(blobLengthValue)
 	sizeType, sizeTypeOK := sizeTypeValue.(string)
 	size, sizeOK := rawInt64(sizeValue)
-	manifestType, manifestTypeOK := manifestTypeValue.(string)
-	manifestLength, manifestLengthOK := rawInt64(manifestLengthValue)
+	fileSetType, fileSetTypeOK := fileSetTypeValue.(string)
+	fileSetLength, fileSetLengthOK := rawInt64(fileSetLengthValue)
 	seq, seqOK := rawInt64(seqValue)
 	revision, revisionOK := rawInt64(revisionValue)
 	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
 		int64(len(record)) != recordLength ||
 		!formTypeOK || formType != "text" || !formOK || !formLengthOK || formLength != int64(len(form)) ||
-		!seqOK || seq < 0 || !revisionOK || revision <= 0 || !manifestTypeOK {
+		!seqOK || seq < 0 || !revisionOK || revision <= 0 || !fileSetTypeOK {
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	row := retainedPublicationRow{
@@ -2197,20 +2197,20 @@ func (s *Store) readUnionRetainedPublication(
 		if !blobTypeOK || blobType != "blob" || !blobOK || !blobLengthOK || blobLength <= 0 ||
 			blobLength > publication.MaxCIDBytes || int64(len(blob)) != blobLength ||
 			!sizeTypeOK || sizeType != "integer" || !sizeOK || size <= 0 ||
-			manifestType != "null" {
+			fileSetType != "null" {
 			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		row.form = PayloadFormPacked
 		row.blobCID = bytes.Clone(blob)
 		row.size = size
-	case PayloadFormManifest:
-		if blobType != "null" || sizeType != "null" || manifestType != "blob" ||
-			!manifestLengthOK || manifestLength <= 0 || manifestLength > publication.MaxManifestRecordBytes {
+	case PayloadFormFileSet:
+		if blobType != "null" || sizeType != "null" || fileSetType != "blob" ||
+			!fileSetLengthOK || fileSetLength <= 0 || fileSetLength > publication.MaxFileSetRecordBytes {
 			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		row.form = PayloadFormManifest
-		row.hasManifest = true
-		row.manifestLength = manifestLength
+		row.form = PayloadFormFileSet
+		row.hasFileSet = true
+		row.fileSetLength = fileSetLength
 	default:
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -2239,27 +2239,27 @@ func (s *Store) readRetainedAcceptedEvent(
 	return acceptedFloor, digest, nil
 }
 
-func (s *Store) readRetainedManifest(
+func (s *Store) readRetainedFileSet(
 	ctx context.Context,
 	q queryer,
 	attempt storedAttempt,
-	manifestLength int64,
+	fileSetLength int64,
 	stage Stage,
-) (*ManifestPayload, error) {
-	var manifestValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(manifest,1,?) FROM retained_publications WHERE attempt_id=?", publication.MaxManifestRecordBytes+1, attempt.core.AttemptID).
-		Scan(&manifestValue); err != nil {
+) (*FileSetPayload, error) {
+	var fileSetValue any
+	if err := q.QueryRowContext(ctx, "SELECT substr(file_set,1,?) FROM retained_publications WHERE attempt_id=?", publication.MaxFileSetRecordBytes+1, attempt.core.AttemptID).
+		Scan(&fileSetValue); err != nil {
 		return nil, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	raw, rawOK := rawBytes(manifestValue)
-	if !rawOK || int64(len(raw)) != manifestLength {
+	raw, rawOK := rawBytes(fileSetValue)
+	if !rawOK || int64(len(raw)) != fileSetLength {
 		return nil, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	manifest, err := decodeRetainedManifest(raw)
+	fileSet, err := decodeRetainedFileSet(raw)
 	if err != nil {
 		return nil, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return manifest, nil
+	return fileSet, nil
 }
 
 func (s *Store) reconcileAttemptMutationRevision(ctx context.Context, q queryer, stage Stage) (uint64, error) {

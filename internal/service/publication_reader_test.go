@@ -476,10 +476,10 @@ func publicationReaderMalformedPayload(t *testing.T) []byte {
 	require.NotNil(t, header)
 	_, err = io.Copy(io.Discard, archive)
 	require.NoError(t, err)
-	manifestEnd := len(packed) - input.Len()
-	require.Greater(t, manifestEnd, 512)
-	require.Less(t, manifestEnd, len(packed))
-	malformed := bytes.Clone(packed[:manifestEnd])
+	fileSetEnd := len(packed) - input.Len()
+	require.Greater(t, fileSetEnd, 512)
+	require.Less(t, fileSetEnd, len(packed))
+	malformed := bytes.Clone(packed[:fileSetEnd])
 	_, unpackErr := vault.UnpackPayload(malformed)
 	require.ErrorIs(t, unpackErr, vault.ErrInvalidPayload)
 	var payloadError *vault.PayloadError
@@ -488,15 +488,15 @@ func publicationReaderMalformedPayload(t *testing.T) []byte {
 	return malformed
 }
 
-type publicationReaderManifestFile struct {
+type publicationReaderFileSetFile struct {
 	path    string
 	mode    uint32
 	content []byte
 }
 
-func (fixture *publicationReaderFixture) manifestPublication(
+func (fixture *publicationReaderFixture) fileSetPublication(
 	t *testing.T,
-	files ...publicationReaderManifestFile,
+	files ...publicationReaderFileSetFile,
 ) (publication.SnapshotRecord, map[string][]byte) {
 	t.Helper()
 	entries := make([]publication.SnapshotEntry, 0, len(files))
@@ -553,17 +553,17 @@ func (fixture *publicationReaderFixture) substituteBlob(content, substitute []by
 	fixture.transport.mu.Unlock()
 }
 
-func fixtureManifestFiles() []publicationReaderManifestFile {
-	return []publicationReaderManifestFile{
-		{path: "init.lua", mode: 0o600, content: []byte("synthetic manifest init")},
-		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic manifest options")},
+func fixtureFileSetFiles() []publicationReaderFileSetFile {
+	return []publicationReaderFileSetFile{
+		{path: "init.lua", mode: 0o600, content: []byte("synthetic file-set init")},
+		{path: "lua/config/options.lua", mode: 0o644, content: []byte("synthetic file-set options")},
 	}
 }
 
-func TestPublicationReaderReadsAManifestPublicationWithVerifiedEntries(t *testing.T) {
+func TestPublicationReaderReadsAFileSetPublicationWithVerifiedEntries(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	fixture.manifestPublication(t, fixtureManifestFiles()...)
+	fixture.fileSetPublication(t, fixtureFileSetFiles()...)
 
 	view, err := fixture.reader.ReadView(ctx)
 	require.NoError(t, err)
@@ -575,77 +575,77 @@ func TestPublicationReaderReadsAManifestPublicationWithVerifiedEntries(t *testin
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, view.Head, accepted.View.Head)
-	assert.Equal(t, publication.PayloadFormManifest, accepted.Payload.Form)
+	assert.Equal(t, publication.PayloadFormFileSet, accepted.Payload.Form)
 	assert.Equal(t, model.Snapshot{}, accepted.Payload.Snapshot)
 	require.Len(t, accepted.Payload.Entries, 2)
 	assert.Equal(t, "init.lua", accepted.Payload.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), accepted.Payload.Entries[0].Mode)
-	assert.Equal(t, []byte("synthetic manifest init"), accepted.Payload.Entries[0].Content)
+	assert.Equal(t, []byte("synthetic file-set init"), accepted.Payload.Entries[0].Content)
 	assert.Equal(t, "lua/config/options.lua", accepted.Payload.Entries[1].Path)
 	assert.Equal(t, uint32(0o644), accepted.Payload.Entries[1].Mode)
-	assert.Equal(t, []byte("synthetic manifest options"), accepted.Payload.Entries[1].Content)
-	assert.Equal(t, uint64(len("synthetic manifest init")), accepted.Payload.Entries[0].Size)
-	assert.Equal(t, uint64(len("synthetic manifest options")), accepted.Payload.Entries[1].Size)
+	assert.Equal(t, []byte("synthetic file-set options"), accepted.Payload.Entries[1].Content)
+	assert.Equal(t, uint64(len("synthetic file-set init")), accepted.Payload.Entries[0].Size)
+	assert.Equal(t, uint64(len("synthetic file-set options")), accepted.Payload.Entries[1].Size)
 	assert.Equal(t, 2, fixture.transport.blobStreams)
 
 	snapshot, err := accepted.Payload.PackedSnapshot()
 	assert.Equal(t, model.Snapshot{}, snapshot)
-	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	require.ErrorIs(t, err, publication.ErrFileSetPayload)
 }
 
-func TestPublicationReaderRefusesAMissingManifestEntryBlobNamingThePath(t *testing.T) {
+func TestPublicationReaderRefusesAMissingFileSetEntryBlobNamingThePath(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	files := fixtureManifestFiles()
-	fixture.manifestPublication(t, files...)
+	files := fixtureFileSetFiles()
+	fixture.fileSetPublication(t, files...)
 	fixture.forgetBlob(files[1].content)
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched manifest payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched file-set payload was exposed")
 	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
-	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	require.ErrorIs(t, err, publication.ErrFileSetPayload)
 	require.ErrorIs(t, err, atproto.ErrReadBlobMissing)
-	var refusal *publication.ManifestPayloadError
+	var refusal *publication.FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[1].path, refusal.EntryPath())
-	assert.Equal(t, publication.ManifestReasonUnavailable, refusal.Reason)
+	assert.Equal(t, publication.FileSetReasonUnavailable, refusal.Reason)
 	assert.Contains(t, err.Error(), files[1].path)
 	assert.Equal(t, 2, fixture.transport.blobStreams, "the reader kept fetching after the refused entry")
 }
 
-func TestPublicationReaderRefusesAMismatchedManifestEntryNamingThePath(t *testing.T) {
+func TestPublicationReaderRefusesAMismatchedFileSetEntryNamingThePath(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
-	files := fixtureManifestFiles()
-	fixture.manifestPublication(t, files...)
+	files := fixtureFileSetFiles()
+	fixture.fileSetPublication(t, files...)
 	fixture.substituteBlob(files[1].content, files[1].content[:len(files[1].content)-1])
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched manifest payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "a partially fetched file-set payload was exposed")
 	require.ErrorIs(t, err, ErrPublicationReaderAccepted)
-	require.ErrorIs(t, err, publication.ErrManifestPayload)
+	require.ErrorIs(t, err, publication.ErrFileSetPayload)
 	require.ErrorIs(t, err, atproto.ErrReadBlobTruncated)
-	var refusal *publication.ManifestPayloadError
+	var refusal *publication.FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[1].path, refusal.EntryPath())
 	assert.Contains(t, err.Error(), files[1].path)
 }
 
-func TestPublicationReaderRefusesAManifestPayloadWithAPartiallyAvailableEntrySet(t *testing.T) {
+func TestPublicationReaderRefusesAFileSetPayloadWithAPartiallyAvailableEntrySet(t *testing.T) {
 	ctx := context.Background()
 	fixture := newPublicationReaderFixture(t, newATProtoMaterialRepository(t, atprotoMaterialDID))
 	files := append(
-		fixtureManifestFiles(),
-		publicationReaderManifestFile{path: "lua/plugin/manifest.lua", mode: 0o600, content: []byte("manifest plugin")},
+		fixtureFileSetFiles(),
+		publicationReaderFileSetFile{path: "lua/plugin/file-set.lua", mode: 0o600, content: []byte("file-set plugin")},
 	)
-	fixture.manifestPublication(t, files...)
+	fixture.fileSetPublication(t, files...)
 	fixture.forgetBlob(files[2].content)
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
-	assert.Equal(t, AcceptedPublication{}, accepted, "an incomplete manifest payload was exposed")
+	assert.Equal(t, AcceptedPublication{}, accepted, "an incomplete file-set payload was exposed")
 	assert.Empty(t, accepted.Payload.Entries)
-	require.ErrorIs(t, err, publication.ErrManifestPayload)
-	var refusal *publication.ManifestPayloadError
+	require.ErrorIs(t, err, publication.ErrFileSetPayload)
+	var refusal *publication.FileSetPayloadError
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, files[2].path, refusal.EntryPath())
 	assert.Equal(t, 3, fixture.transport.blobStreams)

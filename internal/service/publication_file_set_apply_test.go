@@ -17,36 +17,36 @@ import (
 	"github.com/lamb-systems/dottie/internal/source/files"
 )
 
-func manifestApplyUmask(t *testing.T) {
+func fileSetApplyUmask(t *testing.T) {
 	t.Helper()
 	previous := syscall.Umask(0o022)
 	t.Cleanup(func() { syscall.Umask(previous) })
 }
 
-func manifestApplyRemote(t *testing.T, fixture publicationApplyFixture, entries ...publication.PayloadEntry) model.Snapshot {
+func fileSetApplyRemote(t *testing.T, fixture publicationApplyFixture, entries ...publication.PayloadEntry) model.Snapshot {
 	t.Helper()
-	snapshot, err := ProjectManifestSnapshot(fixture.portable, entries)
+	snapshot, err := ProjectFileSetSnapshot(fixture.portable, entries)
 	require.NoError(t, err)
 	return snapshot
 }
 
-func manifestApplyEntry(path string, mode uint32, content string) publication.PayloadEntry {
+func fileSetApplyEntry(path string, mode uint32, content string) publication.PayloadEntry {
 	return publication.PayloadEntry{
 		Path: path, Mode: mode, Size: uint64(len(content)), Content: []byte(content),
 	}
 }
 
-func TestManifestApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
-	manifestApplyUmask(t)
+func TestFileSetApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
+	fileSetApplyUmask(t)
 	fixture := newPublicationApplyFixture(t)
-	remote := manifestApplyRemote(
+	remote := fileSetApplyRemote(
 		t,
 		fixture,
-		manifestApplyEntry("init.lua", 0o600, "synthetic manifest init"),
-		manifestApplyEntry("lua/config/options.lua", 0o644, "synthetic manifest options"),
+		fileSetApplyEntry("init.lua", 0o600, "synthetic file-set init"),
+		fileSetApplyEntry("lua/config/options.lua", 0o644, "synthetic file-set options"),
 	)
 	request := fixture.request(fixture.local, fixture.emptySnapshot(), remote)
-	request.Manifest = true
+	request.FileSet = true
 
 	plan, err := PlanPublicationApply(context.Background(), request)
 	require.NoError(t, err)
@@ -54,13 +54,13 @@ func TestManifestApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
 	assert.Equal(t, []PublicationApplyPlanEntry{
 		{
 			TargetID: fixture.target.ID, Path: "init.lua", Operation: PublicationApplyWrite,
-			Size: uint64(len("synthetic manifest init")),
+			Size: uint64(len("synthetic file-set init")),
 		},
 		{TargetID: fixture.target.ID, Path: "lua", Operation: PublicationApplyMkdir},
 		{TargetID: fixture.target.ID, Path: "lua/config", Operation: PublicationApplyMkdir},
 		{
 			TargetID: fixture.target.ID, Path: "lua/config/options.lua", Operation: PublicationApplyWrite,
-			Size: uint64(len("synthetic manifest options")),
+			Size: uint64(len("synthetic file-set options")),
 		},
 	}, plan.Entries)
 	require.NoDirExists(t, fixture.path("lua"), "planning created a directory")
@@ -72,7 +72,7 @@ func TestManifestApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
 	assert.Zero(t, report.Unchanged)
 	assert.Equal(
 		t,
-		uint64(len("synthetic manifest init")+len("synthetic manifest options")),
+		uint64(len("synthetic file-set init")+len("synthetic file-set options")),
 		report.BytesWritten,
 	)
 
@@ -87,8 +87,8 @@ func TestManifestApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
 		assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), path)
 	}
 
-	assert.Equal(t, "synthetic manifest init", fixture.read(t, "init.lua"))
-	assert.Equal(t, "synthetic manifest options", fixture.read(t, "lua/config/options.lua"))
+	assert.Equal(t, "synthetic file-set init", fixture.read(t, "init.lua"))
+	assert.Equal(t, "synthetic file-set options", fixture.read(t, "lua/config/options.lua"))
 	for path, want := range map[string]os.FileMode{"init.lua": 0o600, "lua/config/options.lua": 0o644} {
 		info, err := os.Lstat(fixture.path(path))
 		require.NoError(t, err)
@@ -101,12 +101,12 @@ func TestManifestApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
 	assert.NoError(t, fixture.journal.CheckAdmission(context.Background(), fixture.floor))
 }
 
-func newManifestApplySymlinkedParentRequest(
+func newFileSetApplySymlinkedParentRequest(
 	t *testing.T,
 ) (publicationApplyFixture, PublicationApplyRequest, string) {
 	t.Helper()
 	fixture := newPublicationApplyFixture(t)
-	remote := manifestApplyRemote(t, fixture, manifestApplyEntry("linked/app.conf", 0o600, "synthetic linked"))
+	remote := fileSetApplyRemote(t, fixture, fileSetApplyEntry("linked/app.conf", 0o600, "synthetic linked"))
 	outside := filepath.Join(fixture.paths.Home, "outside")
 	require.NoError(t, os.Mkdir(outside, 0o700))
 	capture := publicationCapturePortFunc(
@@ -122,13 +122,13 @@ func newManifestApplySymlinkedParentRequest(
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 	request := fixture.request(local, fixture.emptySnapshot(), remote)
-	request.Manifest = true
+	request.FileSet = true
 	return fixture, request, outside
 }
 
-func TestManifestApplyRefusesASymlinkedParentBeforeJournaling(t *testing.T) {
+func TestFileSetApplyRefusesASymlinkedParentBeforeJournaling(t *testing.T) {
 	t.Run("plan", func(t *testing.T) {
-		fixture, request, outside := newManifestApplySymlinkedParentRequest(t)
+		fixture, request, outside := newFileSetApplySymlinkedParentRequest(t)
 
 		_, err := PlanPublicationApply(context.Background(), request)
 		requirePublicationApplyRefusal(t, err, "apply-plan", "missing_parent")
@@ -137,7 +137,7 @@ func TestManifestApplyRefusesASymlinkedParentBeforeJournaling(t *testing.T) {
 	})
 
 	t.Run("apply", func(t *testing.T) {
-		fixture, request, outside := newManifestApplySymlinkedParentRequest(t)
+		fixture, request, outside := newFileSetApplySymlinkedParentRequest(t)
 
 		_, err := ApplyPublication(context.Background(), request)
 		requirePublicationApplyRefusal(t, err, "apply-plan", "missing_parent")
@@ -146,12 +146,12 @@ func TestManifestApplyRefusesASymlinkedParentBeforeJournaling(t *testing.T) {
 	})
 }
 
-func TestManifestApplyRefusesADirectoryDownloadInBackupOnly(t *testing.T) {
+func TestFileSetApplyRefusesADirectoryDownloadInBackupOnly(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	fixture.configuration.Targets[0].Mode = config.BackupOnly
-	remote := manifestApplyRemote(t, fixture, manifestApplyEntry("nested/app.conf", 0o600, "synthetic nested"))
+	remote := fileSetApplyRemote(t, fixture, fileSetApplyEntry("nested/app.conf", 0o600, "synthetic nested"))
 	request := fixture.request(fixture.local, fixture.emptySnapshot(), remote)
-	request.Manifest = true
+	request.FileSet = true
 
 	_, err := PlanPublicationApply(context.Background(), request)
 	requirePublicationApplyRefusal(t, err, "apply-plan", "backup_only")
