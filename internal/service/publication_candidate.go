@@ -164,9 +164,13 @@ func encodePublicationCandidate(
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
 		}
+		snapshotTargets, err := fileSetSnapshotTargets(snapshot)
+		if err != nil {
+			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		}
 		snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-			PublicationSeq: sequence, Parent: parent, Entries: snapshotEntries,
+			PublicationSeq: sequence, Parent: parent, Entries: snapshotEntries, Targets: snapshotTargets,
 		})
 		if err != nil {
 			return publicationstate.CandidateInput{}, publication.BlobReference{}, err

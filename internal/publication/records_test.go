@@ -871,7 +871,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	)
 	assert.Equal(
 		t,
-		[]string{"blob", "entries", "parent", "publicationId", "publicationSeq", "schemaVersion", "vault"},
+		[]string{"blob", "entries", "parent", "publicationId", "publicationSeq", "schemaVersion", "targets", "vault"},
 		sortedPropertyKeys(snapshot.Defs["main"].Record.Properties),
 	)
 	assert.Equal(
@@ -946,6 +946,27 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 		},
 		entryProperties["blob"],
 	)
+	targetsProperty := snapshot.Defs["main"].Record.Properties["targets"]
+	assert.Equal(t, "array", targetsProperty["type"])
+	assert.InDelta(t, float64(1), targetsProperty["minLength"], 0)
+	assert.InDelta(t, float64(1), targetsProperty["maxLength"], 0)
+	targetItems, ok := targetsProperty["items"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "object", targetItems["type"])
+	assert.Equal(t, []any{"id", "source", "source_version", "root"}, targetItems["required"])
+	targetProperties, ok := targetItems["properties"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"type": "string", "maxLength": float64(128)}, targetProperties["id"])
+	assert.Equal(t, map[string]any{"type": "string", "const": "files"}, targetProperties["source"])
+	assert.Equal(t, map[string]any{"type": "integer", "const": float64(1)}, targetProperties["source_version"])
+	rootProperty, ok := targetProperties["root"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"base", "path", "kind"}, rootProperty["required"])
+	rootProperties, ok := rootProperty["properties"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"type": "string", "enum": []any{"home", "xdg-config"}}, rootProperties["base"])
+	assert.Equal(t, map[string]any{"type": "string", "maxLength": float64(4096)}, rootProperties["path"])
+	assert.Equal(t, map[string]any{"type": "string", "enum": []any{"file", "directory"}}, rootProperties["kind"])
 	assert.Equal(
 		t,
 		map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)},

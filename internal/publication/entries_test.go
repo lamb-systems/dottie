@@ -423,6 +423,7 @@ func TestFileSetEntriesSortRegularFilesIntoARecord(t *testing.T) {
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
 		Entries:       entries,
+		Targets:       fixtureFileSetTargets(),
 	}
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -442,6 +443,7 @@ func TestFileSetRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
 		Entries:       entries,
+		Targets:       fixtureFileSetTargets(),
 	}
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -462,7 +464,15 @@ func fixtureFileSetRecord(t testing.TB) SnapshotRecord {
 			fixtureEntry(t, "init.lua", []byte("file-set init"), 0o600),
 			fixtureEntry(t, "lua/config/options.lua", []byte("file-set options"), 0o644),
 		},
+		Targets: fixtureFileSetTargets(),
 	}
+}
+
+func fixtureFileSetTargets() []model.Target {
+	return []model.Target{{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootXDGConfig, Path: "dotfiles", Kind: model.SelectionDirectory},
+	}}
 }
 
 func fixtureEntry(t testing.TB, path string, content []byte, mode uint32) SnapshotEntry {
@@ -514,7 +524,25 @@ func independentFileSetValue(t testing.TB, record SnapshotRecord) map[string]any
 		"publicationSeq": int64(record.PublicationSeq),
 		"parent":         parent,
 		"entries":        independentEntriesValue(t, record.Entries),
+		"targets":        independentTargetsValue(record.Targets),
 	}
+}
+
+func independentTargetsValue(targets []model.Target) []any {
+	values := make([]any, 0, len(targets))
+	for _, target := range targets {
+		values = append(values, map[string]any{
+			"id":             target.ID,
+			"source":         string(target.Source),
+			"source_version": int64(target.SourceVersion),
+			"root": map[string]any{
+				"base": string(target.Root.Base),
+				"path": target.Root.Path,
+				"kind": string(target.Root.Kind),
+			},
+		})
+	}
+	return values
 }
 
 func independentFileSetBytes(t testing.TB, record SnapshotRecord) []byte {
@@ -537,4 +565,60 @@ func fileSetEntryValue(t testing.TB, value map[string]any, index int) map[string
 	entry, ok := entries[index].(map[string]any)
 	require.True(t, ok)
 	return entry
+}
+
+func TestSnapshotRecordFileSetToleratesALegacyRecordWithoutATarget(t *testing.T) {
+	legacy := fixtureFileSetRecord(t)
+	legacy.Targets = nil
+	value := independentFileSetValue(t, legacy)
+	delete(value, "targets")
+	decoded, err := DecodeSnapshot(testCBOR(value))
+	require.NoError(t, err)
+	assert.Nil(t, decoded.Targets)
+	assert.Equal(t, legacy.Entries, decoded.Entries)
+
+	encoded, err := EncodeSnapshot(decoded)
+	require.NoError(t, err)
+	assert.Equal(t, testCBOR(value), encoded, "the legacy record did not re-encode canonically")
+}
+
+func TestSnapshotRecordRefusesAFileTargetWithADifferentEntryPath(t *testing.T) {
+	record := fixtureFileSetRecord(t)
+	record.Entries = record.Entries[:1]
+	record.Targets[0].Root = &model.FileRoot{
+		Base: model.RootXDGConfig, Path: "dotfiles/other.lua", Kind: model.SelectionFile,
+	}
+	encoded, err := EncodeSnapshot(record)
+	assert.Nil(t, encoded)
+	requireViolation(t, err, ErrInvalidRecord, "targets.root", "mismatch")
+
+	record.Targets[0].Root.Path = "dotfiles/init.lua"
+	encoded, err = EncodeSnapshot(record)
+	require.NoError(t, err)
+	decoded, err := DecodeSnapshot(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, record, decoded)
+}
+
+func TestSnapshotRecordRefusesTargetsOnAPackedPayload(t *testing.T) {
+	record := fixtureSnapshotValue(t)
+	record.Targets = fixtureFileSetTargets()
+	encoded, err := EncodeSnapshot(record)
+	assert.Nil(t, encoded)
+	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
+
+	value := independentSnapshotValue(t, fixtureSnapshotValue(t))
+	value["targets"] = independentTargetsValue(record.Targets)
+	decoded, err := DecodeSnapshot(testCBOR(value))
+	assert.Equal(t, SnapshotRecord{}, decoded)
+	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
+}
+
+func TestSnapshotRecordRefusesAFileSetTargetWithAnUnsupportedSource(t *testing.T) {
+	record := fixtureFileSetRecord(t)
+	record.Targets[0].Source = model.SourceGNOME
+	record.Targets[0].Root = nil
+	encoded, err := EncodeSnapshot(record)
+	assert.Nil(t, encoded)
+	requireViolation(t, err, ErrInvalidRecord, "targets.target", "unsupported")
 }

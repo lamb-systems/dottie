@@ -956,7 +956,7 @@ func TestFileSetSnapshotEncodingRefusesASixtyFifthEntry(t *testing.T) {
 	}
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault,
-		PublicationSeq: 0, Parent: nil, Entries: entries,
+		PublicationSeq: 0, Parent: nil, Entries: entries, Targets: fileSetTestTargets(),
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], 1)
 	raw, err := publication.EncodeSnapshot(record)

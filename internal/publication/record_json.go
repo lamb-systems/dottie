@@ -94,6 +94,9 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 				return nil, err
 			}
 			value["entries"] = entries
+			if len(record.Targets) != 0 {
+				value["targets"] = record.Targets
+			}
 			return value, nil
 		}
 		blobCID, err := cid.Cast(record.Blob.CID)

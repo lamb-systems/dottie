@@ -73,8 +73,9 @@ The file-set entry list is strictly more evidence than the packed path has, not 
 
 V2 typed repository records are public plaintext metadata. The published head and snapshot records
 disclose the vault and publication identifiers, sequence, parent and CIDs. A file-set record also
-discloses every file path, mode, size and blob CID, although not the file content in the record
-itself; the blobs are plaintext. Do not publish configuration you are unwilling to place in the
+discloses the target id, its portable root of base, relative path and kind, and every file path,
+mode, size and blob CID, although not the file content in the record itself; the blobs are
+plaintext. Do not publish configuration you are unwilling to place in the
 account repository and provider storage.
 
 Dottie has no log facility. Routine status, read, push, pull, sync and position output omits file
@@ -101,16 +102,26 @@ recovery kit and no export archive in this tree, and no command mints, reads or 
 account access or provider-held data can therefore lose the published position; losing Dottie device
 keys alone does not.
 
-A file-set record carries no target id or portable root. Dottie maps it only to the sole local files
-target, a single directory or a single selected file, and cannot detect that a publisher used a
-different directory or file. A single-file target publishes its file under the basename of its
-configured path, and pull maps the sole file-set entry back to that file without synthesizing parent
-directories. The pull confirmation binds the local target id, portable root and selection/approval
-revisions, so changing the local target, root or configuration between review and confirmation
-refuses. Multi-target configurations cannot consume a file-set base; they fall back to packed only
-when the accepted base is packed. The target root must exist before apply. Missing parent
-directories named implicitly by a directory file-set entry are created with mode `0755`;
-directory modes are not carried in the record.
+A file-set record names the target it was captured from: an id and a portable root of base,
+relative path and kind. A record cannot grant local path access on its own. Adoption happens only
+on its own pull confirmation, only when the machine configures no files target, and only after the
+same checks and canonicalization `targets add` performs: the root must resolve inside HOME or
+XDG_CONFIG_HOME, must not overlap Dottie's own directories or an existing target, and the adopted
+target is stored at its resolved path. The proposed root is resolved and validated before that
+confirmation but its contents are not captured: the plan that reads the target is composed only
+after adoption is confirmed, and its confirmation binds the resolved root. The adopted target uses
+review mode and no excludes, and the sync path refuses adoption because its push half is already
+composed. A machine that already configures files targets keeps them, and the published root is not
+enforced against them, so the record cannot redirect an existing target. A file-set record written
+before this field existed names no root, so it cannot be adopted and pull requires a local files
+target for it. A single-file target publishes its file under the basename of its configured path,
+and pull maps the sole file-set entry back to that file without synthesizing parent directories.
+The pull confirmation binds the local target id, portable root and selection/approval revisions,
+including any adopted target, so changing the local target, root or
+configuration between review and confirmation refuses. Multi-target configurations cannot consume a
+file-set base; they fall back to packed only when the accepted base is packed. The target root must
+exist before apply. Missing parent directories named implicitly by a directory file-set entry are
+created with mode `0755`; directory modes are not carried in the record.
 
 Local state is plaintext on disk. The publication position database, the apply journal, journal
 preimage backups and captured payloads are readable by anyone who can read the state directory. Local

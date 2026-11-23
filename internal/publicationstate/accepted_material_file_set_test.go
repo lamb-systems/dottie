@@ -76,6 +76,7 @@ func fileSetMaterialBlock(
 		PublicationSeq: sequence,
 		Parent:         parent,
 		Entries:        entries,
+		Targets:        fileSetTestTargets(),
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)

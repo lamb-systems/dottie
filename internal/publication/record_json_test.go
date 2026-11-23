@@ -298,3 +298,17 @@ func requireRecordJSONViolation(t *testing.T, err error, reason string) {
 	assert.Equal(t, "record", problem.Field())
 	assert.Equal(t, reason, problem.Reason())
 }
+
+func TestRecordToJSONFileSetCarriesTheTargetLayout(t *testing.T) {
+	record := fixtureFileSetRecord(t)
+	encoded, err := EncodeSnapshot(record)
+	require.NoError(t, err)
+	jsonBytes, err := RecordToJSON(encoded)
+	require.NoError(t, err)
+	assert.Contains(
+		t,
+		string(jsonBytes),
+		`"targets":[{"id":"files","source":"files","source_version":1,"root":{"base":"xdg-config","path":"dotfiles","kind":"directory"}}]`,
+	)
+	assertRecordJSONSDKRoundTrip(t, encoded, jsonBytes, "")
+}

@@ -76,6 +76,7 @@ type pullRemoteFactory func(context.Context, *urfave.Command, pushSession, publi
 type pullApplySources struct {
 	Paths         platform.Paths
 	Configuration config.Config
+	Token         config.Token
 	Local         *service.PublicationLocalContext
 }
 
@@ -89,6 +90,7 @@ type pullApplyMaterial struct {
 	BaseForm    publication.PayloadForm
 	Entries     []publication.PayloadEntry
 	BaseEntries []publication.PayloadEntry
+	Targets     []model.Target
 	TargetID    string
 	TargetRoot  model.FileRoot
 	RecordCID   []byte
@@ -455,14 +457,22 @@ func (input pullApplyPlanRequest) label() string {
 }
 
 type pullApplyPreparation struct {
-	Sources     pullApplySources
-	Request     service.PublicationApplyRequest
-	Material    pullApplyMaterial
-	Plan        service.PublicationApplyPlan
-	Observation publicationstate.Observation
-	Staged      service.PublicationAcceptProposal
-	Token       [32]byte
-	AcceptOnly  bool
+	Sources         pullApplySources
+	Request         service.PublicationApplyRequest
+	Material        pullApplyMaterial
+	Plan            service.PublicationApplyPlan
+	Observation     publicationstate.Observation
+	Staged          service.PublicationAcceptProposal
+	Adoption        *pullApplyTargetAdoption
+	Token           [32]byte
+	AcceptOnly      bool
+	AdoptionPending bool
+	Adopted         bool
+}
+
+type pullApplyTargetAdoption struct {
+	ConfigToken config.Token
+	Targets     []config.Target
 }
 
 func (preparation pullApplyPreparation) applies() bool {
@@ -482,19 +492,12 @@ func preparePullApply(
 		)
 	}
 	preparation := pullApplyPreparation{Sources: sources}
-	if len(sources.Configuration.Targets) == 0 {
-		return preparation, nil
-	}
-	if sources.Local == nil {
+	if len(sources.Configuration.Targets) == 0 && len(pullApplyRecordTargets(input.View)) == 0 {
+		if input.Present {
+			return preparation, nil
+		}
 		return pullApplyPreparation{}, urfave.Exit(
-			input.label()+" refused: the local publication context is not available for apply; nothing was changed",
-			3,
-		)
-	}
-	roots, err := pullApplyRoots(sources.Configuration, sources.Paths)
-	if err != nil {
-		return pullApplyPreparation{}, urfave.Exit(
-			input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed",
+			input.label()+" refused: no files target is configured and the published position names none to adopt; run dottie targets add; nothing was changed",
 			3,
 		)
 	}
@@ -502,8 +505,44 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
+	configuration, adoption, err := pullApplyAdoption(sources, material, input)
+	if err != nil {
+		return pullApplyPreparation{}, err
+	}
+	if adoption != nil {
+		preparation.Adoption = adoption
+		token := pullAdoptionConfirmationToken(
+			input.Binding, input.Floor.Revision, input.Present, material.RecordCID, material.Sequence, adoption,
+		)
+		if !input.Confirmed || input.Confirmation != token {
+			preparation.AdoptionPending = true
+			preparation.Token = token
+			return preparation, nil
+		}
+		preparation.Adopted = true
+	}
+	preparation.Sources.Configuration = configuration
+	if sources.Local == nil {
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: the local publication context is not available for apply; nothing was changed",
+			3,
+		)
+	}
+	roots, err := pullApplyRoots(configuration, sources.Paths)
+	if err != nil {
+		if adoption != nil {
+			return pullApplyPreparation{}, urfave.Exit(
+				input.label()+" refused: the published target root "+escapeField(pullAdoptionSelector(adoption))+" does not exist or cannot be resolved; create it and re-run; nothing was changed",
+				3,
+			)
+		}
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: a selected filesystem target cannot be resolved for apply; nothing was changed",
+			3,
+		)
+	}
 	if material.Form == publication.PayloadFormFileSet || material.BaseForm == publication.PayloadFormFileSet {
-		target, portable, err := service.FileSetPublicationTarget(sources.Configuration)
+		target, portable, err := service.FileSetPublicationTarget(configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
 				input.label()+" refused: a file-set publication requires the sole local files target; nothing was changed",
@@ -533,7 +572,7 @@ func preparePullApply(
 	}
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
-		Configuration: sources.Configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
+		Configuration: configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
 		Roots: roots, Local: sources.Local, ApplyRemoteOnly: input.RemoteOnly,
 		FileSet: material.Form == publication.PayloadFormFileSet,
 	}
@@ -544,6 +583,22 @@ func preparePullApply(
 	preparation.Request = request
 	preparation.Material = material
 	preparation.Plan = plan
+	if preparation.Adopted {
+		if err := commitPullAdoption(ctx, sources.Paths, adoption); err != nil {
+			return pullApplyPreparation{}, err
+		}
+		reloaded, err := service.FileConfigPort{Paths: sources.Paths}.Snapshot(ctx)
+		if err != nil || !pullAdoptionApplied(reloaded.Config, adoption.Targets) {
+			return pullApplyPreparation{}, urfave.Exit(
+				"pull refused: the configuration does not carry the adopted target; nothing was applied",
+				3,
+			)
+		}
+		configuration = reloaded.Config
+		preparation.Sources.Configuration = configuration
+		request.Configuration = configuration
+		preparation.Request = request
+	}
 	observation := pullApplyObservation(input.View)
 	if plan.Changes == 0 {
 		if !input.AcceptPosition {
@@ -569,8 +624,8 @@ func preparePullApply(
 			staged.ObservationDigest,
 			pullApplyTargetBinding{
 				TargetID: material.TargetID, Root: material.TargetRoot,
-				SelectionRevision: sources.Configuration.SelectionRevision,
-				ApprovalRevision:  sources.Configuration.ApprovalRevision,
+				SelectionRevision: configuration.SelectionRevision,
+				ApprovalRevision:  configuration.ApprovalRevision,
 			},
 		)
 		return preparation, nil
@@ -592,11 +647,177 @@ func preparePullApply(
 		staged.ObservationDigest,
 		pullApplyTargetBinding{
 			TargetID: material.TargetID, Root: material.TargetRoot,
-			SelectionRevision: sources.Configuration.SelectionRevision,
-			ApprovalRevision:  sources.Configuration.ApprovalRevision,
+			SelectionRevision: configuration.SelectionRevision,
+			ApprovalRevision:  configuration.ApprovalRevision,
 		},
 	)
 	return preparation, nil
+}
+
+func pullApplyAdoption(
+	sources pullApplySources,
+	material pullApplyMaterial,
+	input pullApplyPlanRequest,
+) (config.Config, *pullApplyTargetAdoption, error) {
+	if material.Form != publication.PayloadFormFileSet || len(material.Targets) == 0 {
+		return sources.Configuration, nil, nil
+	}
+	if len(sources.Configuration.Targets) != 0 {
+		return sources.Configuration, nil, nil
+	}
+	if len(material.Targets) != 1 {
+		return config.Config{}, nil, pullAdoptionRefusal(input, "the file-set publication names more than one target")
+	}
+	published := material.Targets[0]
+	if published.Source != model.SourceFiles || published.Root == nil || published.Validate() != nil {
+		return config.Config{}, nil, pullAdoptionRefusal(input, "the file-set publication names an unsupported target layout")
+	}
+	selector := pullPortableSelector(*published.Root)
+	if input.Label != "" && input.Label != "pull" {
+		return config.Config{}, nil, urfave.Exit(
+			input.label()+" refused: the published position names "+escapeField(selector)+" which this machine does not configure; run dottie pull first to adopt it; nothing was changed",
+			3,
+		)
+	}
+	provisional := config.Target{
+		ID: published.ID, Source: model.SourceFiles,
+		Root: &config.Root{Base: published.Root.Base, Path: published.Root.Path, Kind: published.Root.Kind},
+	}
+	absolute, err := provisional.ResolvedPath(sources.Paths)
+	if err != nil {
+		return config.Config{}, nil, pullAdoptionRefusal(input, "the published target "+selector+" cannot be resolved")
+	}
+	root, err := config.ResolveSelection(sources.Paths, absolute)
+	if err != nil {
+		return config.Config{}, nil, urfave.Exit(
+			input.label()+" refused: the published target "+escapeField(selector)+" cannot be adopted ("+escapeField(
+				err.Error(),
+			)+"); nothing was changed",
+			3,
+		)
+	}
+	if root.Kind != published.Root.Kind {
+		return config.Config{}, nil, pullAdoptionRefusal(input, "the published target "+selector+" resolves to a different kind")
+	}
+	adopted := config.Target{ID: published.ID, Source: model.SourceFiles, Mode: config.Review, Root: &root}
+	if err := config.CheckAddition(sources.Configuration, sources.Paths, adopted); err != nil {
+		return config.Config{}, nil, urfave.Exit(
+			input.label()+" refused: the published target "+escapeField(selector)+" cannot be adopted ("+escapeField(
+				err.Error(),
+			)+"); nothing was changed",
+			3,
+		)
+	}
+	next := sources.Configuration
+	next.Targets = append(append([]config.Target(nil), sources.Configuration.Targets...), adopted)
+	return next, &pullApplyTargetAdoption{ConfigToken: sources.Token, Targets: []config.Target{adopted}}, nil
+}
+
+func pullApplyRecordTargets(view publicationstate.SuppliedRepositoryView) []model.Target {
+	if len(view.Snapshots) == 0 {
+		return nil
+	}
+	record, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
+	if err != nil || record.PayloadForm() != publication.PayloadFormFileSet {
+		return nil
+	}
+	return record.Targets
+}
+
+func pullAdoptionRefusal(input pullApplyPlanRequest, reason string) error {
+	return urfave.Exit(input.label()+" refused: "+reason+"; nothing was changed", 3)
+}
+
+func pullTargetSelector(target config.Target) string {
+	if target.Root == nil {
+		return string(target.Source)
+	}
+	return "files:" + string(target.Root.Base) + "/" + target.Root.Path
+}
+
+func pullPortableSelector(root model.FileRoot) string {
+	return "files:" + string(root.Base) + "/" + root.Path
+}
+
+func pullAdoptionSelector(adoption *pullApplyTargetAdoption) string {
+	if adoption == nil || len(adoption.Targets) == 0 {
+		return ""
+	}
+	return pullTargetSelector(adoption.Targets[0])
+}
+
+func renderPullApplyAdoption(adoption *pullApplyTargetAdoption) string {
+	return renderPullApplyAdoptionVerb(adoption, "create")
+}
+
+func renderPullApplyAdoptionCreated(adoption *pullApplyTargetAdoption) string {
+	return renderPullApplyAdoptionVerb(adoption, "created")
+}
+
+func renderPullApplyAdoptionVerb(adoption *pullApplyTargetAdoption, verb string) string {
+	if adoption == nil {
+		return ""
+	}
+	var output strings.Builder
+	for _, target := range adoption.Targets {
+		output.WriteString("adopt: " + verb + " target " + escapeField(target.ID) + " (" + escapeField(
+			pullTargetSelector(target),
+		) + ", " + escapeField(string(target.Root.Kind)) + ", mode " + escapeField(string(target.Mode)) + ")\n")
+	}
+	return output.String()
+}
+
+func commitPullAdoption(ctx context.Context, paths platform.Paths, adoption *pullApplyTargetAdoption) error {
+	if adoption == nil {
+		return nil
+	}
+	snapshot, err := service.FileConfigPort{Paths: paths}.Update(
+		ctx,
+		adoption.ConfigToken,
+		func(current config.Config) (config.Config, error) {
+			for _, target := range adoption.Targets {
+				if err := config.CheckAddition(current, paths, target); err != nil {
+					return current, err
+				}
+				current.Targets = append(current.Targets, target)
+			}
+			return current, nil
+		},
+	)
+	if err != nil {
+		return urfave.Exit(
+			"pull refused: the adopted target could not be created ("+escapeField(err.Error())+"); nothing was applied",
+			3,
+		)
+	}
+	if !pullAdoptionApplied(snapshot.Config, adoption.Targets) {
+		return urfave.Exit("pull refused: the configuration does not carry the adopted target; nothing was applied", 3)
+	}
+	return nil
+}
+
+func pullAdoptionApplied(configuration config.Config, targets []config.Target) bool {
+	for _, wanted := range targets {
+		if wanted.Root == nil {
+			return false
+		}
+		found := false
+		for _, existing := range configuration.Targets {
+			if existing.ID != wanted.ID || existing.Source != wanted.Source || existing.Mode != wanted.Mode ||
+				existing.Root == nil {
+				continue
+			}
+			if existing.Root.Base == wanted.Root.Base && existing.Root.Path == wanted.Root.Path &&
+				existing.Root.Kind == wanted.Root.Kind {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func applyPullPreparation(
@@ -654,6 +875,18 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 	if err != nil {
 		return err
 	}
+	if preparation.AdoptionPending {
+		output := renderPullApplyAdoption(preparation.Adoption)
+		output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
+		output += fmt.Sprintf(
+			"pull: adoption only; nothing local was read or changed; repeat with --confirm %x\n",
+			preparation.Token,
+		)
+		return writeCommandOutput(input.Command, output)
+	}
+	if preparation.Adopted {
+		return writePullAdoptionRun(input, preparation)
+	}
 	if len(preparation.Sources.Configuration.Targets) == 0 {
 		return nil
 	}
@@ -686,6 +919,26 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return urfave.Exit(input.label()+" applied changes but its result could not be written", 4)
 	}
 	return nil
+}
+
+func writePullAdoptionRun(input pullApplyPlanRequest, preparation pullApplyPreparation) error {
+	output := renderPullApplyAdoptionCreated(preparation.Adoption)
+	switch {
+	case preparation.AcceptOnly:
+		output += renderPullAcceptPosition(preparation.Plan, preparation.Material)
+		output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
+		output += fmt.Sprintf(
+			"pull: acceptance only; nothing was applied; repeat with --confirm %x\n",
+			preparation.Token,
+		)
+	case preparation.applies():
+		output += renderPullApplyPlan(preparation.Plan)
+		output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
+		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", preparation.Token)
+	default:
+		output += "pull: matches; the target is now configured; nothing else was changed\n"
+	}
+	return writeCommandOutput(input.Command, output)
 }
 
 func runPullAcceptPosition(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation) error {
@@ -791,6 +1044,10 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, err
 	}
+	targets := payload.Snapshot.Targets
+	if payload.Form == publication.PayloadFormFileSet {
+		targets = terminal.Targets
+	}
 	if !present {
 		return pullApplyMaterial{
 			Base:      model.Snapshot{Version: model.SnapshotVersion},
@@ -799,6 +1056,7 @@ func pullApplySnapshots(
 			BaseForm:  publication.PayloadFormPacked,
 			Form:      payload.Form,
 			Entries:   payload.Entries,
+			Targets:   targets,
 			RecordCID: recordCID,
 			Sequence:  terminal.PublicationSeq,
 		}, nil
@@ -828,6 +1086,7 @@ func pullApplySnapshots(
 		BaseForm:    basePayload.Form,
 		Entries:     payload.Entries,
 		BaseEntries: basePayload.Entries,
+		Targets:     targets,
 		RecordCID:   recordCID,
 		Sequence:    terminal.PublicationSeq,
 	}, nil
@@ -1219,23 +1478,68 @@ func pullAcceptPositionConfirmationToken(
 	return token
 }
 
+func pullAdoptionConfirmationToken(
+	binding publicationstate.Binding,
+	floorRevision uint64,
+	present bool,
+	recordCID []byte,
+	sequence uint64,
+	adoption *pullApplyTargetAdoption,
+) [32]byte {
+	digest := sha256.New()
+	var length [4]byte
+	writeField := func(value string) {
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(value))
+	}
+	var scratch [8]byte
+	writeField("dottie/pull-adopt/v1")
+	writeField(binding.AccountDID)
+	writeField(string(binding.Backend))
+	writeField(binding.Repository)
+	_, _ = digest.Write(binding.Vault[:])
+	binary.BigEndian.PutUint64(scratch[:], floorRevision)
+	_, _ = digest.Write(scratch[:])
+	if present {
+		_, _ = digest.Write([]byte{1})
+	} else {
+		_, _ = digest.Write([]byte{0})
+	}
+	binary.BigEndian.PutUint32(length[:], uint32(len(recordCID)))
+	_, _ = digest.Write(length[:])
+	_, _ = digest.Write(recordCID)
+	binary.BigEndian.PutUint64(scratch[:], sequence)
+	_, _ = digest.Write(scratch[:])
+	_, _ = digest.Write(adoption.ConfigToken[:])
+	for _, target := range adoption.Targets {
+		writeField(target.ID)
+		writeField(string(target.Source))
+		writeField(string(target.Mode))
+		writeField(string(target.Root.Base))
+		writeField(target.Root.Path)
+		writeField(string(target.Root.Kind))
+	}
+	var token [32]byte
+	copy(token[:], digest.Sum(nil))
+	return token
+}
+
 func productionPullApplySourcesFactory(env func(string) string) pullApplySourcesFactory {
 	return func(ctx context.Context, _ *urfave.Command, _ publicationstate.Binding) (pullApplySources, error) {
 		paths, err := platform.Resolve(env)
 		if err != nil {
 			return pullApplySources{}, err
 		}
-		configuration, err := service.FileConfigPort{Paths: paths}.Load(ctx)
+		snapshot, err := service.FileConfigPort{Paths: paths}.Snapshot(ctx)
 		if err != nil {
 			return pullApplySources{}, err
 		}
+		configuration := snapshot.Config
 		if err := configuration.Validate(); err != nil {
 			return pullApplySources{}, err
 		}
-		sources := pullApplySources{Paths: paths, Configuration: configuration}
-		if len(configuration.Targets) == 0 {
-			return sources, nil
-		}
+		sources := pullApplySources{Paths: paths, Configuration: configuration, Token: snapshot.Token}
 		local, err := service.NewPublicationLocalContext(paths, service.LocalFilesCapture{}, nil)
 		if err != nil {
 			return pullApplySources{}, err

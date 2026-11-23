@@ -10,6 +10,8 @@ import (
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
 	"github.com/multiformats/go-multihash"
+
+	"github.com/lamb-systems/dottie/internal/model"
 )
 
 const (
@@ -85,6 +87,7 @@ type SnapshotRecord struct {
 	Parent         []byte
 	Blob           BlobReference
 	Entries        []SnapshotEntry
+	Targets        []model.Target
 }
 
 type HeadRecord struct {
@@ -148,6 +151,9 @@ func EncodeSnapshot(record SnapshotRecord) ([]byte, error) {
 			return nil, err
 		}
 		object["entries"] = entries
+		if len(record.Targets) != 0 {
+			object["targets"] = encodeSnapshotTargets(record.Targets)
+		}
 		sizeLimit = MaxFileSetRecordBytes
 	} else {
 		blobCID, err := castCID(record.Blob.CID, cid.Raw, "blob.ref")
@@ -217,6 +223,13 @@ func DecodeSnapshot(encoded []byte) (SnapshotRecord, error) {
 			return SnapshotRecord{}, err
 		}
 		record.Entries = entries
+		if _, present := object["targets"]; present {
+			targets, err := decodeSnapshotTargets(object["targets"])
+			if err != nil {
+				return SnapshotRecord{}, err
+			}
+			record.Targets = targets
+		}
 	}
 	if err := validateSnapshot(record); err != nil {
 		return SnapshotRecord{}, err
@@ -563,12 +576,19 @@ func checkHeadKeys(object map[string]any) error {
 func checkSnapshotKeys(object map[string]any) error {
 	_, packed := object["blob"]
 	_, fileSet := object["entries"]
-	if packed && fileSet {
+	_, targets := object["targets"]
+	if packed && (fileSet || targets) {
 		return violation(ErrInvalidRecord, "record", "both_payload_forms")
 	}
 	expected := len(snapshotCommonKeys)
-	if packed || fileSet {
+	switch {
+	case packed:
 		expected++
+	case fileSet:
+		expected++
+		if targets {
+			expected++
+		}
 	}
 	if len(object) != expected {
 		return violation(ErrInvalidRecord, "record", "fields")
@@ -617,7 +637,7 @@ func validateSnapshot(record SnapshotRecord) error {
 func validateSnapshotPayload(record SnapshotRecord) error {
 	packed := len(record.Blob.CID) != 0 || record.Blob.Size != 0 || record.Blob.MIMEType != ""
 	switch {
-	case packed && len(record.Entries) != 0:
+	case packed && (len(record.Entries) != 0 || len(record.Targets) != 0):
 		return violation(ErrInvalidRecord, "record", "both_payload_forms")
 	case packed:
 		if record.Blob.Size == 0 || record.Blob.Size > MaxBlobBytes {
@@ -631,7 +651,13 @@ func validateSnapshotPayload(record SnapshotRecord) error {
 		}
 		return nil
 	case len(record.Entries) != 0:
-		return validateEntries(record.Entries)
+		if err := validateEntries(record.Entries); err != nil {
+			return err
+		}
+		if len(record.Targets) == 0 {
+			return nil
+		}
+		return validateSnapshotTargets(record.Entries, record.Targets)
 	default:
 		return violation(ErrInvalidRecord, "record", "missing_payload_form")
 	}

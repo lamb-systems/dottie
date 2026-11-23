@@ -514,7 +514,7 @@ func (fixture *publicationReaderFixture) fileSetPublication(
 	}
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
-		PublicationID: [16]byte{0x62, 0x21}, Entries: entries,
+		PublicationID: [16]byte{0x62, 0x21}, Entries: entries, Targets: fileSetServiceTargets(),
 	}
 	snapshotRecord, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

@@ -373,6 +373,7 @@ func payloadUnionFileSetSnapshot(t *testing.T) (publication.SnapshotRecord, []by
 		PublicationSeq: 0,
 		Parent:         []byte{},
 		Entries:        entries,
+		Targets:        fileSetTestTargets(),
 	}
 	record.PublicationID[0] = 0x42
 	encoded, err := publication.EncodeSnapshot(record)

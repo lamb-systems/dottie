@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
@@ -56,7 +57,7 @@ func newSequencedFileSetServicePublication(
 	document := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: vault, PublicationID: publicationID,
 		PublicationSeq: sequence, Parent: parent,
-		Entries: entries,
+		Entries: entries, Targets: fileSetServiceTargets(),
 	}
 	raw, err := publication.EncodeSnapshot(document)
 	require.NoError(t, err)
@@ -71,6 +72,13 @@ func newSequencedFileSetServicePublication(
 		document: document, raw: raw,
 		block: publicationstate.SnapshotBlock{Key: key, Raw: raw}, head: head,
 	}
+}
+
+func fileSetServiceTargets() []model.Target {
+	return []model.Target{{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootXDGConfig, Path: "dotfiles", Kind: model.SelectionDirectory},
+	}}
 }
 
 func fileSetServiceFiles() []fileSetServiceFile {

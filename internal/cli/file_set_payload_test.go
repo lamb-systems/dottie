@@ -76,6 +76,7 @@ func cliFileSetBlock(
 	raw, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
 		PublicationID: [16]byte{0x62, 0x31}, PublicationSeq: sequence, Parent: parent, Entries: entries,
+		Targets: cliFileSetTargets(),
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(raw)
@@ -88,6 +89,13 @@ func cliFileSetBlock(
 	key, err := publication.SequenceKey(sequence)
 	require.NoError(t, err)
 	return publicationstate.SnapshotBlock{Key: key, Raw: raw}, head
+}
+
+func cliFileSetTargets() []model.Target {
+	return []model.Target{{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}}
 }
 
 func pullTestFileSetBinding() publicationstate.Binding {
@@ -479,4 +487,192 @@ func readPullSingleFile(t *testing.T, fixture *pullTestFixture) []byte {
 	content, err := os.ReadFile(fixture.targetPath("init.lua"))
 	require.NoError(t, err)
 	return content
+}
+
+func TestPullAdoptsAFreshFileSetTargetOnConfirmation(t *testing.T) {
+	pullFileSetUmask(t)
+	fixture := newPullTestFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.targetPath("init.lua")), 0o700))
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "adopt: create target files (files:home/config, directory, mode review)\n")
+	assert.Contains(t, stdout, "pull: adoption only; nothing local was read or changed; repeat with")
+	assert.NotContains(t, stdout, "apply:")
+	planned, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	assert.Empty(t, planned.Targets, "the unconfirmed adoption was written")
+	_, statErr := os.Lstat(fixture.targetPath("init.lua"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the unconfirmed adoption wrote a target file")
+
+	adoptionToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", adoptionToken,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "adopt: created target files (files:home/config, directory, mode review)\n")
+	assert.Contains(t, stdout, "pull: plan only; nothing was applied; repeat with")
+	adopted, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	require.Len(t, adopted.Targets, 1)
+	target := adopted.Targets[0]
+	assert.Equal(t, "files", target.ID)
+	assert.Equal(t, model.SourceFiles, target.Source)
+	assert.Equal(t, config.Review, target.Mode)
+	require.NotNil(t, target.Root)
+	assert.Equal(t, model.RootHome, target.Root.Base)
+	assert.Equal(t, "config", target.Root.Path)
+	assert.Equal(t, model.SelectionDirectory, target.Root.Kind)
+	assert.Empty(t, target.Root.Exclude)
+	_, statErr = os.Lstat(fixture.targetPath("init.lua"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the adoption run applied files")
+
+	applyToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", applyToken,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, fmt.Sprintf("pull: applied changes=4 unchanged=0 bytes=%d\n",
+		len("synthetic file-set init")+len("synthetic file-set options")))
+	assert.Equal(t, []byte("synthetic file-set init"), readPullSingleFile(t, fixture))
+	assert.Equal(t, uint64(1), fixture.acceptedFloor(t).Revision)
+
+	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "pull: matches\n", stdout)
+}
+
+func TestPullReadsNothingOutsideTheConfiguredTargetBeforeAdoption(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.targetPath("init.lua")), 0o700))
+	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte("local difference"), 0o600))
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: adoption only; nothing local was read or changed; repeat with")
+	assert.NotContains(t, stdout, "conflict")
+	planned, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	assert.Empty(t, planned.Targets)
+
+	adoptionToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", adoptionToken,
+	)
+	require.Equal(t, 3, code, stdout)
+	assert.Contains(t, stderr, "conflict")
+	refused, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	assert.Empty(t, refused.Targets, "a refused plan adopted the target")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("local difference"), content)
+}
+
+func TestPullAdoptsAFileSetTargetWhenLocalFilesAlreadyMatch(t *testing.T) {
+	pullFileSetUmask(t)
+	fixture := newPullTestFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "config", "lua", "config"), 0o755))
+	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte("synthetic file-set init"), 0o600))
+	require.NoError(t, os.WriteFile(fixture.targetPath("lua/config/options.lua"), []byte("synthetic file-set options"), 0o644))
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: adoption only; nothing local was read or changed; repeat with")
+	adoptionToken := pullTestConfirmation(t, stdout)
+
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", adoptionToken,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "adopt: created target")
+	assert.Contains(t, stdout, "pull: acceptance only; nothing was applied; repeat with")
+	adopted, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	require.Len(t, adopted.Targets, 1)
+	assert.Equal(t, "files", adopted.Targets[0].ID)
+
+	acceptToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--confirm", acceptToken,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "floor: revision=1")
+}
+
+func TestPullRefusesToAdoptAFileSetTargetWhoseRootDoesNotExist(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code, stdout)
+	assert.Contains(t, stderr, "cannot be adopted")
+	assert.NotContains(t, stdout, "confirmation:")
+	planned, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	assert.Empty(t, planned.Targets)
+}
+
+func TestPullRefusesAFreshPackedPositionWithoutAnyTarget(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{view: fixture.view()}
+
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code, stdout.String())
+	assert.Contains(t, stderr.String(), "no files target is configured")
+}
+
+func TestPullApplyAdoptionLeavesAConfiguredMachineAlone(t *testing.T) {
+	configuration := config.Default()
+	configuration.Targets = []config.Target{{
+		ID: "settings", Source: model.SourceGNOME,
+		GNOMEPolicy: &config.GNOMEPolicy{Approval: config.GNOMEApprovalPending},
+	}}
+	sources := pullApplySources{Configuration: configuration}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormFileSet,
+		Targets: []model.Target{{
+			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+	}
+	got, adoption, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, adoption)
+	assert.Equal(t, configuration, got)
 }

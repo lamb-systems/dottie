@@ -50,6 +50,7 @@ func newFileSetAttemptFixture(t *testing.T, paths []string) fileSetAttemptFixtur
 		PublicationSeq: 0,
 		Parent:         []byte{},
 		Entries:        entries,
+		Targets:        fileSetTestTargets(),
 	}
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

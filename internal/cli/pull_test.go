@@ -2192,3 +2192,85 @@ func TestPullApplyConfirmationBindsTheFileSetTargetRootAndConfigurationRevisions
 	assert.NotEqual(t, token, pullApplyConfirmationToken(binding, plan, state, observation, changedApproval))
 	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation, target))
 }
+
+func TestPullAdoptionTokenBindsTheRecordTheFloorAndTheAdoptedTarget(t *testing.T) {
+	binding := publicationstate.Binding{
+		AccountDID: pullTestDID,
+		Backend:    publicationstate.BackendPublicRepo,
+		Vault:      [32]byte{0x62},
+	}
+	binding.Repository = "at://" + pullTestDID
+	recordCID := []byte{0x01, 0x02, 0x03}
+	adoption := &pullApplyTargetAdoption{
+		ConfigToken: config.Token{0x11},
+		Targets: []config.Target{{
+			ID: "files", Source: model.SourceFiles, Mode: config.Review,
+			Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+	}
+	token := pullAdoptionConfirmationToken(binding, 3, true, recordCID, 7, adoption)
+	assert.Equal(t, token, pullAdoptionConfirmationToken(binding, 3, true, recordCID, 7, adoption))
+
+	otherFloor := pullAdoptionConfirmationToken(binding, 4, true, recordCID, 7, adoption)
+	assert.NotEqual(t, token, otherFloor, "the token does not bind the floor revision")
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, false, recordCID, 7, adoption),
+		"the token does not bind first use versus advance",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, true, []byte{0x01, 0x02, 0x04}, 7, adoption),
+		"the token does not bind the observed record",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, true, recordCID, 8, adoption),
+		"the token does not bind the observed sequence",
+	)
+	otherVault := binding
+	otherVault.Vault = [32]byte{0x63}
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(otherVault, 3, true, recordCID, 7, adoption),
+		"the token does not bind the vault",
+	)
+
+	movedConfig := &pullApplyTargetAdoption{ConfigToken: config.Token{0x12}, Targets: adoption.Targets}
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, true, recordCID, 7, movedConfig),
+		"the token does not bind the configuration it was reviewed against",
+	)
+	movedRoot := &pullApplyTargetAdoption{
+		ConfigToken: adoption.ConfigToken,
+		Targets: []config.Target{{
+			ID: "files", Source: model.SourceFiles, Mode: config.Review,
+			Root: &config.Root{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+		}},
+	}
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, true, recordCID, 7, movedRoot),
+		"the token does not bind the adopted root",
+	)
+	movedID := &pullApplyTargetAdoption{
+		ConfigToken: adoption.ConfigToken,
+		Targets: []config.Target{{
+			ID: "other", Source: model.SourceFiles, Mode: config.Review,
+			Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+	}
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 3, true, recordCID, 7, movedID),
+		"the token does not bind the adopted identifier",
+	)
+}

@@ -120,6 +120,26 @@ func fileSetSyntheticPath(target model.Target) (string, bool) {
 	return base, true
 }
 
+func fileSetSnapshotTargets(snapshot model.Snapshot) ([]model.Target, error) {
+	if len(snapshot.Targets) != 1 {
+		return nil, publication.ErrInvalidRecord
+	}
+	target := snapshot.Targets[0]
+	if target.Source != model.SourceFiles || target.Root == nil || target.Validate() != nil {
+		return nil, publication.ErrInvalidRecord
+	}
+	return []model.Target{{
+		ID:            target.ID,
+		Source:        target.Source,
+		SourceVersion: target.SourceVersion,
+		Root: &model.FileRoot{
+			Base: target.Root.Base,
+			Path: target.Root.Path,
+			Kind: target.Root.Kind,
+		},
+	}}, nil
+}
+
 func fileSetSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEntry, error) {
 	target, single := fileSetSingleFileTarget(snapshot)
 	if !single {
