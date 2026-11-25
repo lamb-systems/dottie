@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	urfave "github.com/urfave/cli/v3"
@@ -15,6 +16,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
 	"github.com/lamb-systems/dottie/internal/service"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/state"
 )
 
@@ -46,6 +48,7 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 	idFlag := &urfave.StringFlag{Name: "id", Usage: "target identifier", OnlyOnce: true}
 	modeFlag := &urfave.StringFlag{Name: "mode", Usage: "target consent mode", OnlyOnce: true}
 	excludeFlag := &urfave.StringSliceFlag{Name: "exclude", Usage: "file exclusion pattern"}
+	categoryFlag := &urfave.StringSliceFlag{Name: "category", Usage: "GNOME category identifier"}
 
 	list := commandOptions(&urfave.Command{
 		Name: "list",
@@ -146,11 +149,58 @@ func newTargetsCommand(stdout, stderr io.Writer, env func(string) string, exitCo
 		},
 	})
 
+	approve := commandOptions(&urfave.Command{
+		Name:                      "approve",
+		Flags:                     []urfave.Flag{idFlag, categoryFlag},
+		DisableSliceFlagSeparator: true,
+		Action: func(ctx context.Context, command *urfave.Command) error {
+			if command.NArg() != 0 {
+				return usageExit("targets approve takes no positional arguments")
+			}
+			id := command.String("id")
+			if !command.IsSet("id") || id == "" {
+				return usageExit("targets approve requires --id")
+			}
+			categories := command.StringSlice("category")
+			if len(categories) == 0 {
+				return usageExit("targets approve requires at least one --category")
+			}
+			if slices.Contains(categories, "") {
+				return usageExit("missing value for --category")
+			}
+			output, err := updateTargetsConfig(
+				ctx,
+				env,
+				func(_ platform.Paths, current config.Config) (config.Config, string, error) {
+					return approveGNOMETarget(id, categories, current)
+				},
+			)
+			if err != nil {
+				return err
+			}
+			return writeCommandOutput(command, output)
+		},
+	})
+
+	categories := commandOptions(&urfave.Command{
+		Name: "categories",
+		Action: func(_ context.Context, command *urfave.Command) error {
+			if command.NArg() != 0 {
+				return usageExit("targets categories takes no arguments")
+			}
+			output, err := listGNOMECategories()
+			if err != nil {
+				return err
+			}
+			return writeCommandOutput(command, output)
+		},
+	})
+
 	root := commandOptions(&urfave.Command{
 		Name:     "targets",
-		Commands: []*urfave.Command{list, add, remove, mode},
+		Commands: []*urfave.Command{list, add, remove, mode, approve, categories},
 		Action: func(_ context.Context, _ *urfave.Command) error {
-			return usageExit("expected list, add, remove or mode")
+			return usageExit("expected list, add, remove, mode, approve or categories")
 		},
 		Writer:    stdout,
 		ErrWriter: stderr,
@@ -324,6 +374,61 @@ func setTargetMode(id string, mode config.Mode, current config.Config) (config.C
 		return current, fmt.Sprintf("mode for %s set to %s\n", escapeField(id), escapeField(string(mode))), nil
 	}
 	return current, "", urfave.Exit("unknown target "+escapeField(id), 1)
+}
+
+func listGNOMECategories() (string, error) {
+	catalog, err := matrix.Categories()
+	if err != nil {
+		return "", urfave.Exit("cannot read the GNOME category catalog", 1)
+	}
+	var output strings.Builder
+	for _, category := range catalog {
+		fmt.Fprintf(&output, "%s\tkeys=%d\n", escapeField(category.ID), len(category.Keys))
+	}
+	return output.String(), nil
+}
+
+func approveGNOMETarget(id string, categories []string, current config.Config) (config.Config, string, error) {
+	policy, err := config.ApprovedGNOMEPolicy(categories)
+	if err != nil {
+		return current, "", urfave.Exit(err.Error(), 1)
+	}
+	summary := fmt.Sprintf(
+		"categories=%s, matrix=%d, digest=%s",
+		escapeField(strings.Join(policy.Categories, ",")),
+		policy.MatrixVersion,
+		escapeField(policy.KeyDigest),
+	)
+	for index := range current.Targets {
+		target := current.Targets[index]
+		if target.ID != id {
+			continue
+		}
+		if target.Source != model.SourceGNOME {
+			return current, "", urfave.Exit("target "+escapeField(id)+" is not a GNOME settings target", 1)
+		}
+		if sameGNOMEPolicy(target.GNOMEPolicy, policy) {
+			return current, "already approved " + escapeField(id) + " (" + summary + ")\n", nil
+		}
+		current.Targets[index].GNOMEPolicy = &policy
+		return current, "approved " + escapeField(id) + " (" + summary + ")\n", nil
+	}
+	current.Targets = append(current.Targets, config.Target{
+		ID: id, Source: model.SourceGNOME, GNOMEPolicy: &policy,
+	})
+	return current, "added " + escapeField(id) + " (gnome, " + summary + ")\n", nil
+}
+
+func sameGNOMEPolicy(existing *config.GNOMEPolicy, wanted config.GNOMEPolicy) bool {
+	if existing == nil {
+		return false
+	}
+	provided := append([]string(nil), existing.Categories...)
+	sort.Strings(provided)
+	return existing.Approval == wanted.Approval &&
+		existing.MatrixVersion == wanted.MatrixVersion &&
+		existing.KeyDigest == wanted.KeyDigest &&
+		sameStrings(provided, wanted.Categories)
 }
 
 const targetConfigUpdateAttempts = 3

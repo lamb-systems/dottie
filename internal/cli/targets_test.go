@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/platform"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 )
 
 func cliEnvironment(t *testing.T) (platform.Paths, func(string) string) {
@@ -197,7 +199,7 @@ func TestTargetsModeInheritanceAndRemoveDoesNotDeleteFiles(t *testing.T) {
 	code, out, stderr := invokeTargets(env)
 	require.Equal(t, 2, code, "targets without a subcommand exit code")
 	assert.Empty(t, out, "targets without a subcommand output")
-	assert.Equal(t, "dottie: usage: expected list, add, remove or mode\n", stderr, "targets without a subcommand error")
+	assert.Equal(t, "dottie: usage: expected list, add, remove, mode, approve or categories\n", stderr, "targets without a subcommand error")
 
 	code, out, stderr = invokeTargets(env, "mode", "custom", "backup-only")
 	require.Equal(t, 0, code, "mode set exit code")
@@ -325,7 +327,7 @@ func TestTargetsUnknownTokenAndFlagErrorsEscapeControls(t *testing.T) {
 	code, out, stderr := invokeTargets(env, "unknown\x1b")
 	require.Equal(t, 2, code, "unknown targets command exit code")
 	assert.Empty(t, out, "unknown targets command output")
-	assert.Equal(t, "dottie: usage: expected list, add, remove or mode\n", stderr, "unknown targets command error")
+	assert.Equal(t, "dottie: usage: expected list, add, remove, mode, approve or categories\n", stderr, "unknown targets command error")
 
 	for _, args := range [][]string{{"--bad\x1b"}, {"list", "--bad\x1b"}} {
 		code, out, stderr = invokeTargets(env, args...)
@@ -511,4 +513,105 @@ func TestTargetsNoPathLeakAndControlEscaping(t *testing.T) {
 	resolved, err := stored.Targets[0].ResolvedPath(paths)
 	require.NoError(t, err)
 	assert.Equal(t, selected, resolved, "stored selector resolution")
+}
+
+func TestTargetsCategoriesListTheCatalog(t *testing.T) {
+	_, env := cliEnvironment(t)
+	code, out, stderr := invokeTargets(env, "categories")
+	require.Equal(t, 0, code, stderr)
+	catalog, err := matrix.Categories()
+	require.NoError(t, err)
+	require.NotEmpty(t, catalog)
+	for _, category := range catalog {
+		assert.Contains(t, out, escapeField(category.ID)+"\tkeys=", "category %q", category.ID)
+	}
+}
+
+func TestTargetsApproveCreatesAndReapprovesAGNOMETarget(t *testing.T) {
+	paths, env := cliEnvironment(t)
+	code, out, stderr := invokeTargets(
+		env,
+		"approve",
+		"--id", "desktop",
+		"--category", "appearance",
+		"--category", "clock",
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.True(
+		t,
+		strings.HasPrefix(out, "added desktop (gnome, categories=appearance,clock, matrix=1, digest="),
+		out,
+	)
+
+	stored, err := config.Load(paths)
+	require.NoError(t, err)
+	require.Len(t, stored.Targets, 1)
+	target := stored.Targets[0]
+	assert.Equal(t, "desktop", target.ID)
+	assert.Equal(t, model.SourceGNOME, target.Source)
+	require.NotNil(t, target.GNOMEPolicy)
+	policy := *target.GNOMEPolicy
+	assert.Equal(t, config.GNOMEApprovalApproved, policy.Approval)
+	assert.Equal(t, []string{"appearance", "clock"}, policy.Categories)
+	assert.Equal(t, matrix.Version, policy.MatrixVersion)
+	keys, err := matrix.SelectCategories([]string{"appearance", "clock"})
+	require.NoError(t, err)
+	digest, err := matrix.KeySetDigest(keys)
+	require.NoError(t, err)
+	assert.Equal(t, hex.EncodeToString(digest[:]), policy.KeyDigest)
+
+	configPath := filepath.Join(paths.AppConfigDir(), config.FileName)
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	beforeSnapshot, err := config.OpenSnapshot(paths)
+	require.NoError(t, err)
+
+	code, out, stderr = invokeTargets(
+		env,
+		"approve",
+		"--id", "desktop",
+		"--category", "clock",
+		"--category", "appearance",
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.True(t, strings.HasPrefix(out, "already approved desktop ("), out)
+	after, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a matching approval rewrote the config")
+
+	code, out, stderr = invokeTargets(env, "approve", "--id", "desktop", "--category", "fonts")
+	require.Equal(t, 0, code, stderr)
+	assert.True(t, strings.HasPrefix(out, "approved desktop (categories=fonts, matrix=1, digest="), out)
+	changedSnapshot, err := config.OpenSnapshot(paths)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		beforeSnapshot.Approval.Revision+1,
+		changedSnapshot.Approval.Revision,
+		"a changed policy did not bump the approval revision",
+	)
+}
+
+func TestTargetsApproveRefusesAFileTargetAndUnknownCategories(t *testing.T) {
+	paths, env := cliEnvironment(t)
+	selected := filepath.Join(paths.Home, "dotfiles")
+	require.NoError(t, os.Mkdir(selected, 0o700))
+	code, _, stderr := invokeTargets(env, "add", "--id", "desktop", selected)
+	require.Equal(t, 0, code, stderr)
+
+	code, _, stderr = invokeTargets(env, "approve", "--id", "desktop", "--category", "appearance")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "not a GNOME settings target")
+
+	code, _, stderr = invokeTargets(env, "approve", "--id", "desktop", "--category", "no-such-category")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "unknown GNOME category")
+
+	code, _, stderr = invokeTargets(env, "approve", "--id", "desktop")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "--category")
+
+	code, _, stderr = invokeTargets(env, "approve", "--category", "appearance")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "--id")
 }

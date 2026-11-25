@@ -108,7 +108,7 @@ func TestRunDispatchesTargetsCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	require.Equal(t, 2, Run([]string{"targets"}, &stdout, &stderr), "exit code")
 	assert.Empty(t, stdout.String(), "unexpected stdout")
-	assert.Equal(t, "dottie: usage: expected list, add, remove or mode\n", stderr.String(), "targets dispatch error")
+	assert.Equal(t, "dottie: usage: expected list, add, remove, mode, approve or categories\n", stderr.String(), "targets dispatch error")
 }
 
 func TestRunQuotesUntrustedArguments(t *testing.T) {

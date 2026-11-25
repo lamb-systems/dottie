@@ -17,6 +17,8 @@ Usage:
   dottie targets add [--id ID] [--mode MODE] [--exclude PATTERN]... <absolute-path>
   dottie targets remove <id>
   dottie targets mode <id> <auto-apply|review|backup-only>
+  dottie targets approve --id ID --category CATEGORY [--category CATEGORY]...
+  dottie targets categories
   dottie plan --from FILE [--json]
   dottie status
   dottie position status [--did DID] [--vault HEX]
@@ -43,6 +45,10 @@ sync, exit codes are:
 0 means committed/no-op success; 2 means usage error; 3 means refusal/conflict/rejection; exit 4 means queued,
 starved, fence-lost, superseded, unavailable or another partial/non-success outcome. Push never treats a queued or
 indeterminate publication as success.
+
+Targets approve resolves a GNOME category selection into the approved key set: it prints the catalog matrix version and
+key digest it stores, creates the settings target when the id is new, and leaves everything unchanged when the policy
+already matches. Targets categories lists the catalog ids the approval accepts.
 
 Status is local-only and writes nothing: it reports the locally recorded vault selection as the vault fingerprint
 and device id, an explicit absence when no selection is recorded, then each selected target with its journal item

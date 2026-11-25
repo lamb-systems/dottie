@@ -173,16 +173,10 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 	}
 	proposal := cloneConfig(c)
 	if p.Source == model.SourceGNOME {
-		keys, err := matrix.SelectCategories(p.Categories)
+		expected, err := config.ApprovedGNOMEPolicy(p.Categories)
 		if err != nil {
 			return config.Config{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
 		}
-		digest, err := matrix.KeySetDigest(keys)
-		if err != nil {
-			return config.Config{}, fmt.Errorf("preset %q key \"categories\": %w", p.ID, err)
-		}
-		categoryIDs := normalizedCategories(p.Categories)
-		keyDigest := hex.EncodeToString(digest[:])
 		for _, target := range proposal.Targets {
 			if target.Source != model.SourceGNOME {
 				continue
@@ -194,10 +188,10 @@ func Materialize(p Preset, c config.Config, paths platform.Paths) (config.Config
 					Reason:   "select GNOME categories and approve their resolved key set",
 				}
 			}
-			if policy.Approval != config.GNOMEApprovalApproved ||
-				!sameStrings(normalizedCategories(policy.Categories), categoryIDs) ||
-				policy.MatrixVersion != matrix.Version ||
-				policy.KeyDigest != keyDigest {
+			if policy.Approval != expected.Approval ||
+				!sameStrings(normalizedCategories(policy.Categories), expected.Categories) ||
+				policy.MatrixVersion != expected.MatrixVersion ||
+				policy.KeyDigest != expected.KeyDigest {
 				return config.Config{}, &ReapprovalError{
 					TargetID: target.ID,
 					Reason:   "stored GNOME category policy does not match the catalog selection and current matrix",
