@@ -401,7 +401,7 @@ func runSync(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 			openKeyring,
 			env,
 		),
-		productionPullApplySourcesFactory(env),
+		productionPullApplySourcesFactory(env, manualGNOMESettings()),
 		productionSyncPushPreviewFactory(env),
 		productionPushSourcesFactory(openKeyring, env),
 		productionSessionDIDSource(openKeyring, env),

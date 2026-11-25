@@ -103,17 +103,21 @@ account access or provider-held data can therefore lose the published position; 
 keys alone does not.
 
 A file-set record names the target it was captured from: an id and a portable root of base,
-relative path and kind. A record cannot grant local path access on its own. Adoption happens only
-on its own pull confirmation, only when the machine configures no files target, and only after the
-same checks and canonicalization `targets add` performs: the root must resolve inside HOME or
-XDG_CONFIG_HOME, must not overlap Dottie's own directories or an existing target, and the adopted
-target is stored at its resolved path. The proposed root is resolved and validated before that
-confirmation but its contents are not captured: the plan that reads the target is composed only
-after adoption is confirmed, and its confirmation binds the resolved root. The adopted target uses
-review mode and no excludes, and the sync path refuses adoption because its push half is already
-composed. A machine that already configures files targets keeps them, and the published root is not
-enforced against them, so the record cannot redirect an existing target. A file-set record written
-before this field existed names no root, so it cannot be adopted and pull requires a local files
+relative path and kind. A packed payload names every target it carries instead: files targets with
+portable roots, and settings targets without one. A record cannot grant local path access on its
+own. Adoption happens only on its own pull confirmation, and only after the same checks and
+canonicalization `targets add` performs: a files root must resolve inside HOME or XDG_CONFIG_HOME,
+must not overlap Dottie's own directories or an existing target, and the adopted target is stored
+at its resolved path. A settings target is adopted only when the user names it on the pull command
+with a category selection, which resolves from the local catalog into the approved key set and
+digest the plan shows; the record cannot choose categories, approval or a matrix version. Proposed
+roots are resolved and validated before that confirmation but their contents are not captured: the
+plan that reads a target is composed only after adoption is confirmed, and its confirmation binds
+the resolved root or the derived settings policy. Adopted targets use review mode and no excludes,
+targets that cannot be resolved are skipped and reported rather than adopted, and the sync path
+refuses adoption because its push half is already composed. An existing target is left alone: the
+published root is not enforced against it, so a record cannot redirect it, and a legacy file-set
+record without a target names no root, so it cannot be adopted and pull requires a local files
 target for it. A single-file target publishes its file under the basename of its configured path,
 and pull maps the sole file-set entry back to that file without synthesizing parent directories.
 The pull confirmation binds the local target id, portable root and selection/approval revisions,

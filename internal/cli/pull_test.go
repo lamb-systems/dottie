@@ -555,7 +555,7 @@ func newPullTestCommandWithVaults(
 		sessions,
 		remotes,
 		vaults,
-		productionPullApplySourcesFactory(os.Getenv),
+		productionPullApplySourcesFactory(os.Getenv, manualGNOMESettings()),
 		dids,
 		os.Getenv,
 	)

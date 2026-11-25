@@ -372,7 +372,7 @@ func (gate *joinGate) pull(t *testing.T, machine *joinGateMachine, args ...strin
 		sessions,
 		gate.pullRemotes,
 		gate.pullVaults,
-		productionPullApplySourcesFactory(os.Getenv),
+		productionPullApplySourcesFactory(os.Getenv, manualGNOMESettings()),
 		pushTestDIDs(gate.session().DID),
 		os.Getenv,
 	)

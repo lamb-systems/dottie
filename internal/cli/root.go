@@ -23,7 +23,7 @@ Usage:
   dottie status
   dottie position status [--did DID] [--vault HEX]
   dottie push [--did DID] [--vault HEX] [--device-id ID] [--confirm HEX]
-  dottie pull [--did DID] [--vault HEX] [--confirm HEX]
+  dottie pull [--did DID] [--vault HEX] [--settings ID=CATEGORY[,CATEGORY]]... [--confirm HEX]
   dottie sync [--did DID] [--vault HEX] [--confirm HEX]
   dottie account login --handle HANDLE [--no-browser] [--timeout DURATION]
   dottie account status (--did DID | --handle HANDLE) [--refresh]

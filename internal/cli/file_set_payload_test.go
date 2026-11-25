@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -645,16 +647,16 @@ func TestPullRefusesToAdoptAFileSetTargetWhoseRootDoesNotExist(t *testing.T) {
 	assert.Empty(t, planned.Targets)
 }
 
-func TestPullRefusesAFreshPackedPositionWithoutAnyTarget(t *testing.T) {
+func TestPullRefusesAFreshPackedPositionWithoutAnyAdoptableTarget(t *testing.T) {
 	fixture := newPullTestFixture(t)
-	reader := &pullTestReader{view: fixture.view()}
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
 
 	var stdout, stderr bytes.Buffer
 	code := 0
 	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
 	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code, stdout.String())
-	assert.Contains(t, stderr.String(), "no files target is configured")
+	assert.Contains(t, stderr.String(), "no target is configured")
 }
 
 func TestPullApplyAdoptionLeavesAConfiguredMachineAlone(t *testing.T) {
@@ -671,8 +673,197 @@ func TestPullApplyAdoptionLeavesAConfiguredMachineAlone(t *testing.T) {
 			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 		}},
 	}
-	got, adoption, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
+	got, adoption, _, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
 	require.NoError(t, err)
 	assert.Nil(t, adoption)
 	assert.Equal(t, configuration, got)
+}
+
+func TestPullAdoptsAPackedFilesTargetOnConfirmation(t *testing.T) {
+	pullFileSetUmask(t)
+	fixture := newPullTestFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.targetPath("init.lua")), 0o700))
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+
+	run := func(args ...string) (int, string, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		code := 0
+		command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+		code = runPullForTest(command, &code, args...)
+		return code, stdout.String(), stderr.String()
+	}
+
+	code, stdout, stderr := run("--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "adopt: create target files (files:home/config, directory, mode review)\n")
+	assert.Contains(t, stdout, "pull: adoption only; nothing local was read or changed; repeat with")
+	planned, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	assert.Empty(t, planned.Targets, "the unconfirmed adoption was written")
+
+	adoptionToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = run("--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", adoptionToken)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "adopt: created target files (files:home/config, directory, mode review)\n")
+	assert.Contains(t, stdout, "pull: plan only; nothing was applied; repeat with")
+	adopted, err := config.Load(fixture.paths)
+	require.NoError(t, err)
+	require.Len(t, adopted.Targets, 1)
+	assert.Equal(t, model.RootHome, adopted.Targets[0].Root.Base)
+	assert.Equal(t, "config", adopted.Targets[0].Root.Path)
+	_, statErr := os.Lstat(fixture.targetPath("init.lua"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the adoption run applied files")
+
+	applyToken := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = run("--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", applyToken)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "pull: applied changes=1 unchanged=0")
+	content, err := os.ReadFile(fixture.targetPath("init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, pullTestBaseContent, string(content))
+	assert.Equal(t, uint64(1), fixture.acceptedFloor(t).Revision)
+}
+
+func TestPullApplyAdoptionCarriesPackedFilesAndSettingsTargets(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "config"), 0o700))
+	absent, err := config.OpenSnapshot(paths)
+	require.NoError(t, err)
+	sources := pullApplySources{
+		Paths:         paths,
+		Configuration: config.Default(),
+		Token:         absent.Token,
+	}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormPacked,
+		Targets: []model.Target{
+			{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+			{
+				ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion,
+			},
+		},
+	}
+	input := pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"clock", "appearance"}}},
+	}
+	configuration, adoption, skipped, err := pullApplyAdoption(sources, material, input)
+	require.NoError(t, err)
+	assert.Empty(t, skipped)
+	require.NotNil(t, adoption)
+	require.Len(t, adoption.Targets, 2)
+	require.Len(t, configuration.Targets, 2)
+
+	files := configuration.Targets[0]
+	assert.Equal(t, model.SourceFiles, files.Source)
+	require.NotNil(t, files.Root)
+	assert.Equal(t, model.RootHome, files.Root.Base)
+	assert.Equal(t, "config", files.Root.Path)
+	assert.Equal(t, config.Review, files.Mode)
+
+	desktop := configuration.Targets[1]
+	assert.Equal(t, "desktop", desktop.ID)
+	assert.Equal(t, model.SourceGNOME, desktop.Source)
+	assert.Equal(t, config.Review, desktop.Mode)
+	require.NotNil(t, desktop.GNOMEPolicy)
+	keys, err := matrix.SelectCategories([]string{"appearance", "clock"})
+	require.NoError(t, err)
+	digest, err := matrix.KeySetDigest(keys)
+	require.NoError(t, err)
+	assert.Equal(t, config.GNOMEApprovalApproved, desktop.GNOMEPolicy.Approval)
+	assert.Equal(t, []string{"appearance", "clock"}, desktop.GNOMEPolicy.Categories)
+	assert.Equal(t, matrix.Version, desktop.GNOMEPolicy.MatrixVersion)
+	assert.Equal(t, hex.EncodeToString(digest[:]), desktop.GNOMEPolicy.KeyDigest)
+
+	binding := pullTestFileSetBinding()
+	token := pullAdoptionConfirmationToken(binding, 0, false, []byte{0x01}, 0, adoption)
+	assert.Equal(t, token, pullAdoptionConfirmationToken(binding, 0, false, []byte{0x01}, 0, adoption))
+	widened := pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"appearance", "clock", "fonts"}}},
+	}
+	_, other, _, err := pullApplyAdoption(sources, material, widened)
+	require.NoError(t, err)
+	assert.NotEqual(
+		t,
+		token,
+		pullAdoptionConfirmationToken(binding, 0, false, []byte{0x01}, 0, other),
+		"the token does not bind the approved category set",
+	)
+
+	require.NoError(t, commitPullAdoption(context.Background(), paths, adoption))
+	stored, err := config.Load(paths)
+	require.NoError(t, err)
+	require.Len(t, stored.Targets, 2)
+}
+
+func TestPullApplyAdoptionSkipsSettingsTargetsWithoutASelection(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	sources := pullApplySources{Paths: paths, Configuration: config.Default()}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormPacked,
+		Targets: []model.Target{
+			{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+		},
+	}
+	configuration, adoption, skipped, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, adoption)
+	assert.Equal(t, config.Default(), configuration)
+	require.Len(t, skipped, 1)
+	assert.Contains(t, skipped[0], "settings target desktop is not configured")
+	assert.Contains(t, skipped[0], "--settings desktop=CATEGORY")
+}
+
+func TestPullApplyAdoptionLeavesAnIdenticalSettingsTargetAlone(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	policy, err := config.ApprovedGNOMEPolicy([]string{"appearance", "clock"})
+	require.NoError(t, err)
+	configured := config.Default()
+	configured.Targets = []config.Target{{
+		ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &policy,
+	}}
+	sources := pullApplySources{Paths: paths, Configuration: configured}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormPacked,
+		Targets: []model.Target{
+			{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+		},
+	}
+	got, adoption, skipped, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"clock", "appearance"}}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, adoption)
+	assert.Empty(t, skipped)
+	assert.Equal(t, configured, got)
+
+	_, _, _, err = pullApplyAdoption(sources, material, pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"fonts"}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run dottie targets approve")
+}
+
+func TestPullSettingsSelectionsParseAndRejectDuplicates(t *testing.T) {
+	selections, err := parsePullSettings([]string{"desktop=appearance,clock", "files=appearance"})
+	require.NoError(t, err)
+	assert.Equal(t, []pullSettingsSelection{
+		{TargetID: "desktop", Categories: []string{"appearance", "clock"}},
+		{TargetID: "files", Categories: []string{"appearance"}},
+	}, selections)
+
+	for _, value := range [][]string{
+		{"desktop"},
+		{"=appearance"},
+		{"desktop="},
+		{"desktop=appearance,"},
+		{"desktop=appearance", "desktop=clock"},
+	} {
+		_, err := parsePullSettings(value)
+		require.Error(t, err, "%v", value)
+		assert.Contains(t, err.Error(), "usage:", "%v", value)
+	}
 }

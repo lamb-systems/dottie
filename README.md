@@ -51,13 +51,16 @@ dottie push --confirm <token from the previous output>
 ```
 
 On a second machine, log in and run `pull`. It resolves the vault from your published position, so
-you do not need to copy a fingerprint around. If the machine configures no files target, the first
-run proposes the target the publication names without reading the proposed directory; confirming
-that proposal creates the target, and the following run plans and applies under its own token. If
-the machine already configures a files target, that target is used as is. If your local files
-differ from the published ones and there is no history to compare, pull refuses and tells you which
-files conflict. That is deliberate: it will not overwrite a file you edited, and it will not
-merge.
+you do not need to copy a fingerprint around. A packed position names the targets it carries: files
+targets with portable roots, and settings targets without one. Pull proposes adopting the targets
+this machine does not configure yet, without reading the proposed directories first; confirming
+that proposal creates them, and the following run plans and applies under its own token. Files
+targets are adopted only when their root already exists, and a settings target only when you name
+it with `--settings <id>=CATEGORY[,CATEGORY]`, which resolves from the local catalog into the
+approved key set shown in the plan; anything else is reported and skipped. A target that already
+matches a configured one is left alone. If your local files differ from the published ones and
+there is no history to compare, pull refuses and tells you which files conflict. That is
+deliberate: it will not overwrite a file you edited, and it will not merge.
 
 `push` and `pull` take `--did` only when more than one account is authorised. `--vault` exists
 for installs that know several vaults.
@@ -72,14 +75,16 @@ head carries no `blobCid`. `pull` reads the head, walks back through the chain, 
 verifies every payload blob against its CID and size.
 
 A file-set record names the target it was captured from: an id and a portable root of base,
-relative path and kind. That is enough for a machine with no files target to adopt it, but it is
-only a proposal: the target is created on its own confirmation, before that directory is read, in
-review mode and without excludes, through the same checks and canonicalization as `targets add`.
-A machine that already configures files targets keeps them, and the published root is not enforced
-against them, so a file-set publication can still be applied to the sole local target of your
-choosing. A file-set record written before this field existed names no root, so pull requires a
-local files target for it. A single-file target publishes its file under the basename of its
-configured path, for example `init.lua`, and pull maps that one entry back to the selected file.
+relative path and kind. A packed payload names every target it carries, files targets with portable
+roots and settings targets without one. Either form is only a proposal: a target is created on its
+own confirmation, before any proposed directory is read, in review mode and without excludes, for a
+files target through the same checks and canonicalization as `targets add`, and for a settings
+target through the local category selection and its resolved digest. A files target that is already
+configured is left alone, and the published root is not enforced against it, so a file-set
+publication can still be applied to the sole local target of your choosing. A file-set record
+written before this field existed names no root, so pull requires a local files target for it. A
+single-file target publishes its file under the basename of its configured path, for example
+`init.lua`, and pull maps that one entry back to the selected file.
 The pull confirmation binds the local target id, portable root and configuration revisions, so a
 local target or root change between review and confirmation refuses. The target root must already
 exist; parent directories absent from the published entries are created with mode `0755` during

@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	urfave "github.com/urfave/cli/v3"
@@ -110,7 +113,7 @@ func runPull(args []string, stdout, stderr io.Writer, openKeyring accountKeyring
 	code := 0
 	command := newPullCommand(stdout, stderr, &code,
 		productionPushSessionFactory(openKeyring, env), productionPullRemoteFactory(openKeyring, env),
-		productionPullVaultFactory(openKeyring, env), productionPullApplySourcesFactory(env),
+		productionPullVaultFactory(openKeyring, env), productionPullApplySourcesFactory(env, manualGNOMESettings()),
 		productionSessionDIDSource(openKeyring, env), env)
 	arguments := append([]string{"dottie"}, args...)
 	ctx := context.Background()
@@ -142,12 +145,16 @@ func newPullCommand(
 		return command
 	}
 	pull := configure(&urfave.Command{
-		Name: "pull",
+		Name:                      "pull",
+		DisableSliceFlagSeparator: true,
 		Flags: []urfave.Flag{
 			&urfave.StringFlag{Name: "vault", Usage: "local vault fingerprint", OnlyOnce: true},
 			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
 			&urfave.StringFlag{Name: "handle", Usage: "signed-in account handle", OnlyOnce: true},
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier apply plan", OnlyOnce: true},
+			&urfave.StringSliceFlag{
+				Name: "settings", Usage: "GNOME target and categories to adopt, id=CATEGORY[,CATEGORY]",
+			},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runPullCommand(ctx, command, sessions, remotes, vaults, applySources, dids, env)
@@ -206,6 +213,10 @@ func runPullCommand(
 	did, err := syntax.ParseDID(command.String("did"))
 	if err != nil {
 		return usageExit("--did must be a valid account DID")
+	}
+	settings, err := parsePullSettings(command.StringSlice("settings"))
+	if err != nil {
+		return err
 	}
 	paths, err := platform.Resolve(env)
 	if err != nil {
@@ -284,6 +295,7 @@ func runPullCommand(
 		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
 		AcceptPosition: !inspection.Present || finding.Kind == pullFindingDiverges,
+		Settings:       settings,
 	}
 	return runPullApply(ctx, planRequest, applySources)
 }
@@ -447,6 +459,12 @@ type pullApplyPlanRequest struct {
 	RemoteOnly     bool
 	AcceptPosition bool
 	Label          string
+	Settings       []pullSettingsSelection
+}
+
+type pullSettingsSelection struct {
+	TargetID   string
+	Categories []string
 }
 
 func (input pullApplyPlanRequest) label() string {
@@ -468,6 +486,7 @@ type pullApplyPreparation struct {
 	AcceptOnly      bool
 	AdoptionPending bool
 	Adopted         bool
+	Skipped         []string
 }
 
 type pullApplyTargetAdoption struct {
@@ -492,23 +511,18 @@ func preparePullApply(
 		)
 	}
 	preparation := pullApplyPreparation{Sources: sources}
-	if len(sources.Configuration.Targets) == 0 && len(pullApplyRecordTargets(input.View)) == 0 {
-		if input.Present {
-			return preparation, nil
-		}
-		return pullApplyPreparation{}, urfave.Exit(
-			input.label()+" refused: no files target is configured and the published position names none to adopt; run dottie targets add; nothing was changed",
-			3,
-		)
+	if len(sources.Configuration.Targets) == 0 && input.Present {
+		return preparation, nil
 	}
 	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor, input.Present)
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
-	configuration, adoption, err := pullApplyAdoption(sources, material, input)
+	configuration, adoption, skipped, err := pullApplyAdoption(sources, material, input)
 	if err != nil {
 		return pullApplyPreparation{}, err
 	}
+	preparation.Skipped = skipped
 	if adoption != nil {
 		preparation.Adoption = adoption
 		token := pullAdoptionConfirmationToken(
@@ -522,6 +536,12 @@ func preparePullApply(
 		preparation.Adopted = true
 	}
 	preparation.Sources.Configuration = configuration
+	if len(configuration.Targets) == 0 {
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: no target is configured and the published position names none to adopt; run dottie targets add or pass --settings; nothing was changed",
+			3,
+		)
+	}
 	if sources.Local == nil {
 		return pullApplyPreparation{}, urfave.Exit(
 			input.label()+" refused: the local publication context is not available for apply; nothing was changed",
@@ -658,70 +678,272 @@ func pullApplyAdoption(
 	sources pullApplySources,
 	material pullApplyMaterial,
 	input pullApplyPlanRequest,
-) (config.Config, *pullApplyTargetAdoption, error) {
-	if material.Form != publication.PayloadFormFileSet || len(material.Targets) == 0 {
-		return sources.Configuration, nil, nil
+) (config.Config, *pullApplyTargetAdoption, []string, error) {
+	if input.Label != "" && input.Label != "pull" {
+		return sources.Configuration, nil, nil, nil
 	}
-	if len(sources.Configuration.Targets) != 0 {
-		return sources.Configuration, nil, nil
+	if len(sources.Configuration.Targets) == 0 && material.Form == publication.PayloadFormFileSet {
+		return pullAdoptFileSetTarget(sources, material, input)
+	}
+	if material.Form != publication.PayloadFormPacked {
+		return sources.Configuration, nil, nil, nil
+	}
+	return pullAdoptPackedTargets(sources, material, input)
+}
+
+func pullAdoptFileSetTarget(
+	sources pullApplySources,
+	material pullApplyMaterial,
+	input pullApplyPlanRequest,
+) (config.Config, *pullApplyTargetAdoption, []string, error) {
+	if len(material.Targets) == 0 {
+		return sources.Configuration, nil, nil, nil
 	}
 	if len(material.Targets) != 1 {
-		return config.Config{}, nil, pullAdoptionRefusal(input, "the file-set publication names more than one target")
+		return config.Config{}, nil, nil, pullAdoptionRefusal(
+			input, "the file-set publication names more than one target",
+		)
 	}
 	published := material.Targets[0]
 	if published.Source != model.SourceFiles || published.Root == nil || published.Validate() != nil {
-		return config.Config{}, nil, pullAdoptionRefusal(input, "the file-set publication names an unsupported target layout")
-	}
-	selector := pullPortableSelector(*published.Root)
-	if input.Label != "" && input.Label != "pull" {
-		return config.Config{}, nil, urfave.Exit(
-			input.label()+" refused: the published position names "+escapeField(selector)+" which this machine does not configure; run dottie pull first to adopt it; nothing was changed",
-			3,
+		return config.Config{}, nil, nil, pullAdoptionRefusal(
+			input, "the file-set publication names an unsupported target layout",
 		)
 	}
+	target, err := pullAdoptFilesTarget(sources, published)
+	if err != nil {
+		return config.Config{}, nil, nil, pullAdoptionFailure(input, err)
+	}
+	if err := config.CheckAddition(sources.Configuration, sources.Paths, target); err != nil {
+		return config.Config{}, nil, nil, pullAdoptionFailure(
+			input, fmt.Errorf("the published target %s cannot be adopted (%w)", pullPortableSelector(*published.Root), err),
+		)
+	}
+	next := sources.Configuration
+	next.Targets = append(append([]config.Target(nil), sources.Configuration.Targets...), target)
+	return next, &pullApplyTargetAdoption{ConfigToken: sources.Token, Targets: []config.Target{target}}, nil, nil
+}
+
+func pullAdoptPackedTargets(
+	sources pullApplySources,
+	material pullApplyMaterial,
+	input pullApplyPlanRequest,
+) (config.Config, *pullApplyTargetAdoption, []string, error) {
+	selected := make(map[string]struct{}, len(input.Settings))
+	for _, settings := range input.Settings {
+		selected[settings.TargetID] = struct{}{}
+		existing, found := pullTargetByID(sources.Configuration, settings.TargetID)
+		if found {
+			if existing.Source != model.SourceGNOME {
+				return config.Config{}, nil, nil, pullAdoptionRefusal(
+					input, "target "+escapeField(settings.TargetID)+" is not a settings target",
+				)
+			}
+			policy, err := config.ApprovedGNOMEPolicy(settings.Categories)
+			if err != nil {
+				return config.Config{}, nil, nil, pullAdoptionFailure(input, err)
+			}
+			if !samePullGNOMEPolicy(existing.GNOMEPolicy, policy) {
+				return config.Config{}, nil, nil, pullAdoptionRefusal(
+					input,
+					"settings target "+escapeField(settings.TargetID)+" is already configured; run dottie targets approve to change it",
+				)
+			}
+			continue
+		}
+		if _, ok := pullPublishedTarget(material.Targets, settings.TargetID, model.SourceGNOME); !ok {
+			return config.Config{}, nil, nil, pullAdoptionRefusal(
+				input, "the published position names no settings target "+escapeField(settings.TargetID),
+			)
+		}
+	}
+
+	configuration := sources.Configuration
+	adopted := make([]config.Target, 0, len(material.Targets))
+	skipped := make([]string, 0)
+	appendTarget := func(target config.Target) error {
+		if err := config.CheckAddition(configuration, sources.Paths, target); err != nil {
+			return pullAdoptionFailure(
+				input, fmt.Errorf("target %s cannot be adopted (%w)", pullTargetSelector(target), err),
+			)
+		}
+		next := configuration
+		next.Targets = append(append([]config.Target(nil), configuration.Targets...), target)
+		configuration = next
+		adopted = append(adopted, target)
+		return nil
+	}
+
+	for _, published := range material.Targets {
+		if published.Source != model.SourceFiles || published.Root == nil || published.Validate() != nil {
+			continue
+		}
+		if pullFilesRootConfigured(sources.Paths, configuration, *published.Root) {
+			continue
+		}
+		selector := pullPortableSelector(*published.Root)
+		target, err := pullAdoptFilesTarget(sources, published)
+		if err != nil {
+			skipped = append(skipped, "target "+escapeField(selector)+" is not configured; create the root and run dottie targets add")
+			continue
+		}
+		if err := appendTarget(target); err != nil {
+			skipped = append(skipped, "target "+escapeField(selector)+" is not configured; "+escapeField(err.Error()))
+			continue
+		}
+	}
+
+	for _, settings := range input.Settings {
+		if _, found := pullTargetByID(configuration, settings.TargetID); found {
+			continue
+		}
+		published, ok := pullPublishedTarget(material.Targets, settings.TargetID, model.SourceGNOME)
+		if !ok {
+			continue
+		}
+		policy, err := config.ApprovedGNOMEPolicy(settings.Categories)
+		if err != nil {
+			return config.Config{}, nil, nil, pullAdoptionFailure(input, err)
+		}
+		target := config.Target{
+			ID: published.ID, Source: model.SourceGNOME, Mode: config.Review, GNOMEPolicy: &policy,
+		}
+		if err := appendTarget(target); err != nil {
+			return config.Config{}, nil, nil, err
+		}
+	}
+
+	for _, published := range material.Targets {
+		if published.Source != model.SourceGNOME {
+			continue
+		}
+		if _, configured := pullTargetByID(sources.Configuration, published.ID); configured {
+			continue
+		}
+		if _, chosen := selected[published.ID]; chosen {
+			continue
+		}
+		skipped = append(skipped, "settings target "+escapeField(published.ID)+
+			" is not configured; pass --settings "+escapeField(published.ID)+"=CATEGORY[,CATEGORY]")
+	}
+	slices.Sort(skipped)
+
+	if len(adopted) == 0 {
+		return sources.Configuration, nil, skipped, nil
+	}
+	return configuration, &pullApplyTargetAdoption{ConfigToken: sources.Token, Targets: adopted}, skipped, nil
+}
+
+func pullAdoptFilesTarget(sources pullApplySources, published model.Target) (config.Target, error) {
+	selector := pullPortableSelector(*published.Root)
 	provisional := config.Target{
 		ID: published.ID, Source: model.SourceFiles,
 		Root: &config.Root{Base: published.Root.Base, Path: published.Root.Path, Kind: published.Root.Kind},
 	}
 	absolute, err := provisional.ResolvedPath(sources.Paths)
 	if err != nil {
-		return config.Config{}, nil, pullAdoptionRefusal(input, "the published target "+selector+" cannot be resolved")
+		return config.Target{}, errors.New("the published target " + selector + " cannot be resolved")
 	}
 	root, err := config.ResolveSelection(sources.Paths, absolute)
 	if err != nil {
-		return config.Config{}, nil, urfave.Exit(
-			input.label()+" refused: the published target "+escapeField(selector)+" cannot be adopted ("+escapeField(
-				err.Error(),
-			)+"); nothing was changed",
-			3,
+		return config.Target{}, errors.New(
+			"the published target " + selector + " cannot be adopted (" + err.Error() + ")",
 		)
 	}
 	if root.Kind != published.Root.Kind {
-		return config.Config{}, nil, pullAdoptionRefusal(input, "the published target "+selector+" resolves to a different kind")
+		return config.Target{}, errors.New("the published target " + selector + " resolves to a different kind")
 	}
-	adopted := config.Target{ID: published.ID, Source: model.SourceFiles, Mode: config.Review, Root: &root}
-	if err := config.CheckAddition(sources.Configuration, sources.Paths, adopted); err != nil {
-		return config.Config{}, nil, urfave.Exit(
-			input.label()+" refused: the published target "+escapeField(selector)+" cannot be adopted ("+escapeField(
-				err.Error(),
-			)+"); nothing was changed",
-			3,
-		)
-	}
-	next := sources.Configuration
-	next.Targets = append(append([]config.Target(nil), sources.Configuration.Targets...), adopted)
-	return next, &pullApplyTargetAdoption{ConfigToken: sources.Token, Targets: []config.Target{adopted}}, nil
+	return config.Target{ID: published.ID, Source: model.SourceFiles, Mode: config.Review, Root: &root}, nil
 }
 
-func pullApplyRecordTargets(view publicationstate.SuppliedRepositoryView) []model.Target {
-	if len(view.Snapshots) == 0 {
-		return nil
+func pullFilesRootConfigured(paths platform.Paths, configuration config.Config, published model.FileRoot) bool {
+	for _, target := range configuration.Targets {
+		if target.Source != model.SourceFiles || target.Root == nil {
+			continue
+		}
+		if target.Root.Base == published.Base && target.Root.Path == published.Path &&
+			target.Root.Kind == published.Kind {
+			return true
+		}
+		resolved, err := target.ResolvedPath(paths)
+		if err != nil {
+			continue
+		}
+		canonical, err := platform.RealPath(resolved)
+		if err != nil {
+			continue
+		}
+		publishedPath, err := platform.RealPath(filepath.Join(rootBasePath(paths, published.Base), published.Path))
+		if err != nil || canonical != publishedPath {
+			continue
+		}
+		return true
 	}
-	record, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
-	if err != nil || record.PayloadForm() != publication.PayloadFormFileSet {
-		return nil
+	return false
+}
+
+func rootBasePath(paths platform.Paths, base model.RootBase) string {
+	if base == model.RootHome {
+		return paths.Home
 	}
-	return record.Targets
+	return paths.ConfigHome
+}
+
+func pullTargetByID(configuration config.Config, id string) (config.Target, bool) {
+	for _, target := range configuration.Targets {
+		if target.ID == id {
+			return target, true
+		}
+	}
+	return config.Target{}, false
+}
+
+func pullPublishedTarget(targets []model.Target, id string, source model.SourceKind) (model.Target, bool) {
+	for _, target := range targets {
+		if target.ID == id && target.Source == source {
+			return target, true
+		}
+	}
+	return model.Target{}, false
+}
+
+func samePullGNOMEPolicy(existing *config.GNOMEPolicy, wanted config.GNOMEPolicy) bool {
+	if existing == nil {
+		return false
+	}
+	categories := append([]string(nil), existing.Categories...)
+	slices.Sort(categories)
+	return existing.Approval == wanted.Approval &&
+		existing.MatrixVersion == wanted.MatrixVersion &&
+		existing.KeyDigest == wanted.KeyDigest &&
+		slices.Equal(categories, wanted.Categories)
+}
+
+func parsePullSettings(values []string) ([]pullSettingsSelection, error) {
+	selections := make([]pullSettingsSelection, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		id, list, ok := strings.Cut(value, "=")
+		if !ok || id == "" || list == "" {
+			return nil, usageExit("--settings must be id=CATEGORY[,CATEGORY]")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, usageExit("--settings names target " + escapeField(id) + " more than once")
+		}
+		seen[id] = struct{}{}
+		categories := strings.Split(list, ",")
+		for _, category := range categories {
+			if category == "" {
+				return nil, usageExit("--settings must be id=CATEGORY[,CATEGORY]")
+			}
+		}
+		selections = append(selections, pullSettingsSelection{TargetID: id, Categories: categories})
+	}
+	return selections, nil
+}
+
+func pullAdoptionFailure(input pullApplyPlanRequest, err error) error {
+	return urfave.Exit(input.label()+" refused: "+escapeField(err.Error())+"; nothing was changed", 3)
 }
 
 func pullAdoptionRefusal(input pullApplyPlanRequest, reason string) error {
@@ -760,9 +982,31 @@ func renderPullApplyAdoptionVerb(adoption *pullApplyTargetAdoption, verb string)
 	}
 	var output strings.Builder
 	for _, target := range adoption.Targets {
+		if target.Source == model.SourceGNOME {
+			output.WriteString("adopt: " + verb + " target " + escapeField(target.ID) + " (gnome, " +
+				renderPullGNOMEPolicy(target.GNOMEPolicy) + ")\n")
+			continue
+		}
 		output.WriteString("adopt: " + verb + " target " + escapeField(target.ID) + " (" + escapeField(
 			pullTargetSelector(target),
 		) + ", " + escapeField(string(target.Root.Kind)) + ", mode " + escapeField(string(target.Mode)) + ")\n")
+	}
+	return output.String()
+}
+
+func renderPullGNOMEPolicy(policy *config.GNOMEPolicy) string {
+	if policy == nil {
+		return "no policy"
+	}
+	return "categories=" + escapeField(strings.Join(policy.Categories, ",")) +
+		", matrix=" + strconv.FormatUint(uint64(policy.MatrixVersion), 10) +
+		", digest=" + escapeField(policy.KeyDigest)
+}
+
+func renderPullSkipped(lines []string) string {
+	var output strings.Builder
+	for _, line := range lines {
+		output.WriteString("skip: " + line + "\n")
 	}
 	return output.String()
 }
@@ -798,26 +1042,39 @@ func commitPullAdoption(ctx context.Context, paths platform.Paths, adoption *pul
 
 func pullAdoptionApplied(configuration config.Config, targets []config.Target) bool {
 	for _, wanted := range targets {
-		if wanted.Root == nil {
-			return false
-		}
 		found := false
 		for _, existing := range configuration.Targets {
-			if existing.ID != wanted.ID || existing.Source != wanted.Source || existing.Mode != wanted.Mode ||
-				existing.Root == nil {
+			if existing.ID != wanted.ID || existing.Source != wanted.Source || existing.Mode != wanted.Mode {
 				continue
 			}
-			if existing.Root.Base == wanted.Root.Base && existing.Root.Path == wanted.Root.Path &&
-				existing.Root.Kind == wanted.Root.Kind {
-				found = true
-				break
+			if !samePullRoot(existing.Root, wanted.Root) {
+				continue
 			}
+			if !samePullPolicyPointer(existing.GNOMEPolicy, wanted.GNOMEPolicy) {
+				continue
+			}
+			found = true
+			break
 		}
 		if !found {
 			return false
 		}
 	}
 	return true
+}
+
+func samePullRoot(existing, wanted *config.Root) bool {
+	if existing == nil || wanted == nil {
+		return existing == nil && wanted == nil
+	}
+	return existing.Base == wanted.Base && existing.Path == wanted.Path && existing.Kind == wanted.Kind
+}
+
+func samePullPolicyPointer(existing, wanted *config.GNOMEPolicy) bool {
+	if existing == nil || wanted == nil {
+		return existing == nil && wanted == nil
+	}
+	return samePullGNOMEPolicy(existing, *wanted)
 }
 
 func applyPullPreparation(
@@ -876,7 +1133,8 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return err
 	}
 	if preparation.AdoptionPending {
-		output := renderPullApplyAdoption(preparation.Adoption)
+		output := renderPullSkipped(preparation.Skipped)
+		output += renderPullApplyAdoption(preparation.Adoption)
 		output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
 		output += fmt.Sprintf(
 			"pull: adoption only; nothing local was read or changed; repeat with --confirm %x\n",
@@ -894,9 +1152,12 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return runPullAcceptPosition(ctx, input, preparation)
 	}
 	if !preparation.applies() {
+		if len(preparation.Skipped) != 0 {
+			return writeCommandOutput(input.Command, renderPullSkipped(preparation.Skipped))
+		}
 		return nil
 	}
-	output := renderPullApplyPlan(preparation.Plan)
+	output := renderPullSkipped(preparation.Skipped) + renderPullApplyPlan(preparation.Plan)
 	output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
 	if !input.Confirmed {
 		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", preparation.Token)
@@ -922,7 +1183,8 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 }
 
 func writePullAdoptionRun(input pullApplyPlanRequest, preparation pullApplyPreparation) error {
-	output := renderPullApplyAdoptionCreated(preparation.Adoption)
+	output := renderPullSkipped(preparation.Skipped)
+	output += renderPullApplyAdoptionCreated(preparation.Adoption)
 	switch {
 	case preparation.AcceptOnly:
 		output += renderPullAcceptPosition(preparation.Plan, preparation.Material)
@@ -942,7 +1204,8 @@ func writePullAdoptionRun(input pullApplyPlanRequest, preparation pullApplyPrepa
 }
 
 func runPullAcceptPosition(ctx context.Context, input pullApplyPlanRequest, preparation pullApplyPreparation) error {
-	output := renderPullAcceptPosition(preparation.Plan, preparation.Material)
+	output := renderPullSkipped(preparation.Skipped)
+	output += renderPullAcceptPosition(preparation.Plan, preparation.Material)
 	output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
 	if !input.Confirmed {
 		output += fmt.Sprintf(
@@ -1516,16 +1779,31 @@ func pullAdoptionConfirmationToken(
 		writeField(target.ID)
 		writeField(string(target.Source))
 		writeField(string(target.Mode))
-		writeField(string(target.Root.Base))
-		writeField(target.Root.Path)
-		writeField(string(target.Root.Kind))
+		if target.Root != nil {
+			_, _ = digest.Write([]byte{1})
+			writeField(string(target.Root.Base))
+			writeField(target.Root.Path)
+			writeField(string(target.Root.Kind))
+		} else {
+			_, _ = digest.Write([]byte{0})
+		}
+		if target.GNOMEPolicy != nil {
+			_, _ = digest.Write([]byte{1})
+			writeField(string(target.GNOMEPolicy.Approval))
+			writeField(strings.Join(target.GNOMEPolicy.Categories, ","))
+			binary.BigEndian.PutUint64(scratch[:], uint64(target.GNOMEPolicy.MatrixVersion))
+			_, _ = digest.Write(scratch[:])
+			writeField(target.GNOMEPolicy.KeyDigest)
+		} else {
+			_, _ = digest.Write([]byte{0})
+		}
 	}
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))
 	return token
 }
 
-func productionPullApplySourcesFactory(env func(string) string) pullApplySourcesFactory {
+func productionPullApplySourcesFactory(env func(string) string, settings service.SettingsPort) pullApplySourcesFactory {
 	return func(ctx context.Context, _ *urfave.Command, _ publicationstate.Binding) (pullApplySources, error) {
 		paths, err := platform.Resolve(env)
 		if err != nil {
@@ -1540,7 +1818,7 @@ func productionPullApplySourcesFactory(env func(string) string) pullApplySources
 			return pullApplySources{}, err
 		}
 		sources := pullApplySources{Paths: paths, Configuration: configuration, Token: snapshot.Token}
-		local, err := service.NewPublicationLocalContext(paths, service.LocalFilesCapture{}, nil)
+		local, err := service.NewPublicationLocalContext(paths, service.LocalFilesCapture{}, settings)
 		if err != nil {
 			return pullApplySources{}, err
 		}
