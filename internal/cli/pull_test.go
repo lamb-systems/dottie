@@ -1259,6 +1259,22 @@ func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *t
 	otherAccount.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc"
 	otherAccount.Repository = "at://" + otherAccount.AccountDID
 	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation, pullApplyTargetBinding{}))
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(
+			binding, plan, state, observation, pullApplyTargetBinding{Configuration: config.Token{0x21}},
+		),
+		"the token does not bind the configuration it was reviewed against",
+	)
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(
+			binding, plan, state, observation, pullApplyTargetBinding{SelectionRevision: 2},
+		),
+		"the token does not bind the selection revision",
+	)
 	assert.Equal(t, token, pullApplyConfirmationToken(binding, plan, state, observation, pullApplyTargetBinding{}))
 }
 

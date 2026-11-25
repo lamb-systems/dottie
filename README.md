@@ -56,11 +56,11 @@ targets with portable roots, and settings targets without one. Pull proposes ado
 this machine does not configure yet, without reading the proposed directories first; confirming
 that proposal creates them, and the following run plans and applies under its own token. Files
 targets are adopted only when their root already exists, and a settings target only when you name
-it with `--settings <id>=CATEGORY[,CATEGORY]`, which resolves from the local catalog into the
-approved key set shown in the plan; anything else is reported and skipped. A target that already
-matches a configured one is left alone. If your local files differ from the published ones and
-there is no history to compare, pull refuses and tells you which files conflict. That is
-deliberate: it will not overwrite a file you edited, and it will not merge.
+it with `--settings <id>=CATEGORY[,CATEGORY]`, which resolves from the local catalog into an
+approved category set and key digest shown in the plan; anything else is reported and skipped. A
+target that already matches a configured one is left alone. If your local files differ from the
+published ones and there is no history to compare, pull refuses and tells you which files
+conflict. That is deliberate: it will not overwrite a file you edited, and it will not merge.
 
 `push` and `pull` take `--did` only when more than one account is authorised. `--vault` exists
 for installs that know several vaults.

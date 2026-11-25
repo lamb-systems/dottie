@@ -867,3 +867,79 @@ func TestPullSettingsSelectionsParseAndRejectDuplicates(t *testing.T) {
 		assert.Contains(t, err.Error(), "usage:", "%v", value)
 	}
 }
+
+func TestPullReportsSkippedPackedTargetsBeforeRefusing(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 3, code, stdout.String())
+	assert.Contains(t, stdout.String(), "skip: target files:home/config is not configured")
+	assert.Contains(t, stderr.String(), "no target is configured")
+}
+
+func TestPullRefusesSettingsSelectionsOnAFileSetPosition(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fileSet := newCLIFileSetPublication(t, fixture.binding)
+	reader := fileSetTestReader(fileSet)
+
+	code, stdout, stderr := runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did", pullTestDID,
+		"--vault", pullTestVaultHex(),
+		"--settings", "desktop=appearance",
+	)
+	require.Equal(t, 3, code, stdout)
+	assert.Contains(t, stderr, "--settings applies to packed publications")
+}
+
+func TestPullApplyAdoptionRefusesSettingsTargetsThatAreNotPublished(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	policy, err := config.ApprovedGNOMEPolicy([]string{"appearance"})
+	require.NoError(t, err)
+	configured := config.Default()
+	configured.Targets = []config.Target{{
+		ID: "desktop", Source: model.SourceGNOME, GNOMEPolicy: &policy,
+	}}
+	sources := pullApplySources{Paths: paths, Configuration: configured}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormPacked,
+		Targets: []model.Target{
+			{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+	}
+	_, _, _, err = pullApplyAdoption(sources, material, pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"appearance"}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "names no settings target desktop")
+}
+
+func TestPullApplyAdoptionRefusesARootOwnedByADifferentTargetID(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "config"), 0o700))
+	configured := config.Default()
+	configured.Targets = []config.Target{{
+		ID: "other", Source: model.SourceFiles,
+		Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}}
+	sources := pullApplySources{Paths: paths, Configuration: configured}
+	material := pullApplyMaterial{
+		Form: publication.PayloadFormPacked,
+		Targets: []model.Target{{
+			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+	}
+	_, _, _, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shares its root with local target other")
+}
