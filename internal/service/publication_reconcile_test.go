@@ -63,11 +63,14 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -121,7 +124,7 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 			binding:        binding,
 			expectedFloor:  cloneServiceTestFloor(floor),
 			snapshotRecord: bytes.Clone(recordRaw),
-			payload:        bytes.Clone(packed.Payload),
+			payloads:       [][]byte{bytes.Clone(packed.Payload)},
 		},
 	}
 }
@@ -137,7 +140,7 @@ func cloneServiceTestFloor(floor publicationstate.Floor) publicationstate.Floor 
 	}
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
-	testBlobCID(out) = bytes.Clone(testBlobCID(floor))
+	out.Segments = cloneSegmentSummariesService(floor.Segments)
 	return out
 }
 
@@ -145,7 +148,7 @@ func cloneAcceptedMaterialTestRequest(request acceptedPublicationRequest) accept
 	out := request
 	out.expectedFloor = cloneServiceTestFloor(request.expectedFloor)
 	out.snapshotRecord = bytes.Clone(request.snapshotRecord)
-	out.payload = bytes.Clone(request.payload)
+	out.payloads = clonePublicationPayloadSets(request.payloads)
 	return out
 }
 
@@ -298,20 +301,20 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 	fixture := newAcceptedMaterialTestFixture(t, publicationstate.BackendPublicRepo)
 	canary := "private-record-canary"
 	acceptedSnapshot, err := publication.DecodePayload(
-		fixture.request.payload,
+		fixture.request.payloads[0],
 		publication.BlobReference{
-			CID:  testBlobCID(fixture.request.expectedFloor),
-			Size: testBlobSize(fixture.request.expectedFloor),
+			CID:  floorPackedBlob(fixture.request.expectedFloor).CID,
+			Size: floorPackedBlob(fixture.request.expectedFloor).Size,
 		},
 	)
 	require.NoError(t, err)
 	require.Len(t, acceptedSnapshot.Entries, 1)
 	require.NotNil(t, acceptedSnapshot.Entries[0].File)
 	alternateSnapshot, err := publication.DecodePayload(
-		fixture.request.payload,
+		fixture.request.payloads[0],
 		publication.BlobReference{
-			CID:  testBlobCID(fixture.request.expectedFloor),
-			Size: testBlobSize(fixture.request.expectedFloor),
+			CID:  floorPackedBlob(fixture.request.expectedFloor).CID,
+			Size: floorPackedBlob(fixture.request.expectedFloor).Size,
 		},
 	)
 	require.NoError(t, err)
@@ -323,8 +326,8 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 	alternateSnapshot.Entries[0].File.Content = bytes.Clone(alternateContent)
 	alternatePacked, err := vault.Pack(alternateSnapshot)
 	require.NoError(t, err)
-	require.NotEqual(t, fixture.request.payload, alternatePacked.Payload)
-	require.Len(t, alternatePacked.Payload, len(fixture.request.payload))
+	require.NotEqual(t, fixture.request.payloads[0], alternatePacked.Payload)
+	require.Len(t, alternatePacked.Payload, len(fixture.request.payloads[0]))
 	alternateCID, err := publication.RawPayloadCID(alternatePacked.Payload)
 	require.NoError(t, err)
 	decodedAlternate, err := publication.DecodePayload(
@@ -368,16 +371,16 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 		},
 		{
 			name: "missing_payload", stage: "input", reason: "request_invalid",
-			change: func(_ *testing.T, request *acceptedPublicationRequest) { request.payload = nil },
+			change: func(_ *testing.T, request *acceptedPublicationRequest) { request.payloads = nil },
 		},
 		{
 			name: "same_size_corrupted_payload", stage: "payload", reason: "payload_invalid",
-			change: func(_ *testing.T, request *acceptedPublicationRequest) { request.payload[0] ^= 1 },
+			change: func(_ *testing.T, request *acceptedPublicationRequest) { request.payloads[0][0] ^= 1 },
 		},
 		{
 			name: "record_payload_mismatch", stage: "payload", reason: "payload_invalid",
 			change: func(_ *testing.T, request *acceptedPublicationRequest) {
-				request.payload = bytes.Clone(alternatePayload)
+				request.payloads = [][]byte{bytes.Clone(alternatePayload)}
 			},
 		},
 	}
@@ -404,7 +407,7 @@ func TestValidateAcceptedPublicationMaterialDetachesInputsAndOutputs(t *testing.
 	fixture := newAcceptedMaterialTestFixture(t, publicationstate.BackendPublicRepo)
 	request := cloneAcceptedMaterialTestRequest(fixture.request)
 	originalRecord := bytes.Clone(request.snapshotRecord)
-	originalPayload := bytes.Clone(request.payload)
+	originalPayload := bytes.Clone(request.payloads[0])
 	originalFloor := cloneServiceTestFloor(request.expectedFloor)
 	first, err := validateAcceptedPublication(context.Background(), request)
 	require.NoError(t, err)
@@ -412,14 +415,14 @@ func TestValidateAcceptedPublicationMaterialDetachesInputsAndOutputs(t *testing.
 	require.NotNil(t, first.snapshot.Entries[0].File)
 
 	request.snapshotRecord[0] ^= 1
-	request.payload[0] ^= 1
+	request.payloads[0][0] ^= 1
 	request.expectedFloor.Head[0] ^= 1
 	assert.Equal(t, originalFloor, first.floor)
 	assert.Equal(t, []byte("synthetic accepted publication"), first.snapshot.Entries[0].File.Content)
 
 	cleanRequest := cloneAcceptedMaterialTestRequest(fixture.request)
 	cleanRecord := bytes.Clone(cleanRequest.snapshotRecord)
-	cleanPayload := bytes.Clone(cleanRequest.payload)
+	cleanPayload := bytes.Clone(cleanRequest.payloads[0])
 	second, err := validateAcceptedPublication(context.Background(), cleanRequest)
 	require.NoError(t, err)
 	require.Len(t, second.snapshot.Entries, 1)
@@ -427,9 +430,9 @@ func TestValidateAcceptedPublicationMaterialDetachesInputsAndOutputs(t *testing.
 	first.floor.Head[0] ^= 1
 	first.snapshot.Entries[0].File.Content[0] ^= 1
 	assert.Equal(t, cleanRecord, cleanRequest.snapshotRecord)
-	assert.Equal(t, cleanPayload, cleanRequest.payload)
+	assert.Equal(t, cleanPayload, cleanRequest.payloads[0])
 	assert.Equal(t, originalRecord, fixture.request.snapshotRecord)
-	assert.Equal(t, originalPayload, fixture.request.payload)
+	assert.Equal(t, originalPayload, fixture.request.payloads[0])
 	assert.Equal(t, originalFloor, second.floor)
 	assert.Equal(t, []byte("synthetic accepted publication"), second.snapshot.Entries[0].File.Content)
 	stored, present, err := fixture.store.Load(context.Background())
@@ -491,14 +494,14 @@ func TestValidateAcceptedPublicationMaterialAcrossSequentialAdvanceAndReopen(t *
 			{Key: successorKey, Raw: successorRaw},
 		},
 	}
-	proposal, err := fixture.store.Prepare(ctx, publicationstate.ModeAdvance, observation, fixture.request.payload)
+	proposal, err := fixture.store.Prepare(ctx, publicationstate.ModeAdvance, observation, fixture.request.payloads[0])
 	require.NoError(t, err)
 	successorFloor, err := fixture.store.Accept(
 		ctx,
 		publicationstate.ModeAdvance,
 		proposal.StateToken,
 		observation,
-		fixture.request.payload,
+		fixture.request.payloads[0],
 		[32]byte{},
 	)
 	require.NoError(t, err)
@@ -577,7 +580,7 @@ func TestCheckAcceptedPublicationFloorRejectsNilAndMalformedRequests(t *testing.
 		binding:        fixture.request.binding,
 		expectedFloor:  cloneServiceTestFloor(fixture.request.expectedFloor),
 		snapshotRecord: bytes.Clone(fixture.request.snapshotRecord),
-		payload:        bytes.Clone(fixture.request.payload),
+		payloads:       [][]byte{bytes.Clone(fixture.request.payloads[0])},
 	})
 	require.NoError(t, err)
 	assert.NotEqual(t, acceptedPublicationMaterial{}, result)
@@ -586,7 +589,7 @@ func TestCheckAcceptedPublicationFloorRejectsNilAndMalformedRequests(t *testing.
 func TestPublicationReconciliationErrorsRemainClosed(t *testing.T) {
 	fixture := newAcceptedMaterialTestFixture(t, publicationstate.BackendPublicRepo)
 	request := cloneAcceptedMaterialTestRequest(fixture.request)
-	request.payload[0] ^= 1
+	request.payloads[0][0] ^= 1
 	result, err := validateAcceptedPublication(context.Background(), request)
 	require.Error(t, err)
 	assert.Equal(t, acceptedPublicationMaterial{}, result)

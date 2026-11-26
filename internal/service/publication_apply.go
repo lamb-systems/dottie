@@ -155,7 +155,7 @@ type PublicationApplyRequest struct {
 	Barrier         func(PublicationApplyPhase, publicationstate.JournalEntry) error
 	ExpectedPlan    [32]byte
 	ApplyRemoteOnly bool
-	FileSet         bool
+	FileSetTargets  []string
 }
 
 type PublicationApplyPlan struct {
@@ -217,6 +217,8 @@ type publicationApplyOperation struct {
 	anchor           publicationstate.JournalAnchor
 	destinationDir   string
 	destinationPath  string
+	fileSet          bool
+	lenientParents   bool
 }
 
 type publicationApplyBoundFileSystem struct {
@@ -411,10 +413,29 @@ func validatePublicationApplyPlanRequest(ctx context.Context, request Publicatio
 	if len(request.Configuration.Targets) > publicationSelectionMaxTargets {
 		return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonBounds, nil)
 	}
+	fileSet := make(map[string]struct{}, len(request.FileSetTargets))
+	for _, targetID := range request.FileSetTargets {
+		if targetID == "" {
+			return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonRequestInvalid, nil)
+		}
+		if _, duplicate := fileSet[targetID]; duplicate {
+			return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonRequestInvalid, nil)
+		}
+		fileSet[targetID] = struct{}{}
+	}
 	if err := ctx.Err(); err != nil {
 		return publicationApplyFailure(ctx, publicationApplyStageInput, publicationApplyReasonCanceled, err)
 	}
 	return nil
+}
+
+func (request PublicationApplyRequest) fileSetTarget(targetID string) bool {
+	for _, id := range request.FileSetTargets {
+		if id == targetID {
+			return true
+		}
+	}
+	return false
 }
 
 func planPublicationApply(
@@ -544,7 +565,7 @@ func planPublicationApply(
 			content[entry.Identity()] = entry
 		}
 		directories := make(map[model.EntryKey]struct{})
-		if request.FileSet {
+		if request.fileSetTarget(target.ID) {
 			for _, entries := range [][]model.Entry{baseEntries, localEntries, remote.entries} {
 				for _, entry := range entries {
 					if entry.File != nil && entry.File.State == model.FilePresent &&
@@ -593,56 +614,65 @@ func publicationApplyOperationFor(
 	directories map[model.EntryKey]struct{},
 ) (publicationApplyOperation, error) {
 	path := previewEntry.Key.FilePath
-	operation := publicationApplyOperation{targetID: previewEntry.Key.TargetID, root: root, path: path, anchor: anchor}
-	if request.FileSet {
-		if _, directory := directories[previewEntry.Key]; directory {
-			if selection.portable.Root.Kind != model.SelectionDirectory || path == "." {
-				return publicationApplyOperation{}, publicationApplyFailure(
-					ctx,
-					publicationApplyStagePlan,
-					publicationApplyReasonPlanUnresolved,
-					nil,
-				)
-			}
-			operation.key = path
-			switch previewEntry.DecisionAction {
-			case syncengine.ActionDownload:
-				if selection.mode == config.BackupOnly {
-					return publicationApplyOperation{}, publicationApplyFailure(
-						ctx,
-						publicationApplyStagePlan,
-						publicationApplyReasonBackupOnly,
-						nil,
-					)
-				}
-				operation.kind = PublicationApplyMkdir
-				operation.mode = os.FileMode(fileSetProjectionDirectoryMode)
-				operation.post = publicationstate.ObservedFile{Present: true, Mode: fileSetProjectionDirectoryMode}
-			case syncengine.ActionUnchanged, syncengine.ActionUpload,
-				syncengine.ActionDeleteRemote, syncengine.ActionDeleteLocal:
-				operation.kind = PublicationApplyUnchanged
-				return operation, nil
-			default:
-				return publicationApplyOperation{}, publicationApplyFailure(
-					ctx,
-					publicationApplyStagePlan,
-					publicationApplyReasonPlanUnresolved,
-					nil,
-				)
-			}
-			destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
-			if err != nil || destinationDir != anchor.Path {
-				return publicationApplyOperation{}, publicationApplyFailure(
-					ctx,
-					publicationApplyStagePlan,
-					publicationApplyReasonContainment,
-					err,
-				)
-			}
-			operation.destinationDir = destinationDir
-			operation.destinationPath = destinationPath
-			return operation, nil
+	operation := publicationApplyOperation{
+		targetID: previewEntry.Key.TargetID, root: root, path: path, anchor: anchor,
+		fileSet: request.fileSetTarget(previewEntry.Key.TargetID),
+	}
+	operation.lenientParents = operation.fileSet || publicationApplyDeclaresDirectory(content)
+	declared, declaredPresent := content[previewEntry.Key]
+	declaredDirectory := declaredPresent && declared.File != nil && declared.File.Kind == model.FileDirectory
+	_, synthesizedDirectory := directories[previewEntry.Key]
+	if declaredDirectory || operation.fileSet && synthesizedDirectory {
+		if selection.portable.Root.Kind != model.SelectionDirectory || path == "." {
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonPlanUnresolved,
+				nil,
+			)
 		}
+		operation.key = path
+		switch previewEntry.DecisionAction {
+		case syncengine.ActionDownload:
+			if selection.mode == config.BackupOnly {
+				return publicationApplyOperation{}, publicationApplyFailure(
+					ctx,
+					publicationApplyStagePlan,
+					publicationApplyReasonBackupOnly,
+					nil,
+				)
+			}
+			mode := uint32(fileSetProjectionDirectoryMode)
+			if declaredDirectory {
+				mode = declared.File.Mode
+			}
+			operation.kind = PublicationApplyMkdir
+			operation.mode = os.FileMode(mode)
+			operation.post = publicationstate.ObservedFile{Present: true, Mode: mode}
+		case syncengine.ActionUnchanged, syncengine.ActionUpload,
+			syncengine.ActionDeleteRemote, syncengine.ActionDeleteLocal:
+			operation.kind = PublicationApplyUnchanged
+			return operation, nil
+		default:
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonPlanUnresolved,
+				nil,
+			)
+		}
+		destinationDir, destinationPath, err := publicationApplyDestination(selection, path)
+		if err != nil || destinationDir != anchor.Path {
+			return publicationApplyOperation{}, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonContainment,
+				err,
+			)
+		}
+		operation.destinationDir = destinationDir
+		operation.destinationPath = destinationPath
+		return operation, nil
 	}
 	switch previewEntry.DecisionAction {
 	case syncengine.ActionUnchanged:
@@ -763,7 +793,7 @@ func publicationApplyOperationFor(
 	if selection.portable.Root.Kind == model.SelectionFile {
 		operation.key = "."
 	}
-	if request.FileSet {
+	if operation.lenientParents {
 		if err := publicationApplyFileSetParents(fileSystem, root, operation.key); err != nil {
 			return publicationApplyOperation{}, publicationApplyFailure(
 				ctx,
@@ -829,6 +859,15 @@ func validatePublicationApplyDestination(directory, path string) error {
 
 func publicationApplyParents(fileSystem files.ApplyFileSystem, root, key string) error {
 	return publicationApplyExistingParents(fileSystem, root, key, false)
+}
+
+func publicationApplyDeclaresDirectory(content map[model.EntryKey]model.Entry) bool {
+	for _, entry := range content {
+		if entry.File != nil && entry.File.Kind == model.FileDirectory {
+			return true
+		}
+	}
+	return false
 }
 
 func publicationApplyFileSetParents(fileSystem files.ApplyFileSystem, root, key string) error {
@@ -951,7 +990,7 @@ func applyPublicationOperation(
 	if operation.kind == PublicationApplyDelete {
 		err = files.DeleteFile(bound, operation.root, operation.key, expected)
 	} else {
-		if request.FileSet {
+		if operation.lenientParents {
 			if parentErr := publicationApplyEnsureParents(bound, operation.root, operation.key); parentErr != nil {
 				return publicationApplyIndeterminate(
 					ctx,
@@ -1206,11 +1245,15 @@ func applyPublicationMkdir(
 	if !errors.Is(err, os.ErrNotExist) {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageObserve, publicationApplyReasonUnreadable, err)
 	}
-	if err := root.Mkdir(operation.key, os.FileMode(fileSetProjectionDirectoryMode)); err != nil {
+	mode := operation.mode
+	if mode == 0 {
+		mode = os.FileMode(fileSetProjectionDirectoryMode)
+	}
+	if err := root.Mkdir(operation.key, mode); err != nil {
 		return entry, publicationApplyFailure(ctx, publicationApplyStageMutate, publicationApplyReasonMutation, err)
 	}
 	entry.Operation = PublicationApplyMkdir
-	entry.Mode = fileSetProjectionDirectoryMode
+	entry.Mode = uint32(mode)
 	entry.State = publicationstate.JournalStateApplied
 	return entry, nil
 }

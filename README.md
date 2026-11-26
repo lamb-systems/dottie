@@ -17,15 +17,15 @@ installs, but almost nobody has used it and the limits at the bottom of this fil
 - `status` shows your targets and which vault this install knows about, locally.
 - `position status` reads the publication position without changing anything.
 
-Files are synced as plaintext. Dottie automatically chooses between two snapshot forms: a packed
-archive of the whole snapshot, or a file-set that names one blob per regular file. The file-set
-form is used when exactly one files target is configured and it holds only non-empty regular
-files with mode `0600` or `0644`: a single selected file, or a directory whose every directory
-holds at least one published file and carries no mode of its own. The change may not delete a file
-relative to the accepted position. Anything else falls back to packed, including a directory that
-holds no file at all or a selected file that is empty. There is no per-target form setting.
-Snapshots are content addressed and chained, so a reader can tell a snapshot belongs to the
-publication it claims to.
+Files are synced as plaintext. Dottie chooses a form for each target independently: an ordered
+file-set that names one blob per regular file, one packed tar for that target, or inline GNOME
+settings. The file-set form is used for a files target that holds only non-empty regular files with
+mode `0600` or `0644`: a single selected file, or a directory whose every directory holds at least
+one published file and carries no mode of its own. The change may not delete a file relative to the
+accepted position. Anything else falls back to packed for that target only, including a directory
+that holds no file at all, a selected file that is empty, a symlink or an unusual mode; a settings
+target never affects its sibling targets. There is no per-target form setting. Snapshots are content
+addressed and chained, so a reader can tell a snapshot belongs to the publication it claims to.
 
 ## Install
 
@@ -68,27 +68,29 @@ for installs that know several vaults.
 ## How it works
 
 A publication is two records in your repository. `vaultSnapshotV2` is an immutable link in a
-chain: it names either one packed payload blob or an ordered list of file entries with their paths,
-modes, sizes and blob CIDs, points at its predecessor, and carries a publication id and sequence.
-`vaultHeadV2` is the single mutable pointer at `self` naming the current snapshot record; a file-set
-head carries no `blobCid`. `pull` reads the head, walks back through the chain, then fetches and
-verifies every payload blob against its CID and size.
+chain: it carries one payload segment per target, points at its predecessor, and carries a
+publication id and sequence. A segment names its target and picks one form: an ordered list of file
+entries with their paths, modes, sizes and blob CIDs; one packed tar blob for a single target; or
+inline GNOME setting entries. `vaultHeadV2` is the single mutable pointer at `self` naming the
+current snapshot record. `pull` reads the head, walks back through the chain, then fetches and
+verifies every payload blob against its CID and size and reads the inline settings from the record.
 
-A file-set record names the target it was captured from: an id and a portable root of base,
-relative path and kind. A packed payload names every target it carries, files targets with portable
-roots and settings targets without one. Either form is only a proposal: a target is created on its
-own confirmation, before any proposed directory is read, in review mode and without excludes, for a
+Every segment names the target it was captured from: an id and, for files segments, a portable root
+of base, relative path and kind. A record is only a proposal: a target is created on its own
+confirmation, before any proposed directory is read, in review mode and without excludes, for a
 files target through the same checks and canonicalization as `targets add`, and for a settings
-target through the local category selection and its resolved digest. A files target that is already
-configured is left alone, and the published root is not enforced against it, so a file-set
-publication can still be applied to the sole local target of your choosing. A file-set record
-written before this field existed names no root, so pull requires a local files target for it. A
+target through the local category selection and its resolved digest. A published target whose id is
+already configured is left alone. A publication whose single segment is an entries file-set is still
+re-projected onto the one local files target, so it can be applied to the root of your choosing; a
+multi-segment publication applies each segment to the local target with the same id and root. A
 single-file target publishes its file under the basename of its configured path, for example
-`init.lua`, and pull maps that one entry back to the selected file.
+`init.lua`, and pull maps that one entry back to the selected file. Several targets can be adopted
+under one confirmation, each under its own rules.
 The pull confirmation binds the local target id, portable root and configuration revisions, so a
 local target or root change between review and confirmation refuses. The target root must already
-exist; parent directories absent from the published entries are created with mode `0755` during
-apply, and a single-file target synthesizes none.
+exist; parent directories absent from an entries segment are created with mode `0755` during apply,
+a packed segment creates the directories it names with their recorded modes, and a single-file
+target synthesizes none.
 
 Applying files is the part with the sharp edges, so it is journaled. Before touching a file,
 Dottie records the intent and a copy of the previous contents in a separate journal database,
@@ -106,20 +108,30 @@ account can read it back.
 
 ## Limits
 
-- Plaintext. A packed payload is uploaded as one blob before any record references it. A file-set
-  uploads up to one blob per entry, then its record batch. A rejected or ambiguous batch can leave
-  unattached, retrievable plaintext blobs at the provider; Dottie cannot delete them, and it never
-  prints candidate bytes for a publication that failed. The custody object limit is shared across
-  retained publications, not per publication: a representable 64-entry successor that changes a
-  CID can still be refused by custody, and Dottie does not retry another form after an attempt
-  starts.
+- Plaintext. Every packed blob and every entry blob is uploaded before any record references it.
+  A rejected or ambiguous batch can leave unattached, retrievable plaintext blobs at the provider;
+  Dottie cannot delete them, and it never prints candidate bytes for a publication that failed.
+  Inline settings are record metadata, not blobs. The custody object limit is shared across
+  retained publications, not per publication: a representable successor that changes a CID can
+  still be refused by custody, and Dottie does not retry another form after an attempt starts.
 - No offline verification. If you do not trust the provider to serve honest history, this is not
   the tool for that threat model.
 - No recovery story of its own. A backup is `cp -r`. Earlier versions tried to build one from a
   recovery kit and it was not worth the complexity.
 - Conflict resolution is manual by design. `pull` names the conflicting files and stops.
 - Prototype breaking change. A `config.toml` that still sets `targets.form` no longer loads: the key
-  was removed, so the file fails with an unknown configuration key instead of being ignored.
+  was removed, so the file fails with an unknown configuration key instead of being ignored. The v2
+  snapshot record also changed shape in place (one payload segment per target, and the head no
+  longer carries `blobCid`), so a chain or a local publication store written by an earlier build
+  cannot be read: publish a new chain from an empty repository state, or clear it, and rebuild the
+  local store.
+- Applying settings is not implemented. `pull` fetches and verifies inline GNOME settings, but a
+  configured settings target refuses the apply plan (`target_unsupported`) and only files targets are
+  written. Adoption is committed after the apply plan is accepted, so `--settings` cannot yet
+  provision a settings target through `pull`.
+- A push from a machine that configures only some of the published targets composes a snapshot from
+  its own targets, so the targets it does not configure are not carried forward into the next head.
+  Pull them on that machine first, or push from a machine that configures them.
 - Concurrent publication from two machines at once is refused rather than merged.
 - No power-loss evidence. Process death, yes; sudden power loss, untested.
 

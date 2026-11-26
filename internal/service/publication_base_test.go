@@ -18,7 +18,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 type publicationBaseTestFixture struct {
@@ -51,8 +50,10 @@ func newPublicationBaseTestFixture(t *testing.T, capture CapturePort) publicatio
 	request := PublicationReconciliationRequest{
 		Store: accepted.store, Binding: accepted.request.binding,
 		ExpectedFloor:  cloneServiceTestFloor(accepted.request.expectedFloor),
-		SnapshotRecord: bytes.Clone(accepted.request.snapshotRecord), Payload: bytes.Clone(accepted.request.payload),
-		Configuration: configuration, TargetID: target.ID, Local: local,
+		SnapshotRecord: bytes.Clone(accepted.request.snapshotRecord),
+		Payloads:       clonePublicationPayloadSets(accepted.request.payloads),
+		Entries:        clonePublicationPayloadEntries(accepted.request.entries),
+		Configuration:  configuration, TargetID: target.ID, Local: local,
 	}
 	return publicationBaseTestFixture{
 		accepted: accepted,
@@ -71,7 +72,7 @@ func publicationBaseSelectCurrent(
 	t.Helper()
 	material, err := validateAcceptedPublication(context.Background(), acceptedPublicationRequest{
 		store: request.Store, binding: request.Binding, expectedFloor: request.ExpectedFloor,
-		snapshotRecord: request.SnapshotRecord, payload: request.Payload,
+		snapshotRecord: request.SnapshotRecord, payloads: clonePublicationPayloadSets(request.Payloads),
 	})
 	require.NoError(t, err)
 	var portable model.Target
@@ -130,7 +131,7 @@ func TestEstablishLocalReconciliationBaseRequiresCompleteConvergenceAndDetachesI
 	assert.Equal(t, base.position.snapshotRecord, second.position.snapshotRecord)
 
 	fixture.request.SnapshotRecord[0] ^= 0xff
-	fixture.request.Payload[0] ^= 0xff
+	fixture.request.Payloads[0][0] ^= 0xff
 	fixture.request.ExpectedFloor.Head[0] ^= 0xff
 	fixture.request.Configuration.Targets[0].Root.Path = "changed-after-establishment"
 	assert.Equal(t, []byte("synthetic accepted publication"), base.entries[0].File.Content)
@@ -728,8 +729,10 @@ func publicationBaseRequestFor(
 	return PublicationReconciliationRequest{
 		Store: accepted.store, Binding: accepted.request.binding,
 		ExpectedFloor:  cloneServiceTestFloor(accepted.request.expectedFloor),
-		SnapshotRecord: bytes.Clone(accepted.request.snapshotRecord), Payload: bytes.Clone(accepted.request.payload),
-		Configuration: configuration, TargetID: targetID, Local: local,
+		SnapshotRecord: bytes.Clone(accepted.request.snapshotRecord),
+		Payloads:       clonePublicationPayloadSets(accepted.request.payloads),
+		Entries:        clonePublicationPayloadEntries(accepted.request.entries),
+		Configuration:  configuration, TargetID: targetID, Local: local,
 	}
 }
 
@@ -761,20 +764,14 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 		Repository: "at://did:plc:abcdefghijklmnopqrstuvwx",
 		Vault:      [32]byte{0x41, 0x52, 0x63},
 	}
-	packed, err := vault.Pack(snapshot)
-	require.NoError(t, err)
-	blobCID, err := publication.RawPayloadCID(packed.Payload)
+	segments, _, payloads, entries, err := candidateSegments(snapshot, publicationstate.Floor{})
 	require.NoError(t, err)
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion,
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments:      segments,
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -803,14 +800,17 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 	store, err := publicationstate.Open(directory, binding)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	proposal, err := store.Prepare(context.Background(), publicationstate.ModeFirstUse, observation, packed.Payload)
+	input := publicationstate.MaterialInput{
+		Payloads: clonePublicationPayloadSets(payloads), Entries: clonePublicationPayloadEntries(entries),
+	}
+	proposal, err := store.PrepareMaterial(context.Background(), publicationstate.ModeFirstUse, observation, input)
 	require.NoError(t, err)
-	floor, err := store.Accept(
+	floor, err := store.AcceptMaterialInput(
 		context.Background(),
 		publicationstate.ModeFirstUse,
 		proposal.StateToken,
 		observation,
-		packed.Payload,
+		input,
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
@@ -819,8 +819,16 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 		binding:        binding,
 		expectedFloor:  cloneServiceTestFloor(floor),
 		snapshotRecord: bytes.Clone(recordRaw),
-		payload:        bytes.Clone(packed.Payload),
+		payloads:       clonePublicationPayloadSets(payloads),
+		entries:        clonePublicationPayloadEntries(entries),
 	}}
+}
+
+func (request acceptedPublicationRequest) materialInput() publicationstate.MaterialInput {
+	return publicationstate.MaterialInput{
+		Payloads: clonePublicationPayloadSets(request.payloads),
+		Entries:  clonePublicationPayloadEntries(request.entries),
+	}
 }
 
 func publicationBaseAcceptSamePayloadSuccessor(t *testing.T, fixture acceptedMaterialTestFixture) {
@@ -848,19 +856,20 @@ func publicationBaseAcceptSamePayloadSuccessor(t *testing.T, fixture acceptedMat
 			{Key: key, Raw: record},
 		},
 	}
-	proposal, err := fixture.store.Prepare(
+	input := fixture.request.materialInput()
+	proposal, err := fixture.store.PrepareMaterial(
 		context.Background(),
 		publicationstate.ModeAdvance,
 		observation,
-		fixture.request.payload,
+		input,
 	)
 	require.NoError(t, err)
-	_, err = fixture.store.Accept(
+	_, err = fixture.store.AcceptMaterialInput(
 		context.Background(),
 		publicationstate.ModeAdvance,
 		proposal.StateToken,
 		observation,
-		fixture.request.payload,
+		input,
 		[32]byte{},
 	)
 	require.NoError(t, err)

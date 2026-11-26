@@ -416,18 +416,8 @@ func acceptedPublicationSnapshot(
 	return snapshot, record.PayloadForm(), nil
 }
 
-func publicationPayloadSnapshot(
-	payload publication.Payload,
-	configuration config.Config,
-) (model.Snapshot, error) {
-	if payload.Form == publication.PayloadFormPacked {
-		return payload.Snapshot, nil
-	}
-	_, portable, err := fileSetPublicationTarget(configuration)
-	if err != nil {
-		return model.Snapshot{}, err
-	}
-	return fileSetProjection(portable, payload.Entries)
+func publicationPayloadSnapshot(payload publication.Payload) (model.Snapshot, error) {
+	return payload.Snapshot, nil
 }
 
 func fileSetPayloadEntriesMatch(record []publication.SnapshotEntry, entries []publication.PayloadEntry) bool {
@@ -461,6 +451,17 @@ func fileSetFloorMatchesRecord(floor *publicationstate.FileSetPayload, record []
 	return true
 }
 
+func clonePublicationPayloadSets(payloads [][]byte) [][]byte {
+	if payloads == nil {
+		return nil
+	}
+	cloned := make([][]byte, 0, len(payloads))
+	for _, payload := range payloads {
+		cloned = append(cloned, bytes.Clone(payload))
+	}
+	return cloned
+}
+
 func clonePublicationPayloadEntries(entries []publication.PayloadEntry) []publication.PayloadEntry {
 	if entries == nil {
 		return nil
@@ -475,17 +476,9 @@ func clonePublicationPayloadEntries(entries []publication.PayloadEntry) []public
 }
 
 func publicationAcceptedTarget(
-	configuration config.Config,
 	targetID string,
 	material acceptedPublicationMaterial,
 ) (model.Target, bool) {
-	if material.form == publication.PayloadFormFileSet {
-		target, portable, err := fileSetPublicationTarget(configuration)
-		if err != nil || target.ID != targetID {
-			return model.Target{}, false
-		}
-		return portable, true
-	}
 	for _, target := range material.snapshot.Targets {
 		if target.ID == targetID {
 			return cloneSelectionTargetModel(target), true
@@ -497,34 +490,9 @@ func publicationAcceptedTarget(
 func validPreviewMaterialInput(request PublicationReconciliationRequest) error {
 	if len(request.SnapshotRecord) == 0 ||
 		len(request.SnapshotRecord) > publication.MaxFileSetRecordBytes ||
-		!validPublicationFloorInput(request.ExpectedFloor) {
+		!validPublicationFloorInput(request.ExpectedFloor) ||
+		!validAcceptedPublicationMaterial(request.SnapshotRecord, request.Payloads, request.Entries) {
 		return ErrPublicationReconciliation
-	}
-	record, err := publication.DecodeSnapshot(request.SnapshotRecord)
-	if err != nil {
-		return ErrPublicationReconciliation
-	}
-	if len(request.Payload) > 0 {
-		if record.PayloadForm() != publication.PayloadFormPacked ||
-			uint64(len(request.Payload)) > publication.MaxBlobBytes || len(request.Entries) != 0 ||
-			len(request.SnapshotRecord) > publication.MaxRecordBytes {
-			return ErrPublicationReconciliation
-		}
-		return nil
-	}
-	if record.PayloadForm() != publication.PayloadFormFileSet {
-		return ErrPublicationReconciliation
-	}
-	if len(request.Entries) == 0 || len(request.Entries) > publication.MaxSnapshotEntries {
-		return ErrPublicationReconciliation
-	}
-	var total uint64
-	for _, entry := range request.Entries {
-		size := uint64(len(entry.Content))
-		if size == 0 || size > publication.MaxBlobBytes || size > publication.MaxBlobBytes-total {
-			return ErrPublicationReconciliation
-		}
-		total += size
 	}
 	return nil
 }
@@ -566,9 +534,6 @@ func AcceptedPublicationSnapshot(
 	return acceptedPublicationSnapshot(material, configuration)
 }
 
-func PublicationPayloadSnapshot(
-	payload publication.Payload,
-	configuration config.Config,
-) (model.Snapshot, error) {
-	return publicationPayloadSnapshot(payload, configuration)
+func PublicationPayloadSnapshot(payload publication.Payload) (model.Snapshot, error) {
+	return publicationPayloadSnapshot(payload)
 }

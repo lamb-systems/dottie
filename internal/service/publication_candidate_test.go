@@ -77,17 +77,12 @@ func TestBuildPublicationSnapshotAndMaterialDescribeOneReviewedSnapshot(t *testi
 		publicationID,
 	)
 	require.NoError(t, err)
+	require.Len(t, candidate.Segments, 1)
 	require.Len(t, candidate.Payloads, 1)
-	assert.Equal(
-		t,
-		reviewedPacked.Payload,
-		candidate.Payloads[0],
-		"the builder packed a different snapshot than the reviewed one",
-	)
-	assert.Equal(t, uint64(len(reviewedPacked.Payload)), blob.Size)
-	payloadCID, err := publication.RawPayloadCID(candidate.Payload)
-	require.NoError(t, err)
-	assert.Equal(t, payloadCID, blob.CID, "the returned blob reference is not the candidate payload reference")
+	assert.Equal(t, publicationstate.PayloadFormFileSet, candidate.Segments[0].Form)
+	require.Len(t, candidate.Entries, 1)
+	assert.Equal(t, "init.lua", candidate.Entries[0].Path)
+	assert.Equal(t, []byte("synthetic candidate payload"), candidate.Entries[0].Content)
 	assert.Equal(t, view.SuppliedContext, batch.ExpectedContext, "the batch does not carry the supplied view context")
 	assert.True(t, batch.HeadCreate)
 	assert.Nil(t, batch.ExpectedPredecessor)
@@ -95,11 +90,16 @@ func TestBuildPublicationSnapshotAndMaterialDescribeOneReviewedSnapshot(t *testi
 	record, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	require.NoError(t, err)
 	assert.Equal(t, publicationID, record.PublicationID)
-	decoded, err := publication.DecodePayload(candidate.Payload, record.Blob)
+	require.Len(t, record.Segments, 1)
+	assert.Equal(t, "files", record.Segments[0].Target.ID)
+	entries, ok := record.SegmentEntries()
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "init.lua", entries[0].Path)
+	assert.Equal(t, uint64(len("synthetic candidate payload")), entries[0].Size)
+	entryCID, err := publication.RawPayloadCID(reviewed.Entries[0].File.Content)
 	require.NoError(t, err)
-	decodedPacked, err := vault.Pack(decoded)
-	require.NoError(t, err)
-	assert.Equal(t, reviewedPacked.Payload, decodedPacked.Payload)
+	assert.Equal(t, entryCID, entries[0].Blob.CID, "the entries segment does not name the reviewed content")
 }
 
 func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
@@ -116,9 +116,8 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 		PublicationCandidateRequest{Configuration: configuration, PublicationID: [16]byte{0x53}},
 	)
 	require.NoError(t, err)
-	predecessor, predecessorBlob, err := encodePublicationCandidate(
+	predecessor, err := encodePublicationCandidate(
 		binding,
-		publication.PayloadFormPacked,
 		snapshot,
 		publicationstate.Floor{},
 		false,
@@ -140,8 +139,8 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 		SuppliedContext: materialTestContext(1),
 	}
 
-	candidate, _, batch, err := buildPublicationMaterialLegacy(
-		binding, publication.PayloadFormPacked, snapshot, floor, true, view, [16]byte{0x53},
+	candidate, batch, err := buildPublicationMaterial(
+		binding, snapshot, floor, true, view, [16]byte{0x53},
 	)
 	require.NoError(t, err)
 	record, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -156,9 +155,8 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 	assert.Equal(t, uint64(0), batch.ExpectedPredecessor.Sequence)
 	assert.Equal(t, floor.RecordCID, batch.ExpectedPredecessor.CID)
 
-	_, _, _, err = buildPublicationMaterialLegacy(
+	_, _, err = buildPublicationMaterial(
 		binding,
-		publication.PayloadFormPacked,
 		snapshot,
 		floor,
 		true,

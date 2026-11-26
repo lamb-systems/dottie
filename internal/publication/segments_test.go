@@ -124,3 +124,50 @@ func TestSnapshotSegmentListRequiresUniqueSortedTargets(t *testing.T) {
 	duplicate := first
 	requireViolation(t, validateSegmentList([]SnapshotSegment{first, duplicate}), ErrInvalidRecord, "segments.target", "duplicate")
 }
+
+func TestSettingsResetCarriesNoValueProperty(t *testing.T) {
+	record := SnapshotRecord{
+		SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(),
+		Segments: []SnapshotSegment{{
+			Target: model.Target{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+			Form:   SegmentFormSettings,
+			Settings: []SnapshotSetting{
+				{
+					SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/",
+					Key: "clock-format", State: model.SettingPresent,
+					Value: &model.VariantValue{Type: "s", Text: "'24h'"},
+				},
+				{
+					SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/",
+					Key: "color-scheme", State: model.SettingReset,
+				},
+			},
+		}},
+	}
+	encoded, err := EncodeSnapshot(record)
+	require.NoError(t, err)
+	decoded, err := DecodeSnapshot(encoded)
+	require.NoError(t, err)
+	require.Len(t, decoded.Segments, 1)
+	require.Len(t, decoded.Segments[0].Settings, 2)
+	require.NotNil(t, decoded.Segments[0].Settings[0].Value)
+	assert.Equal(t, "s", decoded.Segments[0].Settings[0].Value.Type)
+	assert.Nil(t, decoded.Segments[0].Settings[1].Value)
+
+	object, err := decodeSnapshotObject(encoded)
+	require.NoError(t, err)
+	segments, ok := object["segments"].([]any)
+	require.True(t, ok)
+	require.Len(t, segments, 1)
+	segment, ok := segments[0].(map[string]any)
+	require.True(t, ok)
+	settings, ok := segment["settings"].([]any)
+	require.True(t, ok)
+	require.Len(t, settings, 2)
+	present, ok := settings[0].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, present, "value")
+	reset, ok := settings[1].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, reset, "value")
+}

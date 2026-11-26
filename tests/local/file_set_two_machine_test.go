@@ -39,16 +39,16 @@ func fileSetTwoMachineSnapshot(
 	blobs := atproto.VaultReader{Transport: fixture.pds, Budgets: atproto.DefaultBudgets()}
 	if record.PayloadForm() == publication.PayloadFormPacked {
 		payload, err := blobs.FetchBlob(
-			context.Background(), publicationTwoMachineDID, record.Blob.CID, int64(record.Blob.Size))
+			context.Background(), publicationTwoMachineDID, recordPackedBlob(record).CID, int64(recordPackedBlob(record).Size))
 		require.NoError(t, err)
-		snapshot, err := publication.DecodePayload(payload, record.Blob)
+		snapshot, err := publication.DecodePayload(payload, recordPackedBlob(record))
 		require.NoError(t, err)
 		return snapshot, nil, payload
 	}
 	portable, err := machine.target.Model()
 	require.NoError(t, err)
-	entries := make([]publication.PayloadEntry, 0, len(record.Entries))
-	for _, entry := range record.Entries {
+	entries := make([]publication.PayloadEntry, 0, len(recordFileSetEntries(record)))
+	for _, entry := range recordFileSetEntries(record) {
 		content, err := blobs.FetchBlob(
 			context.Background(), publicationTwoMachineDID, entry.Blob.CID, int64(entry.Blob.Size))
 		require.NoError(t, err)
@@ -74,20 +74,7 @@ func fileSetTwoMachineFinding(floor publicationstate.Floor, view publicationstat
 	if err != nil {
 		return "unreadable"
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if floor.FileSet == nil || len(floor.FileSet.Entries) != len(record.Entries) {
-			return "diverges"
-		}
-		for index, entry := range record.Entries {
-			reference := floor.FileSet.Entries[index]
-			if reference.Path != entry.Path || reference.Size != entry.Size ||
-				!bytes.Equal(reference.CID, entry.Blob.CID) {
-				return "diverges"
-			}
-		}
-		return "matches"
-	}
-	if floor.FileSet != nil || record.Blob.Size != floor.BlobSize {
+	if !service.PublicationFloorMatchesRecord(floor, record) {
 		return "diverges"
 	}
 	return "matches"
@@ -146,7 +133,7 @@ func fileSetTwoMachinePull(t *testing.T, fixture *publicationTwoMachineFixture, 
 		Vault: fixture.binding.Vault, FloorRevision: inspection.Floor.Revision,
 		Configuration: machine.configuration, BaseSnapshot: base, RemoteSnapshot: remote,
 		Roots: map[string]string{machine.target.ID: machine.selected}, Local: machine.local,
-		FileSet: true,
+		FileSetTargets: []string{machine.target.ID},
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
@@ -184,8 +171,8 @@ func TestFileSetPublicationTwoMachinePullApplyGate(t *testing.T) {
 	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineAlpha)
 
 	first := fixture.push(t, fixture.a)
-	require.NotNil(t, first.Floor.FileSet)
-	require.Len(t, first.Floor.FileSet.Entries, 1)
+	require.NotEmpty(t, floorFileSet(first.Floor))
+	require.Len(t, floorFileSet(first.Floor), 1)
 
 	joined := fileSetTwoMachineJoin(t, fixture, fixture.b)
 	assert.Equal(t, first.Floor.Revision, joined.Revision)
@@ -195,8 +182,8 @@ func TestFileSetPublicationTwoMachinePullApplyGate(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(fixture.a.selected, "nested", "app.conf"), []byte("nested alpha"), 0o600))
 	second := fixture.push(t, fixture.a)
-	require.NotNil(t, second.Floor.FileSet)
-	require.Len(t, second.Floor.FileSet.Entries, 2)
+	require.NotEmpty(t, floorFileSet(second.Floor))
+	require.Len(t, floorFileSet(second.Floor), 2)
 
 	require.NoError(t, fileSetTwoMachinePull(t, fixture, fixture.b))
 	content, err := os.ReadFile(filepath.Join(fixture.b.selected, "nested", "app.conf"))
@@ -267,12 +254,12 @@ func TestAutomaticPackedFallbackPublishesAndAppliesSupportedContent(t *testing.T
 	require.NoError(t, os.WriteFile(filepath.Join(fixture.b.selected, "empty"), nil, 0o600))
 
 	first := fixture.push(t, fixture.a)
-	assert.Nil(t, first.Floor.FileSet, "an empty file did not force the packed fallback")
+	assert.Empty(t, floorFileSet(first.Floor), "an empty file did not force the packed fallback")
 	fixture.joinFirstUse(t, fixture.b)
 
 	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineBeta)
 	second := fixture.push(t, fixture.a)
-	assert.Nil(t, second.Floor.FileSet)
+	assert.Empty(t, floorFileSet(second.Floor))
 	pulled := fixture.pull(t, fixture.b)
 	assert.Equal(t, 1, pulled.Plan.Changes)
 	assert.Equal(t, publicationTwoMachineBeta, readPublicationTwoMachineFile(t, fixture.b))

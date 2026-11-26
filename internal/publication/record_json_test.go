@@ -262,7 +262,7 @@ func TestRecordToJSONClosedErrorsDoNotExposeEncoderOrParserText(t *testing.T) {
 	assert.NotContains(t, err.Error(), "CANARY")
 
 	encoded, err = recordToJSONWithEncoder(valid, func(any) ([]byte, error) {
-		return bytes.Repeat([]byte(" "), maxRecordJSONBytes+1), nil
+		return bytes.Repeat([]byte(" "), maxFileSetRecordJSONBytes+1), nil
 	})
 	require.Nil(t, encoded)
 	requireRecordJSONViolation(t, err, "size_limit")

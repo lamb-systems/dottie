@@ -82,7 +82,7 @@ type publicationTwoMachinePullPreparation struct {
 	View        publicationstate.SuppliedRepositoryView
 	Base        model.Snapshot
 	Remote      model.Snapshot
-	Payload     []byte
+	Material    publicationstate.MaterialInput
 	Observation publicationstate.Observation
 	Request     service.PublicationApplyRequest
 	Plan        service.PublicationApplyPlan
@@ -484,19 +484,19 @@ func (fixture *publicationTwoMachineFixture) joinFirstUse(
 	ctx := context.Background()
 	view, err := fixture.adapter.ReadView(ctx)
 	require.NoError(t, err)
-	payload := fixture.terminalPayload(t, view)
+	material := fixture.terminalMaterial(t, view)
 	observation := publicationTwoMachineObservation(view)
 	store, err := publicationstate.Open(machine.storeDir, fixture.binding)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, store.Close()) }()
-	proposal, err := store.Prepare(ctx, publicationstate.ModeFirstUse, observation, payload)
+	proposal, err := store.PrepareMaterial(ctx, publicationstate.ModeFirstUse, observation, material)
 	require.NoError(t, err)
-	accepted, err := store.Accept(
+	accepted, err := store.AcceptMaterialInput(
 		ctx,
 		publicationstate.ModeFirstUse,
 		proposal.StateToken,
 		observation,
-		payload,
+		material,
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
@@ -522,8 +522,8 @@ func (fixture *publicationTwoMachineFixture) preparePull(
 	if preparation.Finding == "matches" {
 		return preparation, nil
 	}
-	base, remote, payload := fixture.pullMaterial(t, view, inspection.Floor)
-	preparation.Base, preparation.Remote, preparation.Payload = base, remote, payload
+	base, remote, material := fixture.pullMaterial(t, view, inspection.Floor)
+	preparation.Base, preparation.Remote, preparation.Material = base, remote, material
 	preparation.Observation = publicationTwoMachineObservation(view)
 	preparation.Request = service.PublicationApplyRequest{
 		Vault: fixture.binding.Vault, FloorRevision: inspection.Floor.Revision,
@@ -543,7 +543,8 @@ func (fixture *publicationTwoMachineFixture) preparePull(
 	}
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 		Directory: machine.storeDir, Binding: fixture.binding, FloorRevision: inspection.Floor.Revision,
-		Observation: preparation.Observation, Payload: payload,
+		Observation: preparation.Observation, Payloads: preparation.Material.Payloads,
+		Entries: preparation.Material.Entries,
 	})
 	if err != nil {
 		return preparation, err
@@ -574,7 +575,7 @@ func (fixture *publicationTwoMachineFixture) applyPull(
 		Directory: machine.storeDir, Binding: fixture.binding, Mode: preparation.Staged.Mode,
 		FloorRevision: preparation.Floor.Revision, StateToken: preparation.Staged.StateToken,
 		Confirmation: preparation.Staged.Confirmation, Observation: preparation.Observation,
-		Payload: preparation.Payload,
+		Payloads: preparation.Material.Payloads, Entries: preparation.Material.Entries,
 	})
 	require.NoError(t, journal.Close())
 	require.NoError(t, acceptErr)
@@ -600,7 +601,7 @@ func (fixture *publicationTwoMachineFixture) pullMaterial(
 	t *testing.T,
 	view publicationstate.SuppliedRepositoryView,
 	floor publicationstate.Floor,
-) (model.Snapshot, model.Snapshot, []byte) {
+) (model.Snapshot, model.Snapshot, publicationstate.MaterialInput) {
 	t.Helper()
 	require.NotEmpty(t, view.Snapshots)
 	require.Less(t, floor.Sequence, uint64(len(view.Snapshots)))
@@ -611,37 +612,38 @@ func (fixture *publicationTwoMachineFixture) pullMaterial(
 	require.NoError(t, err)
 	require.Equal(t, floor.SnapshotKey, baseBlock.Key)
 	require.Equal(t, floor.RecordCID, baseCID)
-	require.Equal(t, floor.BlobCID, baseRecord.Blob.CID)
-	require.Equal(t, floor.BlobSize, baseRecord.Blob.Size)
-	basePayload := fixture.payloadFor(t, baseRecord)
-	base, err := publication.DecodePayload(basePayload, baseRecord.Blob)
-	require.NoError(t, err)
+	require.Equal(t, floor.Segments, recordSummaries(t, baseRecord))
+	base, _ := fixture.resolveRecord(t, baseRecord)
 	terminal := view.Snapshots[len(view.Snapshots)-1]
 	terminalRecord, err := publication.DecodeSnapshot(terminal.Raw)
 	require.NoError(t, err)
-	terminalPayload := fixture.payloadFor(t, terminalRecord)
-	remote, err := publication.DecodePayload(terminalPayload, terminalRecord.Blob)
-	require.NoError(t, err)
-	return base, remote, terminalPayload
+	remote, material := fixture.resolveRecord(t, terminalRecord)
+	return base.Snapshot, remote.Snapshot, material
 }
 
-func (fixture *publicationTwoMachineFixture) terminalPayload(
+func (fixture *publicationTwoMachineFixture) terminalMaterial(
 	t *testing.T,
 	view publicationstate.SuppliedRepositoryView,
-) []byte {
+) publicationstate.MaterialInput {
 	t.Helper()
 	require.NotEmpty(t, view.Snapshots)
 	terminal, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	require.NoError(t, err)
-	return fixture.payloadFor(t, terminal)
+	_, material := fixture.resolveRecord(t, terminal)
+	return material
 }
 
-func (fixture *publicationTwoMachineFixture) payloadFor(t *testing.T, record publication.SnapshotRecord) []byte {
+func (fixture *publicationTwoMachineFixture) resolveRecord(
+	t *testing.T,
+	record publication.SnapshotRecord,
+) (publication.Payload, publicationstate.MaterialInput) {
 	t.Helper()
-	payload, err := atproto.VaultReader{Transport: fixture.pds, Budgets: atproto.DefaultBudgets()}.FetchBlob(
-		context.Background(), publicationTwoMachineDID, record.Blob.CID, int64(record.Blob.Size))
-	require.NoError(t, err)
-	return payload
+	return resolvedRecord(
+		t,
+		atproto.VaultReader{Transport: fixture.pds, Budgets: atproto.DefaultBudgets()},
+		publicationTwoMachineDID,
+		record,
+	)
 }
 
 func publicationTwoMachineFinding(floor publicationstate.Floor, view publicationstate.SuppliedRepositoryView) string {
@@ -660,7 +662,7 @@ func publicationTwoMachineFinding(floor publicationstate.Floor, view publication
 	if err != nil {
 		return "unreadable"
 	}
-	if record.Blob.Size != floor.BlobSize {
+	if !service.PublicationFloorMatchesRecord(floor, record) {
 		return "diverges"
 	}
 	return "matches"

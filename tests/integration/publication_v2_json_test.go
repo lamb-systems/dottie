@@ -53,11 +53,14 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x51},
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: packedSnapshotTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	genesisCID, err := publication.RecordCID(genesisRecord)
@@ -67,7 +70,6 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		Vault:          vaultID,
 		PublicationSeq: 0,
 		SnapshotCID:    genesisCID,
-		BlobCID:        blobCID,
 	})
 	require.NoError(t, err)
 	genesisKey, err := publication.SequenceKey(0)
@@ -87,11 +89,14 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		PublicationID:  [16]byte{0x52},
 		PublicationSeq: 1,
 		Parent:         genesisCID,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: packedSnapshotTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	successorCID, err := publication.RecordCID(successorRecord)
@@ -101,7 +106,6 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		Vault:          vaultID,
 		PublicationSeq: 1,
 		SnapshotCID:    successorCID,
-		BlobCID:        blobCID,
 	})
 	require.NoError(t, err)
 	successorKey, err := publication.SequenceKey(1)
@@ -240,7 +244,7 @@ func exerciseCandidateRecordJSONPreflight(
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotRecord, retained.SnapshotRecord)
 	assert.Equal(t, candidate.HeadRecord, retained.HeadRecord)
-	assert.Equal(t, candidate.Payload, retained.Payload)
+	assert.Equal(t, candidate.Payload, candidatePackedPayload(retained))
 	beforeFloor, beforeAttempt := loadCandidateJSONState(t, store, attempt.ID)
 	preflight := encodeRetainedCandidateRecords(t, retained)
 	afterFloor, afterAttempt := loadCandidateJSONState(t, store, attempt.ID)
@@ -262,7 +266,7 @@ func exerciseCandidateRecordJSONPreflight(
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotRecord, retained.SnapshotRecord)
 	assert.Equal(t, candidate.HeadRecord, retained.HeadRecord)
-	assert.Equal(t, candidate.Payload, retained.Payload)
+	assert.Equal(t, candidate.Payload, candidatePackedPayload(retained))
 	beforeFloor, beforeAttempt = loadCandidateJSONState(t, store, attempt.ID)
 	reopenedPreflight := encodeRetainedCandidateRecords(t, retained)
 	afterFloor, afterAttempt = loadCandidateJSONState(t, store, attempt.ID)
@@ -281,7 +285,7 @@ func exerciseCandidateRecordJSONPreflight(
 		uploadProposal.Confirmation,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, payload, upload.Payload)
+	assert.Equal(t, payload, uploadPackedPayload(upload))
 	uploadedAttempt, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.AttemptUploadStarted, uploadedAttempt.Lifecycle)
@@ -374,10 +378,9 @@ func encodeRetainedCandidateRecords(t *testing.T, retained publicationstate.Cand
 	require.NoError(t, err)
 	head, err := publication.DecodeHead(headCBOR)
 	require.NoError(t, err)
-	assert.Equal(t, retained.Blob.CID, snapshot.Blob.CID)
+	assert.Equal(t, candidatePackedBlob(retained), recordPackedBlob(snapshot))
 	assert.Equal(t, snapshotCID, head.SnapshotCID)
-	assert.Equal(t, retained.Blob.CID, head.BlobCID)
-	assert.NotEqual(t, snapshotCID, snapshot.Blob.CID)
+	assert.NotEqual(t, snapshotCID, recordPackedBlob(snapshot).CID)
 	return candidateRecordJSON{snapshot: snapshotJSON, head: headJSON}
 }
 

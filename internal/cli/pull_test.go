@@ -62,6 +62,12 @@ func (reader *pullTestReader) ReadEntry(
 		return bytes.Clone(content), nil
 	}
 	for _, snapshot := range reader.payloads {
+		for _, target := range snapshot.Targets {
+			packed, err := vault.PackTarget(snapshot, target.ID)
+			if err == nil && packedCIDMatches(packed.Payload, reference) {
+				return bytes.Clone(packed.Payload), nil
+			}
+		}
 		for _, entry := range snapshot.Entries {
 			if entry.File == nil || entry.File.Kind != model.FileRegular {
 				continue
@@ -72,7 +78,12 @@ func (reader *pullTestReader) ReadEntry(
 			}
 		}
 	}
-	return nil, errors.New("synthetic file-set entry is unavailable")
+	return nil, errors.New("synthetic publication payload is unavailable")
+}
+
+func packedCIDMatches(payload []byte, reference publication.BlobReference) bool {
+	cid, err := publication.RawPayloadCID(payload)
+	return err == nil && bytes.Equal(cid, reference.CID) && uint64(len(payload)) == reference.Size
 }
 
 func (reader *pullTestReader) ReadPayload(
@@ -87,18 +98,6 @@ func (reader *pullTestReader) ReadPayload(
 		return model.Snapshot{}, errors.New("synthetic payload is unavailable")
 	}
 	return snapshot, nil
-}
-
-func (reader *pullTestReader) ReadBlob(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
-	snapshot, err := reader.ReadPayload(ctx, record)
-	if err != nil {
-		return nil, err
-	}
-	packed, err := vault.Pack(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return packed.Payload, nil
 }
 
 func (reader *pullTestReader) ReadView(ctx context.Context) (publicationstate.SuppliedRepositoryView, error) {
@@ -190,7 +189,7 @@ func newPullTestFixture(t *testing.T) *pullTestFixture {
 	}
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
-	block, record := pullTestSnapshot(t, binding, packed.Payload, 0, nil)
+	block, record := pullTestSnapshot(t, binding, snapshot, 0, nil)
 	return &pullTestFixture{
 		paths:    paths,
 		binding:  binding,
@@ -209,23 +208,60 @@ func newPullTestFixture(t *testing.T) *pullTestFixture {
 func pullTestSnapshot(
 	t *testing.T,
 	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	sequence uint64,
+	parent []byte,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+	t.Helper()
+	segments := make([]publication.SnapshotSegment, 0, len(snapshot.Targets))
+	for _, target := range snapshot.Targets {
+		packed, err := vault.PackTarget(snapshot, target.ID)
+		require.NoError(t, err)
+		segments = append(segments, pullTestPackedSegment(t, target, packed.Payload))
+	}
+	return pullTestRecordFromSegments(t, binding, segments, sequence, parent)
+}
+
+func pullTestSnapshotFromPayload(
+	t *testing.T,
+	binding publicationstate.Binding,
+	target model.Target,
 	payload []byte,
 	sequence uint64,
 	parent []byte,
 ) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
 	t.Helper()
+	return pullTestRecordFromSegments(
+		t, binding, []publication.SnapshotSegment{pullTestPackedSegment(t, target, payload)}, sequence, parent,
+	)
+}
+
+func pullTestPackedSegment(t *testing.T, target model.Target, payload []byte) publication.SnapshotSegment {
+	t.Helper()
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
+	return publication.SnapshotSegment{
+		Target: target, Form: publication.SegmentFormPacked,
+		Blob: publication.BlobReference{
+			CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType,
+		},
+	}
+}
+
+func pullTestRecordFromSegments(
+	t *testing.T,
+	binding publicationstate.Binding,
+	segments []publication.SnapshotSegment,
+	sequence uint64,
+	parent []byte,
+) (publicationstate.SnapshotBlock, publication.SnapshotRecord) {
+	t.Helper()
 	record := publication.SnapshotRecord{
 		SchemaVersion:  publication.SchemaVersion,
 		Vault:          binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments:       segments,
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
@@ -246,10 +282,17 @@ func pullTestHead(
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationSeq: record.PublicationSeq, SnapshotCID: cid, BlobCID: record.Blob.CID,
+		PublicationSeq: record.PublicationSeq, SnapshotCID: cid,
 	})
 	require.NoError(t, err)
 	return head
+}
+
+func pullTestFilesTarget() model.Target {
+	return model.Target{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}
 }
 
 func (fixture *pullTestFixture) observation() publicationstate.Observation {
@@ -270,7 +313,9 @@ func (fixture *pullTestFixture) view() publicationstate.SuppliedRepositoryView {
 func (fixture *pullTestFixture) divergedView(t *testing.T) publicationstate.SuppliedRepositoryView {
 	t.Helper()
 	payload := append(bytes.Clone(fixture.payload), 0x00)
-	block, record := pullTestSnapshot(t, fixture.binding, payload, 0, nil)
+	block, record := pullTestSnapshotFromPayload(
+		t, fixture.binding, pullTestFilesTarget(), payload, 0, nil,
+	)
 	return publicationstate.SuppliedRepositoryView{
 		Origin: fixture.binding,
 		Scope:  publicationstate.ViewScopeWholeRepository,
@@ -335,7 +380,7 @@ func (fixture *pullTestFixture) acceptSnapshot(t *testing.T, snapshot model.Snap
 	t.Helper()
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
-	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, 0, nil)
+	block, record := pullTestSnapshot(t, fixture.binding, snapshot, 0, nil)
 	fixture.payload = packed.Payload
 	fixture.snapshot = snapshot
 	fixture.block = block
@@ -362,11 +407,9 @@ func (fixture *pullTestFixture) viewFromEntries(
 		Targets: fixture.snapshot.Targets,
 		Entries: entries,
 	}
-	packed, err := vault.Pack(snapshot)
-	require.NoError(t, err)
 	parent, err := publication.RecordCID(fixture.block.Raw)
 	require.NoError(t, err)
-	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, fixture.record.PublicationSeq+1, parent)
+	block, record := pullTestSnapshot(t, fixture.binding, snapshot, fixture.record.PublicationSeq+1, parent)
 	view := publicationstate.SuppliedRepositoryView{
 		Origin:          fixture.binding,
 		Scope:           publicationstate.ViewScopeWholeRepository,
@@ -412,11 +455,9 @@ func (fixture *pullTestFixture) unselectedTargetView(
 			Mode:    0o600,
 		},
 	})
-	packed, err := vault.Pack(snapshot)
-	require.NoError(t, err)
 	parent, err := publication.RecordCID(fixture.block.Raw)
 	require.NoError(t, err)
-	block, record := pullTestSnapshot(t, fixture.binding, packed.Payload, fixture.record.PublicationSeq+1, parent)
+	block, record := pullTestSnapshot(t, fixture.binding, snapshot, fixture.record.PublicationSeq+1, parent)
 	view := publicationstate.SuppliedRepositoryView{
 		Origin:          fixture.binding,
 		Scope:           publicationstate.ViewScopeWholeRepository,
@@ -546,7 +587,7 @@ func newPullTestCommandWithVaults(
 		if factoryCalls != nil {
 			*factoryCalls++
 		}
-		return pullRemote{Reader: reader, Blob: reader.ReadBlob, Entry: reader.ReadEntry, Close: func() {}}, nil
+		return pullRemote{Reader: reader, Entry: reader.ReadEntry, Close: func() {}}, nil
 	}
 	return newPullCommand(
 		stdout,
@@ -622,8 +663,7 @@ func TestPullComparisonClassifiesTheFloorAgainstTheValidatedView(t *testing.T) {
 	require.NoError(t, err)
 	accepted := publicationstate.Floor{
 		RecordCID: recordCID,
-		BlobCID:   fixture.record.Blob.CID,
-		BlobSize:  fixture.record.Blob.Size,
+		Segments:  cliRecordSummaries(t, fixture.record),
 	}
 	for _, test := range []struct {
 		name  string
@@ -633,10 +673,16 @@ func TestPullComparisonClassifiesTheFloorAgainstTheValidatedView(t *testing.T) {
 	}{
 		{name: "matching record and payload size", floor: accepted, view: fixture.view(), want: pullFinding{Kind: pullFindingMatches}},
 		{name: "empty provider records", floor: accepted, view: publicationstate.SuppliedRepositoryView{}, want: pullFinding{Kind: pullFindingAbsent}},
-		{name: "different record", floor: publicationstate.Floor{RecordCID: []byte{0x01, 0x02}, BlobSize: fixture.record.Blob.Size}, view: fixture.view(),
+		{name: "different record", floor: publicationstate.Floor{RecordCID: []byte{0x01, 0x02}}, view: fixture.view(),
 			want: pullFinding{Kind: pullFindingDiverges, Reason: pullDivergenceRecordCID}},
-		{name: "different payload size", floor: publicationstate.Floor{RecordCID: recordCID, BlobSize: fixture.record.Blob.Size + 1}, view: fixture.view(),
-			want: pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadSize}},
+		{name: "different payload segment", floor: func() publicationstate.Floor {
+			changed := publicationstate.Floor{
+				RecordCID: recordCID, Segments: cliRecordSummaries(t, fixture.record),
+			}
+			changed.Segments[0].BlobSize++
+			return changed
+		}(), view: fixture.view(),
+			want: pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}},
 		{name: "undecodable provider record", floor: accepted,
 			view: publicationstate.SuppliedRepositoryView{Snapshots: []publicationstate.SnapshotBlock{{Key: fixture.block.Key, Raw: []byte("not a snapshot record")}}},
 			want: pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}},
@@ -1897,7 +1943,7 @@ func TestPullAdvancesTheAcceptedFloorAfterAConfirmedApply(t *testing.T) {
 	store := fixture.openStore(t)
 	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, accepted)
 	require.NoError(t, err)
-	assert.Equal(t, packed.Payload, material.Payload)
+	assert.Equal(t, packed.Payload, cliAcceptedPayload(material))
 	require.NoError(t, store.Close())
 
 	stdout.Reset()

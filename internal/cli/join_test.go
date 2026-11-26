@@ -317,9 +317,6 @@ func (gate *joinGate) pullRemotes(
 	}
 	return pullRemote{
 		Reader: reader,
-		Blob: func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
-			return blobs.FetchBlob(ctx, joinGateDID, record.Blob.CID, int64(record.Blob.Size))
-		},
 		Entry: func(ctx context.Context, reference publication.BlobReference) ([]byte, error) {
 			return blobs.FetchBlob(ctx, joinGateDID, reference.CID, int64(reference.Size))
 		},

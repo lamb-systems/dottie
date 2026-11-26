@@ -237,7 +237,9 @@ func oracleCandidateDigest(
 	writePart([]byte(candidate.key))
 	writePart(candidate.snapshotRaw)
 	writePart(candidate.headRaw)
-	writePart(candidate.payload)
+	for _, segment := range candidate.segments {
+		writePart(segment.payload)
+	}
 	writePart(candidate.view.digest[:])
 	reviewBody := oracleCanonicalJSON(
 		t,
@@ -434,7 +436,7 @@ func TestLocalAttemptWireGoldenVectors(t *testing.T) {
 		key:         "0000000000000007",
 		snapshotRaw: []byte{0x31, 0, 0xff},
 		headRaw:     []byte{0x41, '<', '&', '>'},
-		payload:     []byte{0x51, 0, 0xfe},
+		segments:    []validatedCandidateSegment{{payload: []byte{0x51, 0, 0xfe}}},
 	}
 	candidate.view.digest = oracleViewDigest
 	state := stateSnapshot{revision: 23, generation: 7}
@@ -448,9 +450,9 @@ func TestLocalAttemptWireGoldenVectors(t *testing.T) {
 	)
 	assert.Equal(t, oracleCandidateHash, candidateHash)
 	nilPayload := candidate
-	nilPayload.payload = nil
+	nilPayload.segments = []validatedCandidateSegment{{}}
 	emptyPayload := candidate
-	emptyPayload.payload = []byte{}
+	emptyPayload.segments = []validatedCandidateSegment{{payload: []byte{}}}
 	nilPayloadHash, err := candidateDigest(nilPayload, state, review, databaseID)
 	require.NoError(t, err)
 	emptyPayloadHash, err := candidateDigest(emptyPayload, state, review, databaseID)

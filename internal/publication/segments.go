@@ -137,17 +137,16 @@ func validateSegmentList(segments []SnapshotSegment) error {
 func encodeSnapshotSettings(settings []SnapshotSetting) []any {
 	encoded := make([]any, 0, len(settings))
 	for _, setting := range settings {
-		value := map[string]any{}
-		if setting.Value != nil {
-			value = map[string]any{"type": setting.Value.Type, "text": setting.Value.Text}
-		}
-		encoded = append(encoded, map[string]any{
+		value := map[string]any{
 			"schemaId": setting.SchemaID,
 			"path":     setting.Path,
 			"key":      setting.Key,
 			"state":    string(setting.State),
-			"value":    value,
-		})
+		}
+		if setting.Value != nil {
+			value["value"] = map[string]any{"type": setting.Value.Type, "text": setting.Value.Text}
+		}
+		encoded = append(encoded, value)
 	}
 	return encoded
 }
@@ -163,7 +162,11 @@ func decodeSnapshotSettings(value any) ([]SnapshotSetting, error) {
 		if !ok {
 			return nil, violation(ErrInvalidRecord, "segments.settings", "type")
 		}
-		if err := exactKeys(object, "schemaId", "path", "key", "state", "value"); err != nil {
+		keys := []string{"schemaId", "path", "key", "state"}
+		if _, present := object["value"]; present {
+			keys = append(keys, "value")
+		}
+		if err := exactKeys(object, keys...); err != nil {
 			return nil, err
 		}
 		schemaID, ok := object["schemaId"].(string)
@@ -182,12 +185,12 @@ func decodeSnapshotSettings(value any) ([]SnapshotSetting, error) {
 		if !ok {
 			return nil, violation(ErrInvalidRecord, "segments.settings.state", "type")
 		}
-		valueObject, ok := object["value"].(map[string]any)
-		if !ok {
-			return nil, violation(ErrInvalidRecord, "segments.settings.value", "type")
-		}
 		var parsedValue *model.VariantValue
-		if len(valueObject) != 0 {
+		if rawValue, present := object["value"]; present {
+			valueObject, ok := rawValue.(map[string]any)
+			if !ok {
+				return nil, violation(ErrInvalidRecord, "segments.settings.value", "type")
+			}
 			if err := exactKeys(valueObject, "type", "text"); err != nil {
 				return nil, err
 			}

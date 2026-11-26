@@ -25,7 +25,7 @@ type PublicationReconciliationRequest struct {
 	Binding        publicationstate.Binding
 	ExpectedFloor  publicationstate.Floor
 	SnapshotRecord []byte
-	Payload        []byte
+	Payloads       [][]byte
 	Entries        []publication.PayloadEntry
 	Configuration  config.Config
 	TargetID       string
@@ -103,12 +103,13 @@ func EstablishLocalReconciliationBase(
 
 	material, err := validateAcceptedPublication(ctx, acceptedPublicationRequest{
 		store: request.Store, binding: request.Binding, expectedFloor: request.ExpectedFloor,
-		snapshotRecord: record, payload: request.Payload, entries: request.Entries,
+		snapshotRecord: record, payloads: clonePublicationPayloadSets(request.Payloads),
+		entries: clonePublicationPayloadEntries(request.Entries),
 	})
 	if err != nil {
 		return nil, err
 	}
-	portable, found := publicationAcceptedTarget(request.Configuration, request.TargetID, material)
+	portable, found := publicationAcceptedTarget(request.TargetID, material)
 	if !found {
 		return nil, publicationBaseFailure(ctx, publicationBaseStage, publicationBaseReasonTarget, nil)
 	}

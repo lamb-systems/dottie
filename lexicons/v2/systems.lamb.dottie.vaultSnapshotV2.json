@@ -163,8 +163,7 @@
                       "schemaId",
                       "path",
                       "key",
-                      "state",
-                      "value"
+                      "state"
                     ],
                     "properties": {
                       "schemaId": {

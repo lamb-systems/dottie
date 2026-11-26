@@ -10,6 +10,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -69,7 +70,6 @@ type pullViewReader interface {
 
 type pullRemote struct {
 	Reader pullViewReader
-	Blob   func(context.Context, publication.SnapshotRecord) ([]byte, error)
 	Entry  func(context.Context, publication.BlobReference) ([]byte, error)
 	Close  func()
 }
@@ -86,18 +86,19 @@ type pullApplySources struct {
 type pullApplySourcesFactory func(context.Context, *urfave.Command, publicationstate.Binding) (pullApplySources, error)
 
 type pullApplyMaterial struct {
-	Base        model.Snapshot
-	Remote      model.Snapshot
-	Payload     []byte
-	Form        publication.PayloadForm
-	BaseForm    publication.PayloadForm
-	Entries     []publication.PayloadEntry
-	BaseEntries []publication.PayloadEntry
-	Targets     []model.Target
-	TargetID    string
-	TargetRoot  model.FileRoot
-	RecordCID   []byte
-	Sequence    uint64
+	Base           model.Snapshot
+	Remote         model.Snapshot
+	Payloads       [][]byte
+	Form           publication.PayloadForm
+	BaseForm       publication.PayloadForm
+	Entries        []publication.PayloadEntry
+	BaseEntries    []publication.PayloadEntry
+	FileSetTargets []string
+	Targets        []model.Target
+	TargetID       string
+	TargetRoot     model.FileRoot
+	RecordCID      []byte
+	Sequence       uint64
 }
 
 var (
@@ -547,7 +548,7 @@ func preparePullApply(
 			3,
 		)
 	}
-	if material.Form == publication.PayloadFormFileSet || material.BaseForm == publication.PayloadFormFileSet {
+	if material.Form == publication.PayloadFormFileSet {
 		target, portable, err := service.FileSetPublicationTarget(configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
@@ -557,14 +558,13 @@ func preparePullApply(
 		}
 		material.TargetID = target.ID
 		material.TargetRoot = *portable.Root
-		if material.Form == publication.PayloadFormFileSet {
-			material.Remote, err = service.ProjectFileSetSnapshot(portable, material.Entries)
-			if err != nil {
-				return pullApplyPreparation{}, urfave.Exit(
-					input.label()+" refused: the file-set publication entries cannot be projected onto the local target; nothing was changed",
-					3,
-				)
-			}
+		material.FileSetTargets = []string{target.ID}
+		material.Remote, err = service.ProjectFileSetSnapshot(portable, material.Entries)
+		if err != nil {
+			return pullApplyPreparation{}, urfave.Exit(
+				input.label()+" refused: the file-set publication entries cannot be projected onto the local target; nothing was changed",
+				3,
+			)
 		}
 		if input.Present && material.BaseForm == publication.PayloadFormFileSet {
 			material.Base, err = service.ProjectFileSetSnapshot(portable, material.BaseEntries)
@@ -575,13 +575,17 @@ func preparePullApply(
 				)
 			}
 		}
+	} else if len(material.Targets) == 1 && material.Targets[0].Source == model.SourceFiles &&
+		material.Targets[0].Root != nil {
+		material.TargetID = material.Targets[0].ID
+		material.TargetRoot = *material.Targets[0].Root
 	}
 	configurationToken := sources.Token
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
 		Configuration: configuration, BaseSnapshot: material.Base, RemoteSnapshot: material.Remote,
 		Roots: roots, Local: sources.Local, ApplyRemoteOnly: input.RemoteOnly,
-		FileSet: material.Form == publication.PayloadFormFileSet,
+		FileSetTargets: material.FileSetTargets,
 	}
 	plan, err := service.PlanPublicationApply(ctx, request)
 	if err != nil {
@@ -614,8 +618,8 @@ func preparePullApply(
 		}
 		staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 			Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
-			FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
-			Entries: material.Entries,
+			FloorRevision: input.Floor.Revision, Observation: observation,
+			Payloads: material.Payloads, Entries: material.Entries,
 		})
 		if err != nil {
 			return pullApplyPreparation{}, pullAcceptPositionStagingFailure(input.label(), err)
@@ -641,8 +645,8 @@ func preparePullApply(
 	}
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 		Directory: sources.Paths.PublicationStateDir(), Binding: input.Binding,
-		FloorRevision: input.Floor.Revision, Observation: observation, Payload: material.Payload,
-		Entries: material.Entries,
+		FloorRevision: input.Floor.Revision, Observation: observation,
+		Payloads: material.Payloads, Entries: material.Entries,
 	})
 	if err != nil {
 		return pullApplyPreparation{}, pullAcceptStagingFailure(input.label(), err)
@@ -672,57 +676,13 @@ func pullApplyAdoption(
 	if input.Label != "" && input.Label != "pull" {
 		return sources.Configuration, nil, nil, nil
 	}
-	if material.Form == publication.PayloadFormFileSet {
-		if len(input.Settings) != 0 {
-			return config.Config{}, nil, nil, pullAdoptionRefusal(
-				input, "--settings applies to packed publications, not file-set records",
-			)
-		}
-		if len(sources.Configuration.Targets) == 0 {
-			return pullAdoptFileSetTarget(sources, material, input)
-		}
-		return sources.Configuration, nil, nil, nil
-	}
-	if material.Form != publication.PayloadFormPacked {
-		return sources.Configuration, nil, nil, nil
-	}
-	return pullAdoptPackedTargets(sources, material, input)
-}
-
-func pullAdoptFileSetTarget(
-	sources pullApplySources,
-	material pullApplyMaterial,
-	input pullApplyPlanRequest,
-) (config.Config, *pullApplyTargetAdoption, []string, error) {
 	if len(material.Targets) == 0 {
 		return sources.Configuration, nil, nil, nil
 	}
-	if len(material.Targets) != 1 {
-		return config.Config{}, nil, nil, pullAdoptionRefusal(
-			input, "the file-set publication names more than one target",
-		)
-	}
-	published := material.Targets[0]
-	if published.Source != model.SourceFiles || published.Root == nil || published.Validate() != nil {
-		return config.Config{}, nil, nil, pullAdoptionRefusal(
-			input, "the file-set publication names an unsupported target layout",
-		)
-	}
-	target, err := pullAdoptFilesTarget(sources, published)
-	if err != nil {
-		return config.Config{}, nil, nil, pullAdoptionFailure(input, err)
-	}
-	if err := config.CheckAddition(sources.Configuration, sources.Paths, target); err != nil {
-		return config.Config{}, nil, nil, pullAdoptionFailure(
-			input, fmt.Errorf("the published target %s cannot be adopted (%w)", pullPortableSelector(*published.Root), err),
-		)
-	}
-	next := sources.Configuration
-	next.Targets = append(append([]config.Target(nil), sources.Configuration.Targets...), target)
-	return next, &pullApplyTargetAdoption{ConfigToken: sources.Token, Targets: []config.Target{target}}, nil, nil
+	return pullAdoptPublishedTargets(sources, material, input)
 }
 
-func pullAdoptPackedTargets(
+func pullAdoptPublishedTargets(
 	sources pullApplySources,
 	material pullApplyMaterial,
 	input pullApplyPlanRequest,
@@ -777,6 +737,9 @@ func pullAdoptPackedTargets(
 			continue
 		}
 		selector := pullPortableSelector(*published.Root)
+		if _, configured := pullTargetByID(sources.Configuration, published.ID); configured {
+			continue
+		}
 		if owner, configured := pullFilesRootOwner(sources.Paths, configuration, *published.Root); configured {
 			if owner.ID != published.ID {
 				return config.Config{}, nil, nil, pullAdoptionRefusal(
@@ -1122,8 +1085,8 @@ func applyPullPreparation(
 		Directory: preparation.Sources.Paths.PublicationStateDir(), Binding: input.Binding,
 		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
 		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
-		Observation: preparation.Observation, Payload: preparation.Material.Payload,
-		Entries: preparation.Material.Entries,
+		Observation: preparation.Observation,
+		Payloads:    preparation.Material.Payloads, Entries: preparation.Material.Entries,
 	})
 	if acceptErr != nil {
 		return output, pullAcceptFailure(input.Command, input.label(), output, acceptErr)
@@ -1260,8 +1223,8 @@ func acceptPullPosition(
 		Directory: preparation.Sources.Paths.PublicationStateDir(), Binding: input.Binding,
 		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
 		StateToken: preparation.Staged.StateToken, Confirmation: preparation.Staged.Confirmation,
-		Observation: preparation.Observation, Payload: preparation.Material.Payload,
-		Entries: preparation.Material.Entries,
+		Observation: preparation.Observation,
+		Payloads:    preparation.Material.Payloads, Entries: preparation.Material.Entries,
 	})
 	if acceptErr != nil {
 		return output, pullAcceptPositionFailure(input.Command, output, acceptErr)
@@ -1313,22 +1276,23 @@ func pullApplySnapshots(
 	if err != nil {
 		return pullApplyMaterial{}, errPullApplySnapshotUnavailable
 	}
-	payload, raw, err := pullApplyResolvedPayload(ctx, remote, terminal)
+	payload, payloads, err := pullApplyResolvedPayload(ctx, remote, terminal)
 	if err != nil {
 		return pullApplyMaterial{}, err
 	}
 	targets := payload.Snapshot.Targets
 	if !present {
 		return pullApplyMaterial{
-			Base:      model.Snapshot{Version: model.SnapshotVersion},
-			Remote:    payload.Snapshot,
-			Payload:   raw,
-			BaseForm:  publication.PayloadFormPacked,
-			Form:      payload.Form,
-			Entries:   payload.Entries,
-			Targets:   targets,
-			RecordCID: recordCID,
-			Sequence:  terminal.PublicationSeq,
+			Base:           model.Snapshot{Version: model.SnapshotVersion},
+			Remote:         payload.Snapshot,
+			Payloads:       payloads,
+			Form:           payload.Form,
+			BaseForm:       publication.PayloadFormPacked,
+			Entries:        payload.Entries,
+			FileSetTargets: pullApplyEntriesTargets(terminal),
+			Targets:        targets,
+			RecordCID:      recordCID,
+			Sequence:       terminal.PublicationSeq,
 		}, nil
 	}
 	if floor.Sequence >= uint64(len(view.Snapshots)) {
@@ -1349,50 +1313,79 @@ func pullApplySnapshots(
 		return pullApplyMaterial{}, err
 	}
 	return pullApplyMaterial{
-		Base:        basePayload.Snapshot,
-		Remote:      payload.Snapshot,
-		Payload:     raw,
-		Form:        payload.Form,
-		BaseForm:    basePayload.Form,
-		Entries:     payload.Entries,
-		BaseEntries: basePayload.Entries,
-		Targets:     targets,
-		RecordCID:   recordCID,
-		Sequence:    terminal.PublicationSeq,
+		Base:           basePayload.Snapshot,
+		Remote:         payload.Snapshot,
+		Payloads:       payloads,
+		Form:           payload.Form,
+		BaseForm:       basePayload.Form,
+		Entries:        payload.Entries,
+		BaseEntries:    basePayload.Entries,
+		FileSetTargets: pullApplyEntriesTargets(terminal),
+		Targets:        targets,
+		RecordCID:      recordCID,
+		Sequence:       terminal.PublicationSeq,
 	}, nil
+}
+
+func pullApplyEntriesTargets(records ...publication.SnapshotRecord) []string {
+	seen := make(map[string]struct{})
+	targets := make([]string, 0)
+	for _, record := range records {
+		for _, segment := range record.Segments {
+			if segment.Form != publication.SegmentFormEntries {
+				continue
+			}
+			if _, exists := seen[segment.Target.ID]; exists {
+				continue
+			}
+			seen[segment.Target.ID] = struct{}{}
+			targets = append(targets, segment.Target.ID)
+		}
+	}
+	sort.Strings(targets)
+	return targets
 }
 
 func pullApplyResolvedPayload(
 	ctx context.Context,
 	remote pullRemote,
 	record publication.SnapshotRecord,
-) (publication.Payload, []byte, error) {
-	if remote.Blob == nil || remote.Entry == nil {
+) (publication.Payload, [][]byte, error) {
+	if remote.Entry == nil {
 		return publication.Payload{}, nil, errPullApplySnapshotUnavailable
 	}
 	limits := publication.PayloadLimits{
 		MaxEntries: publication.MaxSnapshotEntries, MaxEntryBytes: pullApplyMaxEntryBytes,
 		MaxTotalBytes: pullApplyMaxTotalBytes,
 	}
-	var raw []byte
-	for _, segment := range record.Segments {
-		if segment.Form != publication.SegmentFormPacked {
-			continue
+	fetched := make(map[string][]byte, len(record.Segments))
+	fetch := func(blob publication.BlobReference) ([]byte, error) {
+		if raw, ok := fetched[string(blob.CID)]; ok {
+			return raw, nil
 		}
-		blob, err := remote.Blob(ctx, record)
+		raw, err := remote.Entry(ctx, blob)
 		if err != nil {
-			return publication.Payload{}, nil, err
+			return nil, err
 		}
-		raw = blob
-		break
+		fetched[string(blob.CID)] = raw
+		return raw, nil
 	}
-	payload, err := publication.ResolvePayload(record, limits, func(blob publication.BlobReference) ([]byte, error) {
-		return remote.Entry(ctx, blob)
-	})
+	payload, err := publication.ResolvePayload(record, limits, fetch)
 	if err != nil {
 		return publication.Payload{}, nil, err
 	}
-	return payload, raw, nil
+	payloads := make([][]byte, len(record.Segments))
+	for index, segment := range record.Segments {
+		if segment.Form != publication.SegmentFormPacked {
+			continue
+		}
+		raw, ok := fetched[string(segment.Blob.CID)]
+		if !ok {
+			return publication.Payload{}, nil, errPullApplySnapshotUnavailable
+		}
+		payloads[index] = raw
+	}
+	return payload, payloads, nil
 }
 
 func pullApplyFloorMatchesRecord(floor publicationstate.Floor, record publication.SnapshotRecord) bool {
@@ -1869,17 +1862,10 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 		if err != nil {
 			return fail(err)
 		}
-		blob := func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
-			reference, ok := record.SegmentBlob()
-			if !ok {
-				return nil, errPullApplySnapshotUnavailable
-			}
-			return blobs.FetchBlob(ctx, identity.DID, reference.CID, int64(reference.Size))
-		}
 		entry := func(ctx context.Context, reference publication.BlobReference) ([]byte, error) {
 			return blobs.FetchBlob(ctx, identity.DID, reference.CID, int64(reference.Size))
 		}
-		return pullRemote{Reader: publicationReader, Blob: blob, Entry: entry, Close: closeResources}, nil
+		return pullRemote{Reader: publicationReader, Entry: entry, Close: closeResources}, nil
 	}
 }
 

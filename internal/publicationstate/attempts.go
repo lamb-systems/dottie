@@ -439,25 +439,39 @@ func (s *Store) checkCandidatePayloadCapacity(
 	candidate validatedCandidate,
 	createDirectory bool,
 ) error {
-	if candidate.form == PayloadFormFileSet {
-		for _, entry := range candidate.entries {
-			if err := s.checkPayloadCapacity(
-				ctx,
-				payloadBasename(entry.content),
-				uint64(len(entry.content)),
-				createDirectory,
-			); err != nil {
+	batch := make(map[string]uint64)
+	stage := func(content []byte) error {
+		name := payloadBasename(content)
+		size := uint64(len(content))
+		if existing, ok := batch[name]; ok {
+			if existing != size {
+				return errStoredValue
+			}
+			return nil
+		}
+		batch[name] = size
+		return nil
+	}
+	for _, segment := range candidate.segments {
+		for _, entry := range segment.entries {
+			if err := stage(entry.content); err != nil {
 				return err
 			}
 		}
-		return nil
+		if len(segment.payload) == 0 {
+			continue
+		}
+		if err := stage(segment.payload); err != nil {
+			return err
+		}
 	}
-	return s.checkPayloadCapacity(
-		ctx,
-		payloadBasename(candidate.payload),
-		uint64(len(candidate.payload)),
-		createDirectory,
-	)
+	if len(batch) == 0 {
+		if !createDirectory {
+			return nil
+		}
+		return s.ensurePayloadDirectory()
+	}
+	return s.checkPayloadBatchCapacity(ctx, s.conn, batch, createDirectory)
 }
 
 func candidateDigest(
@@ -491,7 +505,9 @@ func candidateDigest(
 	writePart([]byte(candidate.key))
 	writePart(candidate.snapshotRaw)
 	writePart(candidate.headRaw)
-	writePart(candidate.payload)
+	for _, segment := range candidate.segments {
+		writePart(segment.payload)
+	}
 	writePart(candidate.view.digest[:])
 	encodedReview, err := canonicalJSON(reviewToWire(review))
 	if err != nil {

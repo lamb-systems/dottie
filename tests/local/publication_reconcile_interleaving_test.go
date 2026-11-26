@@ -116,7 +116,7 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	require.NoError(t, err)
 	nextHead, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: nextSequence,
-		SnapshotCID: nextRecordCID, BlobCID: bytes.Clone(originalFloor.BlobCID),
+		SnapshotCID: nextRecordCID,
 	})
 	require.NoError(t, err)
 	successor := publicationReconcileMaterial{
@@ -164,7 +164,7 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	assert.Equal(t, "position_changed", classified.Reason())
 	assert.Equal(t, originalFloor, request.ExpectedFloor)
 	assert.Equal(t, originalRecord, request.SnapshotRecord)
-	assert.Equal(t, originalPayload, request.Payload)
+	assert.Equal(t, [][]byte{originalPayload}, request.Payloads)
 	assert.Equal(t, originalPayload, successor.payload)
 	assertPublicationReconcileFile(t, selectedPath, publicationReconcileInitial, 0o600)
 	assertPublicationReconcileFile(t, home.sentinel, publicationReconcileSentinelB, 0o640)
@@ -185,8 +185,7 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	assert.Equal(t, nextKey, loadedFloor.SnapshotKey)
 	assert.Equal(t, nextRecordCID, loadedFloor.RecordCID)
 	assert.Equal(t, nextHead, loadedFloor.Head)
-	assert.Equal(t, originalFloor.BlobCID, loadedFloor.BlobCID)
-	assert.Equal(t, originalFloor.BlobSize, loadedFloor.BlobSize)
+	assert.Equal(t, originalFloor.Segments, loadedFloor.Segments)
 	assert.NotEqual(t, originalFloor.ObservationDigest, loadedFloor.ObservationDigest)
 	assert.Equal(t, originalFloor.SuppliedContext, loadedFloor.SuppliedContext)
 
@@ -215,12 +214,12 @@ func TestPublicationReconcileFloorAdvanceDuringLocalCapture(t *testing.T) {
 	assertPublicationReconcileInterleavingEvidenceHas(t, page.Records, initial)
 	assertPublicationReconcileInterleavingEvidenceHas(t, page.Records, successor)
 	assert.Equal(t, originalRecord, initial.record)
-	assert.Equal(t, originalPayload, request.Payload)
+	assert.Equal(t, [][]byte{originalPayload}, request.Payloads)
 
 	refreshedRequest := request
 	refreshedRequest.ExpectedFloor = clonePublicationReconcileFloor(loadedFloor)
 	refreshedRequest.SnapshotRecord = bytes.Clone(successor.record)
-	refreshedRequest.Payload = bytes.Clone(originalPayload)
+	refreshedRequest.Payloads = [][]byte{bytes.Clone(originalPayload)}
 	refreshed, refreshedDisposition, err := service.PreviewPublicationTarget(ctx, refreshedRequest, base)
 	require.NoError(t, err)
 	assert.Equal(t, service.PublicationPreviewBaseEstablished, refreshedDisposition)

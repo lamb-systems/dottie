@@ -62,11 +62,14 @@ func TestPublicationV2StatePersistsOnlyAcceptedPositionEvidence(t *testing.T) {
 			PublicationID:  [16]byte{0x31},
 			PublicationSeq: 0,
 			Parent:         []byte{},
-			Blob: publication.BlobReference{
-				CID:      blobCID,
-				Size:     uint64(len(packed.Payload)),
-				MIMEType: publication.SnapshotBlobMIMEType,
-			},
+			Segments: []publication.SnapshotSegment{{
+				Target: packedSnapshotTarget(), Form: publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID:      blobCID,
+					Size:     uint64(len(packed.Payload)),
+					MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			}},
 		},
 	)
 	require.NoError(t, err)
@@ -78,7 +81,6 @@ func TestPublicationV2StatePersistsOnlyAcceptedPositionEvidence(t *testing.T) {
 			Vault:          binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    recordCID,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)

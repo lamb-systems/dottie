@@ -62,11 +62,14 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 			PublicationID:  publicationID,
 			PublicationSeq: 0,
 			Parent:         []byte{},
-			Blob: publication.BlobReference{
-				CID:      blobCID,
-				Size:     uint64(len(packed.Payload)),
-				MIMEType: publication.SnapshotBlobMIMEType,
-			},
+			Segments: []publication.SnapshotSegment{{
+				Target: packedSnapshotTarget(), Form: publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID:      blobCID,
+					Size:     uint64(len(packed.Payload)),
+					MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			}},
 		},
 	)
 	require.NoError(t, err)
@@ -78,7 +81,6 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 			Vault:          binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    snapshotCID,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)
@@ -113,7 +115,7 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 	require.NoError(t, err)
 	material, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	assert.Equal(t, packed.Payload, material.Payload)
+	assert.Equal(t, packed.Payload, candidatePackedPayload(material))
 
 	uploadProposal, err := store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchUpload, view, review)
 	require.NoError(t, err)
@@ -126,7 +128,7 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 		uploadProposal.Confirmation,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, packed.Payload, upload.Payload)
+	assert.Equal(t, packed.Payload, uploadPackedPayload(upload))
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, publicationstate.DispatchSubmission, view, review)
 	require.NoError(t, err)
 	submission, err := store.BeginSubmission(
@@ -172,5 +174,5 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 	assert.Equal(t, publicationstate.AttemptRetiredSuccess, retained.Lifecycle)
 	retainedCandidate, err := reopened.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	assert.Equal(t, packed.Payload, retainedCandidate.Payload)
+	assert.Equal(t, packed.Payload, candidatePackedPayload(retainedCandidate))
 }

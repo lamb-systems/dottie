@@ -7,15 +7,19 @@ boundaries below to decide whether to publish configuration with this tree.
 
 ## Current v2 access model
 
-A v2 snapshot is a packed plaintext record set or an ordered plaintext file-set published in
-the account's own AT Protocol repository. Dottie does not add a client-side confidentiality layer
-over that payload.
+A v2 snapshot is an ordered list of plaintext payload segments, one per target, published in the
+account's own AT Protocol repository. A files target is published either as an ordered plaintext
+file-set (one plaintext blob per entry) or as one packed plaintext tar; a GNOME settings target is
+carried inline in the snapshot record. Dottie does not add a client-side confidentiality layer over
+any of it.
 
-A fresh-machine `dottie pull` resolves the publication, fetches and decodes the packed plaintext
-blob or every file-set entry blob, and can apply them using the account session and the published
-`vaultHeadV2` record. It does not load a Dottie device key. The reader verifies account identity,
-publication scopes, record membership in a signed commit, the head/snapshot chain, each payload CID
-and size, and the payload format. Those checks establish repository-scoped authenticity and
+A fresh-machine `dottie pull` resolves the publication, fetches and decodes every packed blob and
+entry blob, and reads the inline settings from the snapshot record, using the account session and
+the published `vaultHeadV2` record. It applies files targets; writing inline settings back to a
+settings backend is not implemented in this tree, so a configured settings target refuses the apply
+plan instead of being applied silently. It does not load a Dottie device key. The reader verifies
+account identity, publication scopes, record membership in a signed commit, the head/snapshot
+chain, each payload CID and size, and the payload format. Those checks establish repository-scoped authenticity and
 integrity, not global freshness or device authorization.
 
 `dottie push` resolves the vault it acts on from local evidence: an explicit `--vault`, the recorded local vault
@@ -35,48 +39,57 @@ Consequences:
 - Repository signatures establish account repository authority. They do not establish which Dottie
   device or authenticated session authored a record.
 
-The plaintext provider residual is unchanged. The packed payload is uploaded before the record batch,
-so a rejected or ambiguous batch can leave an unattached plaintext blob that remains retrievable by
-CID at the provider. Dottie cannot delete that blob. Dottie itself never surfaces candidate bytes for
-a publication that did not succeed: no command, log, error, report or archive surfaces them, and the
-accepted position does not advance. The residual is provider-side only.
+Every payload object is uploaded before the record batch, so a rejected or ambiguous batch can leave
+unattached plaintext blobs that remain retrievable by CID at the provider. Dottie cannot delete them.
+Dottie itself never surfaces candidate bytes for a publication that did not succeed: no command,
+log, error, report or archive surfaces them, and the accepted position does not advance. The
+residual is provider-side only.
 
-A file-set publication widens that residual to one blob per entry. Its snapshot record names each
-file's blob, so the upload sequence is one blob per entry followed by the record batch. A mid-upload
-failure or a rejected batch can therefore leave up to N unattached plaintext blobs at the provider,
-one per entry that was already uploaded, and Dottie still cannot delete them. The residual is bounded
-by the 64-entry file-set ceiling and the custody byte limit, it stays provider-side, and it does not
-license exposing candidate bytes locally: a file-set submission that did not succeed surfaces no
-entry content through any Dottie command, log, error, report or archive, and the accepted position
-does not advance. A failure before submission is abandoned automatically by the confirmation
-wrapper; once submission may have happened, the attempt remains unresolved and blocking. Dottie
-never retries a different form after an attempt starts. The 64-object custody limit is shared across
-retained publications, not newly granted per publication, so a representable file-set successor that
-changes a CID can still be refused before any upload.
+A publication is now several payload objects, one per segment that carries data, so the residual is
+one unattached plaintext blob per object that was already uploaded: one per entry for a file-set
+segment, one per packed segment, and none for an inline settings segment. A mid-upload failure or a
+rejected batch can therefore leave up to N unattached plaintext blobs at the provider, and Dottie
+still cannot delete them. Inline settings are not blobs, but a rejected or ambiguous `applyWrites`
+batch has already sent their values to the provider in the record body, so a settings segment can
+disclose plaintext to the provider even when no blob exists and no record was committed. The blob
+residual is bounded by the managed-object ceiling and the custody byte limit, it stays
+provider-side, and it does not license exposing candidate bytes locally: a
+submission that did not succeed surfaces no entry content and no setting value through any Dottie
+command, log, error, report or archive, and the accepted position does not advance. A failure before
+submission is abandoned automatically by the confirmation wrapper; once submission may have happened,
+the attempt remains unresolved and blocking. Dottie never retries a different form after an attempt
+starts. The 64-object custody limit is shared across retained publications, not newly granted per
+publication, so a representable successor that changes a CID can still be refused before any
+upload.
 
 ## Evidence behind a submission
 
-The two payload forms do not rest on the same evidence, and the difference is deliberate.
+The segment forms do not rest on the same evidence, and the difference is deliberate.
 
-- A packed submission trusts the caller's claim that the single payload upload happened. The store
-  records that the upload phase started and hands out the one blob; it cannot observe the provider.
-- A file-set submission requires the caller to name the entries it uploaded, exactly and in full:
-  same count, same order, same path, same CID, same size as the authenticated entry list in the
-  attempt core. The store refuses a partial, reordered, substituted or extended list, and it
-  corroborates the list against local custody first, so a caller cannot satisfy the gate by naming
-  entries it never staged. The refusal leaves the attempt in its upload-started, not-submitted state:
-  unresolved and blocking, never terminal.
+- A packed segment submits a blob reference that the attempt core already carries. The store records
+  that the upload phase started and hands out the staged payload; it cannot observe the provider.
+- A file-set segment requires the caller to name the entries it uploaded, exactly and in full: same
+  count, same order, same path, same CID, same size as the authenticated entry list in the attempt
+  core. The store refuses a partial, reordered, substituted or extended list, and it corroborates the
+  list against local custody first, so a caller cannot satisfy the gate by naming entries it never
+  staged. The refusal leaves the attempt in its upload-started, not-submitted state: unresolved and
+  blocking, never terminal.
+- A settings segment carries no blob at all: its values are authenticated by the snapshot record.
 
-The file-set entry list is strictly more evidence than the packed path has, not a substitute for it.
+A file-set entry list is strictly more evidence than a packed blob reference, not a substitute for it.
 
 ## Public metadata visibility
 
 V2 typed repository records are public plaintext metadata. The published head and snapshot records
-disclose the vault and publication identifiers, sequence, parent and CIDs. A file-set record also
-discloses the target id, its portable root of base, relative path and kind, and every file path,
-mode, size and blob CID, although not the file content in the record itself; the blobs are
-plaintext. Do not publish configuration you are unwilling to place in the
-account repository and provider storage.
+disclose the vault and publication identifiers, sequence, parent and CIDs. Each segment also
+discloses its target id, its portable root of base, relative path and kind when it has one, and its
+form. A file-set segment discloses every file path, mode, size and blob CID, although not the file
+content in the record itself; the blobs are plaintext. A packed segment discloses one blob CID and
+size. A settings segment discloses the schema id, settings path, key, state and value of every
+setting inline in the snapshot record, so setting values are record metadata rather than blob
+content, exactly as they were previously public inside a packed tar manifest. Do not publish
+configuration or setting values you are unwilling to place in the account repository and provider
+storage.
 
 Dottie has no log facility. Routine status, read, push, pull, sync and position output omits file
 contents, setting values, private keys, session material, relative entry locators and absolute
@@ -102,10 +115,9 @@ recovery kit and no export archive in this tree, and no command mints, reads or 
 account access or provider-held data can therefore lose the published position; losing Dottie device
 keys alone does not.
 
-A file-set record names the target it was captured from: an id and a portable root of base,
-relative path and kind. A packed payload names every target it carries instead: files targets with
-portable roots, and settings targets without one. A record cannot grant local path access on its
-own. Adoption happens only on its own pull confirmation, and only after the same checks and
+Every segment names the target it was captured from: an id and, for files segments, a portable root
+of base, relative path and kind. Settings segments name the target without a root. A record cannot
+grant local path access on its own. Adoption happens only on its own pull confirmation, and only after the same checks and
 canonicalization `targets add` performs: a files root must resolve inside HOME or XDG_CONFIG_HOME,
 must not overlap Dottie's own directories or an existing target, and the adopted target is stored
 at its resolved path. A settings target is adopted only when the user names it on the pull command

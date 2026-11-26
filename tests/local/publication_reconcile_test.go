@@ -147,11 +147,14 @@ func encodePublicationReconcileMaterial(
 		PublicationID:  publicationID,
 		PublicationSeq: sequence,
 		Parent:         bytes.Clone(parent),
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(recordRaw)
@@ -160,7 +163,7 @@ func encodePublicationReconcileMaterial(
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
-		SnapshotCID: recordCID, BlobCID: blobCID,
+		SnapshotCID: recordCID,
 	})
 	require.NoError(t, err)
 	return publicationReconcileMaterial{
@@ -196,7 +199,7 @@ func clonePublicationReconcileFloor(floor publicationstate.Floor) publicationsta
 	floor.SuppliedContext = clonePublicationReconcileContext(floor.SuppliedContext)
 	floor.Head = bytes.Clone(floor.Head)
 	floor.RecordCID = bytes.Clone(floor.RecordCID)
-	floor.BlobCID = bytes.Clone(floor.BlobCID)
+	floor.Segments = clonePublicationReconcileSegments(floor.Segments)
 	return floor
 }
 
@@ -241,8 +244,9 @@ func publicationReconcileRequest(
 ) service.PublicationReconciliationRequest {
 	return service.PublicationReconciliationRequest{
 		Store: home.pubStore, Binding: binding, ExpectedFloor: home.floor,
-		SnapshotRecord: bytes.Clone(material.record), Payload: bytes.Clone(material.payload),
-		Configuration: configuration, TargetID: publicationReconcileTargetID, Local: local,
+		SnapshotRecord: bytes.Clone(material.record),
+		Payloads:       [][]byte{bytes.Clone(material.payload)},
+		Configuration:  configuration, TargetID: publicationReconcileTargetID, Local: local,
 	}
 }
 
@@ -260,4 +264,30 @@ func writePublicationReconcileFile(t *testing.T, path string, content []byte, mo
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, content, mode))
 	require.NoError(t, os.Chmod(path, mode))
+}
+
+func clonePublicationReconcileSegments(summaries []publicationstate.SegmentSummary) []publicationstate.SegmentSummary {
+	cloned := make([]publicationstate.SegmentSummary, 0, len(summaries))
+	for _, summary := range summaries {
+		copy := summary
+		copy.BlobCID = bytes.Clone(summary.BlobCID)
+		if summary.Entries != nil {
+			entries := make([]publicationstate.PayloadEntryReference, 0, len(summary.Entries))
+			for _, entry := range summary.Entries {
+				entries = append(entries, publicationstate.PayloadEntryReference{
+					Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
+				})
+			}
+			copy.Entries = entries
+		}
+		cloned = append(cloned, copy)
+	}
+	return cloned
+}
+
+func publicationReconcilePortableTarget() model.Target {
+	return model.Target{
+		ID: publicationReconcileTargetID, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+	}
 }

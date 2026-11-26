@@ -63,14 +63,14 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 	)
 	require.True(
 		t,
-		bytes.Equal(expectedPayload, material.Payload),
+		bytes.Equal(expectedPayload, acceptedPackedPayload(material)),
 		"reader payload must match the assertions-only setup oracle",
 	)
 	requirePublicationMaterialFile(t, filepath.Join(home.selected, "settings.ini"), initial, 0o600)
 	requirePublicationMaterialFile(t, home.sentinel, publicationReconcileSentinelA, 0o640)
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	require.NoError(t, err)
-	snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
+	snapshot, err := publication.DecodePayload(acceptedPackedPayload(material), recordPackedBlob(record))
 	require.NoError(t, err)
 	require.Equal(t, model.SnapshotVersion, snapshot.Version)
 	require.Len(t, snapshot.Targets, 1)
@@ -96,8 +96,9 @@ func TestPublicationMaterialOwnedReadDrivesFreshLocalPreview(t *testing.T) {
 
 	request := service.PublicationReconciliationRequest{
 		Store: reopened, Binding: binding, ExpectedFloor: beforeRead.floor,
-		SnapshotRecord: bytes.Clone(material.SnapshotRecord), Payload: bytes.Clone(material.Payload),
-		Configuration: configuration, TargetID: publicationReconcileTargetID,
+		SnapshotRecord: bytes.Clone(material.SnapshotRecord),
+		Payloads:       [][]byte{bytes.Clone(acceptedPackedPayload(material))},
+		Configuration:  configuration, TargetID: publicationReconcileTargetID,
 		Local: newPublicationReconcileContext(t, home.paths),
 	}
 
@@ -375,14 +376,14 @@ func finalizePublicationMaterialOwner(
 	require.Equal(t, attempt.ID, upload.AttemptID)
 	require.True(
 		t,
-		bytes.Equal(expectedPayload, upload.Payload),
+		bytes.Equal(expectedPayload, uploadPackedPayload(upload)),
 		"local upload reservation must match only the setup oracle",
 	)
 	setupRecord, err := publication.DecodeSnapshot(expectedRecord)
 	require.NoError(t, err)
 	require.True(
 		t,
-		bytes.Equal(setupRecord.Blob.CID, upload.Blob.CID),
+		bytes.Equal(recordPackedBlob(setupRecord).CID, uploadPackedBlob(upload).CID),
 		"local upload reservation must bind the setup blob",
 	)
 	afterUpload, err := home.pubStore.LoadAttempt(ctx, attempt.ID)
@@ -456,7 +457,7 @@ func finalizePublicationMaterialOwner(
 	clear(candidate.Payload)
 	clear(candidate.SnapshotRecord)
 	clear(candidate.HeadRecord)
-	clear(upload.Payload)
+	clear(uploadPackedPayload(upload))
 	clear(submission.SnapshotRecord)
 	clear(submission.HeadRecord)
 	clear(current.Head)
@@ -597,8 +598,8 @@ func requirePublicationMaterialOwnedState(
 	require.Equal(t, expectedSnapshot.PublicationSeq, state.floor.Sequence)
 	require.Equal(t, expectedSnapshot.PublicationID, state.floor.PublicationID)
 	require.Equal(t, expectedSnapshot.Vault, state.floor.Binding.Vault)
-	require.True(t, bytes.Equal(expectedSnapshot.Blob.CID, state.floor.BlobCID))
-	require.Equal(t, expectedSnapshot.Blob.Size, state.floor.BlobSize)
+	require.True(t, bytes.Equal(recordPackedBlob(expectedSnapshot).CID, floorPackedBlob(state.floor).CID))
+	require.Equal(t, recordPackedBlob(expectedSnapshot).Size, floorPackedBlob(state.floor).Size)
 	require.NoError(t, publication.VerifyHeadBinding(state.floor.Head, expectedRecord, expectedKey))
 	require.True(
 		t,
@@ -676,15 +677,19 @@ func requirePublicationMaterialPositionOnlyLink(
 	require.Equal(t, state.floor.SnapshotKey, key)
 	require.True(t, bytes.Equal(recordCID, state.floor.RecordCID))
 	require.Equal(t, record.Vault, state.floor.Binding.Vault)
-	require.Equal(t, record.Blob.Size, state.floor.BlobSize)
-	require.True(t, bytes.Equal(record.Blob.CID, state.floor.BlobCID))
+	require.Equal(t, recordPackedBlob(record).Size, floorPackedBlob(state.floor).Size)
+	require.True(t, bytes.Equal(recordPackedBlob(record).CID, floorPackedBlob(state.floor).CID))
 	require.NoError(t, publication.VerifyHeadBinding(state.floor.Head, expectedRecord, key))
 	head, err := publication.DecodeHead(state.floor.Head)
 	require.NoError(t, err)
 	require.Equal(t, state.floor.Sequence, head.PublicationSeq)
 	require.Equal(t, state.floor.Binding.Vault, head.Vault)
 	require.True(t, bytes.Equal(recordCID, head.SnapshotCID))
-	require.True(t, bytes.Equal(record.Blob.CID, head.BlobCID))
+	require.True(
+		t,
+		bytes.Equal(recordPackedBlob(record).CID, floorPackedBlob(state.floor).CID),
+		"the accepted floor must name the packed blob the terminal record references",
+	)
 	require.Len(t, state.history.Events, 1)
 	require.False(t, state.history.HasMore)
 	require.Equal(t, state.floor.Revision, state.history.NextRevision)

@@ -119,7 +119,7 @@ func encodePublicationCandidate(
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
-	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot)
+	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot, floor)
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
@@ -171,6 +171,7 @@ func cloneSegmentSummariesService(summaries []publicationstate.SegmentSummary) [
 
 func candidateSegments(
 	snapshot model.Snapshot,
+	floor publicationstate.Floor,
 ) ([]publication.SnapshotSegment, []publicationstate.CandidateSegment, [][]byte, []publication.PayloadEntry, error) {
 	targets := append([]model.Target(nil), snapshot.Targets...)
 	sort.Slice(targets, func(left, right int) bool { return targets[left].ID < targets[right].ID })
@@ -199,6 +200,9 @@ func candidateSegments(
 			payloads = append(payloads, nil)
 		case model.SourceFiles:
 			segment, targetPayloads, ok := entriesSegmentForTarget(target, targetEntries)
+			if ok && publicationSegmentDeletesAcceptedFile(floor, target.ID, segment.Entries) {
+				ok = false
+			}
 			if ok {
 				recordSegments = append(recordSegments, segment)
 				references := make([]publicationstate.PayloadEntryReference, 0, len(segment.Entries))
@@ -284,6 +288,9 @@ func entriesSegmentForTarget(
 			return publication.SnapshotSegment{}, nil, false
 		}
 		if file.Kind == model.FileDirectory {
+			if file.Mode != fileSetProjectionDirectoryMode {
+				return publication.SnapshotSegment{}, nil, false
+			}
 			directories = append(directories, file.Path)
 			continue
 		}
@@ -473,4 +480,26 @@ func publicationSyncAppliedEntry(entry model.Entry) (model.Entry, bool) {
 		return clone, true
 	}
 	return model.Entry{}, false
+}
+
+func publicationSegmentDeletesAcceptedFile(
+	floor publicationstate.Floor,
+	targetID string,
+	entries []publication.SnapshotEntry,
+) bool {
+	present := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		present[entry.Path] = struct{}{}
+	}
+	for _, summary := range floor.Segments {
+		if summary.TargetID != targetID || summary.Form != publicationstate.PayloadFormFileSet {
+			continue
+		}
+		for _, accepted := range summary.Entries {
+			if _, ok := present[accepted.Path]; !ok {
+				return true
+			}
+		}
+	}
+	return false
 }

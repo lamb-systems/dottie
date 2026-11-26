@@ -627,7 +627,7 @@ func TestMaterialATProtoGenesisPublishesThroughCoordinator(t *testing.T) {
 	assert.Equal(t, uint64(1), result.Floor.Revision)
 	assert.Equal(t, uint64(0), result.Floor.Sequence)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, result.Floor.RecordCID)
-	assert.Equal(t, proposalPackedBlob(proposal).CID, testBlobCID(result.Floor))
+	assert.Equal(t, proposalPackedBlob(proposal).CID, floorPackedBlob(result.Floor).CID)
 	assert.Equal(t, proposal.Batch.HeadRecord, result.Floor.Head)
 
 	assert.Equal(t, 1, fixture.repository.uploadCount())
@@ -722,24 +722,23 @@ func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
 	fixture := newATProtoMaterialFixture(t)
 	genesisProposal, genesis := fixture.publish(t)
 
-	packed, err := vault.Pack(materialTestSnapshot("synthetic atproto fenced payload"))
-	require.NoError(t, err)
-	candidate := materialTestCandidate(
-		t,
+	candidate, err := encodePublicationCandidate(
 		fixture.binding,
+		materialTestSnapshot("synthetic atproto fenced payload"),
+		genesis.Floor,
+		true,
 		[16]byte{0x35, 0x83},
-		1,
-		genesis.Floor.RecordCID,
-		packed.Payload,
 	)
+	require.NoError(t, err)
 	view, err := fixture.transport.ReadView(ctx)
 	require.NoError(t, err)
 	captured := genesis.Floor
 	batch, err := newMaterialWriteBatch(fixture.binding, &captured, view, candidate)
 	require.NoError(t, err)
-	blob, err := fixture.transport.UploadPayload(ctx, candidate.Payload)
+	require.Len(t, candidate.Payloads, 1)
+	blob, err := fixture.transport.UploadPayload(ctx, candidate.Payloads[0])
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, fixture.repository.blob(blob.CID))
+	assert.Equal(t, candidate.Payloads[0], fixture.repository.blob(blob.CID))
 	prepared, err := fixture.transport.PrepareWrites(ctx, batch)
 	require.NoError(t, err)
 	assert.Equal(t, string(batch.ExpectedContext.RepositoryDigest), fixture.repository.commitCID())
@@ -1313,7 +1312,7 @@ func TestMaterialATProtoClassifiesDispatchOutcomes(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			fixture := newATProtoMaterialFixture(t)
 			proposal := fixture.prepare(t)
-			_, err := fixture.transport.UploadPayload(ctx, proposal.Candidate.Payload)
+			_, err := fixture.transport.UploadPayload(ctx, proposalPackedPayload(proposal))
 			require.NoError(t, err)
 			prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
 			require.NoError(t, err)
@@ -1349,7 +1348,7 @@ func TestMaterialATProtoRefusesConsumedAndUnknownPreparedWrites(t *testing.T) {
 	ctx := context.Background()
 	fixture := newATProtoMaterialFixture(t)
 	proposal := fixture.prepare(t)
-	_, err := fixture.transport.UploadPayload(ctx, proposal.Candidate.Payload)
+	_, err := fixture.transport.UploadPayload(ctx, proposalPackedPayload(proposal))
 	require.NoError(t, err)
 	prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
 	require.NoError(t, err)
@@ -1381,7 +1380,7 @@ func TestMaterialATProtoConsumesPreparedWritesOnError(t *testing.T) {
 	fixture := newATProtoMaterialFixture(t)
 	fixture.repository.rejectNextApply(500, "InternalServerError")
 	proposal := fixture.prepare(t)
-	_, err := fixture.transport.UploadPayload(ctx, proposal.Candidate.Payload)
+	_, err := fixture.transport.UploadPayload(ctx, proposalPackedPayload(proposal))
 	require.NoError(t, err)
 	prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
 	require.NoError(t, err)
@@ -1402,7 +1401,7 @@ func TestMaterialATProtoDispatchesConcurrentSendsOnce(t *testing.T) {
 	ctx := context.Background()
 	fixture := newATProtoMaterialFixture(t)
 	proposal := fixture.prepare(t)
-	_, err := fixture.transport.UploadPayload(ctx, proposal.Candidate.Payload)
+	_, err := fixture.transport.UploadPayload(ctx, proposalPackedPayload(proposal))
 	require.NoError(t, err)
 	prepared, err := fixture.transport.PrepareWrites(ctx, proposal.Batch)
 	require.NoError(t, err)

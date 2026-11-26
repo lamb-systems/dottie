@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"reflect"
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
@@ -574,7 +575,7 @@ func (coordinator *Coordinator) PublishMaterial(
 		return MaterialPublishResult{Attempt: attempt}, err
 	}
 	var submission publicationstate.SubmissionMaterial
-	if proposal.Form == publication.PayloadFormFileSet {
+	if publicationSegmentsCarryEntries(sealed.Segments) {
 		submission, err = proposal.Store.BeginFileSetSubmission(
 			ctx,
 			id,
@@ -1037,7 +1038,7 @@ func sameRecordSegments(left, right []publication.SnapshotSegment) bool {
 	}
 	for index, segment := range left {
 		other := right[index]
-		if segment.Target.ID != other.Target.ID || segment.Form != other.Form {
+		if !reflect.DeepEqual(segment.Target, other.Target) || segment.Form != other.Form {
 			return false
 		}
 		switch segment.Form {
@@ -1046,15 +1047,8 @@ func sameRecordSegments(left, right []publication.SnapshotSegment) bool {
 				return false
 			}
 		case publication.SegmentFormEntries:
-			if len(segment.Entries) != len(other.Entries) {
+			if !sameFileSetSnapshotEntries(segment.Entries, other.Entries) {
 				return false
-			}
-			for entryIndex, entry := range segment.Entries {
-				peer := other.Entries[entryIndex]
-				if entry.Path != entry.Path || entry.Mode != peer.Mode || entry.Size != peer.Size ||
-					!bytes.Equal(entry.Blob.CID, peer.Blob.CID) {
-					return false
-				}
 			}
 		case publication.SegmentFormSettings:
 			if publication.SettingsDigest(segment.Settings) != publication.SettingsDigest(other.Settings) {
@@ -1073,8 +1067,13 @@ func validMaterialPublishRequest(request MaterialPublishRequest) bool {
 	if request.PublicationID == ([16]byte{}) || request.Snapshot.Validate() != nil {
 		return false
 	}
-	return request.Form == "" || request.Form == publication.PayloadFormPacked ||
-		request.Form == publication.PayloadFormFileSet
+	switch request.Form {
+	case "", publication.PayloadFormPacked, publication.PayloadFormFileSet,
+		publication.PayloadFormSettings, publication.PayloadFormMixed:
+		return true
+	default:
+		return false
+	}
 }
 
 func validMaterialPublishProposal(proposal MaterialPublishProposal) bool {
@@ -1220,6 +1219,9 @@ func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
 	if err != nil || len(segments) == 0 {
 		return ErrPublicationProposal
 	}
+	if record.Form != publicationFormOfSummaries(segments) {
+		return ErrPublicationProposal
+	}
 	for _, segment := range segments {
 		switch segment.Form {
 		case publicationstate.PayloadFormPacked:
@@ -1282,7 +1284,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	accepted, err := request.Reader.ReadAcceptedPayload(ctx)
 	switch {
 	case err == nil:
-		remote, err = publicationPayloadSnapshot(accepted.Payload, request.Configuration)
+		remote, err = publicationPayloadSnapshot(accepted.Payload)
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
@@ -1491,6 +1493,31 @@ func (coordinator *Coordinator) publicationPushRefusal(
 		}
 	}
 	return err
+}
+
+func publicationSegmentsCarryEntries(segments []publication.SnapshotSegment) bool {
+	for _, segment := range segments {
+		if segment.Form == publication.SegmentFormEntries {
+			return true
+		}
+	}
+	return false
+}
+
+func publicationFormOfSummaries(summaries []publicationstate.SegmentSummary) publication.PayloadForm {
+	if len(summaries) != 1 {
+		return publication.PayloadFormMixed
+	}
+	switch summaries[0].Form {
+	case publicationstate.PayloadFormPacked:
+		return publication.PayloadFormPacked
+	case publicationstate.PayloadFormFileSet:
+		return publication.PayloadFormFileSet
+	case publicationstate.PayloadFormSettings:
+		return publication.PayloadFormSettings
+	default:
+		return ""
+	}
 }
 
 func newPublicationProposalRecord(proposal MaterialPublishProposal) (PublicationProposalRecord, error) {

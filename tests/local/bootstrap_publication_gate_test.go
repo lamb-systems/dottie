@@ -175,9 +175,9 @@ type bootstrapGateHome struct {
 }
 
 type bootstrapGateMaterial struct {
-	base    model.Snapshot
-	remote  model.Snapshot
-	payload []byte
+	base     model.Snapshot
+	remote   model.Snapshot
+	material publicationstate.MaterialInput
 }
 
 func TestBootstrappedAccountPublishesOnlyV2AndPullsIntoASecondHome(t *testing.T) {
@@ -413,22 +413,21 @@ func joinBootstrapGatePosition(
 	require.NotEmpty(t, view.Snapshots)
 	terminal, err := publication.DecodeSnapshot(view.Snapshots[len(view.Snapshots)-1].Raw)
 	require.NoError(t, err)
-	payload, err := blobs.FetchBlob(ctx, bootstrapGateDID, terminal.Blob.CID, int64(terminal.Blob.Size))
-	require.NoError(t, err)
+	_, material := resolvedRecord(t, blobs, bootstrapGateDID, terminal)
 	observation := publicationstate.Observation{
 		Origin: view.Origin, SuppliedContext: view.SuppliedContext, Head: view.Head, Snapshots: view.Snapshots,
 	}
 	store, err := publicationstate.Open(home.storeDir, binding)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, store.Close()) }()
-	proposal, err := store.Prepare(ctx, publicationstate.ModeFirstUse, observation, payload)
+	proposal, err := store.PrepareMaterial(ctx, publicationstate.ModeFirstUse, observation, material)
 	require.NoError(t, err)
-	accepted, err := store.Accept(
+	accepted, err := store.AcceptMaterialInput(
 		ctx,
 		publicationstate.ModeFirstUse,
 		proposal.StateToken,
 		observation,
-		payload,
+		material,
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
@@ -471,7 +470,8 @@ func pullBootstrapGate(
 	require.NotZero(t, plan.Changes)
 	staged, err := service.StagePublicationAccept(ctx, service.PublicationAcceptStageRequest{
 		Directory: home.storeDir, Binding: binding, FloorRevision: inspection.Floor.Revision,
-		Observation: observation, Payload: material.payload,
+		Observation: observation, Payloads: material.material.Payloads,
+		Entries: material.material.Entries,
 	})
 	require.NoError(t, err)
 	journal, err := publicationstate.OpenJournal(home.storeDir)
@@ -488,7 +488,8 @@ func pullBootstrapGate(
 		StateToken:    staged.StateToken,
 		Confirmation:  staged.Confirmation,
 		Observation:   observation,
-		Payload:       material.payload,
+		Payloads:      material.material.Payloads,
+		Entries:       material.material.Entries,
 	})
 	require.NoError(t, journal.Close())
 	require.NoError(t, err)
@@ -512,23 +513,14 @@ func bootstrapGateMaterialRead(
 	baseBlock := view.Snapshots[floor.Sequence]
 	baseRecord, err := publication.DecodeSnapshot(baseBlock.Raw)
 	require.NoError(t, err)
-	basePayload, err := blobs.FetchBlob(ctx, bootstrapGateDID, baseRecord.Blob.CID, int64(baseRecord.Blob.Size))
-	require.NoError(t, err)
-	base, err := publication.DecodePayload(basePayload, baseRecord.Blob)
-	require.NoError(t, err)
+	basePayload, _ := resolvedRecord(t, blobs, bootstrapGateDID, baseRecord)
 	terminal := view.Snapshots[len(view.Snapshots)-1]
 	terminalRecord, err := publication.DecodeSnapshot(terminal.Raw)
 	require.NoError(t, err)
-	terminalPayload, err := blobs.FetchBlob(
-		ctx,
-		bootstrapGateDID,
-		terminalRecord.Blob.CID,
-		int64(terminalRecord.Blob.Size),
-	)
-	require.NoError(t, err)
-	remote, err := publication.DecodePayload(terminalPayload, terminalRecord.Blob)
-	require.NoError(t, err)
-	return bootstrapGateMaterial{base: base, remote: remote, payload: terminalPayload}
+	terminalPayload, material := resolvedRecord(t, blobs, bootstrapGateDID, terminalRecord)
+	return bootstrapGateMaterial{
+		base: basePayload.Snapshot, remote: terminalPayload.Snapshot, material: material,
+	}
 }
 
 func bootstrapGateCollections(t *testing.T, revision *atproto.Revision) []string {

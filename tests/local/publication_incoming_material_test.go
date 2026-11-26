@@ -149,13 +149,13 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	)
 	require.True(
 		t,
-		bytes.Equal(f.expectedPayload, material.Payload),
+		bytes.Equal(f.expectedPayload, acceptedPackedPayload(material)),
 		"reader payload must match the assertions-only setup oracle",
 	)
 	f.requireLocalFiles(t, publicationReconcileInitial)
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	require.NoError(t, err)
-	snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
+	snapshot, err := publication.DecodePayload(acceptedPackedPayload(material), recordPackedBlob(record))
 	require.NoError(t, err)
 	require.Equal(t, model.SnapshotVersion, snapshot.Version)
 	require.Len(t, snapshot.Targets, 1)
@@ -182,8 +182,9 @@ func TestPublicationIncomingMaterialIntakeDrivesFreshLocalPreview(t *testing.T) 
 	f.requireSetupBuffersCleared(t, "no setup buffer may remain to supply the service call")
 	request := service.PublicationReconciliationRequest{
 		Store: reopened, Binding: f.binding, ExpectedFloor: beforeRead.floor,
-		SnapshotRecord: bytes.Clone(material.SnapshotRecord), Payload: bytes.Clone(material.Payload),
-		Configuration: f.configuration, TargetID: publicationReconcileTargetID,
+		SnapshotRecord: bytes.Clone(material.SnapshotRecord),
+		Payloads:       [][]byte{bytes.Clone(acceptedPackedPayload(material))},
+		Configuration:  f.configuration, TargetID: publicationReconcileTargetID,
 		Local: newPublicationReconcileContext(t, f.home.paths),
 	}
 
@@ -395,7 +396,10 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		)
 		record, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 			SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault,
-			PublicationID: [16]byte{0x62, 0x34, 0x63}, PublicationSeq: 0, Blob: blob,
+			PublicationID: [16]byte{0x62, 0x34, 0x63}, PublicationSeq: 0,
+			Segments: []publication.SnapshotSegment{{
+				Target: publicationReconcilePortableTarget(), Form: publication.SegmentFormPacked, Blob: blob,
+			}},
 		})
 		require.NoError(t, err)
 		recordCID, err := publication.RecordCID(record)
@@ -404,7 +408,7 @@ func TestPublicationIncomingMaterialRefusesTypedInputs(t *testing.T) {
 		require.NoError(t, err)
 		head, err := publication.EncodeHead(publication.HeadRecord{
 			SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault,
-			PublicationSeq: 0, SnapshotCID: recordCID, BlobCID: blobCID,
+			PublicationSeq: 0, SnapshotCID: recordCID,
 		})
 		require.NoError(t, err)
 		observation := publicationstate.Observation{
@@ -483,7 +487,7 @@ func TestPublicationIncomingMaterialReopenPreservesExactFloor(t *testing.T) {
 	)
 	require.True(
 		t,
-		bytes.Equal(f.expectedPayload, material.Payload),
+		bytes.Equal(f.expectedPayload, acceptedPackedPayload(material)),
 		"reader payload must match the assertions-only setup oracle",
 	)
 	f.requireLocalFiles(t, publicationReconcileInitial)

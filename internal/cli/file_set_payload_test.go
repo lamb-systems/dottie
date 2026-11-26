@@ -15,6 +15,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
+	"github.com/lamb-systems/dottie/internal/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,7 @@ func newCLIFileSetPublication(t *testing.T, binding publicationstate.Binding) cl
 	require.NoError(t, err)
 	floor := publicationstate.Floor{
 		Revision: 1, Generation: 1, Binding: binding, RecordCID: recordCID, SnapshotKey: block.Key,
+		Segments: cliRecordSummaries(t, mustCLIFileSetRecord(t, block.Raw)),
 	}
 	return cliFileSetPublication{block: block, head: head, view: view, floor: floor}
 }
@@ -77,8 +79,10 @@ func cliFileSetBlock(
 	}
 	raw, err := publication.EncodeSnapshot(publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationID: [16]byte{0x62, 0x31}, PublicationSeq: sequence, Parent: parent, Entries: entries,
-		Targets: cliFileSetTargets(),
+		PublicationID: [16]byte{0x62, 0x31}, PublicationSeq: sequence, Parent: parent,
+		Segments: []publication.SnapshotSegment{{
+			Target: cliFileSetTargets()[0], Form: publication.SegmentFormEntries, Entries: entries,
+		}},
 	})
 	require.NoError(t, err)
 	recordCID, err := publication.RecordCID(raw)
@@ -118,12 +122,32 @@ func fileSetTestReader(fileSet cliFileSetPublication) *pullTestReader {
 	}
 }
 
+func fixtureEntryForCLI(t *testing.T, path string, content []byte, mode uint32) publication.SnapshotEntry {
+	t.Helper()
+	blobCID, err := publication.RawPayloadCID(content)
+	require.NoError(t, err)
+	return publication.SnapshotEntry{
+		Path: path, Mode: mode, Size: uint64(len(content)),
+		Kind: publication.SnapshotEntryKindFile,
+		Blob: publication.BlobReference{
+			CID: blobCID, Size: uint64(len(content)), MIMEType: publication.BlobMIMEType,
+		},
+	}
+}
+
+func mustCLIFileSetRecord(t *testing.T, raw []byte) publication.SnapshotRecord {
+	t.Helper()
+	record, err := publication.DecodeSnapshot(raw)
+	require.NoError(t, err)
+	return record
+}
+
 func mustCLIFileSetCID(raw []byte, index int) []byte {
 	record, err := publication.DecodeSnapshot(raw)
 	if err != nil {
 		panic(err)
 	}
-	return record.Entries[index].Blob.CID
+	return cliRecordFileSetEntries(record)[index].Blob.CID
 }
 
 func TestPullApplySnapshotsResolvesAFileSetProviderPayload(t *testing.T) {
@@ -135,11 +159,13 @@ func TestPullApplySnapshotsResolvesAFileSetProviderPayload(t *testing.T) {
 		Reader: reader, Entry: reader.ReadEntry,
 	}, fileSet.view, fileSet.floor, false)
 	require.NoError(t, err)
-	assert.Equal(t, publication.PayloadFormFileSet, material.Form)
+	assert.Equal(t, []string{"files"}, material.FileSetTargets)
 	require.Len(t, material.Entries, 2)
 	assert.Equal(t, "init.lua", material.Entries[0].Path)
 	assert.Equal(t, []byte("synthetic file-set init"), material.Entries[0].Content)
-	assert.Empty(t, material.Payload)
+	for _, payload := range material.Payloads {
+		assert.Empty(t, payload, "a file-set publication carried a packed payload")
+	}
 }
 
 func TestPullPositionComparisonAcceptsAFileSetFloor(t *testing.T) {
@@ -148,12 +174,7 @@ func TestPullPositionComparisonAcceptsAFileSetFloor(t *testing.T) {
 	floor := fileSet.floor
 	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
-	floor.FileSet = &publicationstate.FileSetPayload{}
-	for _, entry := range record.Entries {
-		floor.FileSet.Entries = append(floor.FileSet.Entries, publicationstate.PayloadEntryReference{
-			Path: entry.Path, CID: entry.Blob.CID, Size: entry.Size,
-		})
-	}
+	floor.Segments = cliRecordSummaries(t, record)
 	assert.Equal(t, pullFinding{Kind: pullFindingMatches}, comparePullPosition(floor, fileSet.view))
 	require.NoError(t, syncViewMatchesFloor(floor, fileSet.view))
 }
@@ -167,9 +188,9 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
 	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
-	require.Len(t, record.Entries, 2)
-	require.Len(t, reader.entries, len(record.Entries), "the reader fixture did not supply every file-set entry")
-	for _, entry := range record.Entries {
+	require.Len(t, cliRecordFileSetEntries(record), 2)
+	require.Len(t, reader.entries, len(cliRecordFileSetEntries(record)), "the reader fixture did not supply every file-set entry")
+	for _, entry := range cliRecordFileSetEntries(record) {
 		require.Contains(t, reader.entries, string(entry.Blob.CID), entry.Path)
 	}
 
@@ -250,25 +271,26 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	}
 	assert.Equal(t, int64(2), pullFileSetJournalRows(t, fixture), "a synthesized directory was journaled")
 	accepted := fixture.acceptedFloor(t)
-	require.NotNil(t, accepted.FileSet, "the accepted floor did not record the file-set payload")
-	assert.Empty(t, accepted.BlobCID)
-	assert.Zero(t, accepted.BlobSize)
-	require.Len(t, accepted.FileSet.Entries, len(record.Entries))
-	for index, entry := range record.Entries {
-		assert.Equal(t, entry.Path, accepted.FileSet.Entries[index].Path)
-		assert.Equal(t, entry.Size, accepted.FileSet.Entries[index].Size)
-		assert.Equal(t, entry.Blob.CID, accepted.FileSet.Entries[index].CID)
+	acceptedFileSet := cliFloorFileSet(accepted)
+	require.NotEmpty(t, acceptedFileSet, "the accepted floor did not record the file-set payload")
+	assert.Empty(t, cliFloorPackedBlob(accepted).CID)
+	assert.Zero(t, cliFloorPackedBlob(accepted).Size)
+	require.Len(t, acceptedFileSet, len(cliRecordFileSetEntries(record)))
+	for index, entry := range cliRecordFileSetEntries(record) {
+		assert.Equal(t, entry.Path, acceptedFileSet[index].Path)
+		assert.Equal(t, entry.Size, acceptedFileSet[index].Size)
+		assert.Equal(t, entry.Blob.CID, acceptedFileSet[index].CID)
 	}
 	store := fixture.openStore(t)
 	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, accepted)
 	require.NoError(t, err)
-	require.Len(t, material.Entries, len(record.Entries))
-	for index, entry := range material.Entries {
-		assert.Equal(t, record.Entries[index].Path, entry.Path)
-		assert.Equal(t, record.Entries[index].Mode, entry.Mode)
-		assert.Equal(t, reader.entries[string(record.Entries[index].Blob.CID)], entry.Content)
+	require.Len(t, cliAcceptedEntries(material), len(cliRecordFileSetEntries(record)))
+	for index, entry := range cliAcceptedEntries(material) {
+		assert.Equal(t, cliRecordFileSetEntries(record)[index].Path, entry.Path)
+		assert.Equal(t, cliRecordFileSetEntries(record)[index].Mode, entry.Mode)
+		assert.Equal(t, reader.entries[string(cliRecordFileSetEntries(record)[index].Blob.CID)], entry.Content)
 	}
-	assert.Empty(t, material.Payload, "a file-set floor retained a packed payload")
+	assert.Empty(t, cliAcceptedPayload(material), "a file-set floor retained a packed payload")
 	require.NoError(t, store.Close())
 
 	before := pullTestDirectoryState(t, fixture.paths.Home)
@@ -335,13 +357,15 @@ func TestSyncAcceptedSnapshotProjectsAFileSetWithTheSoleTarget(t *testing.T) {
 	fileSet := newCLIFileSetPublication(t, binding)
 	record, err := publication.DecodeSnapshot(fileSet.block.Raw)
 	require.NoError(t, err)
-	accepted := publicationstate.AcceptedMaterial{
-		Floor: fileSet.floor, SnapshotRecord: fileSet.block.Raw,
-	}
-	for _, entry := range record.Entries {
-		accepted.Entries = append(accepted.Entries, publicationstate.AcceptedMaterialEntry{
+	segment := cliAcceptedSegment(t, record.Segments[0].Target.ID)
+	for _, entry := range cliRecordFileSetEntries(record) {
+		segment.Entries = append(segment.Entries, publicationstate.AcceptedMaterialEntry{
 			Path: entry.Path, Mode: entry.Mode, Content: []byte("synthetic file-set " + entry.Path),
 		})
+	}
+	accepted := publicationstate.AcceptedMaterial{
+		Floor: fileSet.floor, SnapshotRecord: fileSet.block.Raw,
+		Segments: []publicationstate.AcceptedMaterialSegment{segment},
 	}
 	configuration := config.Config{Version: config.Version, Targets: []config.Target{{
 		ID: "files", Source: model.SourceFiles,
@@ -640,7 +664,8 @@ func TestPullRefusesToAdoptAFileSetTargetWhoseRootDoesNotExist(t *testing.T) {
 
 	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
 	require.Equal(t, 3, code, stdout)
-	assert.Contains(t, stderr, "cannot be adopted")
+	assert.Contains(t, stdout, "skip: target files:home/config is not configured")
+	assert.Contains(t, stderr, "no target is configured")
 	assert.NotContains(t, stdout, "confirmation:")
 	planned, err := config.Load(fixture.paths)
 	require.NoError(t, err)
@@ -667,7 +692,7 @@ func TestPullApplyAdoptionLeavesAConfiguredMachineAlone(t *testing.T) {
 	}}
 	sources := pullApplySources{Configuration: configuration}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormFileSet,
+		FileSetTargets: []string{"files"},
 		Targets: []model.Target{{
 			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
@@ -736,7 +761,6 @@ func TestPullApplyAdoptionCarriesPackedFilesAndSettingsTargets(t *testing.T) {
 		Token:         absent.Token,
 	}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormPacked,
 		Targets: []model.Target{
 			{
 				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
@@ -803,7 +827,6 @@ func TestPullApplyAdoptionSkipsSettingsTargetsWithoutASelection(t *testing.T) {
 	paths, _ := cliEnvironment(t)
 	sources := pullApplySources{Paths: paths, Configuration: config.Default()}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormPacked,
 		Targets: []model.Target{
 			{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
 		},
@@ -827,7 +850,6 @@ func TestPullApplyAdoptionLeavesAnIdenticalSettingsTargetAlone(t *testing.T) {
 	}}
 	sources := pullApplySources{Paths: paths, Configuration: configured}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormPacked,
 		Targets: []model.Target{
 			{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
 		},
@@ -895,7 +917,7 @@ func TestPullRefusesSettingsSelectionsOnAFileSetPosition(t *testing.T) {
 		"--settings", "desktop=appearance",
 	)
 	require.Equal(t, 3, code, stdout)
-	assert.Contains(t, stderr, "--settings applies to packed publications")
+	assert.Contains(t, stderr, "the published position names no settings target desktop")
 }
 
 func TestPullApplyAdoptionRefusesSettingsTargetsThatAreNotPublished(t *testing.T) {
@@ -908,7 +930,6 @@ func TestPullApplyAdoptionRefusesSettingsTargetsThatAreNotPublished(t *testing.T
 	}}
 	sources := pullApplySources{Paths: paths, Configuration: configured}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormPacked,
 		Targets: []model.Target{
 			{
 				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
@@ -933,7 +954,6 @@ func TestPullApplyAdoptionRefusesARootOwnedByADifferentTargetID(t *testing.T) {
 	}}
 	sources := pullApplySources{Paths: paths, Configuration: configured}
 	material := pullApplyMaterial{
-		Form: publication.PayloadFormPacked,
 		Targets: []model.Target{{
 			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
@@ -942,4 +962,258 @@ func TestPullApplyAdoptionRefusesARootOwnedByADifferentTargetID(t *testing.T) {
 	_, _, _, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shares its root with local target other")
+}
+
+func TestPullApplyAdoptionTakesFilesAndSettingsTargetsFromOnePosition(t *testing.T) {
+	paths, _ := cliEnvironment(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(paths.Home, "synthetic"), 0o700))
+	sources := pullApplySources{Paths: paths, Configuration: config.Default()}
+	material := pullApplyMaterial{
+		FileSetTargets: []string{"files"},
+		Targets: []model.Target{
+			{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
+			{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+			},
+		},
+	}
+	configuration, adoption, skipped, err := pullApplyAdoption(sources, material, pullApplyPlanRequest{
+		Settings: []pullSettingsSelection{{TargetID: "desktop", Categories: []string{"appearance"}}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, skipped)
+	require.NotNil(t, adoption)
+	require.Len(t, adoption.Targets, 2)
+	adopted := map[string]config.Target{}
+	for _, target := range adoption.Targets {
+		adopted[target.ID] = target
+	}
+	assert.Equal(t, model.SourceFiles, adopted["files"].Source)
+	assert.Equal(t, model.SourceGNOME, adopted["desktop"].Source)
+	require.NotNil(t, adopted["desktop"].GNOMEPolicy)
+	require.Len(t, configuration.Targets, 2)
+	assert.Equal(t, adoption.Targets, configuration.Targets)
+}
+
+func TestPullAppliesAnEntriesTargetBesideAPackedTarget(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	directory := fixture.paths.AppConfigDir()
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	require.NoError(t, os.Chmod(directory, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(directory, config.FileName),
+		[]byte(`config_version = 2
+
+[[targets]]
+id = "files"
+source = "files"
+
+[targets.root]
+base = "home"
+path = "synthetic"
+kind = "directory"
+
+[[targets]]
+id = "other"
+source = "files"
+
+[targets.root]
+base = "home"
+path = "other"
+kind = "directory"
+`),
+		0o600,
+	))
+	for _, root := range []string{"synthetic", "other"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, root), 0o700))
+	}
+
+	entryContent := []byte("synthetic nested entries content")
+	entries := []publication.SnapshotEntry{
+		fixtureEntryForCLI(t, "nested/app.conf", entryContent, 0o600),
+	}
+	packedSnapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{{
+			ID: "other", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+		}},
+		Entries: []model.Entry{{
+			TargetID: "other",
+			File: &model.FileEntry{
+				Path: "packed.conf", State: model.FilePresent, Kind: model.FileRegular,
+				Content: []byte("synthetic packed content"), Mode: 0o600,
+			},
+		}},
+	}
+	packed, err := vault.Pack(packedSnapshot)
+	require.NoError(t, err)
+	packedCID, err := publication.RawPayloadCID(packed.Payload)
+	require.NoError(t, err)
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationID: [16]byte{0x62, 0x32},
+		Segments: []publication.SnapshotSegment{
+			{
+				Target: model.Target{
+					ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+					Root: &model.FileRoot{Base: model.RootHome, Path: "synthetic", Kind: model.SelectionDirectory},
+				},
+				Form: publication.SegmentFormEntries, Entries: entries,
+			},
+			{
+				Target: packedSnapshot.Targets[0], Form: publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID: packedCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			},
+		},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	recordCID, err := publication.RecordCID(raw)
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+	head, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationSeq: 0, SnapshotCID: recordCID,
+	})
+	require.NoError(t, err)
+	view := publicationstate.SuppliedRepositoryView{
+		Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+		SuppliedContext: fixture.context, Head: head,
+		Snapshots: []publicationstate.SnapshotBlock{{Key: key, Raw: raw}},
+	}
+	reader := &pullTestReader{
+		view: view,
+		entries: map[string][]byte{
+			string(entries[0].Blob.CID): entryContent,
+			string(packedCID):           packed.Payload,
+		},
+	}
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	token := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "apply: mkdir nested")
+	nested, err := os.ReadFile(filepath.Join(fixture.paths.Home, "synthetic", "nested", "app.conf"))
+	require.NoError(t, err)
+	assert.Equal(t, entryContent, nested)
+	packedContent, err := os.ReadFile(filepath.Join(fixture.paths.Home, "other", "packed.conf"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("synthetic packed content"), packedContent)
+}
+
+func TestPullAppliesAPackedHeadOverAnEntriesBaseWithPackedSemantics(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, "")
+
+	accepted := []byte("synthetic entries base content")
+	firstEntries := []publication.SnapshotEntry{fixtureEntryForCLI(t, "init.lua", accepted, 0o600)}
+	firstRecord := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationID: [16]byte{0x62, 0x41},
+		Segments: []publication.SnapshotSegment{{
+			Target: model.Target{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+			Form: publication.SegmentFormEntries, Entries: firstEntries,
+		}},
+	}
+	firstRaw, err := publication.EncodeSnapshot(firstRecord)
+	require.NoError(t, err)
+	firstCID, err := publication.RecordCID(firstRaw)
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+
+	packedSnapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{{
+			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+		}},
+		Entries: []model.Entry{
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular,
+					Content: accepted, Mode: 0o600,
+				},
+			},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path: "private", State: model.FilePresent, Kind: model.FileDirectory, Mode: 0o700,
+				},
+			},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path: "private/app.conf", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("synthetic private content"), Mode: 0o600,
+				},
+			},
+		},
+	}
+	packed, err := vault.Pack(packedSnapshot)
+	require.NoError(t, err)
+	packedCID, err := publication.RawPayloadCID(packed.Payload)
+	require.NoError(t, err)
+	secondRecord := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationID: [16]byte{0x62, 0x42}, PublicationSeq: 1, Parent: firstCID,
+		Segments: []publication.SnapshotSegment{{
+			Target: packedSnapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID: packedCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
+	}
+	secondRaw, err := publication.EncodeSnapshot(secondRecord)
+	require.NoError(t, err)
+	secondCID, err := publication.RecordCID(secondRaw)
+	require.NoError(t, err)
+	secondKey, err := publication.SequenceKey(1)
+	require.NoError(t, err)
+	secondHead, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
+		PublicationSeq: 1, SnapshotCID: secondCID,
+	})
+	require.NoError(t, err)
+	reader := &pullTestReader{
+		view: publicationstate.SuppliedRepositoryView{
+			Origin: fixture.binding, Scope: publicationstate.ViewScopeWholeRepository,
+			SuppliedContext: fixture.context, Head: secondHead,
+			Snapshots: []publicationstate.SnapshotBlock{
+				{Key: key, Raw: firstRaw},
+				{Key: secondKey, Raw: secondRaw},
+			},
+		},
+		entries: map[string][]byte{
+			string(firstEntries[0].Blob.CID): accepted,
+			string(packedCID):                packed.Payload,
+		},
+	}
+
+	code, stdout, stderr := runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr)
+	token := pullTestConfirmation(t, stdout)
+	code, stdout, stderr = runPullFileSetStep(
+		t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, "apply: write private/app.conf")
+	content, err := os.ReadFile(fixture.targetPath("private/app.conf"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("synthetic private content"), content)
+	info, err := os.Lstat(fixture.targetPath("private"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 }

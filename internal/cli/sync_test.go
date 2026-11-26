@@ -225,8 +225,8 @@ func (fixture *syncTestFixture) pullVaults(context.Context, *urfave.Command, pus
 	return fixture.binding.Vault, nil
 }
 
-func (fixture *syncTestFixture) blob(_ context.Context, record publication.SnapshotRecord) ([]byte, error) {
-	return fixture.transport.blob(context.Background(), record.Blob)
+func (fixture *syncTestFixture) blob(_ context.Context, blob publication.BlobReference) ([]byte, error) {
+	return fixture.transport.blob(context.Background(), blob)
 }
 
 func (fixture *syncTestFixture) snapshotA(a string) model.Snapshot {
@@ -282,7 +282,7 @@ func (fixture *syncTestFixture) seed(
 	head := syncTestHead(t, fixture.binding, block, record)
 	fixture.transport.mu.Lock()
 	fixture.transport.blocks[block.Key] = bytes.Clone(block.Raw)
-	fixture.transport.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	fixture.transport.blobs[string(cliRecordPackedBlob(record).CID)] = bytes.Clone(packed.Payload)
 	fixture.transport.head = head
 	fixture.transport.context = pushTestContext(0)
 	fixture.transport.mu.Unlock()
@@ -298,7 +298,7 @@ func (fixture *syncTestFixture) publishOnly(t *testing.T, snapshot model.Snapsho
 	head := syncTestHead(t, fixture.binding, block, record)
 	fixture.transport.mu.Lock()
 	fixture.transport.blocks[block.Key] = bytes.Clone(block.Raw)
-	fixture.transport.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	fixture.transport.blobs[string(cliRecordPackedBlob(record).CID)] = bytes.Clone(packed.Payload)
 	fixture.transport.head = head
 	fixture.transport.context = pushTestContext(0)
 	fixture.transport.mu.Unlock()
@@ -317,7 +317,7 @@ func (fixture *syncTestFixture) advance(
 	head := syncTestHead(t, fixture.binding, block, record)
 	fixture.transport.mu.Lock()
 	fixture.transport.blocks[block.Key] = bytes.Clone(block.Raw)
-	fixture.transport.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	fixture.transport.blobs[string(cliRecordPackedBlob(record).CID)] = bytes.Clone(packed.Payload)
 	fixture.transport.head = head
 	fixture.transport.context = pushTestContext(1)
 	fixture.transport.mu.Unlock()
@@ -333,7 +333,7 @@ func (fixture *syncTestFixture) rewriteProvider(t *testing.T, snapshot model.Sna
 	head := syncTestHead(t, fixture.binding, block, record)
 	fixture.transport.mu.Lock()
 	fixture.transport.blocks[block.Key] = bytes.Clone(block.Raw)
-	fixture.transport.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	fixture.transport.blobs[string(cliRecordPackedBlob(record).CID)] = bytes.Clone(packed.Payload)
 	fixture.transport.head = head
 	fixture.transport.mu.Unlock()
 	return block
@@ -410,11 +410,14 @@ func syncTestRecord(
 		Vault:          binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: pullTestFilesTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+7)
 	raw, err := publication.EncodeSnapshot(record)
@@ -435,7 +438,7 @@ func syncTestHead(
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault,
-		PublicationSeq: record.PublicationSeq, SnapshotCID: cid, BlobCID: record.Blob.CID,
+		PublicationSeq: record.PublicationSeq, SnapshotCID: cid,
 	})
 	require.NoError(t, err)
 	return head
@@ -498,7 +501,7 @@ func runSyncForTestWithDIDs(
 	exitCode := 0
 	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return fixture.session(), nil }
 	remotes := func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error) {
-		return pullRemote{Reader: fixture.transport, Blob: fixture.blob, Close: func() {}}, nil
+		return pullRemote{Reader: fixture.transport, Entry: fixture.blob, Close: func() {}}, nil
 	}
 	previews := func(context.Context, *urfave.Command, publicationstate.Binding) (syncPushPreviewSources, error) {
 		if hooks.preview != nil {
@@ -549,7 +552,7 @@ func (fixture *syncTestFixture) runPull(t *testing.T, args ...string) (int, stri
 	exitCode := 0
 	sessions := func(context.Context, *urfave.Command) (pushSession, error) { return fixture.session(), nil }
 	remotes := func(context.Context, *urfave.Command, pushSession, publicationstate.Binding) (pullRemote, error) {
-		return pullRemote{Reader: fixture.transport, Blob: fixture.blob, Close: func() {}}, nil
+		return pullRemote{Reader: fixture.transport, Entry: fixture.blob, Close: func() {}}, nil
 	}
 	command := newPullCommand(
 		&stdout,
@@ -671,8 +674,8 @@ func TestSyncUnconfirmedPrintsBothHalvesAndChangesNothing(t *testing.T) {
 	assert.Contains(t, stdout, "pull: diverges (record_cid)")
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=1")
 	assert.Contains(t, stdout, "apply: write a.txt")
-	assert.Contains(t, stdout, "push: form=file_set targets=1 entries=2")
-	assert.Contains(t, stdout, "push: candidate file-set:")
+	assert.Contains(t, stdout, "push: targets=1 entries=2")
+	assert.Contains(t, stdout, "push: reviewed candidate: ")
 	assert.Contains(t, stdout, "confirmation: ")
 	assert.Contains(t, stdout, "sync: plan only; nothing was applied or published; repeat with --confirm ")
 	assert.Equal(t, syncTestBaseA, readSyncFile(t, fixture, "a.txt"), "the unconfirmed run applied the pull half")
@@ -1124,9 +1127,9 @@ func TestSyncConfirmationTokenBindsThePullAndPushHalves(t *testing.T) {
 	observation := sha256.Sum256([]byte("observation"))
 	view := sha256.Sum256([]byte("provider view"))
 	identity := syncPushIdentity{
-		PayloadCID:    []byte{0x01},
-		PayloadDigest: sha256.Sum256([]byte("candidate")),
-		PayloadSize:   9,
+		SnapshotCID: []byte{0x01},
+		Targets:     1,
+		Entries:     2,
 		Review: publicationstate.LocalReviewContext{
 			SelectionDigest:   [32]byte{0x71},
 			SelectionRevision: 2,
@@ -1134,37 +1137,52 @@ func TestSyncConfirmationTokenBindsThePullAndPushHalves(t *testing.T) {
 			ApprovalRevision:  3,
 		},
 	}
-	token := syncConfirmationToken(binding, plan, stateToken, observation, view, identity)
+	token := syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), stateToken, observation, view, identity),
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, sha256.Sum256([]byte("changed plan")), stateToken, observation, view, identity),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation, view, identity),
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, sha256.Sum256([]byte("moved state")), observation, view, identity),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, plan, stateToken, sha256.Sum256([]byte("moved observation")), view, identity),
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, sha256.Sum256([]byte("moved observation")), view, identity),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, plan, stateToken, observation, sha256.Sum256([]byte("moved view")), identity),
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, sha256.Sum256([]byte("moved view")), identity),
 	)
 	moved := identity
-	moved.PayloadDigest = sha256.Sum256([]byte("changed candidate"))
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, moved))
+	moved.SnapshotCID = []byte{0x02}
+	assert.NotEqual(t, token, syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, moved))
 	reviewed := identity
 	reviewed.Review.ApprovalRevision++
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, reviewed))
+	assert.NotEqual(t, token, syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, reviewed))
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
-	assert.NotEqual(t, token, syncConfirmationToken(otherVault, plan, stateToken, observation, view, identity))
-	assert.Equal(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, identity))
+	assert.NotEqual(t, token, syncConfirmationToken(otherVault, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity))
+	movedPosition := publicationstate.Floor{
+		DatabaseID: [32]byte{0x01}, Revision: 4, Generation: 2,
+		RecordCID: []byte{0x02}, SnapshotKey: "0000000000000001",
+	}
+	assert.NotEqual(t, token, syncConfirmationToken(binding, movedPosition, true, plan, stateToken, observation, view, identity))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, true, plan, stateToken, observation, view, identity),
+		"the local position presence is not bound",
+	)
+	assert.Equal(
+		t,
+		token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity),
+	)
 }
 
 func TestSyncRefusesAFloorThatDoesNotMatchTheReviewedPosition(t *testing.T) {
@@ -1173,9 +1191,8 @@ func TestSyncRefusesAFloorThatDoesNotMatchTheReviewedPosition(t *testing.T) {
 	block, _ := syncTestRecord(t, fixture.binding, []byte("other payload"), 0, nil)
 	view := publicationstate.SuppliedRepositoryView{Snapshots: []publicationstate.SnapshotBlock{block}}
 	floor := publicationstate.Floor{
-		RecordCID:   record.Blob.CID,
-		BlobCID:     record.Blob.CID,
-		BlobSize:    record.Blob.Size,
+		RecordCID:   cliRecordPackedBlob(record).CID,
+		Segments:    cliRecordSummaries(t, record),
 		Sequence:    0,
 		SnapshotKey: block.Key,
 	}
@@ -1185,8 +1202,7 @@ func TestSyncRefusesAFloorThatDoesNotMatchTheReviewedPosition(t *testing.T) {
 			t,
 			block.Raw,
 		),
-		BlobCID:     mustPullBlobCID(t, block.Raw),
-		BlobSize:    mustPullBlobSize(t, block.Raw),
+		Segments:    cliRecordSummaries(t, mustCLIFileSetRecord(t, block.Raw)),
 		Sequence:    0,
 		SnapshotKey: block.Key,
 	}, view))
@@ -1213,12 +1229,9 @@ func syncTestTerminalSnapshot(t *testing.T, fixture *syncTestFixture) model.Snap
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
 	if record.PayloadForm() == publication.PayloadFormFileSet {
-		target := model.Target{
-			ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
-			Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
-		}
-		entries := make([]publication.PayloadEntry, 0, len(record.Entries))
-		for _, entry := range record.Entries {
+		target := pullTestFilesTarget()
+		entries := make([]publication.PayloadEntry, 0, len(record.EntriesOrNil()))
+		for _, entry := range record.EntriesOrNil() {
 			fixture.transport.mu.Lock()
 			content := bytes.Clone(fixture.transport.blobs[string(entry.Blob.CID)])
 			fixture.transport.mu.Unlock()
@@ -1231,9 +1244,9 @@ func syncTestTerminalSnapshot(t *testing.T, fixture *syncTestFixture) model.Snap
 		return snapshot
 	}
 	fixture.transport.mu.Lock()
-	payload := bytes.Clone(fixture.transport.blobs[string(record.Blob.CID)])
+	payload := bytes.Clone(fixture.transport.blobs[string(cliRecordPackedBlob(record).CID)])
 	fixture.transport.mu.Unlock()
-	snapshot, err := publication.DecodePayload(payload, record.Blob)
+	snapshot, err := publication.DecodePayload(payload, cliRecordPackedBlob(record))
 	require.NoError(t, err)
 	return snapshot
 }
@@ -1249,14 +1262,14 @@ func mustPullBlobCID(t *testing.T, raw []byte) []byte {
 	t.Helper()
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
-	return record.Blob.CID
+	return cliRecordPackedBlob(record).CID
 }
 
 func mustPullBlobSize(t *testing.T, raw []byte) uint64 {
 	t.Helper()
 	record, err := publication.DecodeSnapshot(raw)
 	require.NoError(t, err)
-	return record.Blob.Size
+	return cliRecordPackedBlob(record).Size
 }
 
 func TestSyncRefusesAProviderViewThatDivergesWhileTheFloorStillMatches(t *testing.T) {
@@ -1488,7 +1501,7 @@ func TestSyncResolvesThePublishedVaultWhenNoBindingIsStored(t *testing.T) {
 	)
 }
 
-func TestSyncConfirmationTokenBindsTheFileSetEntrySet(t *testing.T) {
+func TestSyncConfirmationTokenBindsTheCandidateRecord(t *testing.T) {
 	binding := publicationstate.Binding{
 		AccountDID: pullTestDID, Backend: publicationstate.BackendPublicRepo, Vault: [32]byte{0x62},
 	}
@@ -1498,21 +1511,61 @@ func TestSyncConfirmationTokenBindsTheFileSetEntrySet(t *testing.T) {
 	observation := sha256.Sum256([]byte("file-set observation"))
 	view := sha256.Sum256([]byte("file-set view"))
 	identity := syncPushIdentity{
-		Form:           publication.PayloadFormFileSet,
-		EntryCount:     2,
-		EntrySetDigest: [32]byte{0x01},
-		Targets:        1,
-		Entries:        3,
+		SnapshotCID: []byte{0x01},
+		Targets:     1,
+		Entries:     3,
 	}
-	token := syncConfirmationToken(binding, plan, stateToken, observation, view, identity)
-	changedDigest := identity
-	changedDigest.EntrySetDigest = [32]byte{0x02}
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedDigest))
-	changedCount := identity
-	changedCount.EntryCount = 1
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedCount))
-	changedForm := identity
-	changedForm.Form = publication.PayloadFormPacked
-	assert.NotEqual(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, changedForm))
-	assert.Equal(t, token, syncConfirmationToken(binding, plan, stateToken, observation, view, identity))
+	token := syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity)
+	changedRecord := identity
+	changedRecord.SnapshotCID = []byte{0x02}
+	assert.NotEqual(
+		t, token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, changedRecord),
+	)
+	assert.Equal(
+		t, token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity),
+	)
+}
+
+func TestSyncRetriesAfterAnAbandonedPushHalf(t *testing.T) {
+	fixture := newSyncTestFixture(t, "")
+	fixture.seed(t, fixture.snapshotA(syncTestBaseA))
+	fixture.writeLocal(t, syncTestBaseA, syncTestLocalB)
+	code, stdout, stderr := runSyncForTest(
+		t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(),
+	)
+	require.Equal(t, 0, code, stderr)
+	token := syncTestToken(t, stdout)
+
+	fixture.transport.mu.Lock()
+	fixture.transport.uploadErr = errors.New("synthetic upload failure")
+	fixture.transport.mu.Unlock()
+	code, _, stderr = runSyncForTest(
+		t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(),
+		"--confirm", token,
+	)
+	assert.NotEqual(t, 0, code, "a failed upload must not report a completed sync")
+	store, err := publicationstate.Open(fixture.paths.PublicationStateDir(), fixture.binding)
+	require.NoError(t, err)
+	_, active, activeErr := store.ActiveAttempt(context.Background())
+	require.NoError(t, activeErr)
+	require.NoError(t, store.Close())
+	assert.False(t, active, "a pre-submission failure must abandon the attempt")
+
+	fixture.transport.mu.Lock()
+	fixture.transport.uploadErr = nil
+	fixture.transport.mu.Unlock()
+	code, stdout, stderr = runSyncForTest(
+		t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(),
+	)
+	require.Equal(t, 0, code, stderr)
+	token = syncTestToken(t, stdout)
+	code, confirmed, stderr := runSyncForTest(
+		t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(),
+		"--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, confirmed, "push: committed")
+	assert.Equal(t, syncTestLocalB, readSyncFile(t, fixture, "b.txt"))
 }

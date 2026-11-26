@@ -46,7 +46,7 @@ func TestFileSetApplyCreatesMissingParentsFromAnEmptyTargetRoot(t *testing.T) {
 		fileSetApplyEntry("lua/config/options.lua", 0o644, "synthetic file-set options"),
 	)
 	request := fixture.request(fixture.local, fixture.emptySnapshot(), remote)
-	floorFileSet(request) = true
+	request.FileSetTargets = []string{fixture.target.ID}
 
 	plan, err := PlanPublicationApply(context.Background(), request)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func newFileSetApplySymlinkedParentRequest(
 	local, err := NewPublicationLocalContext(fixture.paths, capture, nil)
 	require.NoError(t, err)
 	request := fixture.request(local, fixture.emptySnapshot(), remote)
-	floorFileSet(request) = true
+	request.FileSetTargets = []string{fixture.target.ID}
 	return fixture, request, outside
 }
 
@@ -151,7 +151,7 @@ func TestFileSetApplyRefusesADirectoryDownloadInBackupOnly(t *testing.T) {
 	fixture.configuration.Targets[0].Mode = config.BackupOnly
 	remote := fileSetApplyRemote(t, fixture, fileSetApplyEntry("nested/app.conf", 0o600, "synthetic nested"))
 	request := fixture.request(fixture.local, fixture.emptySnapshot(), remote)
-	floorFileSet(request) = true
+	request.FileSetTargets = []string{fixture.target.ID}
 
 	_, err := PlanPublicationApply(context.Background(), request)
 	requirePublicationApplyRefusal(t, err, "apply-plan", "backup_only")

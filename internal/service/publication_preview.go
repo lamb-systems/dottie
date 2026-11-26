@@ -38,12 +38,13 @@ func PreviewPublicationTarget(
 
 	material, err := validateAcceptedPublication(ctx, acceptedPublicationRequest{
 		store: owned.store, binding: owned.binding, expectedFloor: owned.expectedFloor,
-		snapshotRecord: owned.snapshotRecord, payload: owned.payload, entries: owned.entries,
+		snapshotRecord: owned.snapshotRecord, payloads: clonePublicationPayloadSets(owned.payloads),
+		entries: clonePublicationPayloadEntries(owned.entries),
 	})
 	if err != nil {
 		return syncengine.Preview{}, "", err
 	}
-	portable, found := publicationAcceptedTarget(owned.configuration, owned.targetID, material)
+	portable, found := publicationAcceptedTarget(owned.targetID, material)
 	if !found {
 		return syncengine.Preview{}, "", publicationPreviewFailure(ctx, publicationPreviewReasonTarget, nil)
 	}
@@ -145,7 +146,7 @@ type publicationPreviewInputs struct {
 	binding        publicationstate.Binding
 	expectedFloor  publicationstate.Floor
 	snapshotRecord []byte
-	payload        []byte
+	payloads       [][]byte
 	entries        []publication.PayloadEntry
 	configuration  config.Config
 	targetID       string
@@ -196,9 +197,10 @@ func snapshotPublicationPreviewInputs(
 	owned := publicationPreviewInputs{
 		store: request.Store, binding: request.Binding,
 		expectedFloor:  clonePublicationFloor(request.ExpectedFloor),
-		snapshotRecord: bytes.Clone(request.SnapshotRecord), payload: bytes.Clone(request.Payload),
-		entries:       clonePublicationPayloadEntries(request.Entries),
-		configuration: clonePublicationPreviewConfig(request.Configuration), targetID: request.TargetID, local: local,
+		snapshotRecord: bytes.Clone(request.SnapshotRecord),
+		payloads:       clonePublicationPayloadSets(request.Payloads),
+		entries:        clonePublicationPayloadEntries(request.Entries),
+		configuration:  clonePublicationPreviewConfig(request.Configuration), targetID: request.TargetID, local: local,
 	}
 	if base != nil {
 		ownedBase, reason := snapshotPublicationPreviewBase(base)

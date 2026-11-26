@@ -38,7 +38,7 @@ type acceptedPublicationRequest struct {
 	binding        publicationstate.Binding
 	expectedFloor  publicationstate.Floor
 	snapshotRecord []byte
-	payload        []byte
+	payloads       [][]byte
 	entries        []publication.PayloadEntry
 }
 
@@ -46,14 +46,15 @@ type acceptedPublicationMaterial struct {
 	floor    publicationstate.Floor
 	form     publication.PayloadForm
 	snapshot model.Snapshot
-	entries  []publication.PayloadEntry
 }
 
 func (material acceptedPublicationMaterial) snapshotFor(portable model.Target) (model.Snapshot, error) {
-	if material.form == publication.PayloadFormPacked {
-		return material.snapshot, nil
+	for _, target := range material.snapshot.Targets {
+		if target.ID == portable.ID {
+			return material.snapshot, nil
+		}
 	}
-	return fileSetProjection(portable, material.entries)
+	return model.Snapshot{}, publication.ErrInvalidRecord
 }
 
 const (
@@ -267,31 +268,74 @@ func validateAcceptedPublication(
 			err,
 		)
 	}
-	material := acceptedPublicationMaterial{
-		form:    record.PayloadForm(),
-		entries: clonePublicationPayloadEntries(request.entries),
+	material := acceptedPublicationMaterial{form: record.PayloadForm()}
+	payloads := request.payloads
+	if len(payloads) == 0 {
+		payloads = make([][]byte, len(record.Segments))
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if !fileSetPayloadEntriesMatch(record.EntriesOrNil(), request.entries) {
+	if len(payloads) != len(record.Segments) {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePayload,
+			publicationReasonPayload,
+			nil,
+		)
+	}
+	accepted := publicationstate.AcceptedMaterial{SnapshotRecord: bytes.Clone(request.snapshotRecord)}
+	entryIndex := 0
+	for index, segment := range record.Segments {
+		item := publicationstate.AcceptedMaterialSegment{
+			Summary: publicationstate.SegmentSummary{TargetID: segment.Target.ID},
+		}
+		switch segment.Form {
+		case publication.SegmentFormPacked:
+			item.Blob = bytes.Clone(payloads[index])
+		case publication.SegmentFormEntries:
+			count := len(segment.Entries)
+			if entryIndex+count > len(request.entries) ||
+				!fileSetPayloadEntriesMatch(segment.Entries, request.entries[entryIndex:entryIndex+count]) {
+				return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+					ctx,
+					publicationStagePayload,
+					publicationReasonPayload,
+					nil,
+				)
+			}
+			for _, entry := range request.entries[entryIndex : entryIndex+count] {
+				item.Entries = append(item.Entries, publicationstate.AcceptedMaterialEntry{
+					Path: entry.Path, Mode: entry.Mode, Content: bytes.Clone(entry.Content),
+				})
+			}
+			entryIndex += count
+		case publication.SegmentFormSettings:
+		default:
 			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 				ctx,
-				publicationStagePayload,
-				publicationReasonPayload,
+				publicationStageRecord,
+				publicationReasonRecord,
 				nil,
 			)
 		}
-	} else {
-		snapshot, err := publication.DecodePayload(request.payload, record.BlobReference())
-		if err != nil {
-			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
-				ctx,
-				publicationStagePayload,
-				publicationReasonPayload,
-				err,
-			)
-		}
-		material.snapshot = clonePublicationSnapshot(snapshot)
+		accepted.Segments = append(accepted.Segments, item)
 	}
+	if entryIndex != len(request.entries) {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePayload,
+			publicationReasonPayload,
+			nil,
+		)
+	}
+	snapshot, err := acceptedSnapshotFromSegments(record, accepted)
+	if err != nil {
+		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
+			ctx,
+			publicationStagePayload,
+			publicationReasonPayload,
+			err,
+		)
+	}
+	material.snapshot = snapshot
 
 	if err := checkAcceptedPublicationFloor(ctx, request.store, floor); err != nil {
 		return acceptedPublicationMaterial{}, err
@@ -328,24 +372,54 @@ func validAcceptedPublicationRequest(request acceptedPublicationRequest) bool {
 		len(request.snapshotRecord) > publication.MaxFileSetRecordBytes {
 		return false
 	}
-	record, err := publication.DecodeSnapshot(request.snapshotRecord)
+	if !validAcceptedPublicationMaterial(request.snapshotRecord, request.payloads, request.entries) {
+		return false
+	}
+	return true
+}
+
+func validAcceptedPublicationMaterial(
+	snapshotRecord []byte,
+	payloads [][]byte,
+	materialEntries []publication.PayloadEntry,
+) bool {
+	record, err := publication.DecodeSnapshot(snapshotRecord)
 	if err != nil {
 		return false
 	}
-	if len(request.payload) > 0 {
-		if record.PayloadForm() != publication.PayloadFormPacked ||
-			uint64(len(request.payload)) > publication.MaxBlobBytes || len(request.entries) != 0 ||
-			len(request.snapshotRecord) > publication.MaxRecordBytes {
-			return false
-		}
-		return true
+	entries := 0
+	if len(payloads) == 0 {
+		payloads = make([][]byte, len(record.Segments))
 	}
-	if record.PayloadForm() != publication.PayloadFormFileSet ||
-		len(request.entries) == 0 || len(request.entries) > publication.MaxSnapshotEntries {
+	if len(payloads) != len(record.Segments) {
+		return false
+	}
+	var payloadBytes uint64
+	for index, segment := range record.Segments {
+		payload := payloads[index]
+		switch segment.Form {
+		case publication.SegmentFormPacked:
+			size := uint64(len(payload))
+			if size == 0 || size > publication.MaxBlobBytes || size > publication.MaxBlobBytes-payloadBytes {
+				return false
+			}
+			payloadBytes += size
+		case publication.SegmentFormEntries:
+			if len(payload) != 0 {
+				return false
+			}
+			entries += len(segment.Entries)
+		case publication.SegmentFormSettings:
+			if len(payload) != 0 {
+				return false
+			}
+		}
+	}
+	if len(materialEntries) != entries {
 		return false
 	}
 	var total uint64
-	for _, entry := range request.entries {
+	for _, entry := range materialEntries {
 		size := uint64(len(entry.Content))
 		if entry.Path == "" || entry.Mode != 0o600 && entry.Mode != 0o644 ||
 			size == 0 || size > publication.MaxBlobBytes ||

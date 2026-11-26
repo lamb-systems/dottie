@@ -591,22 +591,24 @@ func runSyncCommand(
 			3,
 		)
 	}
+	viewDigest := syncViewDigest(view)
 	identity, err := prepareSyncPushIdentity(
 		ctx,
 		previews,
 		command,
 		binding,
-		inspection.Floor,
-		inspection.Present,
+		view,
 		preparation.Material.Base,
 		preparation.Material.Remote,
+		viewDigest,
 	)
 	if err != nil {
 		return err
 	}
-	viewDigest := syncViewDigest(view)
 	token := syncConfirmationToken(
 		binding,
+		inspection.Floor,
+		inspection.Present,
 		preparation.Plan.Digest,
 		preparation.Staged.StateToken,
 		preparation.Staged.ObservationDigest,
@@ -638,7 +640,10 @@ func runSyncCommand(
 	} else {
 		output += "pull: no changes\n"
 	}
-	return runSyncPushHalf(ctx, command, session, binding, view, viewDigest, identity, output, pushes)
+	return runSyncPushHalf(
+		ctx, command, session, binding, view, viewDigest, inspection.Floor, preparation.applies(),
+		identity, output, pushes,
+	)
 }
 
 func runSyncPushHalf(
@@ -648,6 +653,8 @@ func runSyncPushHalf(
 	binding publicationstate.Binding,
 	view publicationstate.SuppliedRepositoryView,
 	viewDigest [32]byte,
+	reviewedFloor publicationstate.Floor,
+	pullApplied bool,
 	identity syncPushIdentity,
 	output string,
 	pushes pushSourcesFactory,
@@ -681,6 +688,15 @@ func runSyncPushHalf(
 	if err != nil || !present {
 		return syncPushRefusal(command, output, "the post-pull accepted floor cannot be read", "post_pull_floor")
 	}
+	if floor.DatabaseID != reviewedFloor.DatabaseID ||
+		(!pullApplied && floor.Revision != reviewedFloor.Revision) {
+		return syncPushRefusal(
+			command,
+			output,
+			"the publication position store is not the one that was reviewed",
+			"post_pull_store_moved",
+		)
+	}
 	if err := syncViewMatchesFloor(floor, view); err != nil {
 		return syncPushRefusal(
 			command,
@@ -693,7 +709,7 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the provider position cannot be re-read", "post_pull_provider")
 	}
-	acceptedSnapshot, err := service.PublicationPayloadSnapshot(accepted.Payload, sources.Configuration)
+	acceptedSnapshot, err := service.PublicationPayloadSnapshot(accepted.Payload)
 	if err != nil {
 		return syncPushRefusal(
 			command,
@@ -726,8 +742,16 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be decoded", "post_pull_floor")
 	}
+	candidatePosition, candidatePresent, positionErr := syncCandidatePosition(view)
+	if positionErr != nil {
+		return syncPushRefusal(command, output, "the reviewed provider position cannot be read", "post_pull_candidate")
+	}
+	reviewedID := syncPublicationID(binding, candidatePosition, candidatePresent, viewDigest, identity.Review)
+	if reviewedID == ([16]byte{}) {
+		return syncPushRefusal(command, output, "a fresh publication identity is unavailable", "post_pull_candidate")
+	}
 	publicationID := [16]byte{}
-	if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
+	if _, randErr := rand.Read(publicationID[:]); randErr != nil || publicationID == ([16]byte{}) {
 		return syncPushRefusal(command, output, "a fresh publication identity is unavailable", "post_pull_candidate")
 	}
 	snapshot, err := sources.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
@@ -740,12 +764,12 @@ func runSyncPushHalf(
 		return syncPushRefusal(command, output, "the post-pull publication cannot be composed", "post_pull_candidate")
 	}
 	candidateMaterial, err := service.EncodePublicationCandidate(
-		binding, snapshot, floor, true, publicationID,
+		binding, snapshot, candidatePosition, candidatePresent, publicationID,
 	)
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication identity is unavailable", "post_pull_candidate")
 	}
-	candidateCID, err := publication.RecordCID(candidateMaterial.SnapshotRecord)
+	candidateCID, err := syncCandidateRecordCID(candidateMaterial.SnapshotRecord, reviewedID)
 	if err != nil || !bytes.Equal(candidateCID, identity.SnapshotCID) {
 		return syncPushRefusal(
 			command,
@@ -777,6 +801,15 @@ func runSyncPushHalf(
 		return syncPushRefusal(command, output, "the push half could not be prepared", "post_pull_prepare")
 	}
 	if preparation.NoOp {
+		observed, viewErr := sources.Transport.ReadView(ctx)
+		if viewErr != nil || syncViewDigest(observed) != viewDigest {
+			return syncPushRefusal(
+				command,
+				output,
+				"the provider position moved while the push half was prepared",
+				"post_pull_provider_moved",
+			)
+		}
 		output += "push: no-op\n"
 		if preparation.Present {
 			output += fmt.Sprintf(
@@ -791,7 +824,18 @@ func runSyncPushHalf(
 		}
 		return nil
 	}
-	if !syncPreparedMatches(preparation.Record, binding, identity) {
+	if syncViewDigest(preparation.Proposal.View) != viewDigest {
+		_ = sources.Records.Delete(ctx, preparation.Record.PublicationID)
+		return syncPushRefusal(
+			command,
+			output,
+			"the provider position moved while the push half was prepared",
+			"post_pull_provider_moved",
+		)
+	}
+	if !syncPreparedMatches(
+		preparation.Record, preparation.Proposal.Batch.SnapshotRecord, binding, identity, reviewedID,
+	) {
 		_ = sources.Records.Delete(ctx, preparation.Record.PublicationID)
 		return syncPushRefusal(
 			command,
@@ -885,19 +929,38 @@ func syncAcceptedSnapshot(
 
 func syncPreparedMatches(
 	record service.PublicationProposalRecord,
+	snapshotRecord []byte,
 	binding publicationstate.Binding,
 	identity syncPushIdentity,
+	reviewedID [16]byte,
 ) bool {
 	if record.Binding != binding || record.Review != identity.Review {
 		return false
 	}
-	return bytes.Equal(record.CandidateRecordCID, identity.SnapshotCID)
+	candidateCID, err := syncCandidateRecordCID(snapshotRecord, reviewedID)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(candidateCID, identity.SnapshotCID)
+}
+
+func syncCandidateRecordCID(snapshotRecord []byte, publicationID [16]byte) ([]byte, error) {
+	record, err := publication.DecodeSnapshot(snapshotRecord)
+	if err != nil {
+		return nil, err
+	}
+	record.PublicationID = publicationID
+	encoded, err := publication.EncodeSnapshot(record)
+	if err != nil {
+		return nil, err
+	}
+	return publication.RecordCID(encoded)
 }
 
 func renderSyncPushPreview(identity syncPushIdentity) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "push: targets=%d entries=%d\n", identity.Targets, identity.Entries)
-	fmt.Fprintf(&output, "push: candidate record: %x\n", identity.SnapshotCID)
+	fmt.Fprintf(&output, "push: reviewed candidate: %x\n", identity.SnapshotCID)
 	fmt.Fprintf(
 		&output,
 		"push: review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
@@ -909,14 +972,64 @@ func renderSyncPushPreview(identity syncPushIdentity) string {
 	return output.String()
 }
 
+func syncPublicationID(
+	binding publicationstate.Binding,
+	position publicationstate.Floor,
+	present bool,
+	viewDigest [32]byte,
+	review publicationstate.LocalReviewContext,
+) [16]byte {
+	hash := sha256.New()
+	hash.Write([]byte("dottie/sync/publication-id/v1\x00"))
+	hash.Write([]byte(binding.AccountDID))
+	hash.Write([]byte{0})
+	hash.Write([]byte(binding.Repository))
+	hash.Write([]byte{0})
+	hash.Write(binding.Vault[:])
+	hash.Write(position.RecordCID)
+	hash.Write([]byte{0})
+	hash.Write([]byte(position.SnapshotKey))
+	if present {
+		hash.Write([]byte{1})
+	} else {
+		hash.Write([]byte{0})
+	}
+	hash.Write(viewDigest[:])
+	hash.Write(review.SelectionDigest[:])
+	hash.Write(review.ApprovalDigest[:])
+	var publicationID [16]byte
+	copy(publicationID[:], hash.Sum(nil))
+	return publicationID
+}
+
+func syncCandidatePosition(
+	view publicationstate.SuppliedRepositoryView,
+) (publicationstate.Floor, bool, error) {
+	if len(view.Snapshots) == 0 {
+		return publicationstate.Floor{}, false, errSyncFloorMismatch
+	}
+	terminal := view.Snapshots[len(view.Snapshots)-1]
+	record, err := publication.DecodeSnapshot(terminal.Raw)
+	if err != nil {
+		return publicationstate.Floor{}, false, errSyncFloorMismatch
+	}
+	recordCID, err := publication.RecordCID(terminal.Raw)
+	if err != nil {
+		return publicationstate.Floor{}, false, errSyncFloorMismatch
+	}
+	return publicationstate.Floor{
+		RecordCID: recordCID, SnapshotKey: terminal.Key, Sequence: record.PublicationSeq,
+	}, true, nil
+}
+
 func prepareSyncPushIdentity(
 	ctx context.Context,
 	previews syncPushPreviewFactory,
 	command *urfave.Command,
 	binding publicationstate.Binding,
-	position publicationstate.Floor,
-	present bool,
+	view publicationstate.SuppliedRepositoryView,
 	floor, remote model.Snapshot,
+	viewDigest [32]byte,
 ) (syncPushIdentity, error) {
 	preview, err := previews(ctx, command, binding)
 	if err != nil {
@@ -926,8 +1039,23 @@ func prepareSyncPushIdentity(
 		)
 	}
 	defer preview.Close()
-	publicationID := [16]byte{}
-	if _, err := rand.Read(publicationID[:]); err != nil || publicationID == ([16]byte{}) {
+	review, _, guard, err := preview.Reviews.Acquire(ctx)
+	if err != nil {
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the review identity is unavailable; nothing was changed",
+			3,
+		)
+	}
+	guard.Release()
+	position, present, err := syncCandidatePosition(view)
+	if err != nil {
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the reviewed provider position cannot be read; nothing was changed",
+			3,
+		)
+	}
+	publicationID := syncPublicationID(binding, position, present, viewDigest, review)
+	if publicationID == ([16]byte{}) {
 		return syncPushIdentity{}, urfave.Exit(
 			"sync refused: a fresh publication identity is unavailable; nothing was changed",
 			3,
@@ -957,29 +1085,22 @@ func prepareSyncPushIdentity(
 	identity := syncPushIdentity{
 		Targets: len(snapshot.Targets),
 		Entries: len(snapshot.Entries),
-		Review:  publicationstate.LocalReviewContext{},
+		Review:  review,
 	}
-	identity.SnapshotCID, err = publication.RecordCID(material.SnapshotRecord)
+	identity.SnapshotCID, err = syncCandidateRecordCID(material.SnapshotRecord, publicationID)
 	if err != nil {
 		return syncPushIdentity{}, urfave.Exit(
 			"sync refused: the post-pull publication identity is unavailable; nothing was changed",
 			3,
 		)
 	}
-	review, _, guard, err := preview.Reviews.Acquire(ctx)
-	if err != nil {
-		return syncPushIdentity{}, urfave.Exit(
-			"sync refused: the review identity is unavailable; nothing was changed",
-			3,
-		)
-	}
-	guard.Release()
-	identity.Review = review
 	return identity, nil
 }
 
 func syncConfirmationToken(
 	binding publicationstate.Binding,
+	position publicationstate.Floor,
+	present bool,
 	plan, stateToken, observationDigest, viewDigest [32]byte,
 	identity syncPushIdentity,
 ) [32]byte {
@@ -990,7 +1111,19 @@ func syncConfirmationToken(
 		_, _ = digest.Write(length[:])
 		_, _ = digest.Write([]byte(value))
 	}
-	writeField("dottie/sync/v1")
+	writeField("dottie/sync/v2")
+	if present {
+		writeField("present")
+	} else {
+		writeField("absent")
+	}
+	_, _ = digest.Write(position.DatabaseID[:])
+	writeField(position.SnapshotKey)
+	_, _ = digest.Write(position.RecordCID)
+	var positionCounters [16]byte
+	binary.BigEndian.PutUint64(positionCounters[:8], position.Revision)
+	binary.BigEndian.PutUint64(positionCounters[8:], position.Generation)
+	_, _ = digest.Write(positionCounters[:])
 	writeField(binding.AccountDID)
 	writeField(string(binding.Backend))
 	writeField(binding.Repository)

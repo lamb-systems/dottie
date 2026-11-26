@@ -272,3 +272,153 @@ func TestCandidateSettingsOnlyCarriesNoPayload(t *testing.T) {
 	assert.Empty(t, uploadPayload(upload))
 	assert.Empty(t, upload.Entries)
 }
+
+func TestCandidateEntriesAndSettingsPrepareTogether(t *testing.T) {
+	f := newFixture(t, BackendPublicRepo)
+	store, _ := newStore(t, f)
+	defer func() { assert.NoError(t, store.Close()) }()
+	ctx := context.Background()
+
+	entries, err := publication.SnapshotEntries(model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{v4EntriesTarget()},
+		Entries: []model.Entry{{
+			TargetID: "files",
+			File: &model.FileEntry{
+				Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular,
+				Content: []byte("synthetic entries payload"), Mode: 0o600,
+			},
+		}},
+	})
+	require.NoError(t, err)
+	settings := []publication.SnapshotSetting{{
+		SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/", Key: "color-scheme",
+		State: model.SettingPresent, Value: &model.VariantValue{Type: "s", Text: "prefer-dark"},
+	}}
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationID: [16]byte{3},
+		Segments: []publication.SnapshotSegment{
+			{Target: v4SettingsTarget(), Form: publication.SegmentFormSettings, Settings: settings},
+			{Target: v4EntriesTarget(), Form: publication.SegmentFormEntries, Entries: entries},
+		},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	recordCID, err := publication.RecordCID(raw)
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+	head, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, SnapshotCID: recordCID,
+	})
+	require.NoError(t, err)
+	observation := Observation{
+		Origin: f.binding, SuppliedContext: SuppliedContext{RepositoryRevision: "r", RepositoryDigest: []byte{1}},
+		Head: head, Snapshots: []SnapshotBlock{{Key: key, Raw: raw}},
+	}
+	candidate := CandidateInput{
+		SnapshotKey: key, SnapshotRecord: raw, HeadRecord: head,
+		Segments: []CandidateSegment{
+			{
+				TargetID: "desktop", Form: PayloadFormSettings,
+				SettingsDigest: publication.SettingsDigest(settings),
+			},
+			{
+				TargetID: "files", Form: PayloadFormFileSet,
+				Entries: []PayloadEntryReference{{
+					Path: "init.lua", CID: entries[0].Blob.CID, Size: entries[0].Size,
+				}},
+			},
+		},
+		Payloads: [][]byte{nil, nil},
+		Entries: []publication.PayloadEntry{{
+			Path: "init.lua", Mode: 0o600, Size: uint64(len("synthetic entries payload")),
+			Content: []byte("synthetic entries payload"),
+		}},
+	}
+	review := attemptReview()
+	view := attemptView(f, observation, true)
+	proposal, err := store.PrepareAttempt(ctx, candidate, view, review)
+	require.NoError(t, err)
+	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
+	require.NoError(t, err)
+	require.Len(t, attempt.Segments, 2)
+	assert.Equal(t, PayloadFormSettings, attempt.Segments[0].Form)
+	assert.Equal(t, PayloadFormFileSet, attempt.Segments[1].Form)
+
+	dispatch, err := store.PrepareDispatch(ctx, attempt.ID, DispatchUpload, view, review)
+	require.NoError(t, err)
+	upload, err := store.BeginUpload(ctx, attempt.ID, dispatch.StateToken, view, review, dispatch.Confirmation)
+	require.NoError(t, err)
+	assert.Len(t, upload.Payloads, 2)
+	assert.Empty(t, upload.Payloads[0])
+	require.Len(t, upload.Entries, 1)
+	assert.Equal(t, []byte("synthetic entries payload"), upload.Entries[0].Payload)
+
+	submission, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, view, review)
+	require.NoError(t, err)
+	_, err = store.BeginFileSetSubmission(
+		ctx, attempt.ID, submission.StateToken, view, review, submission.Confirmation,
+		[]PayloadEntryReference{{
+			Path: "init.lua", CID: entries[0].Blob.CID, Size: entries[0].Size,
+		}},
+	)
+	require.NoError(t, err)
+}
+
+func TestCandidateSegmentsMustMatchTheRecordSummaries(t *testing.T) {
+	f := newFixture(t, BackendPublicRepo)
+	store, _ := newStore(t, f)
+	defer func() { assert.NoError(t, store.Close()) }()
+	ctx := context.Background()
+
+	settings := []publication.SnapshotSetting{{
+		SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/", Key: "color-scheme",
+		State: model.SettingReset,
+	}}
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, PublicationID: [16]byte{4},
+		Segments: []publication.SnapshotSegment{
+			{Target: v4SettingsTarget(), Form: publication.SegmentFormSettings, Settings: settings},
+		},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	recordCID, err := publication.RecordCID(raw)
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+	head, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: f.binding.Vault, SnapshotCID: recordCID,
+	})
+	require.NoError(t, err)
+	observation := Observation{
+		Origin: f.binding, SuppliedContext: SuppliedContext{RepositoryRevision: "r", RepositoryDigest: []byte{1}},
+		Head: head, Snapshots: []SnapshotBlock{{Key: key, Raw: raw}},
+	}
+	view := attemptView(f, observation, true)
+	review := attemptReview()
+	for name, segment := range map[string]CandidateSegment{
+		"settings digest": {
+			TargetID: "desktop", Form: PayloadFormSettings, SettingsDigest: [32]byte{0x7f},
+		},
+		"form": {
+			TargetID: "desktop", Form: PayloadFormPacked,
+			Blob: &publication.BlobReference{CID: []byte{0x01, 0x55, 0x12}, Size: 8},
+		},
+		"target": {
+			TargetID: "other", Form: PayloadFormSettings,
+			SettingsDigest: publication.SettingsDigest(settings),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := CandidateInput{
+				SnapshotKey: key, SnapshotRecord: raw, HeadRecord: head,
+				Segments: []CandidateSegment{segment},
+				Payloads: [][]byte{nil},
+			}
+			_, err := store.PrepareAttempt(ctx, candidate, view, review)
+			requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
+		})
+	}
+}

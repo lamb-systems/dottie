@@ -19,7 +19,6 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/files"
 	"github.com/lamb-systems/dottie/internal/syncengine"
-	"github.com/lamb-systems/dottie/internal/vault"
 )
 
 func TestPreviewPublicationTargetNoBaseAndEstablishedContinuity(t *testing.T) {
@@ -45,7 +44,7 @@ func TestPreviewPublicationTargetNoBaseAndEstablishedContinuity(t *testing.T) {
 	require.True(t, present)
 	fixture.request.ExpectedFloor = cloneServiceTestFloor(latest)
 	fixture.request.SnapshotRecord = publicationBaseSuccessorRecord(t, fixture.accepted.request)
-	fixture.request.Payload = bytes.Clone(successor.payload)
+	fixture.request.Payloads = clonePublicationPayloadSets(successor.payloads)
 	preview, disposition, err = PreviewPublicationTarget(context.Background(), fixture.request, base)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationPreviewBaseEstablished, disposition)
@@ -92,14 +91,15 @@ func TestPreviewPublicationTargetClassifiesIndependentDisjointEditsAgainstRetain
 	beforeBase := clonePublicationProjectionEntriesForTest(base.entries)
 
 	remoteEntries := publicationPreviewFileEntries(target.ID, map[string]string{"local-only": "A", "remote-only": "B"})
-	record, payload, floor := publicationPreviewAcceptSuccessor(
+	record, payloads, entries, floor := publicationPreviewAcceptSuccessor(
 		t,
 		accepted,
 		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries},
 	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
-	request.Payload = payload
+	request.Payloads = clonePublicationPayloadSets(payloads)
+	request.Entries = clonePublicationPayloadEntries(entries)
 	capturedEntries = publicationPreviewFileEntries(target.ID, map[string]string{"local-only": "C", "remote-only": "A"})
 
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
@@ -165,10 +165,11 @@ func TestPreviewPublicationTargetClassifiesPartialLocalStateAgainstRetainedBase(
 		Targets: []model.Target{portable},
 		Entries: remoteEntries,
 	}
-	record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, snapshot)
+	record, payloads, entries, floor := publicationPreviewAcceptSuccessor(t, accepted, snapshot)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
-	request.Payload = payload
+	request.Payloads = clonePublicationPayloadSets(payloads)
+	request.Entries = clonePublicationPayloadEntries(entries)
 	capturedEntries = publicationPreviewFileEntries(
 		target.ID,
 		map[string]string{"already-remote": "B", "untouched": "A", "divergent": "C"},
@@ -259,13 +260,13 @@ func TestPreviewPublicationTargetOmitsRawContentAndDoesNotRereadInputsAfterSelec
 	configuration.Targets = []config.Target{target}
 	request := publicationBaseRequestFor(t, accepted, configuration, target.ID, nil)
 	require.NotEmpty(t, request.SnapshotRecord)
-	require.NotEmpty(t, request.Payload)
+	require.NotEmpty(t, request.Entries)
 	require.Len(t, request.Configuration.Targets, 1)
 	require.NotNil(t, request.Configuration.Targets[0].Root)
 	capture := publicationCapturePortFunc(
 		func(ctx context.Context, selected config.Target, path string) (files.Result, error) {
 			request.SnapshotRecord[0] ^= 0xff
-			request.Payload[0] ^= 0xff
+			request.Entries[0].Content[0] ^= 0xff
 			request.Configuration.Targets[0].Root.Path = "changed-after-selection"
 			return (LocalFilesCapture{}).Capture(ctx, selected, path)
 		},
@@ -388,14 +389,15 @@ func TestPreviewPublicationTargetSnapshotsGNOMESelectionInputsBeforeFirstResolve
 	require.NotNil(t, updatedSnapshot.Entries[0].Setting)
 	require.NotNil(t, updatedSnapshot.Entries[0].Setting.Value)
 	updatedSnapshot.Entries[0].Setting.Value = &model.VariantValue{Type: "s", Text: "'remote-new'"}
-	successorRecord, successorPayload, successorFloor := publicationPreviewAcceptSuccessor(
+	successorRecord, successorPayloads, successorEntries, successorFloor := publicationPreviewAcceptSuccessor(
 		t,
 		fixture.accepted,
 		updatedSnapshot,
 	)
 	fixture.request.ExpectedFloor = successorFloor
 	fixture.request.SnapshotRecord = successorRecord
-	fixture.request.Payload = successorPayload
+	fixture.request.Payloads = clonePublicationPayloadSets(successorPayloads)
+	fixture.request.Entries = clonePublicationPayloadEntries(successorEntries)
 
 	require.Len(t, base.entries, len(refs))
 	require.NotNil(t, base.entries[0].Setting)
@@ -558,14 +560,15 @@ func TestPreviewPublicationTargetIncludesRetainedBaseInKeyUnionBound(t *testing.
 	beforeBase := clonePublicationProjectionEntriesForTest(base.entries)
 
 	remoteEntries := publicationBaseEmptyRegularEntries("successor", 0, 10000)
-	record, payload, floor := publicationPreviewAcceptSuccessor(
+	record, payloads, entries, floor := publicationPreviewAcceptSuccessor(
 		t,
 		accepted,
 		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: remoteEntries},
 	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = record
-	request.Payload = payload
+	request.Payloads = clonePublicationPayloadSets(payloads)
+	request.Entries = clonePublicationPayloadEntries(entries)
 	capturedEntries = clonePublicationProjectionEntriesForTest(remoteEntries)
 
 	localView := syncengine.LocalView{Entries: capturedEntries, Coverage: []string{target.ID}}
@@ -682,11 +685,9 @@ func publicationPreviewAcceptSuccessor(
 	t *testing.T,
 	fixture acceptedMaterialTestFixture,
 	snapshot model.Snapshot,
-) ([]byte, []byte, publicationstate.Floor) {
+) ([]byte, [][]byte, []publication.PayloadEntry, publicationstate.Floor) {
 	t.Helper()
-	packed, err := vault.Pack(snapshot)
-	require.NoError(t, err)
-	blobCID, err := publication.RawPayloadCID(packed.Payload)
+	segments, _, payloads, entries, err := candidateSegments(snapshot, publicationstate.Floor{})
 	require.NoError(t, err)
 	old, err := publication.DecodeSnapshot(fixture.request.snapshotRecord)
 	require.NoError(t, err)
@@ -695,11 +696,7 @@ func publicationPreviewAcceptSuccessor(
 	old.PublicationSeq++
 	old.Parent = bytes.Clone(parentCID)
 	old.PublicationID[15]++
-	old.Blob = publication.BlobReference{
-		CID:      blobCID,
-		Size:     uint64(len(packed.Payload)),
-		MIMEType: publication.SnapshotBlobMIMEType,
-	}
+	old.Segments = segments
 	record, err := publication.EncodeSnapshot(old)
 	require.NoError(t, err)
 	cid, err := publication.RecordCID(record)
@@ -724,21 +721,22 @@ func publicationPreviewAcceptSuccessor(
 			{Key: key, Raw: bytes.Clone(record)},
 		},
 	}
-	proposal, err := fixture.store.Prepare(
+	input := publicationstate.MaterialInput{Payloads: clonePublicationPayloadSets(payloads), Entries: clonePublicationPayloadEntries(entries)}
+	proposal, err := fixture.store.PrepareMaterial(
 		context.Background(),
 		publicationstate.ModeAdvance,
 		observation,
-		packed.Payload,
+		input,
 	)
 	require.NoError(t, err)
-	floor, err := fixture.store.Accept(
+	floor, err := fixture.store.AcceptMaterialInput(
 		context.Background(),
 		publicationstate.ModeAdvance,
 		proposal.StateToken,
 		observation,
-		packed.Payload,
+		input,
 		[32]byte{},
 	)
 	require.NoError(t, err)
-	return record, packed.Payload, floor
+	return record, payloads, entries, floor
 }

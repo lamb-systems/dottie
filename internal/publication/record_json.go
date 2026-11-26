@@ -119,6 +119,9 @@ func recordJSONLimit(record []byte) int {
 	if _, fileSet := object["entries"]; fileSet {
 		return maxFileSetRecordJSONBytes
 	}
+	if _, segments := object["segments"]; segments {
+		return maxFileSetRecordJSONBytes
+	}
 	return maxRecordJSONBytes
 }
 

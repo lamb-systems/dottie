@@ -306,23 +306,27 @@ func (transport *materialTestTransport) checkMaterialBatch(batch MaterialWriteBa
 	if err != nil {
 		return errMaterialTestBatchShape
 	}
-	if snapshot.PayloadForm() == publication.PayloadFormFileSet {
-		for _, entry := range snapshot.Entries {
-			payload, uploaded := transport.blobs[string(entry.Blob.CID)]
+	for _, segment := range snapshot.Segments {
+		switch segment.Form {
+		case publication.SegmentFormEntries:
+			for _, entry := range segment.Entries {
+				payload, uploaded := transport.blobs[string(entry.Blob.CID)]
+				if !uploaded {
+					return errMaterialTestPayloadMissing
+				}
+				if uint64(len(payload)) != entry.Size {
+					return errMaterialTestBatchShape
+				}
+			}
+		case publication.SegmentFormPacked:
+			payload, uploaded := transport.blobs[string(segment.Blob.CID)]
 			if !uploaded {
 				return errMaterialTestPayloadMissing
 			}
-			if uint64(len(payload)) != entry.Size {
+			if uint64(len(payload)) != segment.Blob.Size {
 				return errMaterialTestBatchShape
 			}
-		}
-	} else {
-		payload, uploaded := transport.blobs[string(snapshot.Blob.CID)]
-		if !uploaded {
-			return errMaterialTestPayloadMissing
-		}
-		if uint64(len(payload)) != snapshot.Blob.Size {
-			return errMaterialTestBatchShape
+		case publication.SegmentFormSettings:
 		}
 	}
 	if batch.HeadCreate {
@@ -388,7 +392,7 @@ func (transport *materialTestTransport) installSnapshotLocked(t *testing.T, raw 
 	require.NoError(t, err)
 	encoded, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: snapshot.Vault, PublicationSeq: snapshot.PublicationSeq,
-		SnapshotCID: snapshotCID, BlobCID: snapshot.Blob.CID,
+		SnapshotCID: snapshotCID,
 	})
 	require.NoError(t, err)
 	transport.head = encoded
@@ -646,10 +650,17 @@ func materialTestSnapshot(content string) model.Snapshot {
 					State:   model.FilePresent,
 					Kind:    model.FileRegular,
 					Content: []byte(content),
-					Mode:    0o600,
+					Mode:    0o755,
 				},
 			},
 		},
+	}
+}
+
+func materialTestRecordTarget() model.Target {
+	return model.Target{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 	}
 }
 
@@ -671,18 +682,21 @@ func materialTestCandidate(
 		PublicationID:  publicationID,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: materialTestRecordTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)
 	require.NoError(t, err)
 	headRecord, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
-		SnapshotCID: snapshotCID, BlobCID: blobCID,
+		SnapshotCID: snapshotCID,
 	})
 	require.NoError(t, err)
 	return publicationstate.CandidateInput{
@@ -846,7 +860,7 @@ func TestPublishMaterialGenesisCommitsFloorAndRetiresAttempt(t *testing.T) {
 	assert.Equal(t, uint64(1), result.Floor.Revision)
 	assert.Equal(t, uint64(0), result.Floor.Sequence)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, result.Floor.RecordCID)
-	assert.Equal(t, proposalPackedBlob(proposal).CID, testBlobCID(result.Floor))
+	assert.Equal(t, proposalPackedBlob(proposal).CID, floorPackedBlob(result.Floor).CID)
 	assert.Equal(t, proposal.Batch.HeadRecord, result.Floor.Head)
 	assert.Equal(t, proposal.Batch.SnapshotRecord, fixture.transport.committed(proposal.Batch.SnapshotKey))
 	assert.Equal(t, proposal.Batch.HeadRecord, fixture.transport.committedHead())
@@ -928,7 +942,8 @@ func TestPublishMaterialRefusesRejectedUpload(t *testing.T) {
 	assert.Equal(t, publicationstate.OutcomeNotSubmitted, attempt.Outcome)
 	retained, readErr := fixture.store.ReadCandidate(ctx, proposal.Proposal.AttemptID)
 	require.NoError(t, readErr)
-	assert.Equal(t, proposal.Candidate.Payload, retained.Payload)
+	assert.Equal(t, proposal.Candidate.Payloads, retained.Payloads)
+	assert.Empty(t, retained.Entries)
 }
 
 func TestPublishMaterialRefusesApplyFailureBeforeCommit(t *testing.T) {
@@ -1767,6 +1782,150 @@ func TestPublishMaterialDispatchConsumesPreparedWrites(t *testing.T) {
 	assert.Equal(t, 1, fixture.transport.applyCount())
 }
 
+func TestPublishMaterialPublishesSeveralPackedSegments(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	fixture.snapshot = model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{
+			{
+				ID: "alpha", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "alpha", Kind: model.SelectionDirectory},
+			},
+			{
+				ID: "beta", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "beta", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "alpha",
+				File: &model.FileEntry{
+					Path: "alpha.conf", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("synthetic alpha payload"), Mode: 0o755,
+				},
+			},
+			{
+				TargetID: "beta",
+				File: &model.FileEntry{
+					Path: "beta.conf", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("synthetic beta payload"), Mode: 0o755,
+				},
+			},
+		},
+	}
+
+	proposal, result := fixture.publish(t)
+	assert.Equal(t, publication.PayloadFormMixed, proposal.Form)
+	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, sealed.Segments, 2)
+	for index, segment := range sealed.Segments {
+		assert.Equal(t, publication.SegmentFormPacked, segment.Form)
+		assert.Equal(t, uint64(len(proposal.Candidate.Payloads[index])), segment.Blob.Size)
+	}
+	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
+	require.Len(t, result.Floor.Segments, 2)
+	for _, summary := range result.Floor.Segments {
+		assert.Equal(t, publicationstate.PayloadFormPacked, summary.Form)
+		assert.NotEmpty(t, summary.BlobCID)
+	}
+
+	accepted, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, result.Floor)
+	require.NoError(t, err)
+	require.Len(t, accepted.Segments, 2)
+	for _, segment := range accepted.Segments {
+		assert.NotEmpty(t, segment.Blob)
+	}
+
+	directory := t.TempDir()
+	require.NoError(t, os.Chmod(directory, 0o700))
+	position, err := publicationstate.Open(directory, fixture.binding)
+	require.NoError(t, err)
+	require.NoError(t, position.Close())
+	observation := publicationstate.Observation{
+		Origin: fixture.binding, SuppliedContext: fixture.transport.context,
+		Head:      fixture.transport.committedHead(),
+		Snapshots: []publicationstate.SnapshotBlock{{Key: proposal.Batch.SnapshotKey, Raw: proposal.Batch.SnapshotRecord}},
+	}
+	staged, err := StagePublicationAccept(ctx, PublicationAcceptStageRequest{
+		Directory: directory, Binding: fixture.binding, Observation: observation,
+		Payloads: proposal.Candidate.Payloads, Entries: proposal.Candidate.Entries,
+	})
+	require.NoError(t, err)
+	pulled, err := AcceptPublication(ctx, PublicationAcceptRequest{
+		Directory: directory, Binding: fixture.binding, Mode: staged.Mode,
+		StateToken: staged.StateToken, Confirmation: staged.Confirmation,
+		Observation: observation, Payloads: proposal.Candidate.Payloads,
+		Entries: proposal.Candidate.Entries,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, result.Floor.RecordCID, pulled.RecordCID)
+	require.Len(t, pulled.Segments, 2)
+}
+
+func TestPublishMaterialPublishesEntriesBesideInlineSettings(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	fixture.snapshot = model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{
+			{
+				ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion,
+			},
+			{
+				ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+				Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+			},
+		},
+		Entries: []model.Entry{
+			{
+				TargetID: "desktop",
+				Setting: &model.SettingEntry{
+					SchemaID: "org.gnome.desktop.interface", Path: "/org/gnome/desktop/interface/",
+					Key: "color-scheme", State: model.SettingPresent,
+					Value: &model.VariantValue{Type: "s", Text: "'prefer-dark'"},
+				},
+			},
+			{
+				TargetID: "files",
+				File: &model.FileEntry{
+					Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("synthetic entries payload"), Mode: 0o600,
+				},
+			},
+		},
+	}
+
+	proposal, result := fixture.publish(t)
+	assert.Equal(t, publication.PayloadFormMixed, proposal.Form)
+	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, sealed.Segments, 2)
+	assert.Equal(t, "desktop", sealed.Segments[0].Target.ID)
+	assert.Equal(t, publication.SegmentFormSettings, sealed.Segments[0].Form)
+	require.Len(t, sealed.Segments[0].Settings, 1)
+	assert.Equal(t, "files", sealed.Segments[1].Target.ID)
+	assert.Equal(t, publication.SegmentFormEntries, sealed.Segments[1].Form)
+	require.Len(t, sealed.Segments[1].Entries, 1)
+	assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
+
+	accepted, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, result.Floor)
+	require.NoError(t, err)
+	require.Len(t, accepted.Segments, 2)
+	assert.Equal(t, publicationstate.PayloadFormSettings, accepted.Segments[0].Summary.Form)
+	assert.Empty(t, accepted.Segments[0].Blob)
+	require.Len(t, accepted.Segments[1].Entries, 1)
+	assert.Equal(t, "init.lua", accepted.Segments[1].Entries[0].Path)
+	assert.Equal(t, []byte("synthetic entries payload"), accepted.Segments[1].Entries[0].Content)
+
+	snapshot, form, err := acceptedPublicationSnapshot(accepted, config.Default())
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormMixed, form)
+	require.Len(t, snapshot.Targets, 2)
+	require.Len(t, snapshot.Entries, 2)
+}
+
 func TestPublishMaterialDeclaresAndVerifiesTheProviderBlobMediaType(t *testing.T) {
 	ctx := context.Background()
 
@@ -1776,14 +1935,18 @@ func TestPublishMaterialDeclaresAndVerifiesTheProviderBlobMediaType(t *testing.T
 
 		sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
 		require.NoError(t, err)
-		assert.Equal(t, publication.SnapshotBlobMIMEType, sealed.Blob.MIMEType)
+		sealedBlob, ok := sealed.SegmentBlob()
+		require.True(t, ok)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, sealedBlob.MIMEType)
 		assert.Equal(t, publication.SnapshotBlobMIMEType, proposalPackedBlob(proposal).MIMEType)
 		assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
 		assert.Equal(t, 1, fixture.transport.applyCount())
 
 		committed, err := publication.DecodeSnapshot(fixture.transport.committed(proposal.Batch.SnapshotKey))
 		require.NoError(t, err)
-		assert.Equal(t, publication.SnapshotBlobMIMEType, committed.Blob.MIMEType)
+		committedBlob, ok := committed.SegmentBlob()
+		require.True(t, ok)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, committedBlob.MIMEType)
 	})
 
 	t.Run("refuses-a-provider-media-type-that-differs", func(t *testing.T) {
@@ -1803,4 +1966,50 @@ func TestPublishMaterialDeclaresAndVerifiesTheProviderBlobMediaType(t *testing.T
 		require.NoError(t, err)
 		assert.False(t, present)
 	})
+}
+
+func TestPublishMaterialRepeatedEntryContentsAcrossSegmentsReadBack(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMaterialPublishFixture(t)
+	targets := make([]model.Target, 0, 3)
+	entries := make([]model.Entry, 0, 99)
+	for _, id := range []string{"alpha", "beta", "gamma"} {
+		targets = append(targets, model.Target{
+			ID: id, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: id, Kind: model.SelectionDirectory},
+		})
+		for index := range 33 {
+			entries = append(entries, model.Entry{
+				TargetID: id,
+				File: &model.FileEntry{
+					Path: id + "-" + string(rune('a'+index)) + ".conf", State: model.FilePresent,
+					Kind: model.FileRegular, Content: []byte("synthetic repeated payload"), Mode: 0o600,
+				},
+			})
+		}
+	}
+	fixture.snapshot = model.Snapshot{Version: model.SnapshotVersion, Targets: targets, Entries: entries}
+
+	proposal, result := fixture.publish(t)
+	require.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
+	sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, sealed.Segments, 3)
+	resolved, err := publication.ResolvePayload(
+		sealed,
+		publication.PayloadLimits{
+			MaxEntries: publication.MaxSnapshotEntries, MaxEntryBytes: publication.MaxBlobBytes,
+			MaxTotalBytes: publication.MaxBlobBytes,
+		},
+		func(blob publication.BlobReference) ([]byte, error) {
+			payload := fixture.transport.blobs[string(blob.CID)]
+			require.NotEmpty(t, payload)
+			return payload, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Len(t, resolved.Entries, 99)
+	accepted, err := fixture.store.ReadAcceptedMaterial(ctx, fixture.binding, result.Floor)
+	require.NoError(t, err)
+	assert.Len(t, accepted.Segments, 3)
 }

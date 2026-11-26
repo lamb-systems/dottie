@@ -608,9 +608,9 @@ func (s *Store) persistCandidatePayloads(
 	ctx context.Context,
 	candidate validatedCandidate,
 ) ([]stagedPayload, error) {
-	if candidate.form == PayloadFormFileSet {
-		staged := make([]stagedPayload, 0, len(candidate.entries))
-		for _, entry := range candidate.entries {
+	staged := make([]stagedPayload, 0)
+	for _, segment := range candidate.segments {
+		for _, entry := range segment.entries {
 			reference := publication.BlobReference{
 				CID:      bytes.Clone(entry.blob.CID),
 				Size:     entry.blob.Size,
@@ -629,22 +629,22 @@ func (s *Store) persistCandidatePayloads(
 			}
 			staged = append(staged, stagedPayload{path: entry.path, name: name, blob: reference})
 		}
-		return staged, nil
+		if len(segment.payload) == 0 {
+			continue
+		}
+		name, _, err := s.persistPayload(
+			ctx,
+			s.conn,
+			segment.payload,
+			segment.blob,
+			payloadBasename(segment.payload),
+		)
+		if err != nil {
+			return nil, err
+		}
+		staged = append(staged, stagedPayload{name: name, blob: segment.blob})
 	}
-	if len(candidate.payload) == 0 {
-		return nil, nil
-	}
-	name, _, err := s.persistPayload(
-		ctx,
-		s.conn,
-		candidate.payload,
-		attemptPayloadReference(candidate),
-		payloadBasename(candidate.payload),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return []stagedPayload{{name: name, blob: attemptPayloadReference(candidate)}}, nil
+	return staged, nil
 }
 
 func (s *Store) persistPayload(
@@ -692,7 +692,7 @@ func (s *Store) persistPayloadObject(
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", nil, err
 	}
-	if err := s.checkPayloadCapacityWithQueryer(ctx, q, name, blob.Size, true); err != nil {
+	if err := s.checkPayloadBatchCapacity(ctx, q, map[string]uint64{name: blob.Size}, true); err != nil {
 		return "", nil, err
 	}
 	var existing unix.Stat_t

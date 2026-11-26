@@ -210,7 +210,7 @@ func TestPreparePublicationPushIssuesOneRetainedRecordAndReprintsTheSameConfirma
 	assert.Equal(t, fixture.binding, preparation.Record.Binding)
 	assert.Equal(t, preparation.Proposal.Proposal.CapturedGeneration, preparation.Record.Generation)
 	assert.Equal(t, preparation.Proposal.Proposal.CandidateRecordCID, preparation.Record.CandidateRecordCID)
-	assert.Equal(t, uint64(1), preparation.Record.Version)
+	assert.Equal(t, uint64(2), preparation.Record.Version)
 	record, found := fixture.records.has(fixture.publicationID)
 	require.True(t, found)
 	assert.Equal(t, preparation.Record, record)
@@ -379,8 +379,8 @@ func TestPublicationProposalRecordVerificationRefusesIncompleteRecords(t *testin
 		"binding":           func(r *PublicationProposalRecord) { r.Binding = publicationstate.Binding{} },
 		"candidate record":  func(r *PublicationProposalRecord) { r.CandidateRecordCID = nil },
 		"form":              func(r *PublicationProposalRecord) { r.Form = "archive" },
-		"entry count":       func(r *PublicationProposalRecord) { r.CandidateEntryCount = 0 },
-		"entry digest":      func(r *PublicationProposalRecord) { r.CandidateEntryDigest = [32]byte{} },
+		"segments":          func(r *PublicationProposalRecord) { r.Segments = nil },
+		"payload digest":    func(r *PublicationProposalRecord) { r.PayloadsDigest = [32]byte{} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -401,10 +401,13 @@ func TestPublicationProposalRecordCarriesNoPayloadBytes(t *testing.T) {
 	record := preparation.Record
 	assert.Equal(t, fixture.binding.Vault, record.Binding.Vault)
 	assert.NotEmpty(t, record.CandidateRecordCID)
-	assert.Empty(t, record.CandidatePayloadCID)
 	assert.Equal(t, publication.PayloadFormFileSet, record.Form)
-	assert.Equal(t, 1, record.CandidateEntryCount)
-	assert.NotEqual(t, [32]byte{}, record.CandidateEntryDigest)
+	summaries, err := publicationstate.DecodeSegmentSummaries(record.Segments)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	assert.Equal(t, publicationstate.PayloadFormFileSet, summaries[0].Form)
+	require.Len(t, summaries[0].Entries, 1)
+	assert.NotEqual(t, [32]byte{}, record.PayloadsDigest)
 	assert.Equal(t, 1, preparation.Targets)
 	assert.Equal(t, 1, preparation.Entries)
 }

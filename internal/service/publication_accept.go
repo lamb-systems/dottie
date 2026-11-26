@@ -57,6 +57,7 @@ type PublicationAcceptStageRequest struct {
 	FloorRevision uint64
 	Observation   publicationstate.Observation
 	Payload       []byte
+	Payloads      [][]byte
 	Entries       []publication.PayloadEntry
 }
 
@@ -76,6 +77,7 @@ type PublicationAcceptRequest struct {
 	Confirmation  [32]byte
 	Observation   publicationstate.Observation
 	Payload       []byte
+	Payloads      [][]byte
 	Entries       []publication.PayloadEntry
 }
 
@@ -83,7 +85,8 @@ func StagePublicationAccept(
 	ctx context.Context,
 	request PublicationAcceptStageRequest,
 ) (PublicationAcceptProposal, error) {
-	if ctx == nil || request.Directory == "" || (len(request.Payload) == 0 && len(request.Entries) == 0) {
+	if ctx == nil || request.Directory == "" ||
+		(len(request.Payload) == 0 && len(request.Payloads) == 0 && len(request.Entries) == 0) {
 		return PublicationAcceptProposal{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
@@ -122,8 +125,9 @@ func StagePublicationAccept(
 		return PublicationAcceptProposal{}, err
 	}
 	proposal, err := store.PrepareMaterial(ctx, mode, request.Observation, publicationstate.MaterialInput{
-		Payload: request.Payload,
-		Entries: request.Entries,
+		Payload:  request.Payload,
+		Payloads: request.Payloads,
+		Entries:  request.Entries,
 	})
 	if err != nil {
 		return PublicationAcceptProposal{}, publicationAcceptFailure(
@@ -140,7 +144,8 @@ func StagePublicationAccept(
 }
 
 func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (publicationstate.Floor, error) {
-	if ctx == nil || request.Directory == "" || (len(request.Payload) == 0 && len(request.Entries) == 0) {
+	if ctx == nil || request.Directory == "" ||
+		(len(request.Payload) == 0 && len(request.Payloads) == 0 && len(request.Entries) == 0) {
 		return publicationstate.Floor{}, publicationAcceptFailure(
 			ctx,
 			publicationAcceptStageInput,
@@ -191,7 +196,9 @@ func AcceptPublication(ctx context.Context, request PublicationAcceptRequest) (p
 		request.Mode,
 		request.StateToken,
 		request.Observation,
-		publicationstate.MaterialInput{Payload: request.Payload, Entries: request.Entries},
+		publicationstate.MaterialInput{
+			Payload: request.Payload, Payloads: request.Payloads, Entries: request.Entries,
+		},
 		request.Confirmation,
 	)
 	if err != nil {

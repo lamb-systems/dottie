@@ -85,11 +85,14 @@ func (fixture *publicationAcceptFixture) append(t *testing.T, content string) pu
 		Vault:          fixture.binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	record.PublicationID[15] = byte(sequence + 1)
 	raw, err := publication.EncodeSnapshot(record)
@@ -118,7 +121,7 @@ func (fixture *publicationAcceptFixture) observation(t *testing.T) publicationst
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
-		PublicationSeq: terminalRecord.PublicationSeq, SnapshotCID: terminalCID, BlobCID: terminalRecord.Blob.CID,
+		PublicationSeq: terminalRecord.PublicationSeq, SnapshotCID: terminalCID,
 	})
 	require.NoError(t, err)
 	return publicationstate.Observation{

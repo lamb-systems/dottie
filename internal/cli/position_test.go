@@ -82,11 +82,14 @@ func newPositionFloorStore(
 		Vault:         binding.Vault,
 		PublicationID: [16]byte{0x25, 0x71},
 		Parent:        []byte{},
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	recordRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -98,7 +101,6 @@ func newPositionFloorStore(
 			Vault:          binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    recordCID,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)

@@ -35,7 +35,7 @@ func TestPreviewPublicationTargetKeepsOlderBaseEligibleAfterReopen(t *testing.T)
 	require.True(t, present)
 	fixture.request.ExpectedFloor = cloneServiceTestFloor(currentFloor)
 	fixture.request.SnapshotRecord = bytes.Clone(successorRecord)
-	fixture.request.Payload = bytes.Clone(fixture.accepted.request.payload)
+	fixture.request.Payloads = clonePublicationPayloadSets(fixture.accepted.request.payloads)
 	assert.Equal(t, oldFloor.DatabaseID, currentFloor.DatabaseID)
 	assert.Equal(t, oldFloor.Generation, currentFloor.Generation)
 	assert.Greater(t, currentFloor.Revision, oldFloor.Revision)
@@ -76,12 +76,12 @@ func TestPreviewPublicationTargetRefusesBaseFromRecreatedMatchingStore(t *testin
 	recreated := newAcceptedMaterialTestFixture(t, publicationstate.BackendPublicRepo)
 	require.Equal(t, fixture.request.Binding, recreated.request.binding)
 	require.Equal(t, fixture.request.SnapshotRecord, recreated.request.snapshotRecord)
-	require.Equal(t, fixture.request.Payload, recreated.request.payload)
+	require.Equal(t, fixture.request.Payloads, recreated.request.payloads)
 	require.Equal(t, fixture.request.ExpectedFloor.Sequence, recreated.request.expectedFloor.Sequence)
 	require.Equal(t, fixture.request.ExpectedFloor.Revision, recreated.request.expectedFloor.Revision)
 	require.Equal(t, fixture.request.ExpectedFloor.Generation, recreated.request.expectedFloor.Generation)
 	require.Equal(t, fixture.request.ExpectedFloor.RecordCID, recreated.request.expectedFloor.RecordCID)
-	require.Equal(t, testBlobCID(fixture.request.ExpectedFloor), testBlobCID(recreated.request.expectedFloor))
+	require.Equal(t, floorPackedBlob(fixture.request.ExpectedFloor), floorPackedBlob(recreated.request.expectedFloor))
 	require.NotEqual(t, [32]byte{}, fixture.request.ExpectedFloor.DatabaseID)
 	require.NotEqual(t, [32]byte{}, recreated.request.expectedFloor.DatabaseID)
 	assert.NotEqual(t, fixture.request.ExpectedFloor.DatabaseID, recreated.request.expectedFloor.DatabaseID)
@@ -90,7 +90,7 @@ func TestPreviewPublicationTargetRefusesBaseFromRecreatedMatchingStore(t *testin
 	request.Store = recreated.store
 	request.ExpectedFloor = cloneServiceTestFloor(recreated.request.expectedFloor)
 	request.SnapshotRecord = bytes.Clone(recreated.request.snapshotRecord)
-	request.Payload = bytes.Clone(recreated.request.payload)
+	request.Payloads = clonePublicationPayloadSets(recreated.request.payloads)
 	captureCalls = 0
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
 	assert.Zero(t, captureCalls)
@@ -122,7 +122,7 @@ func TestPreviewPublicationTargetDoesNotResurrectBaseAfterReplaceAwayAndBack(t *
 	assert.Equal(t, fixture.accepted.request.snapshotRecord, before.snapshotRecord)
 	originalFloor := cloneServiceTestFloor(fixture.request.ExpectedFloor)
 	originalRecord := bytes.Clone(fixture.request.SnapshotRecord)
-	originalPayload := bytes.Clone(fixture.request.Payload)
+	originalPayload := bytes.Clone(fixture.request.Payloads[0])
 	portable, err := fixture.target.Model()
 	require.NoError(t, err)
 	branch := model.Snapshot{
@@ -160,12 +160,12 @@ func TestPreviewPublicationTargetDoesNotResurrectBaseAfterReplaceAwayAndBack(t *
 	assert.Equal(t, originalFloor.Sequence, returnedFloor.Sequence)
 	assert.Equal(t, originalFloor.PublicationID, returnedFloor.PublicationID)
 	assert.Equal(t, originalFloor.RecordCID, returnedFloor.RecordCID)
-	assert.Equal(t, testBlobCID(originalFloor), testBlobCID(returnedFloor))
-	assert.Equal(t, testBlobSize(originalFloor), testBlobSize(returnedFloor))
+	assert.Equal(t, floorPackedBlob(originalFloor), floorPackedBlob(returnedFloor))
+	assert.Equal(t, floorPackedBlob(originalFloor).Size, floorPackedBlob(returnedFloor).Size)
 	request := fixture.request
 	request.ExpectedFloor = cloneServiceTestFloor(returnedFloor)
 	request.SnapshotRecord = bytes.Clone(originalRecord)
-	request.Payload = bytes.Clone(originalPayload)
+	request.Payloads = [][]byte{bytes.Clone(originalPayload)}
 	captureCalls = 0
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
 	assert.Zero(t, captureCalls)
@@ -232,11 +232,14 @@ func publicationPreviewGenesisMaterialForTest(
 		Vault:         binding.Vault,
 		PublicationID: publicationID,
 		Parent:        []byte{},
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(packed.Payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	return record, bytes.Clone(packed.Payload)
@@ -257,7 +260,7 @@ func publicationPreviewAcceptFloorReplacementForTest(
 	require.NoError(t, err)
 	head, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: decoded.PublicationSeq,
-		SnapshotCID: cid, BlobCID: bytes.Clone(decoded.Blob.CID),
+		SnapshotCID: cid,
 	})
 	require.NoError(t, err)
 	current, present, err := store.Load(context.Background())
@@ -496,11 +499,12 @@ func TestPreviewPublicationTargetRequiresCurrentGNOMEApprovalAndPolicy(t *testin
 			Targets: []model.Target{fixture.portable},
 			Entries: changedEntries,
 		}
-		record, payload, floor := publicationPreviewAcceptSuccessor(t, fixture.accepted, updatedSnapshot)
+		record, payloads, entries, floor := publicationPreviewAcceptSuccessor(t, fixture.accepted, updatedSnapshot)
 		request := fixture.request
 		request.ExpectedFloor = floor
 		request.SnapshotRecord = bytes.Clone(record)
-		request.Payload = bytes.Clone(payload)
+		request.Payloads = clonePublicationPayloadSets(payloads)
+		request.Entries = clonePublicationPayloadEntries(entries)
 		request.Configuration = cloneSelectionTestConfig(fixture.request.Configuration)
 		require.Len(t, request.Configuration.Targets, 1)
 		request.Configuration.Targets[0] = changedTarget
@@ -561,14 +565,15 @@ func TestPreviewPublicationTargetKeepsTombstoneDistinctFromAbsenceOnResurrection
 	before := publicationPreviewBaseWitnessForTest(t, base)
 
 	resurrected := publicationPreviewFileEntries(target.ID, map[string]string{"settings.ini": "resurrected content"})
-	record, payload, floor := publicationPreviewAcceptSuccessor(
+	record, payloads, entries, floor := publicationPreviewAcceptSuccessor(
 		t,
 		accepted,
 		model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{portable}, Entries: resurrected},
 	)
 	request.ExpectedFloor = floor
 	request.SnapshotRecord = bytes.Clone(record)
-	request.Payload = bytes.Clone(payload)
+	request.Payloads = clonePublicationPayloadSets(payloads)
+	request.Entries = clonePublicationPayloadEntries(entries)
 	preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)
 	require.NoError(t, err)
 	assert.Equal(t, PublicationPreviewBaseEstablished, disposition)
@@ -670,10 +675,11 @@ func TestPreviewPublicationTargetClassifiesFileEditAndDeletionMatrix(t *testing.
 				Targets: []model.Target{base.selection.portable},
 				Entries: remoteEntries,
 			}
-			record, payload, floor := publicationPreviewAcceptSuccessor(t, accepted, updatedSnapshot)
+			record, payloads, entries, floor := publicationPreviewAcceptSuccessor(t, accepted, updatedSnapshot)
 			request.ExpectedFloor = floor
 			request.SnapshotRecord = bytes.Clone(record)
-			request.Payload = bytes.Clone(payload)
+			request.Payloads = clonePublicationPayloadSets(payloads)
+			request.Entries = clonePublicationPayloadEntries(entries)
 			captured = test.local(targetID)
 
 			preview, disposition, err := PreviewPublicationTarget(context.Background(), request, base)

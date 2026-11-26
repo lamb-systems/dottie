@@ -209,38 +209,20 @@ func (source pushTestAcceptedSource) ReadAcceptedPayload(ctx context.Context) (s
 	if err != nil {
 		return service.AcceptedPublication{}, err
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		entries := make([]publication.PayloadEntry, 0, len(record.Entries))
-		for _, entry := range record.Entries {
-			content, err := source.transport.blob(ctx, entry.Blob)
-			if err != nil {
-				return service.AcceptedPublication{}, err
-			}
-			entries = append(entries, publication.PayloadEntry{
-				Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
-			})
-		}
-		return service.AcceptedPublication{
-			View: view,
-			Payload: publication.Payload{
-				Form: publication.PayloadFormFileSet, Entries: entries,
-			},
-		}, nil
-	}
-	payload, err := source.transport.blob(ctx, record.Blob)
-	if err != nil {
-		return service.AcceptedPublication{}, err
-	}
-	snapshot, err := publication.DecodePayload(payload, record.Blob)
-	if err != nil {
-		return service.AcceptedPublication{}, err
-	}
-	return service.AcceptedPublication{
-		View: view,
-		Payload: publication.Payload{
-			Form: publication.PayloadFormPacked, Snapshot: snapshot,
+	payload, err := publication.ResolvePayload(
+		record,
+		publication.PayloadLimits{
+			MaxEntries: publication.MaxSnapshotEntries, MaxEntryBytes: publication.MaxBlobBytes,
+			MaxTotalBytes: publication.MaxBlobBytes,
 		},
-	}, nil
+		func(blob publication.BlobReference) ([]byte, error) {
+			return source.transport.blob(ctx, blob)
+		},
+	)
+	if err != nil {
+		return service.AcceptedPublication{}, err
+	}
+	return service.AcceptedPublication{View: view, Payload: payload}, nil
 }
 
 type pushTestGuard struct{}
@@ -1002,14 +984,15 @@ func TestPublicationProposalStoreRoundTripsTheRetainedRecord(t *testing.T) {
 	_, err := rand.Read(publicationID[:])
 	require.NoError(t, err)
 	record := service.PublicationProposalRecord{
-		Version:              1,
-		Binding:              fixture.binding,
-		DatabaseID:           [32]byte{0x65},
-		Generation:           1,
-		FloorRevision:        0,
-		CandidateRecordCID:   []byte{0x66},
-		CandidatePayloadCID:  []byte{0x67},
-		CandidatePayloadSize: 8,
+		Version:            2,
+		Binding:            fixture.binding,
+		DatabaseID:         [32]byte{0x65},
+		Generation:         1,
+		FloorRevision:      0,
+		CandidateRecordCID: []byte{0x66},
+		Form:               publication.PayloadFormPacked,
+		Segments:           cliEncodedPackedSegments(t),
+		PayloadsDigest:     [32]byte{0x67},
 		Review: publicationstate.LocalReviewContext{
 			SelectionDigest:   [32]byte{0x68},
 			SelectionRevision: 1,
@@ -1610,9 +1593,8 @@ func TestPublicationProposalStoreRoundTripsAFileSetRecordWithoutContent(t *testi
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, preparation.Record.Form, records[0].Form)
-	assert.Equal(t, preparation.Record.CandidateEntryCount, records[0].CandidateEntryCount)
-	assert.Equal(t, preparation.Record.CandidateEntryDigest, records[0].CandidateEntryDigest)
-	assert.Empty(t, records[0].CandidatePayloadCID)
+	assert.Equal(t, preparation.Record.Segments, records[0].Segments)
+	assert.Equal(t, preparation.Record.PayloadsDigest, records[0].PayloadsDigest)
 	encoded, err := os.ReadFile(fixture.records.path(records[0].PublicationID))
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(encoded), 8<<10)

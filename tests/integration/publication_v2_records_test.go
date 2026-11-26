@@ -64,11 +64,14 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 		PublicationID:  publicationID,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob: publication.BlobReference{
-			CID:      payloadCID,
-			Size:     uint64(len(payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: snapshot.Targets[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      payloadCID,
+				Size:     uint64(len(payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	snapshotBytes, err := publication.EncodeSnapshot(snapshotRecord)
 	require.NoError(t, err)
@@ -79,13 +82,12 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 		Vault:          vaultID,
 		PublicationSeq: 0,
 		SnapshotCID:    recordCID,
-		BlobCID:        payloadCID,
 	})
 	require.NoError(t, err)
 	require.NoError(t, publication.VerifyHeadBinding(headBytes, snapshotBytes, "0000000000000000"))
-	require.NoError(t, publication.VerifyPayload(payload, snapshotRecord.Blob))
+	require.NoError(t, publication.VerifyPayload(payload, recordPackedBlob(snapshotRecord)))
 
-	unpacked, err := publication.DecodePayload(payload, snapshotRecord.Blob)
+	unpacked, err := publication.DecodePayload(payload, recordPackedBlob(snapshotRecord))
 	require.NoError(t, err)
 	foundFile := false
 	foundSetting := false
@@ -105,13 +107,13 @@ func TestV2PublicationRecordsComposeWithPackAndFetchedPayloadUnpack(t *testing.T
 	assert.True(t, foundFile)
 	assert.True(t, foundSetting)
 
-	wrongCID := snapshotRecord.Blob
+	wrongCID := recordPackedBlob(snapshotRecord)
 	wrongCID.CID = bytes.Clone(wrongCID.CID)
 	wrongCID.CID[len(wrongCID.CID)-1] ^= 1
 	_, err = publication.DecodePayload(payload, wrongCID)
 	require.ErrorIs(t, err, publication.ErrPayload)
 
-	wrongSize := snapshotRecord.Blob
+	wrongSize := recordPackedBlob(snapshotRecord)
 	wrongSize.Size++
 	_, err = publication.DecodePayload(payload, wrongSize)
 	require.ErrorIs(t, err, publication.ErrPayload)

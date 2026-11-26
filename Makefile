@@ -5,7 +5,7 @@ override GIO_MIN_VERSION := 2.40
 GOTOOLCHAIN ?= local
 export GOTOOLCHAIN CC PKG_CONFIG
 
-.PHONY: build test test-race vet lint fmt fmt-check check check-generator verify fuzz fuzz-smoke native-check test-gnome test-gnome-race known-defects acceptance
+.PHONY: build test test-race vet lint fmt fmt-check check verify fuzz fuzz-smoke native-check test-gnome test-gnome-race known-defects acceptance
 
 FUZZ_TIME ?= 30s
 FUZZ_SMOKE_TIME ?= 5s
@@ -32,10 +32,7 @@ fmt-check:
 	@files="$$(gofmt -l cmd internal)"; \
 	if [ -n "$$files" ]; then printf 'Run make fmt for:\n%s\n' "$$files"; exit 1; fi
 
-check: fmt-check vet test check-generator
-
-check-generator:
-	$(GO) test ./internal/publicationstate/testdata/attempts-v2/generate -count=1
+check: fmt-check vet test
 
 override KNOWN_DEFECTS_VAULT_TESTS := TestExpectedRefusalEnrollmentParentJoin TestExpectedRefusalCheckpointSkippedPolicyChain TestExpectedRefusalEnrollmentDeltaPolicyFields TestExpectedRefusalRevocationDeltaPolicyFields TestExpectedRefusalCheckpointCertPolicyRole TestExpectedRefusalPolicyDecoderOutOfRangeBounds TestCaseMatrixMatchesRefusalTests TestCaseSecurityGateIsClosed
 override KNOWN_DEFECTS_ATPROTO_TESTS := TestExpectedRefusalReaderHeadEnvelopeParentLink TestExpectedRefusalReaderExtraRecipientInMetadata TestExpectedRefusalReaderUnauthorizedWrap TestExpectedRefusalReaderOlderSnapshotAtNextCount TestExpectedRefusalReaderCoherentForkBehindHead TestExpectedRefusalReaderSplitHeadAndEnvelopeSigners TestExpectedRefusalReaderControlAncestry TestExpectedRefusalReaderHeadAboveMaxPublications TestCaseMatrixMatchesRefusalTests TestCaseSecurityGateIsClosed

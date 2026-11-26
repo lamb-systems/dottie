@@ -136,14 +136,24 @@ func TestResolvePayloadReadsFileSetEntriesWithPathsModesAndSizes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PayloadFormFileSet, payload.Form)
 	require.Len(t, payload.Snapshot.Targets, 1)
-	require.Len(t, payload.Snapshot.Entries, len(entriesOf(record)))
-	for index, entry := range entriesOf(record) {
-		file := payload.Snapshot.Entries[index].File
+	require.Len(t, payload.Snapshot.Entries, len(entriesOf(record))+2)
+	projected := map[string]*model.FileEntry{}
+	directories := map[string]bool{}
+	for _, entry := range payload.Snapshot.Entries {
+		require.NotNil(t, entry.File)
+		projected[entry.File.Path] = entry.File
+		if entry.File.Kind == model.FileDirectory {
+			directories[entry.File.Path] = true
+		}
+	}
+	for _, entry := range entriesOf(record) {
+		file := projected[entry.Path]
 		require.NotNil(t, file)
-		assert.Equal(t, entry.Path, file.Path)
+		assert.Equal(t, model.FileRegular, file.Kind)
 		assert.Equal(t, entry.Mode, file.Mode)
 		assert.Equal(t, contents[entry.Path], file.Content)
 	}
+	assert.Equal(t, map[string]bool{"lua": true, "lua/config": true}, directories)
 	require.Len(t, payload.Entries, len(entriesOf(record)))
 	for index, entry := range entriesOf(record) {
 		assert.Equal(t, entry.Path, payload.Entries[index].Path)
@@ -239,8 +249,7 @@ func TestResolvePayloadRefusesFileSetPayloadsBeyondItsBounds(t *testing.T) {
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, entriesOf(record)[1].Path, refusal.EntryPath())
 	assert.Equal(t, FileSetReasonEntryBytes, refusal.Reason)
-	require.Len(t, source.fetched, 1)
-	assert.Equal(t, entriesOf(record)[0].Blob, source.fetched[0].reference)
+	assert.Empty(t, source.fetched, "a declared-size bound refusal fetched a payload")
 
 	source.fetched = nil
 	payload, err = ResolvePayload(
@@ -252,8 +261,7 @@ func TestResolvePayloadRefusesFileSetPayloadsBeyondItsBounds(t *testing.T) {
 	require.ErrorAs(t, err, &refusal)
 	assert.Equal(t, entriesOf(record)[1].Path, refusal.EntryPath())
 	assert.Equal(t, FileSetReasonTotalBytes, refusal.Reason)
-	require.Len(t, source.fetched, 1)
-	assert.Equal(t, entriesOf(record)[0].Blob, source.fetched[0].reference)
+	assert.Empty(t, source.fetched, "a declared-size bound refusal fetched a payload")
 }
 
 func mustPayloadRawCID(t *testing.T, payload []byte) []byte {
@@ -261,4 +269,182 @@ func mustPayloadRawCID(t *testing.T, payload []byte) []byte {
 	cid, err := RawPayloadCID(payload)
 	require.NoError(t, err)
 	return cid
+}
+
+func TestResolvePayloadChargesEverySegmentToTheRecordBudget(t *testing.T) {
+	first, firstContents := newFileSetPayloadFixture(
+		t,
+		fileSetFile{path: "alpha.conf", mode: 0o600, content: []byte("synthetic alpha")},
+		fileSetFile{path: "gamma.conf", mode: 0o600, content: []byte("synthetic gamma payload")},
+	)
+	second, secondContents := newFileSetPayloadFixture(
+		t,
+		fileSetFile{path: "beta.conf", mode: 0o600, content: []byte("synthetic beta payload")},
+	)
+	first.Segments = append(first.Segments, SnapshotSegment{
+		Target: model.Target{
+			ID: "other", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+		},
+		Form:    SegmentFormEntries,
+		Entries: second.Segments[0].Entries,
+	})
+	raw, err := EncodeSnapshot(first)
+	require.NoError(t, err)
+	record, err := DecodeSnapshot(raw)
+	require.NoError(t, err)
+
+	source := newPayloadFetchMap()
+	for _, segment := range record.Segments {
+		for _, entry := range segment.Entries {
+			content, ok := firstContents[entry.Path]
+			if !ok {
+				content = secondContents[entry.Path]
+			}
+			source.blobs[string(entry.Blob.CID)] = bytes.Clone(content)
+		}
+	}
+
+	alphaSize := uint64(len(firstContents["alpha.conf"]))
+	gammaSize := uint64(len(firstContents["gamma.conf"]))
+	betaSize := uint64(len(secondContents["beta.conf"]))
+	payload, err := ResolvePayload(
+		record, PayloadLimits{MaxTotalBytes: alphaSize + gammaSize + betaSize - 1}, source.fetch,
+	)
+	assert.Equal(t, Payload{}, payload)
+	require.ErrorIs(t, err, ErrFileSetPayload)
+	var refusal *FileSetPayloadError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, FileSetReasonTotalBytes, refusal.Reason)
+	assert.Empty(t, source.fetched, "a declared-size bound refusal fetched a payload")
+
+	t.Run("per segment entry budget", func(t *testing.T) {
+		payload, err := ResolvePayload(record, PayloadLimits{MaxEntries: 1}, source.fetch)
+		assert.Equal(t, Payload{}, payload)
+		require.ErrorIs(t, err, ErrFileSetPayload)
+		var refusal *FileSetPayloadError
+		require.ErrorAs(t, err, &refusal)
+		assert.Equal(t, FileSetReasonEntryCount, refusal.Reason)
+	})
+
+	source.fetched = nil
+	payload, err = ResolvePayload(
+		record, PayloadLimits{MaxTotalBytes: alphaSize + gammaSize + betaSize}, source.fetch,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, PayloadFormMixed, payload.Form)
+	assert.Len(t, payload.Entries, 3)
+}
+
+func TestResolvePayloadRequiresThePackedSnapshotToMatchItsSegmentTarget(t *testing.T) {
+	target := model.Target{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}
+	other := model.Target{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootXDGConfig, Path: "elsewhere", Kind: model.SelectionDirectory},
+	}
+	for name, packedTarget := range map[string]model.Target{
+		"different root": other,
+	} {
+		t.Run(name, func(t *testing.T) {
+			packed, err := vault.Pack(model.Snapshot{
+				Version: model.SnapshotVersion, Targets: []model.Target{packedTarget},
+				Entries: []model.Entry{{
+					TargetID: packedTarget.ID,
+					File: &model.FileEntry{
+						Path: "init.lua", State: model.FilePresent, Kind: model.FileRegular,
+						Content: []byte("synthetic packed payload"), Mode: 0o600,
+					},
+				}},
+			})
+			require.NoError(t, err)
+			record := SnapshotRecord{
+				SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(),
+				Segments: []SnapshotSegment{{
+					Target: target, Form: SegmentFormPacked,
+					Blob: BlobReference{
+						CID: mustPayloadRawCID(t, packed.Payload), Size: uint64(len(packed.Payload)),
+						MIMEType: SnapshotBlobMIMEType,
+					},
+				}},
+			}
+			source := newPayloadFetchMap()
+			source.blobs[string(record.Segments[0].Blob.CID)] = bytes.Clone(packed.Payload)
+			payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
+			assert.Equal(t, Payload{}, payload)
+			require.ErrorIs(t, err, ErrFileSetPayload)
+			var refusal *FileSetPayloadError
+			require.ErrorAs(t, err, &refusal)
+			assert.Equal(t, FileSetReasonMismatch, refusal.Reason)
+		})
+	}
+}
+
+func TestResolvePayloadRefusesAnEntryTreeThatCollidesWithADirectory(t *testing.T) {
+	record := SnapshotRecord{
+		SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(),
+		Segments: []SnapshotSegment{{
+			Target: fixtureFileSetTargets()[0], Form: SegmentFormEntries,
+			Entries: []SnapshotEntry{
+				fixtureEntry(t, "lua", []byte("synthetic collision"), 0o600),
+				fixtureEntry(t, "lua/config", []byte("synthetic nested"), 0o600),
+			},
+		}},
+	}
+	raw, err := EncodeSnapshot(record)
+	require.NoError(t, err)
+	record, err = DecodeSnapshot(raw)
+	require.NoError(t, err)
+
+	source := newPayloadFetchMap()
+	source.serveFileSet(record, map[string][]byte{
+		"lua":        []byte("synthetic collision"),
+		"lua/config": []byte("synthetic nested"),
+	})
+	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
+	assert.Equal(t, Payload{}, payload)
+	require.ErrorIs(t, err, ErrFileSetPayload)
+	var refusal *FileSetPayloadError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, FileSetReasonMismatch, refusal.Reason)
+	assert.Equal(t, "lua", refusal.EntryPath())
+}
+
+func TestResolvePayloadReadsManySegmentsWithinThePerSegmentEntryBudget(t *testing.T) {
+	targets := make([]model.Target, 0, 3)
+	segments := make([]SnapshotSegment, 0, 3)
+	contents := make(map[string][]byte)
+	for _, id := range []string{"alpha", "beta", "gamma"} {
+		target := model.Target{
+			ID: id, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+			Root: &model.FileRoot{Base: model.RootHome, Path: id, Kind: model.SelectionDirectory},
+		}
+		targets = append(targets, target)
+		entries := make([]SnapshotEntry, 0, 33)
+		for index := range 33 {
+			path := id + "-" + string(rune('a'+index)) + ".conf"
+			contents[path] = []byte("synthetic repeated payload")
+			entries = append(entries, fixtureEntry(t, path, contents[path], 0o600))
+		}
+		segments = append(segments, SnapshotSegment{
+			Target: target, Form: SegmentFormEntries, Entries: entries,
+		})
+	}
+	record := SnapshotRecord{
+		SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(),
+		Segments: segments,
+	}
+	raw, err := EncodeSnapshot(record)
+	require.NoError(t, err)
+	record, err = DecodeSnapshot(raw)
+	require.NoError(t, err)
+
+	source := newPayloadFetchMap()
+	source.serveFileSet(record, contents)
+	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
+	require.NoError(t, err)
+	assert.Len(t, payload.Entries, 99)
+	assert.Equal(t, PayloadFormMixed, payload.Form)
 }

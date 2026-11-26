@@ -591,7 +591,7 @@ func openPublicationPushSources(
 }
 
 func renderPushRejection(result service.MaterialPublishResult) string {
-	rendered := "push: the provider refused the submission and wrote no record; the candidate payload may still be retrievable by CID\n"
+	rendered := "push: the provider refused the submission and wrote no record; uploaded candidate blobs may still be retrievable by CID, and an inline settings segment was already sent in the rejected record batch\n"
 	if result.Attempt.Lifecycle == publicationstate.AttemptRetiredAbandoned {
 		return rendered + "push: the unresolved attempt was retired locally and no longer blocks a review; re-run dottie push to review again\n"
 	}

@@ -157,18 +157,21 @@ func (fixture *publicationReaderFixture) records(
 		Vault:          fixture.binding.Vault,
 		PublicationID:  [16]byte{0x62, 0x01},
 		PublicationSeq: 0,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     declaredSize,
-			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: fileSetServiceTargets()[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     declaredSize,
+				MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	})
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRecord)
 	require.NoError(t, err)
 	headRecord, err := publication.EncodeHead(publication.HeadRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault, PublicationSeq: 0,
-		SnapshotCID: snapshotCID, BlobCID: blobCID,
+		SnapshotCID: snapshotCID,
 	})
 	require.NoError(t, err)
 	return map[atproto.RecordKey][]byte{
@@ -409,10 +412,12 @@ func TestPublicationReaderRefusesPayloadAtTheRejectingLayer(t *testing.T) {
 		fixture := newPublicationReaderFixture(t, publisher.repository)
 		record, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
 		require.NoError(t, err)
-		identifier, err := cid.Cast(record.Blob.CID)
+		blob := record.BlobReference()
+		require.NotEmpty(t, blob.CID)
+		identifier, err := cid.Cast(blob.CID)
 		require.NoError(t, err)
 		fixture.transport.mu.Lock()
-		fixture.transport.blobs[identifier.String()] = bytes.Repeat([]byte{0x5a}, int(record.Blob.Size))
+		fixture.transport.blobs[identifier.String()] = bytes.Repeat([]byte{0x5a}, int(blob.Size))
 		fixture.transport.mu.Unlock()
 
 		_, err = fixture.reader.ReadAcceptedPayload(ctx)
@@ -514,7 +519,10 @@ func (fixture *publicationReaderFixture) fileSetPublication(
 	}
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: fixture.binding.Vault,
-		PublicationID: [16]byte{0x62, 0x21}, Entries: entries, Targets: fileSetServiceTargets(),
+		PublicationID: [16]byte{0x62, 0x21},
+		Segments: []publication.SnapshotSegment{{
+			Target: fileSetServiceTargets()[0], Form: publication.SegmentFormEntries, Entries: entries,
+		}},
 	}
 	snapshotRecord, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -570,13 +578,23 @@ func TestPublicationReaderReadsAFileSetPublicationWithVerifiedEntries(t *testing
 	require.Len(t, view.Snapshots, 1)
 	headRecord, err := publication.DecodeHead(view.Head)
 	require.NoError(t, err)
-	assert.Empty(t, testBlobCID(headRecord))
+	assert.Equal(t, uint64(0), headRecord.PublicationSeq)
+	assert.NotContains(t, string(view.Head), "blobCid")
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, view.Head, accepted.View.Head)
 	assert.Equal(t, publication.PayloadFormFileSet, accepted.Payload.Form)
-	assert.Equal(t, model.Snapshot{}, accepted.Payload.Snapshot)
+	require.Len(t, accepted.Payload.Snapshot.Targets, 1)
+	require.Len(t, accepted.Payload.Snapshot.Entries, 4)
+	regular := 0
+	for _, entry := range accepted.Payload.Snapshot.Entries {
+		if entry.File.Kind == model.FileRegular {
+			regular++
+		}
+	}
+	assert.Equal(t, 2, regular)
+	assert.Equal(t, accepted.Payload.Entries, accepted.Payload.Entries[:2])
 	require.Len(t, accepted.Payload.Entries, 2)
 	assert.Equal(t, "init.lua", accepted.Payload.Entries[0].Path)
 	assert.Equal(t, uint32(0o600), accepted.Payload.Entries[0].Mode)

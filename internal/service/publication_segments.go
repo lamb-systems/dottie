@@ -80,11 +80,11 @@ func acceptedSnapshotFromSegments(
 		}
 		switch segment.Form {
 		case publication.SegmentFormPacked:
-			packed, err := publication.DecodePayload(materialSegment.Blob, segment.Blob)
+			packed, err := publication.DecodeSegmentPayload(materialSegment.Blob, segment)
 			if err != nil {
 				return model.Snapshot{}, err
 			}
-			snapshot.Targets = append(snapshot.Targets, packed.Targets...)
+			snapshot.Targets = append(snapshot.Targets, segment.Target)
 			snapshot.Entries = append(snapshot.Entries, packed.Entries...)
 		case publication.SegmentFormEntries:
 			entries := make([]publication.PayloadEntry, 0, len(materialSegment.Entries))

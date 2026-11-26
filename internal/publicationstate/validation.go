@@ -253,8 +253,11 @@ func validateMaterialInput(
 			if !aligned {
 				payloadIndex++
 			}
-			if _, err := publication.DecodePayload(payload, segment.Blob); err != nil {
-				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			if _, err := publication.DecodeSegmentPayload(payload, segment); err != nil {
+				if errors.Is(err, publication.ErrFileSetPayload) {
+					return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+				}
+				return materialAttachment{}, err
 			}
 			attachment.segments = append(attachment.segments, materialSegment{
 				summary: summaryOfSegment(segment),
