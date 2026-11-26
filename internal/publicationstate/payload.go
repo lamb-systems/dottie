@@ -239,10 +239,22 @@ func fileSetPayloadUnsupported(stage Stage) error {
 }
 
 func attemptCoreForm(core attemptCoreWire) PayloadForm {
-	if core.Version == 2 {
-		return PayloadFormFileSet
+	segments, err := segmentSummariesFromWire(core.Segments)
+	if err != nil || len(segments) == 0 {
+		return ""
 	}
-	return PayloadFormPacked
+	form := PayloadFormPacked
+	for _, segment := range segments {
+		switch segment.Form {
+		case PayloadFormSettings:
+			if len(segments) == 1 {
+				return PayloadFormSettings
+			}
+		case PayloadFormFileSet:
+			form = PayloadFormFileSet
+		}
+	}
+	return form
 }
 
 func requirePackedAttemptCore(core attemptCoreWire, stage Stage) error {

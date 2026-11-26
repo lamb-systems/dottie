@@ -420,7 +420,7 @@ func TestFileSetEntriesSortRegularFilesIntoARecord(t *testing.T) {
 	assert.Equal(t, record, decoded)
 }
 
-func TestFileSetRecordRefusesPastTheRecordSizeBound(t *testing.T) {
+func TestFileSetRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
 	segments := strings.Repeat("p", MaxEntryPathBytes-4)
 	entries := make([]SnapshotEntry, 0, MaxSnapshotEntries)
 	for index := range MaxSnapshotEntries {
@@ -436,9 +436,10 @@ func TestFileSetRecordRefusesPastTheRecordSizeBound(t *testing.T) {
 	}
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
+	assert.Greater(t, len(encoded), MaxRecordBytes)
 	decoded, err := DecodeSnapshot(encoded)
-	assert.Equal(t, SnapshotRecord{}, decoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "size_limit")
+	require.NoError(t, err)
+	assert.Equal(t, record, decoded)
 }
 
 func fixtureFileSetRecord(t testing.TB) SnapshotRecord {

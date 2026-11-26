@@ -195,11 +195,20 @@ func validateMaterialInput(
 		}
 		payloads = append(payloads, input.Payload)
 	}
+	aligned := len(payloads) == len(record.Segments)
+	if !aligned && len(payloads) > len(record.Segments) {
+		return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+	}
+	for index, payload := range payloads {
+		if aligned && payload != nil && record.Segments[index].Form != publication.SegmentFormPacked {
+			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+		}
+	}
 	attachment := materialAttachment{segments: make([]materialSegment, 0, len(record.Segments))}
 	entryIndex, payloadIndex := 0, 0
 	managed := make(map[string]bool)
 	var custody uint64
-	for _, segment := range record.Segments {
+	for segmentIndex, segment := range record.Segments {
 		switch segment.Form {
 		case publication.SegmentFormEntries:
 			count := len(segment.Entries)
@@ -234,11 +243,16 @@ func validateMaterialInput(
 				entries: entries,
 			})
 		case publication.SegmentFormPacked:
+			if aligned {
+				payloadIndex = segmentIndex
+			}
 			if payloadIndex >= len(payloads) {
 				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 			}
 			payload := payloads[payloadIndex]
-			payloadIndex++
+			if !aligned {
+				payloadIndex++
+			}
 			if _, err := publication.DecodePayload(payload, segment.Blob); err != nil {
 				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 			}
@@ -253,7 +267,10 @@ func validateMaterialInput(
 			return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
 		}
 	}
-	if entryIndex != len(input.Entries) || payloadIndex != len(payloads) {
+	if entryIndex != len(input.Entries) {
+		return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+	}
+	if !aligned && payloadIndex != len(payloads) {
 		return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	if uint64(len(managed)) > uint64(limits.ManagedObjects) {
@@ -277,7 +294,7 @@ func summaryOfSegment(segment publication.SnapshotSegment) SegmentSummary {
 	return summariesOfRecord([]publication.SnapshotSegment{segment})[0]
 }
 
-func validateObservationWithFileSet(input Observation, binding Binding, limits Limits, allowFileSet bool) (validatedObservation, error) {
+func validateObservationWithFileSet(input Observation, binding Binding, limits Limits, _ bool) (validatedObservation, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonBinding)
 	}
@@ -323,9 +340,6 @@ func validateObservationWithFileSet(input Observation, binding Binding, limits L
 		record, err := publication.DecodeSnapshot(block.Raw)
 		if err != nil || record.Vault != binding.Vault || record.PublicationSeq != sequence {
 			return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		if payloadFormOf(record) == PayloadFormFileSet && !allowFileSet {
-			return validatedObservation{}, fileSetPayloadUnsupported(StageInput)
 		}
 		cid, err := publication.RecordCID(block.Raw)
 		if err != nil {

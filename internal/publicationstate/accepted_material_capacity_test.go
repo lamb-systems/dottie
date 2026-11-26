@@ -316,7 +316,7 @@ func readAcceptedMaterialCapacityEvidence(
 	var retainedReferences, attemptReferences, activeAttempts, attemptCount int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(expectedFloor.Revision), testBlobCID(expectedFloor)).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(expectedFloor.Revision)).
 			Scan(&retainedReferences),
 	)
 	require.NoError(
@@ -421,7 +421,7 @@ func assertAcceptedMaterialCapacityPositiveInventory(
 	var retainedReferences, baseAttemptReferences, successorAttemptReferences, activeAttempts, attemptCount int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(floor.Revision), testBlobCID(floor)).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=?", int64(floor.Revision)).
 			Scan(&retainedReferences),
 	)
 	require.NoError(
@@ -512,7 +512,6 @@ func assertAcceptedMaterialCapacitySuccessor(
 	require.Equal(t, wantHead.PublicationSeq, successorRecord.PublicationSeq)
 	require.Equal(t, wantHead.Vault, successorRecord.Vault)
 	require.Equal(t, wantHead.SnapshotCID, successorCID)
-	require.Equal(t, testBlobCID(wantHead), testBlob(successorRecord).CID)
 }
 
 func mustSuccessorParent(t *testing.T, candidate CandidateInput) []byte {

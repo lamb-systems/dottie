@@ -78,7 +78,6 @@ func newAcceptedMaterialTestFixture(t *testing.T, backend publicationstate.Backe
 		Vault:          binding.Vault,
 		PublicationSeq: 0,
 		SnapshotCID:    recordCID,
-		BlobCID:        blobCID,
 	})
 	require.NoError(t, err)
 	contextValue := publicationstate.SuppliedContext{
@@ -138,7 +137,7 @@ func cloneServiceTestFloor(floor publicationstate.Floor) publicationstate.Floor 
 	}
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
-	out.BlobCID = bytes.Clone(floor.BlobCID)
+	testBlobCID(out) = bytes.Clone(testBlobCID(floor))
 	return out
 }
 
@@ -301,8 +300,8 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 	acceptedSnapshot, err := publication.DecodePayload(
 		fixture.request.payload,
 		publication.BlobReference{
-			CID:  fixture.request.expectedFloor.BlobCID,
-			Size: fixture.request.expectedFloor.BlobSize,
+			CID:  testBlobCID(fixture.request.expectedFloor),
+			Size: testBlobSize(fixture.request.expectedFloor),
 		},
 	)
 	require.NoError(t, err)
@@ -311,8 +310,8 @@ func TestValidateAcceptedPublicationMaterialRefusesRecordAndPayloadSubstitution(
 	alternateSnapshot, err := publication.DecodePayload(
 		fixture.request.payload,
 		publication.BlobReference{
-			CID:  fixture.request.expectedFloor.BlobCID,
-			Size: fixture.request.expectedFloor.BlobSize,
+			CID:  testBlobCID(fixture.request.expectedFloor),
+			Size: testBlobSize(fixture.request.expectedFloor),
 		},
 	)
 	require.NoError(t, err)
@@ -481,7 +480,6 @@ func TestValidateAcceptedPublicationMaterialAcrossSequentialAdvanceAndReopen(t *
 		Vault:          fixture.request.binding.Vault,
 		PublicationSeq: 1,
 		SnapshotCID:    successorCID,
-		BlobCID:        bytes.Clone(fixture.request.expectedFloor.BlobCID),
 	})
 	require.NoError(t, err)
 	observation := publicationstate.Observation{

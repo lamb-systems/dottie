@@ -846,7 +846,7 @@ func TestPublishMaterialGenesisCommitsFloorAndRetiresAttempt(t *testing.T) {
 	assert.Equal(t, uint64(1), result.Floor.Revision)
 	assert.Equal(t, uint64(0), result.Floor.Sequence)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, result.Floor.RecordCID)
-	assert.Equal(t, proposal.Blob.CID, result.Floor.BlobCID)
+	assert.Equal(t, proposalPackedBlob(proposal).CID, testBlobCID(result.Floor))
 	assert.Equal(t, proposal.Batch.HeadRecord, result.Floor.Head)
 	assert.Equal(t, proposal.Batch.SnapshotRecord, fixture.transport.committed(proposal.Batch.SnapshotKey))
 	assert.Equal(t, proposal.Batch.HeadRecord, fixture.transport.committedHead())
@@ -864,7 +864,7 @@ func TestPublishMaterialGenesisCommitsFloorAndRetiresAttempt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, publicationstate.AttemptRetiredSuccess, retained.Lifecycle)
 
-	decoded, err := publication.DecodePayload(packed.Payload, proposal.Blob)
+	decoded, err := publication.DecodePayload(packed.Payload, proposalPackedBlob(proposal))
 	require.NoError(t, err)
 	require.Len(t, decoded.Entries, 1)
 	assert.Equal(t, []byte("synthetic genesis payload"), decoded.Entries[0].File.Content)
@@ -1777,7 +1777,7 @@ func TestPublishMaterialDeclaresAndVerifiesTheProviderBlobMediaType(t *testing.T
 		sealed, err := publication.DecodeSnapshot(proposal.Batch.SnapshotRecord)
 		require.NoError(t, err)
 		assert.Equal(t, publication.SnapshotBlobMIMEType, sealed.Blob.MIMEType)
-		assert.Equal(t, publication.SnapshotBlobMIMEType, proposal.Blob.MIMEType)
+		assert.Equal(t, publication.SnapshotBlobMIMEType, proposalPackedBlob(proposal).MIMEType)
 		assert.Equal(t, publicationstate.OutcomeCurrent, result.Outcome)
 		assert.Equal(t, 1, fixture.transport.applyCount())
 

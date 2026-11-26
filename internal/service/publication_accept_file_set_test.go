@@ -63,9 +63,12 @@ func packedServiceBlock(
 		Vault:          binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: fileSetServiceTargets()[0], Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+9)
 	raw, err := publication.EncodeSnapshot(record)
@@ -88,9 +91,6 @@ func publicationHead(
 		Vault:          binding.Vault,
 		PublicationSeq: record.PublicationSeq,
 		SnapshotCID:    mustFileSetRecordCID(t, block.Raw),
-	}
-	if record.PayloadForm() == publication.PayloadFormPacked {
-		headRecord.BlobCID = record.Blob.CID
 	}
 	head, err := publication.EncodeHead(headRecord)
 	require.NoError(t, err)
@@ -147,15 +147,15 @@ func TestPublicationAcceptRoutesFileSetEntriesThroughMaterialIntake(t *testing.T
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), accepted.Revision)
-	require.NotNil(t, accepted.FileSet)
-	require.Len(t, accepted.FileSet.Entries, len(files))
+	require.NotEmpty(t, floorFileSet(accepted))
+	require.Len(t, floorFileSet(accepted), len(files))
 
 	material := publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted)
-	require.Len(t, material.Entries, len(files))
+	require.Len(t, acceptedEntriesOf(material), len(files))
 	for index, file := range files {
-		assert.Equal(t, file.path, material.Entries[index].Path)
-		assert.Equal(t, file.mode, material.Entries[index].Mode)
-		assert.Equal(t, file.content, material.Entries[index].Content)
+		assert.Equal(t, file.path, acceptedEntriesOf(material)[index].Path)
+		assert.Equal(t, file.mode, acceptedEntriesOf(material)[index].Mode)
+		assert.Equal(t, file.content, acceptedEntriesOf(material)[index].Content)
 	}
 
 	missing := fileSetServiceEntries(files)[:1]
@@ -203,10 +203,10 @@ func TestPublicationAcceptRoutesFileSetEntriesThroughMaterialIntake(t *testing.T
 	assert.Equal(t, accepted.Revision+1, advanced.Revision)
 	assert.Equal(t, accepted.Generation, advanced.Generation)
 	successorMaterial := publicationAcceptMaterial(t, fixture.directory, fixture.binding, advanced)
-	require.Len(t, successorMaterial.Entries, len(successorFiles))
+	require.Len(t, acceptedEntriesOf(successorMaterial), len(successorFiles))
 	for index, file := range successorFiles {
-		assert.Equal(t, file.path, successorMaterial.Entries[index].Path)
-		assert.Equal(t, file.content, successorMaterial.Entries[index].Content)
+		assert.Equal(t, file.path, acceptedEntriesOf(successorMaterial)[index].Path)
+		assert.Equal(t, file.content, acceptedEntriesOf(successorMaterial)[index].Content)
 	}
 }
 
@@ -229,7 +229,7 @@ func TestPublicationAcceptFileSetRefusesDamagedCustody(t *testing.T) {
 		Observation: observation, Entries: fileSetServiceEntries(files),
 	})
 	require.NoError(t, err)
-	require.NotNil(t, accepted.FileSet)
+	require.NotEmpty(t, floorFileSet(accepted))
 
 	require.NoError(t, os.Remove(filepath.Join(
 		fixture.directory,
@@ -283,8 +283,8 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 			Observation: observation, Entries: fileSetServiceEntries(files),
 		})
 		require.NoError(t, err)
-		require.NotNil(t, accepted.FileSet)
-		require.Len(t, accepted.FileSet.Entries, 1)
+		require.NotEmpty(t, floorFileSet(accepted))
+		require.Len(t, floorFileSet(accepted), 1)
 	})
 
 	t.Run("head packed with a later file-set snapshot", func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 			Observation: observation, Payload: packed.payload,
 		})
 		require.NoError(t, err)
-		assert.Nil(t, accepted.FileSet)
+		assert.Nil(t, floorFileSet(accepted))
 		assert.Equal(t, packed.block.Raw, publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted).SnapshotRecord)
 	})
 }

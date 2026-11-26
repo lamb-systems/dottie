@@ -195,12 +195,12 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 
 	staged, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, acceptedEntries(staged), 3)
+	require.Len(t, staged.Entries, 3)
 	assert.Empty(t, acceptedPayload(staged))
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Path, acceptedEntries(staged)[index].Path)
-		assert.Equal(t, entry.Mode, acceptedEntries(staged)[index].Mode)
-		assert.Equal(t, entry.Content, acceptedEntries(staged)[index].Content)
+		assert.Equal(t, entry.Path, staged.Entries[index].Path)
+		assert.Equal(t, entry.Mode, staged.Entries[index].Mode)
+		assert.Equal(t, entry.Content, staged.Entries[index].Content)
 	}
 
 	upload := beginFileSetUpload(t, store, attempt, view, review)
@@ -233,7 +233,7 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, PayloadFormFileSet, submission.PayloadForm)
-	assert.Equal(t, f.references(), acceptedEntries(submission))
+	assert.Equal(t, f.references(), submission.Entries)
 	assert.Equal(t, f.raw, submission.SnapshotRecord)
 	assert.Equal(t, f.head, submission.HeadRecord)
 	assert.True(t, submission.RequiresAtomicBatch)
@@ -248,10 +248,10 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	assert.Equal(t, OutcomeAbsentUnresolved, resolution.Outcome)
 	readBack, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, acceptedEntries(readBack), 3)
+	require.Len(t, readBack.Entries, 3)
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Path, acceptedEntries(readBack)[index].Path)
-		assert.Equal(t, entry.Content, acceptedEntries(readBack)[index].Content)
+		assert.Equal(t, entry.Path, readBack.Entries[index].Path)
+		assert.Equal(t, entry.Content, readBack.Entries[index].Content)
 	}
 
 	extended := f.view()
@@ -519,9 +519,9 @@ func TestFileSetCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T)
 
 	readBack, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, acceptedEntries(readBack), 3)
+	require.Len(t, readBack.Entries, 3)
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Content, acceptedEntries(readBack)[index].Content)
+		assert.Equal(t, entry.Content, readBack.Entries[index].Content)
 	}
 }
 
@@ -645,20 +645,18 @@ func assertFileSetRetainedPosition(
 	assert.Empty(t, testBlobCID(floor))
 	assert.Equal(t, uint64(0), testBlobSize(floor))
 
-	var formValue, blobValue, sizeValue, fileSetValue any
+	var segmentsValue any
 	require.NoError(t, store.conn.QueryRowContext(
 		ctx,
-		"SELECT form,blob_cid,size,file_set FROM retained_publications WHERE attempt_id=?",
+		"SELECT segments FROM retained_publications WHERE attempt_id=?",
 		id[:],
-	).Scan(&formValue, &blobValue, &sizeValue, &fileSetValue))
-	assert.Equal(t, string(PayloadFormFileSet), formValue)
-	assert.Nil(t, blobValue)
-	assert.Nil(t, sizeValue)
-	encodedFileSet, fileSetOK := fileSetValue.([]byte)
-	require.True(t, fileSetOK)
-	retainedFileSet, err := decodeRetainedFileSet(encodedFileSet)
+	).Scan(&segmentsValue))
+	encodedSegments, segmentsOK := segmentsValue.([]byte)
+	require.True(t, segmentsOK)
+	retainedSegments, err := decodeSegmentSummaries(encodedSegments)
 	require.NoError(t, err)
-	assert.Equal(t, f.references(), acceptedEntries(retainedFileSet))
+	assert.Equal(t, summariesOfRecord(f.recordSegments()), retainedSegments)
+	assert.Equal(t, f.references(), fileSetEntries(retainedSegments))
 
 	for _, query := range []string{
 		"SELECT COUNT(*) FROM accepted_material_refs",
@@ -765,22 +763,6 @@ func fileSetCompletionHistoryBytes(t *testing.T, store *Store, f fileSetAttemptF
 	}
 	return uint64(len(body)+32+8) + recordLogicalBytes(record) +
 		uint64(limits.SuppliedContextBytes) - uint64(len(encodedContext))
-}
-
-func TestFinalizationObservationAcceptsFileSetWhileOrdinaryObservationRefuses(t *testing.T) {
-	f := fileSetFixture(t)
-	observation := Observation{
-		Origin:          f.binding,
-		SuppliedContext: SuppliedContext{RepositoryRevision: "revision-1", RepositoryDigest: []byte{1, 2, 3}},
-		Head:            f.head,
-		Snapshots:       []SnapshotBlock{{Key: f.key, Raw: f.raw}},
-	}
-	_, err := validateObservation(observation, f.binding, DefaultLimits())
-	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
-	validated, err := validateFinalizationObservation(observation, f.binding, DefaultLimits())
-	require.NoError(t, err)
-	assert.Equal(t, f.raw, validated.candidate.raw)
-	assert.Equal(t, f.key, validated.candidate.ref.Key)
 }
 
 func TestOversizedFileSetAttemptRefusesFinalizationAdmission(t *testing.T) {

@@ -255,7 +255,10 @@ func (s *Store) CreateAttempt(
 			s.limits,
 			s.attemptLimits,
 		)
-		if err != nil || hasActive || !bytes.Equal(expectedToken[:], freshToken[:]) {
+		if err != nil {
+			return classified(ErrConsent, StageAttempt, ReasonStale)
+		}
+		if hasActive || !bytes.Equal(expectedToken[:], freshToken[:]) {
 			return classified(ErrConsent, StageAttempt, ReasonStale)
 		}
 		if err := s.checkAttemptAdmissionCapacity(ctx, tx); err != nil {
@@ -1448,9 +1451,15 @@ func (s *Store) checkAttemptGraph(ctx context.Context, q queryer, stage Stage) e
 		active := attempt.lifecycle != AttemptRetiredAbandoned && attempt.lifecycle != AttemptRetiredSuccess
 		if active {
 			nonretired++
-			wantedRefCount := int64(1)
-			if attemptCoreForm(attempt.core) == PayloadFormFileSet {
-				wantedRefCount = 0
+			segments, err := segmentSummariesFromWire(attempt.core.Segments)
+			if err != nil {
+				return classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			wantedRefCount := int64(0)
+			for _, summary := range segments {
+				if summary.Form == PayloadFormPacked {
+					wantedRefCount++
+				}
 			}
 			if activeCount != 1 || id != activeID || refCount != wantedRefCount || reservationCount != 1 ||
 				retainedRows != 0 {

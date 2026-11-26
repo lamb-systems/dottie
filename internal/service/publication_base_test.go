@@ -786,7 +786,6 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 			Vault:          binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    recordCID,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)
@@ -837,7 +836,6 @@ func publicationBaseAcceptSamePayloadSuccessor(t *testing.T, fixture acceptedMat
 			Vault:          fixture.request.binding.Vault,
 			PublicationSeq: 1,
 			SnapshotCID:    cid,
-			BlobCID:        bytes.Clone(fixture.request.expectedFloor.BlobCID),
 		},
 	)
 	require.NoError(t, err)

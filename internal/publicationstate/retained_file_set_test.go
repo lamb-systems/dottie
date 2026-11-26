@@ -74,7 +74,7 @@ func newRetainedValidationFixture(t *testing.T, form PayloadForm) retainedValida
 		key = fixtureValue.key
 	case PayloadFormPacked:
 		f := newFixture(t, BackendPublicRepo)
-		f.recordMIMEType = publication.BlobMIMEType
+		f.recordMIMEType = publication.SnapshotBlobMIMEType
 		f.appendRecord(t, 0)
 		store, _ = newStore(t, f)
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })

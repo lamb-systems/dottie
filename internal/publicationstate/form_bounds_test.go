@@ -401,19 +401,3 @@ func TestLargeFileSetRecordReusesAcrossCapacityAndInsert(t *testing.T) {
 		ReasonCapacity,
 	)
 }
-
-func TestObservationRefusesLargeFileSetWithTypedPayloadFormError(t *testing.T) {
-	f := newLargeFileSetFixture(t)
-	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
-	_, err := validateObservation(
-		Observation{
-			Origin:          f.binding,
-			SuppliedContext: SuppliedContext{RepositoryRevision: "revision-1", RepositoryDigest: []byte{1, 2, 3}},
-			Head:            f.head,
-			Snapshots:       []SnapshotBlock{{Key: f.key, Raw: f.raw}},
-		},
-		f.binding,
-		DefaultLimits(),
-	)
-	requireErrorMetadata(t, err, ErrUnsupported, StageInput, ReasonPayloadForm)
-}

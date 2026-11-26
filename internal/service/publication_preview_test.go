@@ -712,7 +712,6 @@ func publicationPreviewAcceptSuccessor(
 			Vault:          fixture.request.binding.Vault,
 			PublicationSeq: old.PublicationSeq,
 			SnapshotCID:    cid,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)

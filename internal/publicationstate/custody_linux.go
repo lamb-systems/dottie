@@ -631,6 +631,9 @@ func (s *Store) persistCandidatePayloads(
 		}
 		return staged, nil
 	}
+	if len(candidate.payload) == 0 {
+		return nil, nil
+	}
 	name, _, err := s.persistPayload(
 		ctx,
 		s.conn,

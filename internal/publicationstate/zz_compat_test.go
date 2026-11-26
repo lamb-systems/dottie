@@ -38,6 +38,12 @@ func testSegmentsOf(value any) []SegmentSummary {
 		return summaries
 	case *AcceptedMaterial:
 		return testSegmentsOf(*typed)
+	case []SegmentSummary:
+		return typed
+	case SegmentSummary:
+		return []SegmentSummary{typed}
+	case *SegmentSummary:
+		return []SegmentSummary{*typed}
 	}
 	return nil
 }
@@ -92,6 +98,12 @@ func acceptedPayload(value any) []byte {
 	case *CandidateInput:
 		return material.Payload
 	case UploadMaterial:
+		for index, summary := range material.Segments {
+			if summary.Form == PayloadFormPacked && index < len(material.Payloads) {
+				return material.Payloads[index]
+			}
+		}
+	case CandidateMaterial:
 		for index, summary := range material.Segments {
 			if summary.Form == PayloadFormPacked && index < len(material.Payloads) {
 				return material.Payloads[index]
@@ -260,7 +272,10 @@ func requireIncomingMaterialRowsAbsent(t *testing.T, ctx context.Context, store 
 
 func requireIncomingMaterialLoadAbsent(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM active_floor"))
+	floor, present, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.False(t, present)
+	require.Equal(t, Floor{}, floor)
 }
 
 func requireIncomingMaterialPublication(t *testing.T, ctx context.Context, store *Store, f fixture, floor Floor) {
@@ -288,4 +303,45 @@ func incomingCustodyPlaceOrphan(t *testing.T, directory string, payload []byte) 
 	require.NoError(t, os.MkdirAll(payloadDirectory, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(payloadDirectory, name), payload, 0o600))
 	return name
+}
+
+func mustPayloadRawCID(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	cidValue, err := publication.RawPayloadCID(payload)
+	require.NoError(t, err)
+	return cidValue
+}
+
+func (f fileSetAttemptFixture) recordSegments() []publication.SnapshotSegment {
+	record, err := publication.DecodeSnapshot(f.raw)
+	if err != nil {
+		return nil
+	}
+	return record.Segments
+}
+
+func retainedReferencesCID(t *testing.T, store *Store, cidValue []byte) int64 {
+	t.Helper()
+	rows, err := store.conn.QueryContext(context.Background(), "SELECT segments FROM retained_publications")
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, rows.Close()) }()
+	var matches int64
+	for rows.Next() {
+		var encoded []byte
+		require.NoError(t, rows.Scan(&encoded))
+		summaries, err := decodeSegmentSummaries(encoded)
+		require.NoError(t, err)
+		for _, summary := range summaries {
+			if bytes.Equal(summary.BlobCID, cidValue) {
+				matches++
+			}
+			for _, entry := range summary.Entries {
+				if bytes.Equal(entry.CID, cidValue) {
+					matches++
+				}
+			}
+		}
+	}
+	require.NoError(t, rows.Err())
+	return matches
 }

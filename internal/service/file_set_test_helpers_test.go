@@ -57,7 +57,9 @@ func newSequencedFileSetServicePublication(
 	document := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion, Vault: vault, PublicationID: publicationID,
 		PublicationSeq: sequence, Parent: parent,
-		Entries: entries, Targets: fileSetServiceTargets(),
+		Segments: []publication.SnapshotSegment{{
+			Target: fileSetServiceTargets()[0], Form: publication.SegmentFormEntries, Entries: entries,
+		}},
 	}
 	raw, err := publication.EncodeSnapshot(document)
 	require.NoError(t, err)

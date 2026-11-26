@@ -431,7 +431,9 @@ func decodeSnapshotObject(encoded []byte) (map[string]any, error) {
 	if err != nil {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
-	if _, fileSet := object["entries"]; !fileSet {
+	_, entries := object["entries"]
+	_, segments := object["segments"]
+	if !entries && !segments {
 		return nil, violation(ErrInvalidRecord, "record", "size_limit")
 	}
 	return object, nil

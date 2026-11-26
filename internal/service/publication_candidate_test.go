@@ -68,9 +68,8 @@ func TestBuildPublicationSnapshotAndMaterialDescribeOneReviewedSnapshot(t *testi
 		Origin: binding, Scope: publicationstate.ViewScopeWholeRepository,
 		SuppliedContext: materialTestContext(0),
 	}
-	candidate, blob, batch, err := buildPublicationMaterial(
+	candidate, batch, err := buildPublicationMaterial(
 		binding,
-		publication.PayloadFormPacked,
 		reviewed,
 		publicationstate.Floor{},
 		false,
@@ -78,10 +77,11 @@ func TestBuildPublicationSnapshotAndMaterialDescribeOneReviewedSnapshot(t *testi
 		publicationID,
 	)
 	require.NoError(t, err)
+	require.Len(t, candidate.Payloads, 1)
 	assert.Equal(
 		t,
 		reviewedPacked.Payload,
-		candidate.Payload,
+		candidate.Payloads[0],
 		"the builder packed a different snapshot than the reviewed one",
 	)
 	assert.Equal(t, uint64(len(reviewedPacked.Payload)), blob.Size)
@@ -130,7 +130,6 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 	floor := publicationstate.Floor{
 		Sequence:    0,
 		RecordCID:   predecessorCID,
-		BlobCID:     predecessorBlob.CID,
 		SnapshotKey: predecessor.SnapshotKey,
 		Revision:    7,
 		Generation:  2,
@@ -141,7 +140,7 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 		SuppliedContext: materialTestContext(1),
 	}
 
-	candidate, _, batch, err := buildPublicationMaterial(
+	candidate, _, batch, err := buildPublicationMaterialLegacy(
 		binding, publication.PayloadFormPacked, snapshot, floor, true, view, [16]byte{0x53},
 	)
 	require.NoError(t, err)
@@ -157,7 +156,7 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 	assert.Equal(t, uint64(0), batch.ExpectedPredecessor.Sequence)
 	assert.Equal(t, floor.RecordCID, batch.ExpectedPredecessor.CID)
 
-	_, _, _, err = buildPublicationMaterial(
+	_, _, _, err = buildPublicationMaterialLegacy(
 		binding,
 		publication.PayloadFormPacked,
 		snapshot,

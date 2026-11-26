@@ -69,7 +69,7 @@ func Inspect(ctx context.Context, directory string, binding Binding) (Inspection
 	if !probe.recognized {
 		return Inspection{}, classified(ErrSchema, StageInspect, ReasonSchema)
 	}
-	if probe.version != 3 {
+	if probe.version != 4 {
 		return Inspection{}, classified(ErrSchema, StageInspect, ReasonUpgradeRequired)
 	}
 	return readInspection(ctx, databasePath, binding)

@@ -570,7 +570,7 @@ func TestPublicationReaderReadsAFileSetPublicationWithVerifiedEntries(t *testing
 	require.Len(t, view.Snapshots, 1)
 	headRecord, err := publication.DecodeHead(view.Head)
 	require.NoError(t, err)
-	assert.Empty(t, headRecord.BlobCID)
+	assert.Empty(t, testBlobCID(headRecord))
 
 	accepted, err := fixture.reader.ReadAcceptedPayload(ctx)
 	require.NoError(t, err)

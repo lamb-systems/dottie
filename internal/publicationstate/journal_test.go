@@ -953,7 +953,7 @@ func TestJournalLeavesPositionStoreUntouched(t *testing.T) {
 	require.NoError(t, os.Chmod(directory, 0o700))
 	store, err := Open(directory, fixture.binding)
 	require.NoError(t, err)
-	require.Equal(t, 3, store.schemaVersion)
+	require.Equal(t, 4, store.schemaVersion)
 	require.NoError(t, store.Close())
 
 	before := journalPositionStoreBytes(t, directory)
@@ -993,7 +993,7 @@ func TestJournalLeavesPositionStoreUntouched(t *testing.T) {
 
 	reopened, err := Open(directory, fixture.binding)
 	require.NoError(t, err)
-	assert.Equal(t, 3, reopened.schemaVersion)
+	assert.Equal(t, 4, reopened.schemaVersion)
 	_, present, err := reopened.Load(ctx)
 	require.NoError(t, err)
 	assert.False(t, present)

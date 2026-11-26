@@ -817,11 +817,14 @@ func candidateWithPayload(t *testing.T, candidate CandidateInput, binding Bindin
 	require.NoError(t, err)
 	blobCID, err := publication.RawPayloadCID(payload)
 	require.NoError(t, err)
-	_ = publication.BlobReference{
-		CID:      blobCID,
-		Size:     uint64(len(payload)),
-		MIMEType: publication.SnapshotBlobMIMEType,
-	}
+	record.Segments = []publication.SnapshotSegment{{
+		Target: record.Segments[0].Target, Form: publication.SegmentFormPacked,
+		Blob: publication.BlobReference{
+			CID:      blobCID,
+			Size:     uint64(len(payload)),
+			MIMEType: publication.SnapshotBlobMIMEType,
+		},
+	}}
 	snapshotRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	snapshotCID, err := publication.RecordCID(snapshotRaw)

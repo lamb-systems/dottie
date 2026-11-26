@@ -511,8 +511,31 @@ func (s *Store) readCandidateUnlocked(
 		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
-	if err != nil || !sameSegmentSummaries(summariesOfRecord(record.Segments), segments) {
+	if err != nil {
 		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	if !sameSegmentSummaries(summariesOfRecord(record.Segments), segments) {
+		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	packed := 0
+	for _, summary := range segments {
+		if summary.Form == PayloadFormPacked {
+			packed++
+		}
+	}
+	if packed > 0 {
+		var references, retained int
+		if err := s.conn.QueryRowContext(
+			ctx,
+			"SELECT (SELECT COUNT(*) FROM attempt_payload_refs WHERE attempt_id=?),(SELECT COUNT(*) FROM retained_publications WHERE attempt_id=?)",
+			stored.core.AttemptID,
+			stored.core.AttemptID,
+		).Scan(&references, &retained); err != nil {
+			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		if references == 0 && retained != 1 {
+			return CandidateMaterial{}, classified(ErrStorage, stage, ReasonCandidateMissing)
+		}
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)

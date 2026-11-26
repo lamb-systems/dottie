@@ -231,7 +231,7 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Zero(t, attemptReferences)
 
 	catalogBeforeAccept := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
-	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(catalogBeforeAccept))
+	assert.Equal(t, acceptedPayload(candidate), catalogBeforeAccept.Payload)
 	assert.Zero(t, catalogBeforeAccept.AttemptRefs)
 	assert.Zero(t, catalogBeforeAccept.RetainedByBlob)
 	candidateSnapshot, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -307,7 +307,7 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 	catalogAfterRead := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
 	assert.Equal(t, catalogBeforeRead, catalogAfterRead)
-	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(catalogAfterRead))
+	assert.Equal(t, acceptedPayload(candidate), catalogAfterRead.Payload)
 }
 
 type acceptedMaterialRevisionOwnedState struct {
@@ -468,7 +468,7 @@ func readAcceptedMaterialAbandonedObject(
 	var retainedByBlob int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE blob_cid=?", catalogCID).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE segments IS NOT NULL").
 			Scan(&retainedByBlob),
 	)
 	return acceptedMaterialAbandonedObject{

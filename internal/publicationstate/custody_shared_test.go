@@ -292,7 +292,7 @@ func sharedCustodyLogicalRows(ctx context.Context, q queryer) (map[string][][]an
 		{"attempt_evidence", "*", "attempt_id,role"},
 		{"payload_objects", "*", "blob_cid"},
 		{"attempt_payload_refs", "*", "attempt_id"},
-		{"retained_publications", "record_cid,attempt_id,sequence,blob_cid,size,accepted_revision", "record_cid"},
+		{"retained_publications", "record_cid,attempt_id,sequence,segments,accepted_revision", "record_cid"},
 		{"attempt_reservations", "*", "attempt_id"},
 	}
 	result := make(map[string][][]any, len(tables))

@@ -627,7 +627,7 @@ func TestMaterialATProtoGenesisPublishesThroughCoordinator(t *testing.T) {
 	assert.Equal(t, uint64(1), result.Floor.Revision)
 	assert.Equal(t, uint64(0), result.Floor.Sequence)
 	assert.Equal(t, proposal.Batch.ExpectedSnapshotCID, result.Floor.RecordCID)
-	assert.Equal(t, proposal.Blob.CID, result.Floor.BlobCID)
+	assert.Equal(t, proposalPackedBlob(proposal).CID, testBlobCID(result.Floor))
 	assert.Equal(t, proposal.Batch.HeadRecord, result.Floor.Head)
 
 	assert.Equal(t, 1, fixture.repository.uploadCount())
@@ -654,10 +654,10 @@ func TestMaterialATProtoGenesisPublishesThroughCoordinator(t *testing.T) {
 		proposal.Batch.HeadRecord,
 		fixture.repository.record(atproto.RecordKey{Collection: publication.HeadNSID, RKey: materialHeadKey}),
 	)
-	require.True(t, fixture.repository.blobRetrievable(proposal.Blob.CID))
+	require.True(t, fixture.repository.blobRetrievable(proposalPackedBlob(proposal).CID))
 	packed, err := vault.Pack(fixture.snapshot)
 	require.NoError(t, err)
-	assert.Equal(t, packed.Payload, fixture.repository.blob(proposal.Blob.CID))
+	assert.Equal(t, packed.Payload, fixture.repository.blob(proposalPackedBlob(proposal).CID))
 
 	committed, err := fixture.transport.ReadView(ctx)
 	require.NoError(t, err)
@@ -794,7 +794,7 @@ func TestMaterialATProtoRecordsProviderExposureOnRejectedBatch(t *testing.T) {
 	assert.Equal(t, 1, fixture.repository.applyCount())
 	packed, packErr := vault.Pack(fixture.snapshot)
 	require.NoError(t, packErr)
-	assert.Equal(t, packed.Payload, fixture.repository.blob(proposal.Blob.CID))
+	assert.Equal(t, packed.Payload, fixture.repository.blob(proposalPackedBlob(proposal).CID))
 	assert.Empty(
 		t,
 		fixture.repository.record(
