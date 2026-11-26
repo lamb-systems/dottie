@@ -78,17 +78,6 @@ func TestIndependentMalformedHeadCBORIsRejectedWithoutPartialRecords(t *testing.
 			reason:  "type",
 		},
 		{
-			name: "blob CID text type",
-			encoded: independentRecordMutation(
-				t,
-				base,
-				func(value map[string]any) { value["blobCid"] = "not-byte-cid" },
-			),
-			want:   ErrInvalidRecord,
-			field:  "blobCid",
-			reason: "type",
-		},
-		{
 			name: "integral float sequence",
 			encoded: independentRecordMutation(
 				t,
@@ -156,7 +145,6 @@ func TestHeadWithoutBlobCIDDecodesAsFileSetHead(t *testing.T) {
 	decoded, err := DecodeHead(encoded)
 	require.NoError(t, err)
 	assert.Equal(t, head, decoded)
-	assert.Nil(t, decoded.BlobCID)
 
 	key, err := SequenceKey(fileSet.PublicationSeq)
 	require.NoError(t, err)
@@ -165,7 +153,7 @@ func TestHeadWithoutBlobCIDDecodesAsFileSetHead(t *testing.T) {
 
 func TestHeadCIDLengthErrorsMatchEncodeAndDecode(t *testing.T) {
 	base := fixtureHeadValue(t)
-	for _, field := range []string{"snapshotCid", "blobCid"} {
+	for _, field := range []string{"snapshotCid"} {
 		for _, test := range []struct {
 			name   string
 			length int
@@ -180,21 +168,7 @@ func TestHeadCIDLengthErrorsMatchEncodeAndDecode(t *testing.T) {
 				requireViolation(t, err, ErrCID, field, "length")
 
 				head := HeadRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault()}
-				if field == "snapshotCid" {
-					head.SnapshotCID = bytes.Clone(invalidBytes)
-					head.BlobCID = independentCID(t, []byte("head payload"), cid.Raw)
-				} else {
-					head.SnapshotCID = independentCID(t, []byte("snapshot record"), cid.DagCBOR)
-					head.BlobCID = bytes.Clone(invalidBytes)
-					if test.length == 0 {
-						encoded, err = EncodeHead(head)
-						require.NoError(t, err)
-						decoded, decodeErr := DecodeHead(encoded)
-						require.NoError(t, decodeErr)
-						assert.Nil(t, decoded.BlobCID)
-						return
-					}
-				}
+				head.SnapshotCID = bytes.Clone(invalidBytes)
 				encoded, err = EncodeHead(head)
 				require.Nil(t, encoded)
 				requireViolation(t, err, ErrCID, field, "length")
@@ -212,6 +186,5 @@ func fixtureHeadValue(t testing.TB) map[string]any {
 		"vault":          bytes.Clone(vaultID[:]),
 		"publicationSeq": int64(0),
 		"snapshotCid":    independentCID(t, []byte("head snapshot fixture"), cid.DagCBOR),
-		"blobCid":        independentCID(t, []byte("head payload fixture"), cid.Raw),
 	}
 }

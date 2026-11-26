@@ -409,23 +409,11 @@ func acceptedPublicationSnapshot(
 	if err != nil {
 		return model.Snapshot{}, "", err
 	}
-	if record.PayloadForm() == publication.PayloadFormPacked {
-		snapshot, err := publication.DecodePayload(material.Payload, record.Blob)
-		return snapshot, publication.PayloadFormPacked, err
-	}
-	_, portable, err := fileSetPublicationTarget(configuration)
+	snapshot, err := acceptedSnapshotFromSegments(record, material)
 	if err != nil {
 		return model.Snapshot{}, "", err
 	}
-	entries := make([]publication.PayloadEntry, 0, len(material.Entries))
-	for _, entry := range material.Entries {
-		entries = append(entries, publication.PayloadEntry{
-			Path: entry.Path, Mode: entry.Mode, Size: uint64(len(entry.Content)),
-			Content: bytes.Clone(entry.Content),
-		})
-	}
-	snapshot, err := fileSetProjection(portable, entries)
-	return snapshot, publication.PayloadFormFileSet, err
+	return snapshot, record.PayloadForm(), nil
 }
 
 func publicationPayloadSnapshot(
@@ -559,13 +547,12 @@ func SelectPublicationForm(
 
 func EncodePublicationCandidate(
 	binding publicationstate.Binding,
-	form publication.PayloadForm,
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
 	publicationID [16]byte,
-) (publicationstate.CandidateInput, publication.BlobReference, error) {
-	return encodePublicationCandidate(binding, form, snapshot, floor, present, publicationID)
+) (publicationstate.CandidateInput, error) {
+	return encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
 }
 
 func FileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {

@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
-	"github.com/ipfs/go-cid"
 )
 
 const (
@@ -88,26 +87,11 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 			"publicationSeq": int64(record.PublicationSeq),
 			"parent":         atdata.Bytes(cloneRecordBytes(record.Parent)),
 		}
-		if record.PayloadForm() == PayloadFormFileSet {
-			entries, err := encodeSnapshotEntries(record.Entries)
-			if err != nil {
-				return nil, err
-			}
-			value["entries"] = entries
-			if len(record.Targets) != 0 {
-				value["targets"] = record.Targets
-			}
-			return value, nil
-		}
-		blobCID, err := cid.Cast(record.Blob.CID)
+		segments, err := encodeSegments(record.Segments)
 		if err != nil {
 			return nil, err
 		}
-		value["blob"] = atdata.Blob{
-			Ref:      atdata.CIDLink(blobCID),
-			MimeType: record.Blob.MIMEType,
-			Size:     int64(record.Blob.Size),
-		}
+		value["segments"] = segments
 		return value, nil
 	case HeadNSID:
 		record, err := DecodeHead(canonicalRecord)
@@ -120,9 +104,6 @@ func recordJSONValue(canonicalRecord []byte) (map[string]any, error) {
 			"vault":          atdata.Bytes(cloneRecordBytes(record.Vault[:])),
 			"publicationSeq": int64(record.PublicationSeq),
 			"snapshotCid":    atdata.Bytes(cloneRecordBytes(record.SnapshotCID)),
-		}
-		if len(record.BlobCID) != 0 {
-			value["blobCid"] = atdata.Bytes(cloneRecordBytes(record.BlobCID))
 		}
 		return value, nil
 	default:

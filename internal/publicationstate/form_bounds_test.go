@@ -90,7 +90,7 @@ func seedFileSetAcceptedPosition(t *testing.T, store *Store, f fileSetAttemptFix
 		PublicationID:     record.PublicationID,
 		RecordCID:         bytes.Clone(recordCID),
 		ObservationDigest: observationDigest,
-		FileSet:           fileSetPayloadOf(record),
+		Segments:          summariesOfRecord(record.Segments),
 	}
 	body, err := makeEventBody(
 		ModeFirstUse,
@@ -147,7 +147,7 @@ func TestFileSetAcceptedPositionLoadsAfterStoreReopen(t *testing.T) {
 	require.Greater(t, len(f.raw), publication.MaxRecordBytes)
 	record, err := publication.DecodeSnapshot(f.raw)
 	require.NoError(t, err)
-	require.Len(t, record.Entries, largeFileSetEntryCount)
+	require.Len(t, recordEntriesOf(record), largeFileSetEntryCount)
 
 	store, directory := newStore(t, fixture{t: t, binding: f.binding})
 	expected, encodedFloor := seedFileSetAcceptedPosition(t, store, f)

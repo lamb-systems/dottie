@@ -23,7 +23,6 @@ func FuzzRecordToJSON(f *testing.F) {
 		Vault:          successor.Vault,
 		PublicationSeq: successor.PublicationSeq,
 		SnapshotCID:    successorCID,
-		BlobCID:        bytes.Clone(successor.Blob.CID),
 	})
 	require.NoError(f, err)
 	f.Add(headCBOR)

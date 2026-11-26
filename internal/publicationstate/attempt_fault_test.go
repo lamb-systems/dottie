@@ -50,7 +50,7 @@ func TestPublicationAttemptCommitSucceededButReturnedErrorRequiresReadback(t *te
 	require.NoError(t, err)
 	upload, err := store.BeginUpload(ctx, active.ID, dispatch.StateToken, view, review, dispatch.Confirmation)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, upload.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(upload))
 }
 
 func TestPublicationAttemptDeferredCommitErrorRollsBackAndAllowsSubsequentWrite(t *testing.T) {
@@ -103,7 +103,7 @@ func TestPublicationAttemptDeferredCommitErrorRollsBackAndAllowsSubsequentWrite(
 		freshDispatch.Confirmation,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, material.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(material))
 	require.NoError(t, store.Close())
 	reopened, err := Open(directory, f.binding)
 	require.NoError(t, err)
@@ -246,10 +246,10 @@ func TestPublicationAttemptAdmissionCommitRollbackAllowsRealRetryAfterReadback(t
 	requireErrorMetadata(t, err, ErrStorage, StageAttempt, ReasonCommitUnknown)
 	assert.Equal(t, Attempt{}, result)
 	assert.True(t, store.needsReadback)
-	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 	orphan, err := os.ReadFile(payloadPath)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, orphan)
+	assert.Equal(t, acceptedPayload(candidate), orphan)
 	_, present, err := store.Load(ctx)
 	require.NoError(t, err)
 	assert.False(t, present)

@@ -22,8 +22,10 @@ func DecodePayload(payload []byte, reference BlobReference) (model.Snapshot, err
 type PayloadForm string
 
 const (
-	PayloadFormPacked  PayloadForm = "packed"
-	PayloadFormFileSet PayloadForm = "file_set"
+	PayloadFormPacked   PayloadForm = "packed"
+	PayloadFormFileSet  PayloadForm = "file_set"
+	PayloadFormSettings PayloadForm = "settings"
+	PayloadFormMixed    PayloadForm = "mixed"
 
 	FileSetReasonPackedRequired = "packed_payload_required"
 	FileSetReasonEntryCount     = "entry_count"
@@ -83,58 +85,111 @@ type PayloadLimits struct {
 type PayloadFetch func(reference BlobReference) ([]byte, error)
 
 func (record SnapshotRecord) PayloadForm() PayloadForm {
-	if len(record.Entries) != 0 {
-		return PayloadFormFileSet
+	if len(record.Segments) != 1 {
+		return PayloadFormMixed
 	}
-	return PayloadFormPacked
+	switch record.Segments[0].Form {
+	case SegmentFormEntries:
+		return PayloadFormFileSet
+	case SegmentFormSettings:
+		return PayloadFormSettings
+	case SegmentFormPacked:
+		return PayloadFormPacked
+	default:
+		return PayloadFormMixed
+	}
 }
 
 func ResolvePayload(record SnapshotRecord, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
-	if record.PayloadForm() == PayloadFormPacked {
-		payload, err := fetch(record.Blob)
-		if err != nil {
-			return Payload{}, err
+	payload := Payload{Form: record.PayloadForm()}
+	payload.Snapshot = model.Snapshot{Version: model.SnapshotVersion}
+	for _, segment := range record.Segments {
+		payload.Snapshot.Targets = append(payload.Snapshot.Targets, cloneTarget(segment.Target))
+		switch segment.Form {
+		case SegmentFormPacked:
+			raw, err := fetch(segment.Blob)
+			if err != nil {
+				return Payload{}, err
+			}
+			snapshot, err := DecodePayload(raw, segment.Blob)
+			if err != nil {
+				return Payload{}, err
+			}
+			payload.Snapshot.Entries = append(payload.Snapshot.Entries, snapshot.Entries...)
+		case SegmentFormEntries:
+			entries, err := resolvePayloadEntries(segment.Entries, limits, fetch)
+			if err != nil {
+				return Payload{}, err
+			}
+			payload.Entries = append(payload.Entries, entries...)
+			for _, entry := range entries {
+				payload.Snapshot.Entries = append(payload.Snapshot.Entries, model.Entry{
+					TargetID: segment.Target.ID,
+					File: &model.FileEntry{
+						Path: entry.Path, State: model.FilePresent, Kind: model.FileRegular,
+						Content: entry.Content, Mode: entry.Mode,
+					},
+				})
+			}
+		case SegmentFormSettings:
+			for _, setting := range segment.Settings {
+				payload.Snapshot.Entries = append(payload.Snapshot.Entries, model.Entry{
+					TargetID: segment.Target.ID,
+					Setting: &model.SettingEntry{
+						SchemaID: setting.SchemaID, Path: setting.Path, Key: setting.Key,
+						State: setting.State, Value: cloneVariantValue(setting.Value),
+					},
+				})
+			}
+		default:
+			return Payload{}, &FileSetPayloadError{Reason: FileSetReasonPackedRequired}
 		}
-		snapshot, err := DecodePayload(payload, record.Blob)
-		if err != nil {
-			return Payload{}, err
-		}
-		return Payload{Form: PayloadFormPacked, Snapshot: snapshot}, nil
 	}
-	return resolveFileSetPayload(record.Entries, limits, fetch)
+	return payload, nil
 }
 
-func resolveFileSetPayload(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) (Payload, error) {
+func resolvePayloadEntries(entries []SnapshotEntry, limits PayloadLimits, fetch PayloadFetch) ([]PayloadEntry, error) {
 	if len(entries) == 0 {
-		return Payload{}, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
+		return nil, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
 	}
 	if limits.MaxEntries > 0 && len(entries) > limits.MaxEntries {
-		return Payload{}, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
+		return nil, &FileSetPayloadError{Reason: FileSetReasonEntryCount}
 	}
 	resolved := make([]PayloadEntry, 0, len(entries))
 	var total uint64
 	for _, entry := range entries {
 		if limits.MaxEntryBytes != 0 && entry.Size > limits.MaxEntryBytes {
-			return Payload{}, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonEntryBytes}
+			return nil, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonEntryBytes}
 		}
 		total += entry.Size
 		if limits.MaxTotalBytes != 0 && total > limits.MaxTotalBytes {
-			return Payload{}, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonTotalBytes}
+			return nil, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonTotalBytes}
 		}
 		content, err := fetch(entry.Blob)
 		if err != nil {
-			return Payload{}, &FileSetPayloadError{
-				Entry: entry.Path, Reason: FileSetReasonUnavailable, cause: err,
-			}
+			return nil, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonUnavailable, cause: err}
 		}
 		if err := VerifyPayload(content, entry.Blob); err != nil {
-			return Payload{}, &FileSetPayloadError{
-				Entry: entry.Path, Reason: FileSetReasonMismatch, cause: err,
-			}
+			return nil, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonMismatch, cause: err}
 		}
-		resolved = append(resolved, PayloadEntry{
-			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content,
-		})
+		resolved = append(resolved, PayloadEntry{Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content})
 	}
-	return Payload{Form: PayloadFormFileSet, Entries: resolved}, nil
+	return resolved, nil
+}
+
+func cloneTarget(target model.Target) model.Target {
+	cloned := model.Target{ID: target.ID, Source: target.Source, SourceVersion: target.SourceVersion}
+	if target.Root != nil {
+		root := *target.Root
+		cloned.Root = &root
+	}
+	return cloned
+}
+
+func cloneVariantValue(value *model.VariantValue) *model.VariantValue {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

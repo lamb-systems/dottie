@@ -642,7 +642,7 @@ func maxBlobCompetingSuccessorView(
 	if allZero(record.PublicationID[:]) {
 		record.PublicationID[0] = 1
 	}
-	record.Blob.Size = publication.MaxBlobBytes
+	record.Segments[0].Blob.Size = publication.MaxBlobBytes
 	occupant, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
 	occupantCID, err := publication.RecordCID(occupant)
@@ -653,7 +653,6 @@ func maxBlobCompetingSuccessorView(
 			Vault:          record.Vault,
 			PublicationSeq: record.PublicationSeq,
 			SnapshotCID:    occupantCID,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)
@@ -978,7 +977,7 @@ func independentFirstConflictEvidenceSlotBound(
 	contextBytes, err := canonicalJSON(contextToWire(validated.view.input.SuppliedContext))
 	require.NoError(t, err)
 	occupant := validated.snapshot
-	occupant.Blob.Size = publication.MaxBlobBytes
+	occupant.Segments[0].Blob.Size = publication.MaxBlobBytes
 	occupant.PublicationID[15] ^= 1
 	if allZero(occupant.PublicationID[:]) {
 		occupant.PublicationID[0] = 1
@@ -993,7 +992,6 @@ func independentFirstConflictEvidenceSlotBound(
 			Vault:          occupant.Vault,
 			PublicationSeq: occupant.PublicationSeq,
 			SnapshotCID:    occupantCID,
-			BlobCID:        bytes.Clone(occupant.Blob.CID),
 		},
 	)
 	require.NoError(t, err)
@@ -1351,7 +1349,7 @@ func finalizationHistoryBound(
 	}
 	floor := buildFloor(store.databaseID, store.binding, validatedObservation, state, trace, mode)
 	if !modelFileSet {
-		floor.FileSet = nil
+		floor.Segments = nil
 	}
 	body := oracleJSON(
 		t,
@@ -1399,7 +1397,7 @@ func TestPublicationAttemptValidOrphanReuseAtExactCustodyLimit(t *testing.T) {
 	f.appendRecord(t, 0)
 	candidate := attemptCandidate(f, 0)
 	attemptLimits := DefaultAttemptLimits()
-	attemptLimits.CustodyBytes = uint64(len(candidate.Payload))
+	attemptLimits.CustodyBytes = uint64(len(acceptedPayload(candidate)))
 	attemptLimits.ManagedObjects = 1
 	options := DefaultOpenOptions()
 	options.AttemptLimits = attemptLimits
@@ -1407,8 +1405,8 @@ func TestPublicationAttemptValidOrphanReuseAtExactCustodyLimit(t *testing.T) {
 	require.NoError(t, os.Chmod(directory, 0o700))
 	payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 	require.NoError(t, os.Mkdir(payloadDirectory, 0o700))
-	payloadPath := filepath.Join(payloadDirectory, payloadBasename(candidate.Payload))
-	require.NoError(t, os.WriteFile(payloadPath, candidate.Payload, 0o600))
+	payloadPath := filepath.Join(payloadDirectory, payloadBasename(acceptedPayload(candidate)))
+	require.NoError(t, os.WriteFile(payloadPath, acceptedPayload(candidate), 0o600))
 	store, err := OpenWithOptions(directory, f.binding, options)
 	require.NoError(t, err)
 	defer store.Close()
@@ -1421,7 +1419,7 @@ func TestPublicationAttemptValidOrphanReuseAtExactCustodyLimit(t *testing.T) {
 	assert.Equal(t, proposal.AttemptID, attempt.ID)
 	stored, err := os.ReadFile(payloadPath)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, stored)
+	assert.Equal(t, acceptedPayload(candidate), stored)
 	var objects int
 	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects").Scan(&objects))
 	assert.Equal(t, 1, objects)
@@ -1440,12 +1438,12 @@ func TestPublicationAttemptOrphanReuseEnforcesCompletedUnionBytes(t *testing.T) 
 			f := newFixture(t, BackendPublicRepo)
 			f.appendRecord(t, 0)
 			candidate := attemptCandidate(f, 0)
-			other := packFixtureContent(t, candidate.Payload, []byte("second orphan bytes"))
+			other := packFixtureContent(t, acceptedPayload(candidate), []byte("second orphan bytes"))
 			otherCID, err := publication.RawPayloadCID(other)
 			require.NoError(t, err)
 			otherName := payloadBasename(other)
 			otherSize := uint64(len(other))
-			custodyLimit := uint64(len(candidate.Payload))
+			custodyLimit := uint64(len(acceptedPayload(candidate)))
 			if caseValue.refuse {
 				custodyLimit += otherSize - 1
 			} else {
@@ -1467,9 +1465,9 @@ func TestPublicationAttemptOrphanReuseEnforcesCompletedUnionBytes(t *testing.T) 
 			require.NoError(t, err)
 			payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 			require.NoError(t, os.Mkdir(payloadDirectory, 0o700))
-			candidateName := payloadBasename(candidate.Payload)
+			candidateName := payloadBasename(acceptedPayload(candidate))
 			candidatePath := filepath.Join(payloadDirectory, candidateName)
-			require.NoError(t, os.WriteFile(candidatePath, candidate.Payload, 0o600))
+			require.NoError(t, os.WriteFile(candidatePath, acceptedPayload(candidate), 0o600))
 			otherPath := filepath.Join(payloadDirectory, otherName)
 			require.NoError(t, os.WriteFile(otherPath, other, 0o600))
 			_, err = store.conn.ExecContext(
@@ -1524,7 +1522,7 @@ func TestPublicationAttemptCataloguedMissingObjectCountsTowardUnionLimit(t *test
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)
 	candidate := attemptCandidate(f, 0)
-	other := packFixtureContent(t, candidate.Payload, []byte("catalogued missing bytes"))
+	other := packFixtureContent(t, acceptedPayload(candidate), []byte("catalogued missing bytes"))
 	otherCID, err := publication.RawPayloadCID(other)
 	require.NoError(t, err)
 	otherName := payloadBasename(other)
@@ -1535,7 +1533,7 @@ func TestPublicationAttemptCataloguedMissingObjectCountsTowardUnionLimit(t *test
 		t.Run(strconv.FormatUint(uint64(objectLimit), 10), func(t *testing.T) {
 			attemptLimits := DefaultAttemptLimits()
 			attemptLimits.ManagedObjects = objectLimit
-			attemptLimits.CustodyBytes = uint64(len(candidate.Payload) + len(other) + 1)
+			attemptLimits.CustodyBytes = uint64(len(acceptedPayload(candidate)) + len(other) + 1)
 			options := DefaultOpenOptions()
 			options.AttemptLimits = attemptLimits
 			directory := t.TempDir()
@@ -1547,9 +1545,9 @@ func TestPublicationAttemptCataloguedMissingObjectCountsTowardUnionLimit(t *test
 			require.NoError(t, err)
 			payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 			require.NoError(t, os.Mkdir(payloadDirectory, 0o700))
-			candidatePath := filepath.Join(payloadDirectory, payloadBasename(candidate.Payload))
+			candidatePath := filepath.Join(payloadDirectory, payloadBasename(acceptedPayload(candidate)))
 			otherPath := filepath.Join(payloadDirectory, otherName)
-			require.NoError(t, os.WriteFile(candidatePath, candidate.Payload, 0o600))
+			require.NoError(t, os.WriteFile(candidatePath, acceptedPayload(candidate), 0o600))
 			_, err = store.conn.ExecContext(
 				ctx,
 				"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?)",
@@ -1654,7 +1652,7 @@ func TestAttemptCustodyInventoryFailureBlocksIntakeButNotInspection(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, []byte("sentinel"), data)
 	require.NoError(t, os.Remove(unknown))
-	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 	require.NoError(t, os.Remove(payloadPath))
 	missingCatalogCandidate := candidateWithPublicationID(t, candidate, [16]byte{0x56})
 	missingProposal, err := store.PrepareAttempt(ctx, missingCatalogCandidate, view, review)
@@ -1673,7 +1671,7 @@ func TestAttemptCustodyInventoryFailureBlocksIntakeButNotInspection(t *testing.T
 	var active int
 	require.NoError(t, store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM active_publication_attempt").Scan(&active))
 	assert.Equal(t, 0, active)
-	differentPayload := packFixtureContent(t, candidate.Payload, []byte("different retained candidate bytes"))
+	differentPayload := packFixtureContent(t, acceptedPayload(candidate), []byte("different retained candidate bytes"))
 	different := candidateWithPayload(t, candidate, f.binding, differentPayload)
 	_, err = store.PrepareAttempt(ctx, different, view, review)
 	requireErrorMetadata(t, err, ErrLimit, StageAttempt, ReasonCapacity)
@@ -1964,7 +1962,6 @@ func singleSequenceObservation(t *testing.T, f fixture, sequence uint64) Observa
 			Vault:          record.Vault,
 			PublicationSeq: sequence,
 			SnapshotCID:    cid,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)

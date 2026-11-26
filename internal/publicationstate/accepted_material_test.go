@@ -43,7 +43,7 @@ func TestPublicationReadAcceptedMaterialFinalizedOwnerSurvivesReopen(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, expectedFloor, material.Floor)
 	require.Equal(t, candidate.SnapshotRecord, material.SnapshotRecord)
-	require.Equal(t, candidate.Payload, material.Payload)
+	require.Equal(t, acceptedPayload(candidate), acceptedPayload(material))
 	assert.Equal(t, expectedFloor.DatabaseID, material.Floor.DatabaseID)
 	assert.Equal(t, expectedFloor.Generation, material.Floor.Generation)
 	require.NotNil(t, material.Floor.SuppliedContext.Policy)
@@ -51,17 +51,17 @@ func TestPublicationReadAcceptedMaterialFinalizedOwnerSurvivesReopen(t *testing.
 	material.Floor.AnchorCID[0] ^= 0xff
 	material.Floor.Head[0] ^= 0xff
 	material.Floor.RecordCID[0] ^= 0xff
-	material.Floor.BlobCID[0] ^= 0xff
+	testBlobCID(material.Floor)[0] ^= 0xff
 	material.Floor.SuppliedContext.RepositoryDigest[0] ^= 0xff
 	material.Floor.SuppliedContext.Policy.Identity[0] ^= 0xff
 	material.SnapshotRecord[0] ^= 0xff
-	material.Payload[0] ^= 0xff
+	acceptedPayload(material)[0] ^= 0xff
 
 	again, err := reopened.ReadAcceptedMaterial(ctx, f.binding, expectedFloor)
 	require.NoError(t, err)
 	assert.Equal(t, expectedFloor, again.Floor)
 	assert.Equal(t, candidate.SnapshotRecord, again.SnapshotRecord)
-	assert.Equal(t, candidate.Payload, again.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(again))
 	after := acceptedMaterialObservedState(t, reopened, attempt.ID)
 	assert.Equal(t, before, after)
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, reopened))
@@ -154,7 +154,7 @@ func TestPublicationReadAcceptedMaterialRequiresIndependentBindingAndCompleteFlo
 	require.NotEmpty(t, finalized.Floor.AnchorCID)
 	require.NotEmpty(t, finalized.Floor.Head)
 	require.NotEmpty(t, finalized.Floor.RecordCID)
-	require.NotEmpty(t, finalized.Floor.BlobCID)
+	require.NotEmpty(t, testBlobCID(finalized.Floor))
 	require.NotEmpty(t, finalized.Floor.SuppliedContext.RepositoryDigest)
 	require.NotNil(t, finalized.Floor.SuppliedContext.Policy)
 	require.NotEmpty(t, finalized.Floor.SuppliedContext.Policy.Identity)
@@ -171,8 +171,8 @@ func TestPublicationReadAcceptedMaterialRequiresIndependentBindingAndCompleteFlo
 		{"head", func(floor *Floor) { floor.Head[0] ^= 0xff }},
 		{"publication-id", func(floor *Floor) { floor.PublicationID[0] ^= 0xff }},
 		{"record-cid", func(floor *Floor) { floor.RecordCID[0] ^= 0xff }},
-		{"blob-cid", func(floor *Floor) { floor.BlobCID[0] ^= 0xff }},
-		{"blob-size", func(floor *Floor) { floor.BlobSize++ }},
+		{"blob-cid", func(floor *Floor) { floor.Segments[0].BlobCID[0] ^= 0xff }},
+		{"blob-size", func(floor *Floor) { floor.Segments[0].BlobSize++ }},
 		{"observation-digest", func(floor *Floor) { floor.ObservationDigest[0] ^= 0xff }},
 		{"accepted-event-digest", func(floor *Floor) { floor.AcceptedEventDigest[0] ^= 0xff }},
 		{"repository-context", func(floor *Floor) { floor.SuppliedContext.RepositoryDigest[0] ^= 0xff }},
@@ -271,7 +271,7 @@ func TestPublicationReadAcceptedMaterialFencedUntilExplicitReadback(t *testing.T
 				material, err = store.ReadAcceptedMaterial(ctx, f.binding, prospective)
 				require.NoError(t, err)
 				assert.Equal(t, candidate.SnapshotRecord, material.SnapshotRecord)
-				assert.Equal(t, candidate.Payload, material.Payload)
+				assert.Equal(t, acceptedPayload(candidate), acceptedPayload(material))
 			} else {
 				assert.False(t, present)
 				assert.Equal(t, Floor{}, floor)
@@ -377,5 +377,5 @@ func TestPublicationAcceptedMaterialKeepsTheDeclaredBlobMediaType(t *testing.T) 
 	require.NoError(t, err)
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	require.NoError(t, err)
-	assert.Equal(t, publication.SnapshotBlobMIMEType, record.Blob.MIMEType)
+	assert.Equal(t, publication.SnapshotBlobMIMEType, testBlob(record).MIMEType)
 }

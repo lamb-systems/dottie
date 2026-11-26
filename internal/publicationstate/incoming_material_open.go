@@ -71,7 +71,7 @@ func completeIncomingMaterialUpgradeOpen(
 	}
 	copy(owned.databaseID[:], databaseID)
 	owned.attemptMutationRevision = binary.BigEndian.Uint64(mutation)
-	owned.schemaVersion = 3
+	owned.schemaVersion = 4
 	if fault != nil {
 		if err := fault(incomingMaterialOpenSidecarsFault); err != nil {
 			return nil, incomingMaterialOpenError(outcome, storageFailure(ctx, StageOpen, err))

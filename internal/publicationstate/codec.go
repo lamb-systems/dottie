@@ -43,44 +43,40 @@ type payloadEntryWire struct {
 }
 
 type floorCoreWire struct {
-	Version           uint32             `json:"version"`
-	DatabaseID        []byte             `json:"databaseId"`
-	Revision          uint64             `json:"revision"`
-	Generation        uint64             `json:"generation"`
-	Provenance        string             `json:"provenance"`
-	AnchorCID         []byte             `json:"anchorCid"`
-	Binding           bindingWire        `json:"binding"`
-	SuppliedContext   contextWire        `json:"suppliedContext"`
-	Head              []byte             `json:"head"`
-	SnapshotKey       string             `json:"snapshotKey"`
-	Sequence          uint64             `json:"sequence"`
-	PublicationID     []byte             `json:"publicationId"`
-	RecordCID         []byte             `json:"recordCid"`
-	BlobCID           []byte             `json:"blobCid,omitempty"`
-	BlobSize          uint64             `json:"blobSize,omitempty"`
-	Entries           []payloadEntryWire `json:"entries,omitempty"`
-	ObservationDigest []byte             `json:"observationDigest"`
+	Version           uint32               `json:"version"`
+	DatabaseID        []byte               `json:"databaseId"`
+	Revision          uint64               `json:"revision"`
+	Generation        uint64               `json:"generation"`
+	Provenance        string               `json:"provenance"`
+	AnchorCID         []byte               `json:"anchorCid"`
+	Binding           bindingWire          `json:"binding"`
+	SuppliedContext   contextWire          `json:"suppliedContext"`
+	Head              []byte               `json:"head"`
+	SnapshotKey       string               `json:"snapshotKey"`
+	Sequence          uint64               `json:"sequence"`
+	PublicationID     []byte               `json:"publicationId"`
+	RecordCID         []byte               `json:"recordCid"`
+	Segments          []segmentSummaryWire `json:"segments"`
+	ObservationDigest []byte               `json:"observationDigest"`
 }
 
 type floorWire struct {
-	Version             uint32             `json:"version"`
-	DatabaseID          []byte             `json:"databaseId"`
-	Revision            uint64             `json:"revision"`
-	Generation          uint64             `json:"generation"`
-	Provenance          string             `json:"provenance"`
-	AnchorCID           []byte             `json:"anchorCid"`
-	Binding             bindingWire        `json:"binding"`
-	SuppliedContext     contextWire        `json:"suppliedContext"`
-	Head                []byte             `json:"head"`
-	SnapshotKey         string             `json:"snapshotKey"`
-	Sequence            uint64             `json:"sequence"`
-	PublicationID       []byte             `json:"publicationId"`
-	RecordCID           []byte             `json:"recordCid"`
-	BlobCID             []byte             `json:"blobCid,omitempty"`
-	BlobSize            uint64             `json:"blobSize,omitempty"`
-	Entries             []payloadEntryWire `json:"entries,omitempty"`
-	ObservationDigest   []byte             `json:"observationDigest"`
-	AcceptedEventDigest []byte             `json:"acceptedEventDigest"`
+	Version             uint32               `json:"version"`
+	DatabaseID          []byte               `json:"databaseId"`
+	Revision            uint64               `json:"revision"`
+	Generation          uint64               `json:"generation"`
+	Provenance          string               `json:"provenance"`
+	AnchorCID           []byte               `json:"anchorCid"`
+	Binding             bindingWire          `json:"binding"`
+	SuppliedContext     contextWire          `json:"suppliedContext"`
+	Head                []byte               `json:"head"`
+	SnapshotKey         string               `json:"snapshotKey"`
+	Sequence            uint64               `json:"sequence"`
+	PublicationID       []byte               `json:"publicationId"`
+	RecordCID           []byte               `json:"recordCid"`
+	Segments            []segmentSummaryWire `json:"segments"`
+	ObservationDigest   []byte               `json:"observationDigest"`
+	AcceptedEventDigest []byte               `json:"acceptedEventDigest"`
 }
 
 type observationWire struct {
@@ -276,19 +272,12 @@ func floorCoreToWire(f Floor) floorCoreWire {
 		Sequence:          f.Sequence,
 		PublicationID:     bytes.Clone(f.PublicationID[:]),
 		RecordCID:         bytes.Clone(f.RecordCID),
-		BlobCID:           bytes.Clone(f.BlobCID),
-		BlobSize:          f.BlobSize,
-		Entries:           fileSetPayloadToWire(f.FileSet),
+		Segments:          segmentSummariesToWire(f.Segments),
 		ObservationDigest: bytes.Clone(f.ObservationDigest[:]),
 	}
 }
 
-func floorWireVersion(f Floor) uint32 {
-	if f.FileSet != nil {
-		return 2
-	}
-	return 1
-}
+func floorWireVersion(Floor) uint32 { return 3 }
 
 func floorToWire(f Floor) floorWire {
 	core := floorCoreToWire(f)
@@ -306,9 +295,7 @@ func floorToWire(f Floor) floorWire {
 		Sequence:            core.Sequence,
 		PublicationID:       core.PublicationID,
 		RecordCID:           core.RecordCID,
-		BlobCID:             core.BlobCID,
-		BlobSize:            core.BlobSize,
-		Entries:             core.Entries,
+		Segments:            core.Segments,
 		ObservationDigest:   core.ObservationDigest,
 		AcceptedEventDigest: bytes.Clone(f.AcceptedEventDigest[:]),
 	}
@@ -329,9 +316,7 @@ func floorFromWire(w floorWire) (Floor, error) {
 		Sequence:          w.Sequence,
 		PublicationID:     w.PublicationID,
 		RecordCID:         w.RecordCID,
-		BlobCID:           w.BlobCID,
-		BlobSize:          w.BlobSize,
-		Entries:           w.Entries,
+		Segments:          w.Segments,
 		ObservationDigest: w.ObservationDigest,
 	}
 	floor, err := floorCoreFromWire(core)
@@ -353,21 +338,11 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 		!validText(w.Provenance) {
 		return Floor{}, errors.New("invalid floor")
 	}
-	var fileSet *FileSetPayload
-	switch w.Version {
-	case 1:
-		if len(w.BlobCID) == 0 || w.BlobSize == 0 || len(w.Entries) != 0 {
-			return Floor{}, errors.New("invalid floor")
-		}
-	case 2:
-		if len(w.BlobCID) != 0 || w.BlobSize != 0 || len(w.Entries) == 0 {
-			return Floor{}, errors.New("invalid floor")
-		}
-		fileSet, err = fileSetPayloadFromWire(w.Entries)
-		if err != nil {
-			return Floor{}, errors.New("invalid floor")
-		}
-	default:
+	if w.Version != 3 {
+		return Floor{}, errors.New("invalid floor")
+	}
+	segments, err := segmentSummariesFromWire(w.Segments)
+	if err != nil {
 		return Floor{}, errors.New("invalid floor")
 	}
 	context, err := contextFromWire(w.SuppliedContext)
@@ -388,9 +363,7 @@ func floorCoreFromWire(w floorCoreWire) (Floor, error) {
 	floor.SnapshotKey = w.SnapshotKey
 	floor.Sequence = w.Sequence
 	floor.RecordCID = bytes.Clone(w.RecordCID)
-	floor.BlobCID = bytes.Clone(w.BlobCID)
-	floor.BlobSize = w.BlobSize
-	floor.FileSet = fileSet
+	floor.Segments = segments
 	return floor, nil
 }
 

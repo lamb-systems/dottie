@@ -35,7 +35,7 @@ func TestPublicationAttemptDispatchResolveFinalizeAndRetain(t *testing.T) {
 		uploadProposal.Confirmation,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, upload.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(upload))
 	assert.Equal(t, attempt.ID, upload.AttemptID)
 	started, err := store.LoadAttempt(ctx, attempt.ID)
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestPublicationAttemptDispatchResolveFinalizeAndRetain(t *testing.T) {
 	assert.Equal(t, int64(len(f.payload)), info.Size())
 	retainedMaterial, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, retainedMaterial.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(retainedMaterial))
 	loaded, hasFloor, err := store.Load(ctx)
 	require.NoError(t, err)
 	assert.True(t, hasFloor)

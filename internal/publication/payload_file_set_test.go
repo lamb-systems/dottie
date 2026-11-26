@@ -31,7 +31,7 @@ func newPayloadFetchMap() *payloadFetchMap {
 }
 
 func (source *payloadFetchMap) serveFileSet(record SnapshotRecord, contents map[string][]byte) {
-	for _, entry := range record.Entries {
+	for _, entry := range entriesOf(record) {
 		source.blobs[string(entry.Blob.CID)] = bytes.Clone(contents[entry.Path])
 	}
 }
@@ -64,11 +64,17 @@ func newFileSetPayloadFixture(t *testing.T, files ...fileSetFile) (SnapshotRecor
 	slices.SortFunc(sorted, func(left, right fileSetFile) int {
 		return strings.Compare(left.path, right.path)
 	})
-	record := SnapshotRecord{SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID()}
+	entries := make([]SnapshotEntry, 0, len(sorted))
 	contents := make(map[string][]byte, len(sorted))
 	for _, file := range sorted {
-		record.Entries = append(record.Entries, fixtureEntry(t, file.path, file.content, file.mode))
+		entries = append(entries, fixtureEntry(t, file.path, file.content, file.mode))
 		contents[file.path] = file.content
+	}
+	record := SnapshotRecord{
+		SchemaVersion: SchemaVersion, Vault: fixtureVault(), PublicationID: fixturePublicationID(),
+		Segments: []SnapshotSegment{{
+			Target: fixtureFileSetTargets()[0], Form: SegmentFormEntries, Entries: entries,
+		}},
 	}
 	return record, contents
 }
@@ -100,12 +106,13 @@ func TestResolvePayloadReadsPackedThroughTheBlobReference(t *testing.T) {
 	packed, err := vault.Pack(snapshot)
 	require.NoError(t, err)
 	record := fixtureSnapshotValue(t)
-	record.Blob = BlobReference{
+	record.Segments[0].Target = snapshot.Targets[0]
+	record.Segments[0].Blob = BlobReference{
 		CID: mustPayloadRawCID(t, packed.Payload), Size: uint64(len(packed.Payload)),
 		MIMEType: SnapshotBlobMIMEType,
 	}
 	source := newPayloadFetchMap()
-	source.blobs[string(record.Blob.CID)] = bytes.Clone(packed.Payload)
+	source.blobs[string(blobOf(record).CID)] = bytes.Clone(packed.Payload)
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	require.NoError(t, err)
@@ -113,7 +120,7 @@ func TestResolvePayloadReadsPackedThroughTheBlobReference(t *testing.T) {
 	assert.Equal(t, snapshot, payload.Snapshot)
 	assert.Empty(t, payload.Entries)
 	require.Len(t, source.fetched, 1)
-	assert.Equal(t, record.Blob, source.fetched[0].reference)
+	assert.Equal(t, blobOf(record), source.fetched[0].reference)
 
 	resolved, err := payload.PackedSnapshot()
 	require.NoError(t, err)
@@ -128,9 +135,17 @@ func TestResolvePayloadReadsFileSetEntriesWithPathsModesAndSizes(t *testing.T) {
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
 	require.NoError(t, err)
 	assert.Equal(t, PayloadFormFileSet, payload.Form)
-	assert.Equal(t, model.Snapshot{}, payload.Snapshot)
-	require.Len(t, payload.Entries, len(record.Entries))
-	for index, entry := range record.Entries {
+	require.Len(t, payload.Snapshot.Targets, 1)
+	require.Len(t, payload.Snapshot.Entries, len(entriesOf(record)))
+	for index, entry := range entriesOf(record) {
+		file := payload.Snapshot.Entries[index].File
+		require.NotNil(t, file)
+		assert.Equal(t, entry.Path, file.Path)
+		assert.Equal(t, entry.Mode, file.Mode)
+		assert.Equal(t, contents[entry.Path], file.Content)
+	}
+	require.Len(t, payload.Entries, len(entriesOf(record)))
+	for index, entry := range entriesOf(record) {
 		assert.Equal(t, entry.Path, payload.Entries[index].Path)
 		assert.Equal(t, entry.Mode, payload.Entries[index].Mode)
 		assert.Equal(t, entry.Size, payload.Entries[index].Size)
@@ -145,9 +160,9 @@ func TestResolvePayloadReadsFileSetEntriesWithPathsModesAndSizes(t *testing.T) {
 
 func TestResolvePayloadRefusesAMissingFileSetEntryNamingThePath(t *testing.T) {
 	record, contents := defaultFileSetPayloadFixture(t)
-	missing := record.Entries[1]
+	missing := entriesOf(record)[1]
 	source := newPayloadFetchMap()
-	source.blobs[string(record.Entries[0].Blob.CID)] = contents[record.Entries[0].Path]
+	source.blobs[string(entriesOf(record)[0].Blob.CID)] = contents[entriesOf(record)[0].Path]
 	source.fails[string(missing.Blob.CID)] = errPayloadFetchMissing
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
@@ -164,11 +179,11 @@ func TestResolvePayloadRefusesAMissingFileSetEntryNamingThePath(t *testing.T) {
 
 func TestResolvePayloadRefusesAFileSetEntrySizeMismatchNamingTheEntry(t *testing.T) {
 	record, contents := defaultFileSetPayloadFixture(t)
-	mismatched := record.Entries[1]
+	mismatched := entriesOf(record)[1]
 	short := bytes.Clone(contents[mismatched.Path])
 	short = short[:len(short)-1]
 	source := newPayloadFetchMap()
-	source.blobs[string(record.Entries[0].Blob.CID)] = contents[record.Entries[0].Path]
+	source.blobs[string(entriesOf(record)[0].Blob.CID)] = contents[entriesOf(record)[0].Path]
 	source.blobs[string(mismatched.Blob.CID)] = short
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
@@ -187,11 +202,11 @@ func TestResolvePayloadRefusesAFileSetEntrySizeMismatchNamingTheEntry(t *testing
 
 func TestResolvePayloadRefusesAFileSetEntryCIDMismatchNamingTheEntry(t *testing.T) {
 	record, contents := defaultFileSetPayloadFixture(t)
-	mismatched := record.Entries[1]
+	mismatched := entriesOf(record)[1]
 	substitute := bytes.Clone(contents[mismatched.Path])
 	substitute[0] ^= 0xff
 	source := newPayloadFetchMap()
-	source.blobs[string(record.Entries[0].Blob.CID)] = contents[record.Entries[0].Path]
+	source.blobs[string(entriesOf(record)[0].Blob.CID)] = contents[entriesOf(record)[0].Path]
 	source.blobs[string(mismatched.Blob.CID)] = substitute
 
 	payload, err := ResolvePayload(record, payloadLimits(), source.fetch)
@@ -219,26 +234,26 @@ func TestResolvePayloadRefusesFileSetPayloadsBeyondItsBounds(t *testing.T) {
 	assert.Empty(t, source.fetched)
 
 	source.fetched = nil
-	payload, err = ResolvePayload(record, PayloadLimits{MaxEntryBytes: record.Entries[1].Size - 1}, source.fetch)
+	payload, err = ResolvePayload(record, PayloadLimits{MaxEntryBytes: entriesOf(record)[1].Size - 1}, source.fetch)
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
+	assert.Equal(t, entriesOf(record)[1].Path, refusal.EntryPath())
 	assert.Equal(t, FileSetReasonEntryBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
-	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
+	assert.Equal(t, entriesOf(record)[0].Blob, source.fetched[0].reference)
 
 	source.fetched = nil
 	payload, err = ResolvePayload(
 		record,
-		PayloadLimits{MaxTotalBytes: record.Entries[0].Size + record.Entries[1].Size - 1},
+		PayloadLimits{MaxTotalBytes: entriesOf(record)[0].Size + entriesOf(record)[1].Size - 1},
 		source.fetch,
 	)
 	assert.Equal(t, Payload{}, payload)
 	require.ErrorAs(t, err, &refusal)
-	assert.Equal(t, record.Entries[1].Path, refusal.EntryPath())
+	assert.Equal(t, entriesOf(record)[1].Path, refusal.EntryPath())
 	assert.Equal(t, FileSetReasonTotalBytes, refusal.Reason)
 	require.Len(t, source.fetched, 1)
-	assert.Equal(t, record.Entries[0].Blob, source.fetched[0].reference)
+	assert.Equal(t, entriesOf(record)[0].Blob, source.fetched[0].reference)
 }
 
 func mustPayloadRawCID(t *testing.T, payload []byte) []byte {

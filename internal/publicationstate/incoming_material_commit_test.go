@@ -85,12 +85,12 @@ func TestAcceptMaterialCommitSucceededThenErrorReconcilesWithoutReopen(t *testin
 	assert.False(t, store.needsReadback)
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 1)
-	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, loaded.BlobCID}, references[0])
+	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, testBlobCID(loaded)}, references[0])
 	material, err := store.ReadAcceptedMaterial(ctx, f.binding, loaded)
 	require.NoError(t, err)
 	assert.Equal(t, loaded, material.Floor)
 	assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-	assert.Equal(t, f.payload, material.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(material))
 
 	store.commitTransaction = func(tx *sql.Tx) error {
 		commits++

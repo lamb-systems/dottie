@@ -210,7 +210,6 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 	head, err := publication.DecodeHead(input.HeadRecord)
 	if err != nil || head.Vault != binding.Vault || head.PublicationSeq != snapshot.PublicationSeq ||
 		!bytes.Equal(head.SnapshotCID, snapshotCID) ||
-		headPayloadMatchesRecord(head, snapshot) != nil ||
 		publication.VerifyHeadBinding(input.HeadRecord, input.SnapshotRecord, input.SnapshotKey) != nil {
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
@@ -240,13 +239,17 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 		}
 		candidate.entries = entries
 	} else {
-		if err := publication.VerifyPayload(input.Payload, snapshot.Blob); err != nil {
+		blob, ok := snapshot.SegmentBlob()
+		if !ok {
 			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if _, err := publication.DecodePayload(input.Payload, snapshot.Blob); err != nil {
+		if err := publication.VerifyPayload(input.Payload, blob); err != nil {
 			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		candidate.blobCID = bytes.Clone(snapshot.Blob.CID)
+		if _, err := publication.DecodePayload(input.Payload, blob); err != nil {
+			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+		}
+		candidate.blobCID = bytes.Clone(blob.CID)
 		candidate.payload = bytes.Clone(input.Payload)
 	}
 	candidate.kind = AttemptSuccessor
@@ -261,8 +264,12 @@ func validateFileSetCandidateEntries(
 	snapshot publication.SnapshotRecord,
 	limits AttemptLimits,
 ) ([]validatedPayloadEntry, error) {
-	fileSet := &FileSetPayload{Entries: make([]PayloadEntryReference, 0, len(snapshot.Entries))}
-	for _, entry := range snapshot.Entries {
+	entries, ok := snapshot.SegmentEntries()
+	if !ok {
+		return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
+	}
+	fileSet := &FileSetPayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
+	for _, entry := range entries {
 		fileSet.Entries = append(fileSet.Entries, PayloadEntryReference{
 			Path: entry.Path,
 			CID:  bytes.Clone(entry.Blob.CID),
@@ -272,11 +279,11 @@ func validateFileSetCandidateEntries(
 	if err := validateFileSetPayloadCustody(fileSet, limits); err != nil {
 		return nil, err
 	}
-	if len(input.Entries) != len(snapshot.Entries) {
+	if len(input.Entries) != len(entries) {
 		return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
-	entries := make([]validatedPayloadEntry, 0, len(snapshot.Entries))
-	for index, record := range snapshot.Entries {
+	validated := make([]validatedPayloadEntry, 0, len(entries))
+	for index, record := range entries {
 		supplied := input.Entries[index]
 		contentCID, err := publication.RawPayloadCID(supplied.Content)
 		if err != nil || supplied.Path != record.Path || supplied.Size != record.Size ||
@@ -284,7 +291,7 @@ func validateFileSetCandidateEntries(
 			!bytes.Equal(contentCID, record.Blob.CID) {
 			return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		entries = append(entries, validatedPayloadEntry{
+		validated = append(validated, validatedPayloadEntry{
 			path:    record.Path,
 			content: bytes.Clone(supplied.Content),
 			blob: publication.BlobReference{
@@ -294,7 +301,7 @@ func validateFileSetCandidateEntries(
 			},
 		})
 	}
-	return entries, nil
+	return validated, nil
 }
 
 func (s *Store) validateAttemptInput(
@@ -473,14 +480,16 @@ func (s *Store) checkFirstConflictSlotFeasibility(
 	stage Stage,
 ) error {
 	occupant := candidate.snapshot
+	occupant.Segments = append([]publication.SnapshotSegment(nil), occupant.Segments...)
 	if candidate.form == PayloadFormFileSet {
-		occupant.Entries = append([]publication.SnapshotEntry(nil), occupant.Entries...)
-		for index := range occupant.Entries {
-			occupant.Entries[index].Size = publication.MaxBlobBytes
-			occupant.Entries[index].Blob.Size = publication.MaxBlobBytes
+		entries := append([]publication.SnapshotEntry(nil), occupant.Segments[0].Entries...)
+		for index := range entries {
+			entries[index].Size = publication.MaxBlobBytes
+			entries[index].Blob.Size = publication.MaxBlobBytes
 		}
+		occupant.Segments[0].Entries = entries
 	} else {
-		occupant.Blob.Size = publication.MaxBlobBytes
+		occupant.Segments[0].Blob.Size = publication.MaxBlobBytes
 	}
 	occupant.PublicationID[15] ^= 1
 	if allZero(occupant.PublicationID[:]) {
@@ -500,7 +509,6 @@ func (s *Store) checkFirstConflictSlotFeasibility(
 			Vault:          occupant.Vault,
 			PublicationSeq: occupant.PublicationSeq,
 			SnapshotCID:    occupantCID,
-			BlobCID:        bytes.Clone(occupant.Blob.CID),
 		},
 	)
 	if err != nil {
@@ -572,12 +580,8 @@ func (s *Store) checkFinalizationFeasibility(
 		Sequence:          candidate.sequence,
 		PublicationID:     candidate.id,
 		RecordCID:         bytes.Clone(candidate.snapshotCID),
-		BlobCID:           bytes.Clone(candidate.blobCID),
-		BlobSize:          candidate.snapshot.Blob.Size,
+		Segments:          summariesOfRecord(candidate.snapshot.Segments),
 		ObservationDigest: [32]byte{1},
-	}
-	if candidate.form == PayloadFormFileSet {
-		next.FileSet = fileSetPayloadOf(candidate.snapshot)
 	}
 	if state.floor == nil {
 		next.Generation = 1
@@ -690,11 +694,8 @@ func cloneSnapshotBlocks(blocks []SnapshotBlock) []SnapshotBlock {
 }
 
 func attemptPayloadReference(candidate validatedCandidate) publication.BlobReference {
-	return publication.BlobReference{
-		CID:      bytes.Clone(candidate.blobCID),
-		Size:     candidate.snapshot.Blob.Size,
-		MIMEType: candidate.snapshot.Blob.MIMEType,
-	}
+	blob, _ := candidate.snapshot.SegmentBlob()
+	return blob
 }
 
 func validLifecycle(value AttemptLifecycle) bool {

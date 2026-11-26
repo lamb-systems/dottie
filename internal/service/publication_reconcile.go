@@ -221,18 +221,7 @@ func validateAcceptedPublication(
 			nil,
 		)
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			!fileSetFloorMatchesRecord(floor.FileSet, record.Entries) {
-			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
-				ctx,
-				publicationStageRecord,
-				publicationReasonRecord,
-				nil,
-			)
-		}
-	} else if floor.FileSet != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
-		record.Blob.Size != floor.BlobSize {
+	if !publicationFloorMatchesRecord(floor, record) {
 		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 			ctx,
 			publicationStageRecord,
@@ -260,12 +249,8 @@ func validateAcceptedPublication(
 		)
 	}
 	head, err := publication.DecodeHead(floor.Head)
-	headBlobMatches := bytes.Equal(head.BlobCID, floor.BlobCID)
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		headBlobMatches = len(head.BlobCID) == 0
-	}
 	if err != nil || head.Vault != floor.Binding.Vault || head.PublicationSeq != floor.Sequence ||
-		!bytes.Equal(head.SnapshotCID, floor.RecordCID) || !headBlobMatches {
+		!bytes.Equal(head.SnapshotCID, floor.RecordCID) {
 		return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 			ctx,
 			publicationStageRecord,
@@ -287,7 +272,7 @@ func validateAcceptedPublication(
 		entries: clonePublicationPayloadEntries(request.entries),
 	}
 	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if !fileSetPayloadEntriesMatch(record.Entries, request.entries) {
+		if !fileSetPayloadEntriesMatch(record.EntriesOrNil(), request.entries) {
 			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 				ctx,
 				publicationStagePayload,
@@ -296,7 +281,7 @@ func validateAcceptedPublication(
 			)
 		}
 	} else {
-		snapshot, err := publication.DecodePayload(request.payload, record.Blob)
+		snapshot, err := publication.DecodePayload(request.payload, record.BlobReference())
 		if err != nil {
 			return acceptedPublicationMaterial{}, publicationReconciliationFailure(
 				ctx,
@@ -390,13 +375,7 @@ func validPublicationFloorInput(floor publicationstate.Floor) bool {
 	if len(floor.RecordCID) == 0 || len(floor.RecordCID) > publication.MaxCIDBytes {
 		return false
 	}
-	if floor.FileSet == nil {
-		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes ||
-			floor.BlobSize == 0 || floor.BlobSize > publication.MaxBlobBytes {
-			return false
-		}
-	} else if len(floor.BlobCID) != 0 || floor.BlobSize != 0 || len(floor.FileSet.Entries) == 0 ||
-		len(floor.FileSet.Entries) > publication.MaxSnapshotEntries {
+	if len(floor.Segments) == 0 || len(floor.Segments) > publication.MaxSnapshotSettings {
 		return false
 	}
 	if len(floor.Head) == 0 ||
@@ -479,8 +458,7 @@ func clonePublicationFloor(floor publicationstate.Floor) publicationstate.Floor 
 	}
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
-	out.BlobCID = bytes.Clone(floor.BlobCID)
-	out.FileSet = cloneFileSetPayloadReference(floor.FileSet)
+	out.Segments = cloneSegmentSummariesService(floor.Segments)
 	return out
 }
 

@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A v2 publication pointer to exactly one plaintext snapshot payload, carried in one of two forms. The packed form is blob: the payload profile is vault Version 1 with CodecNone, canonical uncompressed USTAR and JSON manifest; the blob is the USTAR archive the packer emits (application/x-tar) and is limited to 402653184 bytes inclusive. The file-set form is entries plus targets: a set of individual files, each with its own file-level blob, and exactly one target descriptor naming the id and portable root the entries are relative to, for publications whose point is browsing the layout at the provider; file-set publications are chosen automatically for an eligible sole files target, carry regular files only, and use paths of at most 1024 bytes that are relative, contain no empty, `.` or `..` segment, are unique within the record and appear in ascending order. Entry modes are limited to 0600 and 0644. A file-set publication carries at most 64 entries, the publication store's managed-object limit, so an opt-in target with more files than that cannot be published in file-set form. Settings, symlinks and directories use the packed form. Exactly one of blob or entries is present, targets is present exactly with entries in records written by this version, and a record carrying both or neither payload form is invalid. A file-set record without targets is a legacy record that names no root and cannot be adopted on another machine. Snapshot records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CID are distinct roles.",
+      "description": "A v2 publication pointer to exactly one plaintext snapshot payload, carried as an ordered list of payload segments, one per target, sorted by target id. Each segment names its target and one form. The entries form carries one file-level blob per regular file, with paths of at most 1024 bytes that are relative, contain no empty, `.` or `..` segment, are unique within the segment and appear in ascending order; entry modes are limited to 0600 and 0644, and a file-kind target root carries exactly one entry whose path is the root basename. The settings form carries typed GNOME settings inline, sorted by schema id, settings path and key, with a value exactly when the state is present, for a settings target without a filesystem root. The packed form carries one USTAR blob for a target the other forms cannot represent. A record carries at most 256 segments and at most 64 entries per entries segment. Records use sequence keys of exactly 16 zero-padded ASCII decimal digits. Record CID and raw payload CIDs are distinct roles.",
       "key": "any",
       "record": {
         "type": "object",
@@ -13,7 +13,8 @@
           "vault",
           "publicationId",
           "publicationSeq",
-          "parent"
+          "parent",
+          "segments"
         ],
         "properties": {
           "schemaVersion": {
@@ -39,107 +40,178 @@
             "type": "bytes",
             "maxLength": 128
           },
-          "blob": {
-            "type": "blob",
-            "accept": [
-              "application/x-tar"
-            ],
-            "maxSize": 402653184
-          },
-          "entries": {
+          "segments": {
             "type": "array",
-            "maxLength": 64,
+            "minLength": 1,
+            "maxLength": 256,
             "items": {
               "type": "object",
               "required": [
-                "path",
-                "mode",
-                "size",
-                "kind",
-                "blob"
+                "target",
+                "form"
               ],
               "properties": {
-                "path": {
+                "target": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "source",
+                    "source_version"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 128
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "files",
+                        "gnome"
+                      ]
+                    },
+                    "source_version": {
+                      "type": "integer",
+                      "const": 1
+                    },
+                    "root": {
+                      "type": "object",
+                      "required": [
+                        "base",
+                        "path",
+                        "kind"
+                      ],
+                      "properties": {
+                        "base": {
+                          "type": "string",
+                          "enum": [
+                            "home",
+                            "xdg-config"
+                          ]
+                        },
+                        "path": {
+                          "type": "string",
+                          "maxLength": 4096
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "file",
+                            "directory"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "form": {
                   "type": "string",
-                  "maxLength": 1024
+                  "enum": [
+                    "entries",
+                    "settings",
+                    "packed"
+                  ]
                 },
-                "mode": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 511
+                "entries": {
+                  "type": "array",
+                  "maxLength": 64,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "mode",
+                      "size",
+                      "kind",
+                      "blob"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "mode": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 511
+                      },
+                      "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 402653184
+                      },
+                      "kind": {
+                        "type": "string",
+                        "const": "file"
+                      },
+                      "blob": {
+                        "type": "blob",
+                        "accept": [
+                          "application/octet-stream",
+                          "application/x-tar"
+                        ],
+                        "maxSize": 402653184
+                      }
+                    }
+                  }
                 },
-                "size": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 402653184
-                },
-                "kind": {
-                  "type": "string",
-                  "const": "file"
+                "settings": {
+                  "type": "array",
+                  "maxLength": 256,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "schemaId",
+                      "path",
+                      "key",
+                      "state",
+                      "value"
+                    ],
+                    "properties": {
+                      "schemaId": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "key": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "present",
+                          "reset"
+                        ]
+                      },
+                      "value": {
+                        "type": "object",
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "maxLength": 255
+                          },
+                          "text": {
+                            "type": "string",
+                            "maxLength": 65536
+                          }
+                        }
+                      }
+                    }
+                  }
                 },
                 "blob": {
                   "type": "blob",
                   "accept": [
-                    "application/octet-stream",
                     "application/x-tar"
                   ],
                   "maxSize": 402653184
-                }
-              }
-            }
-          },
-          "targets": {
-            "type": "array",
-            "minLength": 1,
-            "maxLength": 1,
-            "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "source",
-                "source_version",
-                "root"
-              ],
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "maxLength": 128
-                },
-                "source": {
-                  "type": "string",
-                  "const": "files"
-                },
-                "source_version": {
-                  "type": "integer",
-                  "const": 1
-                },
-                "root": {
-                  "type": "object",
-                  "required": [
-                    "base",
-                    "path",
-                    "kind"
-                  ],
-                  "properties": {
-                    "base": {
-                      "type": "string",
-                      "enum": [
-                        "home",
-                        "xdg-config"
-                      ]
-                    },
-                    "path": {
-                      "type": "string",
-                      "maxLength": 4096
-                    },
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "file",
-                        "directory"
-                      ]
-                    }
-                  }
                 }
               }
             }

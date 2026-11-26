@@ -864,7 +864,7 @@ func (s *Store) readState(ctx context.Context, source queryer, stage Stage) (sta
 			return stateSnapshot{}, err
 		}
 	}
-	if s.schemaVersion == 3 {
+	if s.schemaVersion == 4 {
 		if err := s.checkIncomingMaterialRefs(ctx, source, stage); err != nil {
 			return stateSnapshot{}, err
 		}
@@ -1666,20 +1666,15 @@ func buildFloor(
 		Sequence:          candidate.ref.Sequence,
 		PublicationID:     record.PublicationID,
 		RecordCID:         bytes.Clone(candidate.ref.CID),
-		BlobCID:           bytes.Clone(record.Blob.CID),
-		BlobSize:          record.Blob.Size,
-		FileSet:           fileSetPayloadOf(record),
+		Segments:          summariesOfRecord(record.Segments),
 		ObservationDigest: observation.observationDigest,
 	}
 }
 
 func blobReference(raw []byte) publication.BlobReference {
 	record, _ := publication.DecodeSnapshot(raw)
-	return publication.BlobReference{
-		CID:      bytes.Clone(record.Blob.CID),
-		Size:     record.Blob.Size,
-		MIMEType: record.Blob.MIMEType,
-	}
+	blob, _ := record.SegmentBlob()
+	return blob
 }
 
 func cloneFloor(floor Floor) Floor {
@@ -1689,8 +1684,7 @@ func cloneFloor(floor Floor) Floor {
 	out.SuppliedContext = cloneContext(floor.SuppliedContext)
 	out.Head = bytes.Clone(floor.Head)
 	out.RecordCID = bytes.Clone(floor.RecordCID)
-	out.BlobCID = bytes.Clone(floor.BlobCID)
-	out.FileSet = cloneFileSetPayload(floor.FileSet)
+	out.Segments = cloneSegmentSummaries(floor.Segments)
 	return out
 }
 func cloneReference(ref RecordReference) RecordReference {

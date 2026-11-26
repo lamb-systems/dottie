@@ -249,13 +249,7 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		record.PublicationSeq != floor.Sequence {
 		return false
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			!fileSetFloorMatchesRecord(floor.FileSet, record.Entries) {
-			return false
-		}
-	} else if floor.FileSet != nil || !bytes.Equal(record.Blob.CID, floor.BlobCID) ||
-		record.Blob.Size != floor.BlobSize {
+	if !publicationFloorMatchesRecord(floor, record) {
 		return false
 	}
 	sequence, err := publication.ParseSequenceKey(floor.SnapshotKey)
@@ -268,10 +262,7 @@ func validPublicationBasePosition(position publicationBasePosition) bool {
 		!bytes.Equal(head.SnapshotCID, floor.RecordCID) {
 		return false
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		return len(head.BlobCID) == 0
-	}
-	return bytes.Equal(head.BlobCID, floor.BlobCID)
+	return true
 }
 
 func validPublicationBaseSelection(selection publicationBaseSelection) bool {

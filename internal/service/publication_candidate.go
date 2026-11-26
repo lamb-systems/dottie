@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
@@ -74,16 +75,15 @@ func publicationSnapshotTargetEntries(snapshot model.Snapshot, targetID string) 
 
 func buildPublicationMaterial(
 	binding publicationstate.Binding,
-	form publication.PayloadForm,
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
 	view publicationstate.SuppliedRepositoryView,
 	publicationID [16]byte,
-) (publicationstate.CandidateInput, publication.BlobReference, MaterialWriteBatch, error) {
-	candidate, blob, err := encodePublicationCandidate(binding, form, snapshot, floor, present, publicationID)
+) (publicationstate.CandidateInput, MaterialWriteBatch, error) {
+	candidate, err := encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
 	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, MaterialWriteBatch{}, err
+		return publicationstate.CandidateInput{}, MaterialWriteBatch{}, err
 	}
 	var captured *publicationstate.Floor
 	if present {
@@ -91,25 +91,24 @@ func buildPublicationMaterial(
 		cloned.AnchorCID = bytes.Clone(floor.AnchorCID)
 		cloned.Head = bytes.Clone(floor.Head)
 		cloned.RecordCID = bytes.Clone(floor.RecordCID)
-		cloned.BlobCID = bytes.Clone(floor.BlobCID)
+		cloned.Segments = cloneSegmentSummariesService(floor.Segments)
 		cloned.SuppliedContext = cloneMaterialContext(floor.SuppliedContext)
 		captured = &cloned
 	}
 	batch, err := newMaterialWriteBatch(binding, captured, view, candidate)
 	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, MaterialWriteBatch{}, err
+		return publicationstate.CandidateInput{}, MaterialWriteBatch{}, err
 	}
-	return candidate, blob, batch, nil
+	return candidate, batch, nil
 }
 
 func encodePublicationCandidate(
 	binding publicationstate.Binding,
-	form publication.PayloadForm,
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
 	publicationID [16]byte,
-) (publicationstate.CandidateInput, publication.BlobReference, error) {
+) (publicationstate.CandidateInput, error) {
 	var sequence uint64
 	parent := []byte{}
 	if present {
@@ -118,87 +117,212 @@ func encodePublicationCandidate(
 	}
 	key, err := publication.SequenceKey(sequence)
 	if err != nil {
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, err
+		return publicationstate.CandidateInput{}, err
 	}
-	switch form {
-	case publication.PayloadFormPacked:
-		packed, err := vault.Pack(snapshot)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		blobCID, err := publication.RawPayloadCID(packed.Payload)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		blob := publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(packed.Payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		}
-		snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-			PublicationSeq: sequence, Parent: parent, Blob: blob,
-		})
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		snapshotCID, err := publication.RecordCID(snapshotRecord)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		headRecord, err := publication.EncodeHead(publication.HeadRecord{
-			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
-			SnapshotCID: snapshotCID, BlobCID: blobCID,
-		})
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		return publicationstate.CandidateInput{
-			SnapshotKey:    key,
-			SnapshotRecord: snapshotRecord,
-			HeadRecord:     headRecord,
-			Payload:        packed.Payload,
-		}, blob, nil
-	case publication.PayloadFormFileSet:
-		snapshotEntries, err := fileSetSnapshotEntries(snapshot)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		snapshotTargets, err := fileSetSnapshotTargets(snapshot)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
-			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
-			PublicationSeq: sequence, Parent: parent, Entries: snapshotEntries, Targets: snapshotTargets,
-		})
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		snapshotCID, err := publication.RecordCID(snapshotRecord)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		headRecord, err := publication.EncodeHead(publication.HeadRecord{
-			SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
-			SnapshotCID: snapshotCID,
-		})
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		entries, err := fileSetPayloadEntries(snapshot, snapshotEntries)
-		if err != nil {
-			return publicationstate.CandidateInput{}, publication.BlobReference{}, err
-		}
-		return publicationstate.CandidateInput{
-			SnapshotKey:    key,
-			SnapshotRecord: snapshotRecord,
-			HeadRecord:     headRecord,
-			Entries:        entries,
-		}, publication.BlobReference{}, nil
-	default:
-		return publicationstate.CandidateInput{}, publication.BlobReference{}, publication.ErrPayloadFormMismatch
+	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot)
+	if err != nil {
+		return publicationstate.CandidateInput{}, err
 	}
+	snapshotRecord, err := publication.EncodeSnapshot(publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationID: publicationID,
+		PublicationSeq: sequence, Parent: parent, Segments: recordSegments,
+	})
+	if err != nil {
+		return publicationstate.CandidateInput{}, err
+	}
+	snapshotCID, err := publication.RecordCID(snapshotRecord)
+	if err != nil {
+		return publicationstate.CandidateInput{}, err
+	}
+	headRecord, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: binding.Vault, PublicationSeq: sequence,
+		SnapshotCID: snapshotCID,
+	})
+	if err != nil {
+		return publicationstate.CandidateInput{}, err
+	}
+	return publicationstate.CandidateInput{
+		SnapshotKey:    key,
+		SnapshotRecord: snapshotRecord,
+		HeadRecord:     headRecord,
+		Segments:       writeSegments,
+		Payloads:       payloads,
+		Entries:        entries,
+	}, nil
+}
+
+func cloneSegmentSummariesService(summaries []publicationstate.SegmentSummary) []publicationstate.SegmentSummary {
+	cloned := make([]publicationstate.SegmentSummary, 0, len(summaries))
+	for _, summary := range summaries {
+		copy := publicationstate.SegmentSummary{
+			TargetID: summary.TargetID, Form: summary.Form,
+			BlobCID: bytes.Clone(summary.BlobCID), BlobSize: summary.BlobSize,
+			Settings: summary.Settings,
+		}
+		for _, entry := range summary.Entries {
+			copy.Entries = append(copy.Entries, publicationstate.PayloadEntryReference{
+				Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
+			})
+		}
+		cloned = append(cloned, copy)
+	}
+	return cloned
+}
+
+func candidateSegments(
+	snapshot model.Snapshot,
+) ([]publication.SnapshotSegment, []publicationstate.CandidateSegment, [][]byte, []publication.PayloadEntry, error) {
+	targets := append([]model.Target(nil), snapshot.Targets...)
+	sort.Slice(targets, func(left, right int) bool { return targets[left].ID < targets[right].ID })
+	recordSegments := make([]publication.SnapshotSegment, 0, len(targets))
+	writeSegments := make([]publicationstate.CandidateSegment, 0, len(targets))
+	payloads := make([][]byte, 0, len(targets))
+	entries := make([]publication.PayloadEntry, 0)
+	for _, target := range targets {
+		targetEntries := make([]model.Entry, 0, len(snapshot.Entries))
+		for _, entry := range snapshot.Entries {
+			if entry.TargetID == target.ID {
+				targetEntries = append(targetEntries, entry)
+			}
+		}
+		switch target.Source {
+		case model.SourceGNOME:
+			segment, err := settingsSegmentForTarget(target, targetEntries)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			recordSegments = append(recordSegments, segment)
+			writeSegments = append(writeSegments, publicationstate.CandidateSegment{
+				TargetID: target.ID, Form: publicationstate.PayloadFormSettings,
+				SettingsDigest: publication.SettingsDigest(segment.Settings),
+			})
+			payloads = append(payloads, nil)
+		case model.SourceFiles:
+			segment, targetPayloads, ok := entriesSegmentForTarget(target, targetEntries)
+			if ok {
+				recordSegments = append(recordSegments, segment)
+				references := make([]publicationstate.PayloadEntryReference, 0, len(segment.Entries))
+				for _, entry := range segment.Entries {
+					references = append(references, publicationstate.PayloadEntryReference{
+						Path: entry.Path, CID: bytes.Clone(entry.Blob.CID), Size: entry.Size,
+					})
+				}
+				writeSegments = append(writeSegments, publicationstate.CandidateSegment{
+					TargetID: target.ID, Form: publicationstate.PayloadFormFileSet, Entries: references,
+				})
+				payloads = append(payloads, nil)
+				entries = append(entries, targetPayloads...)
+				continue
+			}
+			packed, err := vault.PackTarget(snapshot, target.ID)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			cid, err := publication.RawPayloadCID(packed.Payload)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			blob := publication.BlobReference{
+				CID: cid, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType,
+			}
+			recordSegments = append(recordSegments, publication.SnapshotSegment{
+				Target: target, Form: publication.SegmentFormPacked, Blob: blob,
+			})
+			writeSegments = append(writeSegments, publicationstate.CandidateSegment{
+				TargetID: target.ID, Form: publicationstate.PayloadFormPacked, Blob: &blob,
+			})
+			payloads = append(payloads, packed.Payload)
+		default:
+			return nil, nil, nil, nil, publication.ErrInvalidRecord
+		}
+	}
+	return recordSegments, writeSegments, payloads, entries, nil
+}
+
+func settingsSegmentForTarget(target model.Target, entries []model.Entry) (publication.SnapshotSegment, error) {
+	settings := make([]publication.SnapshotSetting, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Setting == nil || entry.File != nil {
+			return publication.SnapshotSegment{}, publication.ErrInvalidRecord
+		}
+		settings = append(settings, publication.SnapshotSetting{
+			SchemaID: entry.Setting.SchemaID, Path: entry.Setting.Path, Key: entry.Setting.Key,
+			State: entry.Setting.State, Value: entry.Setting.Value,
+		})
+	}
+	sort.Slice(settings, func(left, right int) bool {
+		if settings[left].SchemaID != settings[right].SchemaID {
+			return settings[left].SchemaID < settings[right].SchemaID
+		}
+		if settings[left].Path != settings[right].Path {
+			return settings[left].Path < settings[right].Path
+		}
+		return settings[left].Key < settings[right].Key
+	})
+	return publication.SnapshotSegment{Target: target, Form: publication.SegmentFormSettings, Settings: settings}, nil
+}
+
+func entriesSegmentForTarget(
+	target model.Target,
+	entries []model.Entry,
+) (publication.SnapshotSegment, []publication.PayloadEntry, bool) {
+	if target.Root == nil ||
+		(target.Root.Kind != model.SelectionDirectory && target.Root.Kind != model.SelectionFile) {
+		return publication.SnapshotSegment{}, nil, false
+	}
+	files := make([]model.Entry, 0, len(entries))
+	directories := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Setting != nil || entry.File == nil {
+			return publication.SnapshotSegment{}, nil, false
+		}
+		file := entry.File
+		if file.State != model.FilePresent {
+			return publication.SnapshotSegment{}, nil, false
+		}
+		if target.Root.Kind == model.SelectionFile && (file.Path != "." || file.Kind != model.FileRegular) {
+			return publication.SnapshotSegment{}, nil, false
+		}
+		if file.Kind == model.FileDirectory {
+			directories = append(directories, file.Path)
+			continue
+		}
+		if file.Kind != model.FileRegular || len(file.Content) == 0 {
+			return publication.SnapshotSegment{}, nil, false
+		}
+		if file.Mode != 0o600 && file.Mode != 0o644 {
+			return publication.SnapshotSegment{}, nil, false
+		}
+		files = append(files, entry)
+	}
+	if len(files) == 0 {
+		return publication.SnapshotSegment{}, nil, false
+	}
+	if target.Root.Kind == model.SelectionFile && len(files) != 1 {
+		return publication.SnapshotSegment{}, nil, false
+	}
+	candidate := publicationSnapshotPaths(files)
+	for _, directory := range directories {
+		if !publicationSnapshotHasDescendant(candidate, directory) {
+			return publication.SnapshotSegment{}, nil, false
+		}
+	}
+	projected := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{cloneSelectionTargetModel(target)},
+		Entries: files,
+	}
+	snapshotEntries, err := fileSetSnapshotEntries(projected)
+	if err != nil {
+		return publication.SnapshotSegment{}, nil, false
+	}
+	payloads, err := fileSetPayloadEntries(projected, snapshotEntries)
+	if err != nil {
+		return publication.SnapshotSegment{}, nil, false
+	}
+	return publication.SnapshotSegment{
+		Target: target, Form: publication.SegmentFormEntries, Entries: snapshotEntries,
+	}, payloads, true
 }
 
 type PublicationSyncSnapshotRequest struct {

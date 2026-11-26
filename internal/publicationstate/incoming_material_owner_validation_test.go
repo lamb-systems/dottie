@@ -348,7 +348,7 @@ func TestAcceptMaterialNoOpDirectoryValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, floor, material.Floor)
 		assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-		assert.Equal(t, f.payload, material.Payload)
+		assert.Equal(t, f.payload, acceptedPayload(material))
 	})
 
 	t.Run("pinned directory replaced", func(t *testing.T) {
@@ -482,7 +482,7 @@ func TestAcceptMaterialAttachmentPathUnchanged(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, floor, material.Floor)
 		assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-		assert.Equal(t, f.payload, material.Payload)
+		assert.Equal(t, f.payload, acceptedPayload(material))
 	})
 
 	t.Run("refuses corrupt orphan", func(t *testing.T) {

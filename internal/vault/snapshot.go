@@ -78,6 +78,35 @@ func Pack(snapshot model.Snapshot) (Blob, error) {
 	return PackWithLimits(snapshot, DefaultLimits())
 }
 
+func PackTarget(snapshot model.Snapshot, targetID string) (Blob, error) {
+	return PackTargetWithLimits(snapshot, targetID, DefaultLimits())
+}
+
+func PackTargetWithLimits(snapshot model.Snapshot, targetID string, limits Limits) (Blob, error) {
+	if targetID == "" {
+		return Blob{}, errors.New("snapshot target is not selected")
+	}
+	if err := snapshot.Validate(); err != nil {
+		return Blob{}, fmt.Errorf("cannot select snapshot target: %w", err)
+	}
+	targets := make([]model.Target, 0, 1)
+	for _, target := range snapshot.Targets {
+		if target.ID == targetID {
+			targets = append(targets, target)
+		}
+	}
+	if len(targets) != 1 {
+		return Blob{}, errors.New("snapshot target not found")
+	}
+	var entries []model.Entry
+	for _, entry := range snapshot.Entries {
+		if entry.TargetID == targetID {
+			entries = append(entries, entry)
+		}
+	}
+	return PackWithLimits(model.Snapshot{Version: snapshot.Version, Targets: targets, Entries: entries}, limits)
+}
+
 func PackWithLimits(snapshot model.Snapshot, limits Limits) (Blob, error) {
 	prepared, err := prepare(snapshot, limits)
 	if err != nil {

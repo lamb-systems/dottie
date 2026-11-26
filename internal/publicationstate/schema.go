@@ -18,25 +18,25 @@ var attemptSchemaStatements = []string{
 	"CREATE TABLE attempt_events (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), ordinal INTEGER NOT NULL, kind TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, ordinal))",
 	"CREATE TABLE attempt_evidence (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), role TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, role))",
 	"CREATE TABLE payload_objects (blob_cid BLOB PRIMARY KEY NOT NULL, size INTEGER NOT NULL, basename TEXT NOT NULL UNIQUE, logical_bytes INTEGER NOT NULL)",
-	"CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
-	"CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)",
+	"CREATE TABLE attempt_payload_refs (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), ordinal INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), PRIMARY KEY(attempt_id, ordinal))",
+	"CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, segments BLOB NOT NULL, accepted_revision INTEGER NOT NULL)",
 	"CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)",
 	"CREATE INDEX publication_attempts_order ON publication_attempts(created_order, attempt_id)",
 	"CREATE INDEX payload_objects_basename ON payload_objects(basename)",
 }
 
-const schema3RetainedPublicationsStatement = "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, form TEXT NOT NULL DEFAULT 'packed' CHECK(form IN ('packed','file_set')), blob_cid BLOB REFERENCES payload_objects(blob_cid), size INTEGER, file_set BLOB, accepted_revision INTEGER NOT NULL, CHECK ((form = 'packed' AND blob_cid IS NOT NULL AND size IS NOT NULL AND file_set IS NULL) OR (form = 'file_set' AND blob_cid IS NULL AND size IS NULL AND file_set IS NOT NULL)))"
+const schema4RetainedPublicationsStatement = "CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, segments BLOB NOT NULL, accepted_revision INTEGER NOT NULL)"
 
 const retainedPublicationsTable = "retained_publications"
 
-var schema3AttemptSchemaStatements = replaceRetainedPublicationsStatement(attemptSchemaStatements)
+var schema4AttemptSchemaStatements = replaceRetainedPublicationsStatement(attemptSchemaStatements)
 
 func replaceRetainedPublicationsStatement(statements []string) []string {
 	replaced := make([]string, len(statements))
 	for index, statement := range statements {
 		replaced[index] = statement
 		if statementTableName(statement) == retainedPublicationsTable {
-			replaced[index] = schema3RetainedPublicationsStatement
+			replaced[index] = schema4RetainedPublicationsStatement
 		}
 	}
 	return replaced
@@ -90,10 +90,10 @@ func schemaInventoryForVersion(version int) (schemaInventory, error) {
 				"revision",
 			},
 		}, nil
-	case 3:
-		statements := make([]string, 0, len(schemaV1Statements)+len(schema3AttemptSchemaStatements)+1)
+	case 4:
+		statements := make([]string, 0, len(schemaV1Statements)+len(schema4AttemptSchemaStatements)+1)
 		statements = append(statements, schemaV1Statements...)
-		statements = append(statements, schema3AttemptSchemaStatements...)
+		statements = append(statements, schema4AttemptSchemaStatements...)
 		statements = append(statements, incomingMaterialSchemaStatement)
 		objects := make(map[string]string, len(schemaV1Objects)+len(attemptSchemaObjects)+1)
 		maps.Copy(objects, schemaV1Objects)

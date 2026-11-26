@@ -62,7 +62,6 @@ func TestPublicationAttemptLostFenceRequiresExactOccupiedKeyAndPredecessor(t *te
 			Vault:          f.binding.Vault,
 			PublicationSeq: 1,
 			SnapshotCID:    competingCID,
-			BlobCID:        competingRecord.Blob.CID,
 		},
 	)
 	require.NoError(t, err)
@@ -104,7 +103,10 @@ func TestPublicationAttemptCompetingGenesisUsesDifferentVaultOnlyForLostFence(t 
 		PublicationID:  [16]byte{0x42},
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob:           blobForCandidate(t, candidate),
+		Segments: []publication.SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: publication.SegmentFormPacked,
+			Blob: blobForCandidate(t, candidate),
+		}},
 	}
 	otherRaw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -116,7 +118,6 @@ func TestPublicationAttemptCompetingGenesisUsesDifferentVaultOnlyForLostFence(t 
 			Vault:          otherVault,
 			PublicationSeq: 0,
 			SnapshotCID:    otherCID,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)
@@ -192,7 +193,6 @@ func TestSuppliedViewRejectsGapsAndWrongPredecessorBeforeOutcomeMutation(t *test
 			Vault:          f.binding.Vault,
 			PublicationSeq: 1,
 			SnapshotCID:    wrongCID,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)
@@ -280,7 +280,6 @@ func competingSuccessorWithOneDescendant(
 			Vault:          descendant.Vault,
 			PublicationSeq: descendant.PublicationSeq,
 			SnapshotCID:    descendantCID,
-			BlobCID:        descendant.Blob.CID,
 		},
 	)
 	require.NoError(t, err)
@@ -344,7 +343,7 @@ func TestAttemptLineageLimitAppliesToResolveAndDirectAbandon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredAbandoned, retired.Lifecycle)
 	assert.Equal(t, OutcomeSuperseded, retired.Outcome)
-	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 	beforePayload, err := os.ReadFile(payloadPath)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())

@@ -64,7 +64,7 @@ func TestPublicationAttemptUploadCanRepeatBeforeSubmissionAfterReadbackAndRestar
 		freshProposal.Confirmation,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, repeated.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(repeated))
 	var afterCore []byte
 	require.NoError(
 		t,
@@ -84,7 +84,7 @@ func TestPublicationAttemptUploadCanRepeatBeforeSubmissionAfterReadbackAndRestar
 			repeatProposal.Confirmation,
 		)
 		require.NoError(t, err)
-		assert.Equal(t, candidate.Payload, repeated.Payload)
+		assert.Equal(t, acceptedPayload(candidate), acceptedPayload(repeated))
 	}
 	var eventCount int
 	require.NoError(

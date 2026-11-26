@@ -30,16 +30,18 @@ type AcceptedMaterialEntry struct {
 type AcceptedMaterial struct {
 	Floor          Floor
 	SnapshotRecord []byte
-	Payload        []byte
-	Entries        []AcceptedMaterialEntry
+	Segments       []AcceptedMaterialSegment
+}
+
+type AcceptedMaterialSegment struct {
+	Summary SegmentSummary
+	Blob    []byte
+	Entries []AcceptedMaterialEntry
 }
 
 type materialOwnership struct {
-	form    PayloadForm
-	name    string
-	record  []byte
-	blob    publication.BlobReference
-	fileSet *FileSetPayload
+	segments []SegmentSummary
+	record   []byte
 }
 
 func (s *Store) ReadAcceptedMaterial(
@@ -81,61 +83,89 @@ func (s *Store) ReadAcceptedMaterial(
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return AcceptedMaterial{}, classifyAcceptedMaterialDirectory(err, StageReadAcceptedMaterial)
 	}
-	if owner.form == PayloadFormFileSet {
-		entries, err := s.readAcceptedFileSetEntries(ctx, owner, StageReadAcceptedMaterial)
-		if err != nil {
-			return AcceptedMaterial{}, err
-		}
+	snapshot, err := publication.DecodeSnapshot(owner.record)
+	if err != nil || !sameSegmentSummaries(summariesOfRecord(snapshot.Segments), owner.segments) {
+		return AcceptedMaterial{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+	}
+	recordSegments := make(map[string]publication.SnapshotSegment, len(snapshot.Segments))
+	for _, segment := range snapshot.Segments {
+		recordSegments[segment.Target.ID] = segment
+	}
+	segments := make([]AcceptedMaterialSegment, 0, len(owner.segments))
+	for _, summary := range owner.segments {
 		if err := s.checkContext(ctx, StageReadAcceptedMaterial); err != nil {
 			return AcceptedMaterial{}, err
 		}
-		return AcceptedMaterial{
-			Floor:          cloneFloor(*state.floor),
-			SnapshotRecord: bytes.Clone(owner.record),
-			Entries:        entries,
-		}, nil
-	}
-	payload, err := s.inspectPayloadFile(owner.name, nil, owner.blob)
-	if err != nil {
-		return AcceptedMaterial{}, classifyAcceptedMaterialRead(err, StageReadAcceptedMaterial)
-	}
-	if err := s.checkContext(ctx, StageReadAcceptedMaterial); err != nil {
-		return AcceptedMaterial{}, err
-	}
-	return AcceptedMaterial{Floor: cloneFloor(*state.floor), SnapshotRecord: bytes.Clone(owner.record), Payload: payload}, nil
-}
-
-func (s *Store) readAcceptedFileSetEntries(
-	ctx context.Context,
-	owner materialOwnership,
-	stage Stage,
-) ([]AcceptedMaterialEntry, error) {
-	snapshot, err := publication.DecodeSnapshot(owner.record)
-	if err != nil || payloadFormOf(snapshot) != PayloadFormFileSet ||
-		!fileSetPayloadMatchesRecord(owner.fileSet, snapshot) {
-		return nil, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	contents := make(map[string][]byte, len(snapshot.Entries))
-	entries := make([]AcceptedMaterialEntry, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if err := s.checkContext(ctx, stage); err != nil {
-			return nil, err
-		}
-		key := string(entry.Blob.CID) + "\x00" + fmt.Sprint(entry.Size)
-		content, present := contents[key]
-		if !present {
-			name, nameErr := payloadBasenameFromCID(entry.Blob.CID)
+		material := AcceptedMaterialSegment{Summary: summary}
+		switch summary.Form {
+		case PayloadFormPacked:
+			name, nameErr := payloadBasenameFromCID(summary.BlobCID)
 			if nameErr != nil || !validPayloadBasename(name) {
-				return nil, classified(ErrSchema, stage, ReasonCorrupt)
+				return AcceptedMaterial{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
 			}
 			blob := publication.BlobReference{
-				CID:      bytes.Clone(entry.Blob.CID),
-				Size:     entry.Size,
-				MIMEType: entry.Blob.MIMEType,
+				CID:      bytes.Clone(summary.BlobCID),
+				Size:     summary.BlobSize,
+				MIMEType: publication.SnapshotBlobMIMEType,
+			}
+			data, readErr := s.inspectPayloadFile(name, nil, blob)
+			if readErr != nil {
+				return AcceptedMaterial{}, classifyAcceptedMaterialRead(readErr, StageReadAcceptedMaterial)
+			}
+			material.Blob = data
+		case PayloadFormFileSet:
+			entries, entryErr := s.readAcceptedSegmentEntries(ctx, summary, recordSegments[summary.TargetID])
+			if entryErr != nil {
+				return AcceptedMaterial{}, entryErr
+			}
+			material.Entries = entries
+		case PayloadFormSettings:
+		default:
+			return AcceptedMaterial{}, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		}
+		segments = append(segments, material)
+	}
+	return AcceptedMaterial{
+		Floor:          cloneFloor(*state.floor),
+		SnapshotRecord: bytes.Clone(owner.record),
+		Segments:       segments,
+	}, nil
+}
+
+func (s *Store) readAcceptedSegmentEntries(
+	ctx context.Context,
+	summary SegmentSummary,
+	record publication.SnapshotSegment,
+) ([]AcceptedMaterialEntry, error) {
+	if len(record.Entries) != len(summary.Entries) {
+		return nil, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+	}
+	contents := make(map[string][]byte, len(summary.Entries))
+	entries := make([]AcceptedMaterialEntry, 0, len(summary.Entries))
+	for index, reference := range summary.Entries {
+		if err := s.checkContext(ctx, StageReadAcceptedMaterial); err != nil {
+			return nil, err
+		}
+		entry := record.Entries[index]
+		if entry.Path != reference.Path || entry.Size != reference.Size ||
+			!bytes.Equal(entry.Blob.CID, reference.CID) {
+			return nil, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+		}
+		key := string(reference.CID) + "\x00" + fmt.Sprint(reference.Size)
+		content, present := contents[key]
+		if !present {
+			name, nameErr := payloadBasenameFromCID(reference.CID)
+			if nameErr != nil || !validPayloadBasename(name) {
+				return nil, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
+			}
+			blob := publication.BlobReference{
+				CID:      bytes.Clone(reference.CID),
+				Size:     reference.Size,
+				MIMEType: publication.SnapshotBlobMIMEType,
 			}
 			data, readErr := s.inspectCustodyObject(name, nil, blob, PayloadFormFileSet)
 			if readErr != nil {
-				return nil, classifyAcceptedMaterialRead(readErr, stage)
+				return nil, classifyAcceptedMaterialRead(readErr, StageReadAcceptedMaterial)
 			}
 			content = data
 			contents[key] = data
@@ -181,9 +211,7 @@ func sameAcceptedFloor(left, right Floor) bool {
 		left.Sequence == right.Sequence &&
 		left.PublicationID == right.PublicationID &&
 		bytes.Equal(left.RecordCID, right.RecordCID) &&
-		bytes.Equal(left.BlobCID, right.BlobCID) &&
-		left.BlobSize == right.BlobSize &&
-		sameFileSetPayload(left.FileSet, right.FileSet) &&
+		sameSegmentSummaries(left.Segments, right.Segments) &&
 		left.ObservationDigest == right.ObservationDigest &&
 		left.AcceptedEventDigest == right.AcceptedEventDigest
 }
@@ -220,7 +248,7 @@ func (s *Store) acceptedMaterialOwner(
 	}
 
 	incomingCount := int64(0)
-	if s.schemaVersion == 3 {
+	if s.schemaVersion == 4 {
 		incomingCount, err = queryInt64(
 			ctx,
 			q,
@@ -253,40 +281,27 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 	stage Stage,
 ) (materialOwnership, error) {
 	var idValue, idLengthValue, recordValue, recordLengthValue any
-	var formTypeValue, formValue, formLengthValue any
-	var blobTypeValue, blobValue, blobLengthValue any
-	var sizeTypeValue, sizeValue any
-	var fileSetTypeValue, fileSetLengthValue any
+	var segmentsTypeValue, segmentsLengthValue, segmentsValue any
 	var sequenceValue, revisionValue any
 	var lifecycleValue, lifecycleLengthValue, outcomeValue, outcomeLengthValue, blockedValue, blockedLengthValue any
 	var recordKeyValue, recordKeyLengthValue, recordSequenceValue any
-	var objectCIDValue, objectCIDLengthValue, objectSizeValue, basenameValue, basenameLengthValue any
 	err := q.QueryRowContext(ctx, `SELECT
 		substr(rp.attempt_id,1,17),length(rp.attempt_id),
 		substr(rp.record_cid,1,129),length(rp.record_cid),
-		typeof(rp.form),CASE WHEN typeof(rp.form)='text' THEN substr(rp.form,1,8) END,length(CAST(rp.form AS BLOB)),
-		typeof(rp.blob_cid),substr(rp.blob_cid,1,129),length(rp.blob_cid),
-		typeof(rp.size),CASE WHEN typeof(rp.size)='integer' THEN rp.size END,
-		typeof(rp.file_set),length(CAST(rp.file_set AS BLOB)),
+		typeof(rp.segments),length(CAST(rp.segments AS BLOB)),substr(CAST(rp.segments AS BLOB),1,2097153),
 		rp.sequence,rp.accepted_revision,
 		substr(pa.lifecycle,1,65),length(pa.lifecycle),substr(pa.outcome,1,65),length(pa.outcome),substr(pa.blocked,1,65),length(pa.blocked),
-		substr(ar.record_key,1,17),length(ar.record_key),ar.sequence,
-		substr(po.blob_cid,1,129),length(po.blob_cid),po.size,substr(po.basename,1,73),length(po.basename)
+		substr(ar.record_key,1,17),length(ar.record_key),ar.sequence
 		FROM retained_publications rp
 		JOIN publication_attempts pa ON pa.attempt_id=rp.attempt_id
 		JOIN accepted_events ae ON ae.revision=rp.accepted_revision
 		JOIN accepted_records ar ON ar.cid=rp.record_cid
-		LEFT JOIN payload_objects po ON po.blob_cid=rp.blob_cid
 		WHERE rp.accepted_revision=?`, int64(floor.Revision)).Scan(
 		&idValue, &idLengthValue, &recordValue, &recordLengthValue,
-		&formTypeValue, &formValue, &formLengthValue,
-		&blobTypeValue, &blobValue, &blobLengthValue,
-		&sizeTypeValue, &sizeValue,
-		&fileSetTypeValue, &fileSetLengthValue,
+		&segmentsTypeValue, &segmentsLengthValue, &segmentsValue,
 		&sequenceValue, &revisionValue,
 		&lifecycleValue, &lifecycleLengthValue, &outcomeValue, &outcomeLengthValue, &blockedValue, &blockedLengthValue,
-		&recordKeyValue, &recordKeyLengthValue, &recordSequenceValue,
-		&objectCIDValue, &objectCIDLengthValue, &objectSizeValue, &basenameValue, &basenameLengthValue)
+		&recordKeyValue, &recordKeyLengthValue, &recordSequenceValue)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
@@ -298,16 +313,9 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 	idLength, idLengthOK := rawInt64(idLengthValue)
 	recordCID, recordOK := rawBytes(recordValue)
 	recordLength, recordLengthOK := rawInt64(recordLengthValue)
-	formType, formTypeOK := formTypeValue.(string)
-	form, formOK := formValue.(string)
-	formLength, formLengthOK := rawInt64(formLengthValue)
-	blobType, blobTypeOK := blobTypeValue.(string)
-	blobCID, blobOK := rawBytes(blobValue)
-	blobLength, blobLengthOK := rawInt64(blobLengthValue)
-	sizeType, sizeTypeOK := sizeTypeValue.(string)
-	size, sizeOK := rawInt64(sizeValue)
-	fileSetType, fileSetTypeOK := fileSetTypeValue.(string)
-	fileSetLength, fileSetLengthOK := rawInt64(fileSetLengthValue)
+	segmentsType, segmentsTypeOK := segmentsTypeValue.(string)
+	segmentsLength, segmentsLengthOK := rawInt64(segmentsLengthValue)
+	segmentsRaw, segmentsOK := rawBytes(segmentsValue)
 	sequence, sequenceOK := rawInt64(sequenceValue)
 	revision, revisionOK := rawInt64(revisionValue)
 	lifecycle, lifecycleOK := lifecycleValue.(string)
@@ -319,14 +327,10 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 	recordKey, recordKeyOK := recordKeyValue.(string)
 	recordKeyLength, recordKeyLengthOK := rawInt64(recordKeyLengthValue)
 	recordSequence, recordSequenceOK := rawInt64(recordSequenceValue)
-	objectCID, objectCIDOK := rawBytes(objectCIDValue)
-	objectCIDLength, objectCIDLengthOK := rawInt64(objectCIDLengthValue)
-	objectSize, objectSizeOK := rawInt64(objectSizeValue)
-	basename, basenameOK := basenameValue.(string)
-	basenameLength, basenameLengthOK := rawInt64(basenameLengthValue)
 	if !idOK || !idLengthOK || idLength != 16 || len(attemptID) != 16 ||
 		!recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes || int64(len(recordCID)) != recordLength ||
-		!formTypeOK || formType != "text" || !formOK || !formLengthOK || formLength != int64(len(form)) ||
+		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
 		!sequenceOK || sequence < 0 || uint64(sequence) != floor.Sequence ||
 		!revisionOK || revision <= 0 || uint64(revision) != floor.Revision ||
 		!lifecycleOK || !lifecycleLengthOK || lifecycleLength <= 0 || lifecycleLength > 64 || lifecycle != string(AttemptRetiredSuccess) ||
@@ -337,61 +341,15 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 		!bytes.Equal(recordCID, floor.RecordCID) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	owner := materialOwnership{
-		form:   PayloadForm(form),
-		record: nil,
-	}
-	switch owner.form {
-	case PayloadFormPacked:
-		if !blobTypeOK || blobType != "blob" || !blobOK || !blobLengthOK || blobLength <= 0 ||
-			blobLength > publication.MaxCIDBytes || int64(len(blobCID)) != blobLength ||
-			!sizeTypeOK || sizeType != "integer" || !sizeOK || size <= 0 || uint64(size) != floor.BlobSize ||
-			!fileSetTypeOK || fileSetType != "null" ||
-			!objectCIDOK || !objectCIDLengthOK || objectCIDLength <= 0 || objectCIDLength > publication.MaxCIDBytes ||
-			int64(len(objectCID)) != objectCIDLength ||
-			!objectSizeOK || objectSize <= 0 || uint64(objectSize) != floor.BlobSize ||
-			!basenameOK || !basenameLengthOK || basenameLength != 72 || int64(len(basename)) != basenameLength ||
-			!bytes.Equal(blobCID, floor.BlobCID) || !bytes.Equal(objectCID, floor.BlobCID) {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		wantedBasename, nameErr := payloadBasenameFromCID(floor.BlobCID)
-		if nameErr != nil || !validPayloadBasename(basename) || basename != wantedBasename {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		owner.name = basename
-		owner.blob = publication.BlobReference{
-			CID:      bytes.Clone(floor.BlobCID),
-			Size:     floor.BlobSize,
-			MIMEType: publication.SnapshotBlobMIMEType,
-		}
-	case PayloadFormFileSet:
-		if blobType != "null" || sizeType != "null" || floor.FileSet == nil || len(floor.BlobCID) != 0 ||
-			floor.BlobSize != 0 ||
-			!fileSetTypeOK || fileSetType != "blob" || !fileSetLengthOK || fileSetLength <= 0 ||
-			fileSetLength > publication.MaxFileSetRecordBytes ||
-			objectCIDOK || objectCIDLengthOK || objectSizeOK || basenameOK {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		expected, err := encodeRetainedFileSet(floor.FileSet)
-		if err != nil {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		stored, err := queryInt64(
-			ctx,
-			q,
-			"SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND file_set=?",
-			int64(floor.Revision),
-			expected,
-		)
-		if err != nil {
-			return materialOwnership{}, queryReadError(ctx, stage, err)
-		}
-		if stored != 1 {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		owner.fileSet = cloneFileSetPayload(floor.FileSet)
-	default:
+	segments, err := decodeSegmentSummaries(segmentsRaw)
+	if err != nil || !sameSegmentSummaries(segments, floor.Segments) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	cache := make(fileSetCatalogCache)
+	for _, summary := range segments {
+		if err := s.checkSegmentCatalog(ctx, q, summary, stage, cache); err != nil {
+			return materialOwnership{}, err
+		}
 	}
 
 	var id [16]byte
@@ -401,12 +359,7 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 		return materialOwnership{}, err
 	}
 	if attempt.lifecycle != AttemptRetiredSuccess || attempt.outcome != OutcomeCurrent || attempt.blocked != "" ||
-		attemptCoreForm(attempt.core) != owner.form ||
 		!bytes.Equal(attempt.core.SnapshotCID, floor.RecordCID) || attempt.core.SnapshotKey != floor.SnapshotKey {
-		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	if owner.form == PayloadFormPacked &&
-		(!bytes.Equal(attempt.core.BlobCID, floor.BlobCID) || attempt.core.BlobSize != floor.BlobSize) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 
@@ -417,12 +370,10 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 	snapshot, err := publication.DecodeSnapshot(record.raw)
 	if err != nil || snapshot.Vault != floor.Binding.Vault || snapshot.PublicationSeq != floor.Sequence ||
 		snapshot.PublicationID != floor.PublicationID ||
-		!floorPayloadMatchesRecord(floor, snapshot) ||
 		!bytes.Equal(attempt.core.SnapshotRecord, record.raw) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	owner.record = bytes.Clone(record.raw)
-	return owner, nil
+	return materialOwnership{segments: segments, record: bytes.Clone(record.raw)}, nil
 }
 
 func (s *Store) incomingAcceptedMaterialOwner(
@@ -432,15 +383,11 @@ func (s *Store) incomingAcceptedMaterialOwner(
 	stage Stage,
 ) (materialOwnership, error) {
 	var revisionTypeValue, revisionValue, recordTypeValue, recordLengthValue, recordValue any
-	var formTypeValue, formValue, formLengthValue any
-	var blobTypeValue, blobLengthValue, blobValue any
-	var fileSetTypeValue, fileSetLengthValue any
-	err := q.QueryRowContext(ctx, "SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(file_set),length(CAST(file_set AS BLOB)) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).
+	var segmentsTypeValue, segmentsLengthValue, segmentsValue any
+	err := q.QueryRowContext(ctx, "SELECT typeof(accepted_revision),CASE WHEN typeof(accepted_revision)='integer' THEN accepted_revision END,typeof(record_cid),length(CAST(record_cid AS BLOB)),substr(CAST(record_cid AS BLOB),1,129),typeof(segments),length(CAST(segments AS BLOB)),substr(CAST(segments AS BLOB),1,2097153) FROM accepted_material_refs WHERE accepted_revision=?", int64(floor.Revision)).
 		Scan(
 			&revisionTypeValue, &revisionValue, &recordTypeValue, &recordLengthValue, &recordValue,
-			&formTypeValue, &formValue, &formLengthValue,
-			&blobTypeValue, &blobLengthValue, &blobValue,
-			&fileSetTypeValue, &fileSetLengthValue)
+			&segmentsTypeValue, &segmentsLengthValue, &segmentsValue)
 	if errors.Is(err, sql.ErrNoRows) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -452,84 +399,68 @@ func (s *Store) incomingAcceptedMaterialOwner(
 	recordType, recordTypeOK := recordTypeValue.(string)
 	recordLength, recordLengthOK := rawInt64(recordLengthValue)
 	recordCID, recordOK := rawBytes(recordValue)
-	formType, formTypeOK := formTypeValue.(string)
-	form, formOK := formValue.(string)
-	formLength, formLengthOK := rawInt64(formLengthValue)
-	blobType, blobTypeOK := blobTypeValue.(string)
-	blobLength, blobLengthOK := rawInt64(blobLengthValue)
-	blobCID, blobOK := rawBytes(blobValue)
-	fileSetType, fileSetTypeOK := fileSetTypeValue.(string)
-	fileSetLength, fileSetLengthOK := rawInt64(fileSetLengthValue)
-	if !revisionTypeOK ||
-		revisionType != "integer" ||
-		!revisionOK ||
-		revision < 1 ||
+	segmentsType, segmentsTypeOK := segmentsTypeValue.(string)
+	segmentsLength, segmentsLengthOK := rawInt64(segmentsLengthValue)
+	segmentsRaw, segmentsOK := rawBytes(segmentsValue)
+	if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 ||
 		uint64(revision) != floor.Revision ||
-		!recordTypeOK ||
-		recordType != "blob" ||
-		!recordLengthOK ||
-		recordLength < 1 ||
-		recordLength > publication.MaxCIDBytes ||
-		!recordOK ||
+		!recordTypeOK || recordType != "blob" || !recordLengthOK || recordLength < 1 ||
+		recordLength > publication.MaxCIDBytes || !recordOK ||
 		int64(len(recordCID)) != recordLength ||
-		!formTypeOK ||
-		formType != "text" ||
-		!formOK ||
-		!formLengthOK ||
-		formLength != int64(len(form)) ||
+		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
 		!bytes.Equal(recordCID, floor.RecordCID) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	ref := incomingMaterialRef{
-		revision:  revision,
-		recordCID: bytes.Clone(recordCID),
-		form:      PayloadForm(form),
-	}
-	switch ref.form {
-	case PayloadFormPacked:
-		if !blobTypeOK || blobType != "blob" || !blobLengthOK || blobLength < 1 ||
-			blobLength > publication.MaxCIDBytes || !blobOK || int64(len(blobCID)) != blobLength ||
-			!fileSetTypeOK || fileSetType != "null" || !bytes.Equal(blobCID, floor.BlobCID) {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		ref.blobCID = bytes.Clone(blobCID)
-	case PayloadFormFileSet:
-		if blobType != "null" || !fileSetTypeOK || fileSetType != "blob" || !fileSetLengthOK ||
-			fileSetLength < 1 || fileSetLength > publication.MaxFileSetRecordBytes || floor.FileSet == nil ||
-			len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
-			return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		ref.fileSetLength = fileSetLength
-	default:
+	segments, err := decodeSegmentSummaries(segmentsRaw)
+	if err != nil || !sameSegmentSummaries(segments, floor.Segments) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if err := s.checkIncomingMaterialRef(ctx, q, ref, stage, make(fileSetCatalogCache)); err != nil {
-		return materialOwnership{}, err
+	cache := make(fileSetCatalogCache)
+	for _, summary := range segments {
+		if err := s.checkSegmentCatalog(ctx, q, summary, stage, cache); err != nil {
+			return materialOwnership{}, err
+		}
 	}
 	record, err := s.loadRecordByCID(ctx, q, floor.RecordCID, floor.SnapshotKey, floor.Sequence, stage)
 	if err != nil {
 		return materialOwnership{}, err
 	}
 	snapshot, err := publication.DecodeSnapshot(record.raw)
-	if err != nil || payloadFormOf(snapshot) != ref.form || !floorPayloadMatchesRecord(floor, snapshot) {
+	if err != nil || !sameSegmentSummaries(summariesOfRecord(snapshot.Segments), segments) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	owner := materialOwnership{form: ref.form, record: bytes.Clone(record.raw)}
-	if ref.form == PayloadFormFileSet {
-		owner.fileSet = cloneFileSetPayload(floor.FileSet)
-		return owner, nil
+	return materialOwnership{segments: segments, record: bytes.Clone(record.raw)}, nil
+}
+
+func (s *Store) checkSegmentCatalog(
+	ctx context.Context,
+	q queryer,
+	summary SegmentSummary,
+	stage Stage,
+	cache fileSetCatalogCache,
+) error {
+	switch summary.Form {
+	case PayloadFormPacked:
+		object, err := s.readPayloadCatalogRow(ctx, q, summary.BlobCID, stage)
+		if err != nil {
+			return err
+		}
+		if object.size != int64(summary.BlobSize) || !bytes.Equal(object.cid, summary.BlobCID) {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		wantedName, nameErr := payloadBasenameFromCID(summary.BlobCID)
+		if nameErr != nil || !validPayloadBasename(object.name) || object.name != wantedName {
+			return classified(ErrSchema, stage, ReasonCorrupt)
+		}
+		return nil
+	case PayloadFormFileSet:
+		return s.checkIncomingFileSetCatalog(ctx, q, summary.Entries, stage, cache)
+	case PayloadFormSettings:
+		return nil
+	default:
+		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	basename, err := payloadBasenameFromCID(floor.BlobCID)
-	if err != nil || !validPayloadBasename(basename) {
-		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	owner.name = basename
-	owner.blob = publication.BlobReference{
-		CID:      bytes.Clone(floor.BlobCID),
-		Size:     floor.BlobSize,
-		MIMEType: publication.SnapshotBlobMIMEType,
-	}
-	return owner, nil
 }
 
 func classifyAcceptedMaterialDirectory(err error, stage Stage) error {
@@ -550,4 +481,27 @@ func classifyAcceptedMaterialRead(err error, stage Stage) error {
 		return classified(ErrStorage, stage, ReasonMaterialCorrupt)
 	}
 	return classified(ErrStorage, stage, ReasonIO)
+}
+
+func sameSegmentSummaries(left, right []SegmentSummary) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].TargetID != right[index].TargetID || left[index].Form != right[index].Form ||
+			!bytes.Equal(left[index].BlobCID, right[index].BlobCID) ||
+			left[index].BlobSize != right[index].BlobSize ||
+			left[index].Settings != right[index].Settings ||
+			len(left[index].Entries) != len(right[index].Entries) {
+			return false
+		}
+		for entry := range left[index].Entries {
+			if left[index].Entries[entry].Path != right[index].Entries[entry].Path ||
+				left[index].Entries[entry].Size != right[index].Entries[entry].Size ||
+				!bytes.Equal(left[index].Entries[entry].CID, right[index].Entries[entry].CID) {
+				return false
+			}
+		}
+	}
+	return true
 }

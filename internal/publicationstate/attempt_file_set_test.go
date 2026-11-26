@@ -49,8 +49,7 @@ func newFileSetAttemptFixture(t *testing.T, paths []string) fileSetAttemptFixtur
 		PublicationID:  publicationID,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Entries:        entries,
-		Targets:        fileSetTestTargets(),
+		Segments:       []publication.SnapshotSegment{{Target: fileSetTestTargets()[0], Form: publication.SegmentFormEntries, Entries: entries}},
 	}
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -134,8 +133,8 @@ func stageFileSetAttempt(
 	proposal, err := store.PrepareAttempt(context.Background(), candidate, view, review)
 	require.NoError(t, err)
 	assert.Equal(t, AttemptGenesis, proposal.Kind)
-	assert.Nil(t, proposal.CandidateBlobCID)
-	assert.Equal(t, uint64(0), proposal.CandidateBlobSize)
+	assert.Len(t, proposal.CandidateSegments, 1)
+	assert.Equal(t, PayloadFormFileSet, proposal.CandidateSegments[0].Form)
 	attempt, err := store.CreateAttempt(
 		context.Background(),
 		proposal.StateToken,
@@ -145,9 +144,9 @@ func stageFileSetAttempt(
 		proposal.Confirmation,
 	)
 	require.NoError(t, err)
-	require.NotNil(t, attempt.FileSet)
-	assert.Nil(t, attempt.BlobCID)
-	assert.Equal(t, uint64(0), attempt.BlobSize)
+	require.NotNil(t, testFileSet(attempt))
+	assert.Nil(t, testBlobCID(attempt))
+	assert.Equal(t, uint64(0), testBlobSize(attempt))
 	return attempt
 }
 
@@ -181,7 +180,7 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	view := f.view()
 	review := attemptReview()
 	attempt := stageFileSetAttempt(t, store, f, view, review)
-	require.Len(t, attempt.FileSet.Entries, 3)
+	require.Len(t, fileSetEntries(attempt), 3)
 
 	for _, entry := range f.entries {
 		info, err := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename(entry.Content)))
@@ -196,17 +195,17 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 
 	staged, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, staged.Entries, 3)
-	assert.Empty(t, staged.Payload)
+	require.Len(t, acceptedEntries(staged), 3)
+	assert.Empty(t, acceptedPayload(staged))
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Path, staged.Entries[index].Path)
-		assert.Equal(t, entry.Mode, staged.Entries[index].Mode)
-		assert.Equal(t, entry.Content, staged.Entries[index].Content)
+		assert.Equal(t, entry.Path, acceptedEntries(staged)[index].Path)
+		assert.Equal(t, entry.Mode, acceptedEntries(staged)[index].Mode)
+		assert.Equal(t, entry.Content, acceptedEntries(staged)[index].Content)
 	}
 
 	upload := beginFileSetUpload(t, store, attempt, view, review)
-	assert.Empty(t, upload.Payload)
-	assert.Empty(t, upload.Blob.CID)
+	assert.Empty(t, uploadPayload(upload))
+	assert.Empty(t, testUploadBlob(upload).CID)
 	require.Len(t, upload.Entries, 3)
 	for index, entry := range f.entries {
 		cid, err := publication.RawPayloadCID(entry.Content)
@@ -234,7 +233,7 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, PayloadFormFileSet, submission.PayloadForm)
-	assert.Equal(t, f.references(), submission.Entries)
+	assert.Equal(t, f.references(), acceptedEntries(submission))
 	assert.Equal(t, f.raw, submission.SnapshotRecord)
 	assert.Equal(t, f.head, submission.HeadRecord)
 	assert.True(t, submission.RequiresAtomicBatch)
@@ -249,10 +248,10 @@ func TestFileSetAttemptStagesUploadsSubmitsAndReadsBack(t *testing.T) {
 	assert.Equal(t, OutcomeAbsentUnresolved, resolution.Outcome)
 	readBack, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, readBack.Entries, 3)
+	require.Len(t, acceptedEntries(readBack), 3)
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Path, readBack.Entries[index].Path)
-		assert.Equal(t, entry.Content, readBack.Entries[index].Content)
+		assert.Equal(t, entry.Path, acceptedEntries(readBack)[index].Path)
+		assert.Equal(t, entry.Content, acceptedEntries(readBack)[index].Content)
 	}
 
 	extended := f.view()
@@ -276,18 +275,18 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	review := attemptReview()
 	proposal, err := store.PrepareAttempt(ctx, candidate, empty, review)
 	require.NoError(t, err)
-	candidateCID, err := publication.RawPayloadCID(candidate.Payload)
+	candidateCID, err := publication.RawPayloadCID(acceptedPayload(candidate))
 	require.NoError(t, err)
-	assert.Equal(t, candidateCID, proposal.CandidateBlobCID)
-	assert.Equal(t, uint64(len(candidate.Payload)), proposal.CandidateBlobSize)
+	assert.Equal(t, candidateCID, proposal.CandidateSegments[0].BlobCID)
+	assert.Equal(t, uint64(len(acceptedPayload(candidate))), proposal.CandidateSegments[0].BlobSize)
 	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, empty, review, proposal.Confirmation)
 	require.NoError(t, err)
-	assert.Nil(t, attempt.FileSet)
+	assert.Nil(t, testFileSet(attempt))
 
 	upload := beginFileSetPackedUpload(t, store, attempt, empty, review)
 	assert.Empty(t, upload.Entries)
-	assert.Equal(t, candidate.Payload, upload.Payload)
-	assert.NotEmpty(t, upload.Blob.CID)
+	assert.Equal(t, acceptedPayload(candidate), uploadPayload(upload))
+	assert.NotEmpty(t, testUploadBlob(upload).CID)
 
 	submissionProposal, err := store.PrepareDispatch(ctx, attempt.ID, DispatchSubmission, empty, review)
 	require.NoError(t, err)
@@ -301,7 +300,7 @@ func TestPackedAttemptMaterialsKeepTheSinglePackedPayload(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, PayloadFormPacked, submission.PayloadForm)
-	assert.Empty(t, submission.Entries)
+	assert.Empty(t, acceptedEntries(submission))
 }
 
 func beginFileSetPackedUpload(
@@ -520,9 +519,9 @@ func TestFileSetCustodyRefusesAStoredObjectThatContradictsItsEntry(t *testing.T)
 
 	readBack, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	require.Len(t, readBack.Entries, 3)
+	require.Len(t, acceptedEntries(readBack), 3)
 	for index, entry := range f.entries {
-		assert.Equal(t, entry.Content, readBack.Entries[index].Content)
+		assert.Equal(t, entry.Content, acceptedEntries(readBack)[index].Content)
 	}
 }
 
@@ -635,16 +634,16 @@ func assertFileSetRetainedPosition(
 	require.NoError(t, err)
 	assert.Equal(t, AttemptRetiredSuccess, attempt.Lifecycle)
 	assert.Equal(t, OutcomeCurrent, attempt.Outcome)
-	require.NotNil(t, attempt.FileSet)
-	assert.Equal(t, f.references(), attempt.FileSet.Entries)
-	assert.Empty(t, attempt.BlobCID)
-	assert.Equal(t, uint64(0), attempt.BlobSize)
+	require.NotNil(t, testFileSet(attempt))
+	assert.Equal(t, f.references(), fileSetEntries(attempt))
+	assert.Empty(t, testBlobCID(attempt))
+	assert.Equal(t, uint64(0), testBlobSize(attempt))
 
 	assert.Equal(t, f.key, floor.SnapshotKey)
-	require.NotNil(t, floor.FileSet)
-	assert.Equal(t, f.references(), floor.FileSet.Entries)
-	assert.Empty(t, floor.BlobCID)
-	assert.Equal(t, uint64(0), floor.BlobSize)
+	require.NotNil(t, testFileSet(floor))
+	assert.Equal(t, f.references(), fileSetEntries(floor))
+	assert.Empty(t, testBlobCID(floor))
+	assert.Equal(t, uint64(0), testBlobSize(floor))
 
 	var formValue, blobValue, sizeValue, fileSetValue any
 	require.NoError(t, store.conn.QueryRowContext(
@@ -659,7 +658,7 @@ func assertFileSetRetainedPosition(
 	require.True(t, fileSetOK)
 	retainedFileSet, err := decodeRetainedFileSet(encodedFileSet)
 	require.NoError(t, err)
-	assert.Equal(t, f.references(), retainedFileSet.Entries)
+	assert.Equal(t, f.references(), acceptedEntries(retainedFileSet))
 
 	for _, query := range []string{
 		"SELECT COUNT(*) FROM accepted_material_refs",

@@ -16,8 +16,8 @@ import (
 const (
 	recordJSONBlobCID     = "bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"
 	recordJSONParentCID   = "bafyreihy6ke4ij3sgd6pl7jzf2osqzst22i4773bcnvq7wnkkueafy76ha"
-	recordJSONSnapshotCID = "bafyreibd57swutju74skdhzkzwstffd4jgdd5emdj3hmacqijvgka4c2ui"
-	recordJSONHeadCID     = "bafyreibepzxugserdcxjnhvjmaue7dfzh4bnez4vak24umpozuzua5gja4"
+	recordJSONSnapshotCID = "bafyreiahc4lmoti3pp35aihxohxsvtlvaibiu7m6sayyvupueagraefn44"
+	recordJSONHeadCID     = "bafyreicp44qnlfnblupivdycknb72wpkmi47y2fi3ai2bznsttdgfkudum"
 	recordJSONGoldenPubID = "oKGio6SlpqeoqaqrrK2urw"
 )
 
@@ -32,11 +32,14 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: 7,
 		Parent:         parentCID.Bytes(),
-		Blob: BlobReference{
-			CID:      blobCID.Bytes(),
-			Size:     uint64(len("golden publication payload")),
-			MIMEType: SnapshotBlobMIMEType,
-		},
+		Segments: []SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: SegmentFormPacked,
+			Blob: BlobReference{
+				CID:      blobCID.Bytes(),
+				Size:     uint64(len("golden publication payload")),
+				MIMEType: SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	snapshotCBOR, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
@@ -44,7 +47,7 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(
 		t,
-		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":"AXESIPjyicQncjD89f05Lp0oZlPWkc//YRNrD9mqVQgC4/44"},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":7,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","parent":{"$bytes":"AXESIPjyicQncjD89f05Lp0oZlPWkc//YRNrD9mqVQgC4/44"},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":7,"schemaVersion":2,"segments":[{"blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"form":"packed","target":{"id":"files","root":{"base":"home","kind":"directory","path":"dotfiles"},"source":"files","source_version":1}}],"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
 		string(encoded),
 	)
 	assertRecordJSONSDKRoundTrip(t, snapshotCBOR, encoded, recordJSONSnapshotCID)
@@ -58,7 +61,7 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(
 		t,
-		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"parent":{"$bytes":""},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":0,"schemaVersion":2,"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		`{"$type":"systems.lamb.dottie.vaultSnapshotV2","parent":{"$bytes":""},"publicationId":{"$bytes":"oKGio6SlpqeoqaqrrK2urw"},"publicationSeq":0,"schemaVersion":2,"segments":[{"blob":{"$type":"blob","ref":{"$link":"bafkreieqc5p7wksheg3xlum7o2zxo3wwsurxud747kalpuokgaeefluyvm"},"mimeType":"application/x-tar","size":26},"form":"packed","target":{"id":"files","root":{"base":"home","kind":"directory","path":"dotfiles"},"source":"files","source_version":1}}],"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
 		string(genesisJSON),
 	)
 	assertRecordJSONSDKRoundTrip(t, genesisCBOR, genesisJSON, "")
@@ -70,7 +73,6 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 		Vault:          snapshot.Vault,
 		PublicationSeq: snapshot.PublicationSeq,
 		SnapshotCID:    snapshotCID.Bytes(),
-		BlobCID:        blobCID.Bytes(),
 	}
 	headCBOR, err := EncodeHead(head)
 	require.NoError(t, err)
@@ -78,7 +80,7 @@ func TestRecordToJSONFixedWireVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(
 		t,
-		`{"$type":"systems.lamb.dottie.vaultHeadV2","blobCid":{"$bytes":"AVUSIJAXX/sqRyG3ddGfdrN3btaVI3oP/PqAt9HKMAhCrpir"},"publicationSeq":7,"schemaVersion":2,"snapshotCid":{"$bytes":"AXESICPv5WpNNP8koZ8qzaUylHxJhj6Rg07OwAoITUygcFqi"},"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
+		`{"$type":"systems.lamb.dottie.vaultHeadV2","publicationSeq":7,"schemaVersion":2,"snapshotCid":{"$bytes":"AXESIAcXFsdNG3v30CD3ce8qzXUCAop9npAxitH0IA0QEK3n"},"vault":{"$bytes":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"}}`,
 		string(headJSON),
 	)
 	assertRecordJSONSDKRoundTrip(t, headCBOR, headJSON, recordJSONHeadCID)
@@ -95,7 +97,10 @@ func TestRecordToJSONMaximumAcceptedValuesFitBounds(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: MaxSequence,
 		Parent:         parentCID.Bytes(),
-		Blob:           BlobReference{CID: blobCID.Bytes(), Size: MaxBlobBytes, MIMEType: SnapshotBlobMIMEType},
+		Segments: []SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: SegmentFormPacked,
+			Blob: BlobReference{CID: blobCID.Bytes(), Size: MaxBlobBytes, MIMEType: SnapshotBlobMIMEType},
+		}},
 	}
 	snapshotCBOR, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
@@ -106,7 +111,12 @@ func TestRecordToJSONMaximumAcceptedValuesFitBounds(t *testing.T) {
 	object, err := atdata.UnmarshalJSON(snapshotJSON)
 	require.NoError(t, err)
 	assert.Equal(t, int64(MaxSequence), object["publicationSeq"])
-	blob, ok := object["blob"].(atdata.Blob)
+	segments, ok := object["segments"].([]any)
+	require.True(t, ok)
+	require.Len(t, segments, 1)
+	segment, ok := segments[0].(map[string]any)
+	require.True(t, ok)
+	blob, ok := segment["blob"].(atdata.Blob)
 	require.True(t, ok)
 	assert.Equal(t, int64(MaxBlobBytes), blob.Size)
 
@@ -117,7 +127,6 @@ func TestRecordToJSONMaximumAcceptedValuesFitBounds(t *testing.T) {
 		Vault:          fixtureVault(),
 		PublicationSeq: MaxSequence,
 		SnapshotCID:    snapshotCID,
-		BlobCID:        blobCID.Bytes(),
 	})
 	require.NoError(t, err)
 	headJSON, err := RecordToJSON(headCBOR)
@@ -166,11 +175,14 @@ func TestRecordToJSONSelfCheckRejectsEmittedCorruption(t *testing.T) {
 		PublicationID:  fixturePublicationID(),
 		PublicationSeq: 7,
 		Parent:         parentCID.Bytes(),
-		Blob: BlobReference{
-			CID:      blobCID.Bytes(),
-			Size:     uint64(len("golden publication payload")),
-			MIMEType: SnapshotBlobMIMEType,
-		},
+		Segments: []SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: SegmentFormPacked,
+			Blob: BlobReference{
+				CID:      blobCID.Bytes(),
+				Size:     uint64(len("golden publication payload")),
+				MIMEType: SnapshotBlobMIMEType,
+			},
+		}},
 	}
 	snapshotCBOR, err := EncodeSnapshot(snapshot)
 	require.NoError(t, err)
@@ -308,7 +320,7 @@ func TestRecordToJSONFileSetCarriesTheTargetLayout(t *testing.T) {
 	assert.Contains(
 		t,
 		string(jsonBytes),
-		`"targets":[{"id":"files","source":"files","source_version":1,"root":{"base":"xdg-config","path":"dotfiles","kind":"directory"}}]`,
+		`"form":"entries","target":{"id":"files","root":{"base":"xdg-config","kind":"directory","path":"dotfiles"},"source":"files","source_version":1}`,
 	)
 	assertRecordJSONSDKRoundTrip(t, encoded, jsonBytes, "")
 }

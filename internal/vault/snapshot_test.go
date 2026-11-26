@@ -1111,3 +1111,57 @@ func snapshotWithFiles(targetID string, count, bytesPerFile int) model.Snapshot 
 		Entries: entries,
 	}
 }
+
+func TestPackTargetSelectsOneTargetsPayload(t *testing.T) {
+	a := fileTarget("a", "a-config", model.SelectionDirectory)
+	z := fileTarget("z", "z-config", model.SelectionDirectory)
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{a, z},
+		Entries: []model.Entry{
+			fileEntry("a", "a.txt", model.FileRegular, model.FilePresent, []byte("alpha")),
+			fileEntry("z", "z.txt", model.FileRegular, model.FilePresent, []byte("zulu")),
+		},
+	}
+	for _, target := range []model.Target{a, z} {
+		expected := model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{target},
+			Entries: []model.Entry{fileEntry(target.ID, target.ID+".txt", model.FileRegular, model.FilePresent,
+				snapshot.Entries[0].File.Content)},
+		}
+		if target.ID == "z" {
+			expected.Entries[0].File.Content = []byte("zulu")
+		}
+		want, err := Pack(expected)
+		require.NoError(t, err)
+		got, err := PackTarget(snapshot, target.ID)
+		require.NoError(t, err)
+		require.Equal(t, want.Payload, got.Payload)
+
+		unpacked, err := Unpack(got)
+		require.NoError(t, err)
+		require.Len(t, unpacked.Targets, 1)
+		require.Equal(t, target.ID, unpacked.Targets[0].ID)
+		require.Len(t, unpacked.Entries, 1)
+		require.Equal(t, target.ID, unpacked.Entries[0].TargetID)
+	}
+
+	_, err := PackTarget(snapshot, "missing")
+	require.ErrorContains(t, err, "not found")
+	_, err = PackTarget(snapshot, "")
+	require.ErrorContains(t, err, "not selected")
+
+	orphan := snapshot
+	orphan.Entries = append(orphan.Entries, fileEntry("missing", "orphan.txt", model.FileRegular, model.FilePresent, []byte("x")))
+	_, err = PackTarget(orphan, "a")
+	require.ErrorContains(t, err, "unknown target")
+
+	empty := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("a", "a-config", model.SelectionDirectory)}}
+	blob, err := PackTarget(empty, "a")
+	require.NoError(t, err)
+	unpacked, err := Unpack(blob)
+	require.NoError(t, err)
+	require.Len(t, unpacked.Targets, 1)
+	require.Empty(t, unpacked.Entries)
+}

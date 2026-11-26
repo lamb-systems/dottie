@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ipfs/go-cid"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,23 +47,22 @@ type wireOracleReview struct {
 }
 
 type wireOracleFloor struct {
-	Version             uint32            `json:"version"`
-	DatabaseID          []byte            `json:"databaseId"`
-	Revision            uint64            `json:"revision"`
-	Generation          uint64            `json:"generation"`
-	Provenance          string            `json:"provenance"`
-	AnchorCID           []byte            `json:"anchorCid"`
-	Binding             wireOracleBinding `json:"binding"`
-	SuppliedContext     wireOracleContext `json:"suppliedContext"`
-	Head                []byte            `json:"head"`
-	SnapshotKey         string            `json:"snapshotKey"`
-	Sequence            uint64            `json:"sequence"`
-	PublicationID       []byte            `json:"publicationId"`
-	RecordCID           []byte            `json:"recordCid"`
-	BlobCID             []byte            `json:"blobCid"`
-	BlobSize            uint64            `json:"blobSize"`
-	ObservationDigest   []byte            `json:"observationDigest"`
-	AcceptedEventDigest []byte            `json:"acceptedEventDigest"`
+	Version             uint32              `json:"version"`
+	DatabaseID          []byte              `json:"databaseId"`
+	Revision            uint64              `json:"revision"`
+	Generation          uint64              `json:"generation"`
+	Provenance          string              `json:"provenance"`
+	AnchorCID           []byte              `json:"anchorCid"`
+	Binding             wireOracleBinding   `json:"binding"`
+	SuppliedContext     wireOracleContext   `json:"suppliedContext"`
+	Head                []byte              `json:"head"`
+	SnapshotKey         string              `json:"snapshotKey"`
+	Sequence            uint64              `json:"sequence"`
+	PublicationID       []byte              `json:"publicationId"`
+	RecordCID           []byte              `json:"recordCid"`
+	Segments            []wireOracleSegment `json:"segments"`
+	ObservationDigest   []byte              `json:"observationDigest"`
+	AcceptedEventDigest []byte              `json:"acceptedEventDigest"`
 }
 
 type wireOracleLimits struct {
@@ -291,8 +292,7 @@ func wireVectorFloor(floor Floor) wireOracleFloor {
 		Sequence:            floor.Sequence,
 		PublicationID:       bytes.Clone(floor.PublicationID[:]),
 		RecordCID:           bytes.Clone(floor.RecordCID),
-		BlobCID:             bytes.Clone(floor.BlobCID),
-		BlobSize:            floor.BlobSize,
+		Segments:            wireVectorSegments(floor.Segments),
 		ObservationDigest:   bytes.Clone(floor.ObservationDigest[:]),
 		AcceptedEventDigest: bytes.Clone(floor.AcceptedEventDigest[:]),
 	}
@@ -483,8 +483,9 @@ func TestLocalAttemptWireGoldenVectors(t *testing.T) {
 		Sequence:        6,
 		PublicationID:   attemptID,
 		RecordCID:       []byte{0x81},
-		BlobCID:         []byte{0x91, 0x92},
-		BlobSize:        93,
+		Segments: []SegmentSummary{{
+			TargetID: "files", Form: PayloadFormPacked, BlobCID: []byte{0x82, 0x83}, BlobSize: 93,
+		}},
 	}
 	copy(floor.ObservationDigest[:], oracleBytes(0x50, 32))
 	copy(floor.AcceptedEventDigest[:], oracleBytes(0x70, 32))
@@ -864,13 +865,12 @@ func TestLocalAttemptWireGoldenVectors(t *testing.T) {
 
 func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 	valid := attemptCoreWire{
-		Version:               1,
+		Version:               3,
 		AttemptID:             bytes.Repeat([]byte{1}, 16),
 		DatabaseID:            bytes.Repeat([]byte{2}, 32),
 		SnapshotCID:           []byte{3},
 		HeadCID:               []byte{4},
-		BlobCID:               []byte{5},
-		BlobSize:              9,
+		Segments:              []segmentSummaryWire{{TargetID: "files", Form: "packed", BlobCID: "55", BlobSize: 9}},
 		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
 		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
 	}
@@ -880,41 +880,27 @@ func TestAttemptWireDecodersRejectMalformedVectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, valid, decoded)
 
-	fileSet := attemptCoreWire{
-		Version:               2,
-		AttemptID:             bytes.Repeat([]byte{1}, 16),
-		DatabaseID:            bytes.Repeat([]byte{2}, 32),
-		SnapshotCID:           []byte{3},
-		HeadCID:               []byte{4},
-		Entries:               []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}},
-		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
-		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
-	}
-	fileSetBytes, err := encodeAttemptCore(fileSet)
-	require.NoError(t, err)
-	fileSetDecoded, err := decodeAttemptCore(fileSetBytes)
-	require.NoError(t, err)
-	assert.Equal(t, fileSet, fileSetDecoded)
-
-	wrongVersion := fileSet
-	wrongVersion.Version = 3
+	wrongVersion := valid
+	wrongVersion.Version = 2
 	wrongVersionBytes, err := encodeAttemptCore(wrongVersion)
 	require.NoError(t, err)
 	_, err = decodeAttemptCore(wrongVersionBytes)
 	require.Error(t, err)
-	fileSetWithBlob := fileSet
-	fileSetWithBlob.BlobCID = []byte{8}
-	fileSetWithBlob.BlobSize = 9
-	fileSetWithBlobBytes, err := encodeAttemptCore(fileSetWithBlob)
+
+	missingSegments := valid
+	missingSegments.Segments = nil
+	missingSegmentsBytes, err := encodeAttemptCore(missingSegments)
 	require.NoError(t, err)
-	_, err = decodeAttemptCore(fileSetWithBlobBytes)
+	_, err = decodeAttemptCore(missingSegmentsBytes)
 	require.Error(t, err)
-	packedWithEntries := valid
-	packedWithEntries.Entries = fileSet.Entries
-	packedWithEntriesBytes, err := encodeAttemptCore(packedWithEntries)
+
+	emptyEntries := valid
+	emptyEntries.Segments = []segmentSummaryWire{{TargetID: "files", Form: "entries"}}
+	emptyEntriesBytes, err := encodeAttemptCore(emptyEntries)
 	require.NoError(t, err)
-	_, err = decodeAttemptCore(packedWithEntriesBytes)
+	_, err = decodeAttemptCore(emptyEntriesBytes)
 	require.Error(t, err)
+
 	wrongDatabaseID := valid
 	wrongDatabaseID.DatabaseID = wrongDatabaseID.DatabaseID[:31]
 	wrongDatabaseIDBytes, err := encodeAttemptCore(wrongDatabaseID)
@@ -967,4 +953,44 @@ func oracleReview(review LocalReviewContext) wireOracleReview {
 func encodeOracleProof(t *testing.T, proof wireOracleEvidence) []byte {
 	t.Helper()
 	return oracleCanonicalJSON(t, proof)
+}
+
+type wireOracleSegment struct {
+	TargetID string                     `json:"target_id"`
+	Form     string                     `json:"form"`
+	BlobCID  string                     `json:"blob_cid,omitempty"`
+	BlobSize uint64                     `json:"blob_size,omitempty"`
+	Entries  []wireOracleEntryReference `json:"entries,omitempty"`
+	Settings string                     `json:"settings,omitempty"`
+}
+
+type wireOracleEntryReference struct {
+	Path string `json:"path"`
+	CID  string `json:"cid"`
+	Size uint64 `json:"size"`
+}
+
+func wireVectorSegments(summaries []SegmentSummary) []wireOracleSegment {
+	wire := make([]wireOracleSegment, 0, len(summaries))
+	for _, summary := range summaries {
+		item := wireOracleSegment{TargetID: summary.TargetID, Form: string(summary.Form), BlobSize: summary.BlobSize}
+		if len(summary.BlobCID) != 0 {
+			cidValue, err := cid.Cast(summary.BlobCID)
+			if err == nil {
+				item.BlobCID = cidValue.String()
+			}
+		}
+		if summary.Settings != ([32]byte{}) {
+			item.Settings = hex.EncodeToString(summary.Settings[:])
+		}
+		for _, entry := range summary.Entries {
+			reference := wireOracleEntryReference{Path: entry.Path, Size: entry.Size}
+			if entryCID, err := cid.Cast(entry.CID); err == nil {
+				reference.CID = entryCID.String()
+			}
+			item.Entries = append(item.Entries, reference)
+		}
+		wire = append(wire, item)
+	}
+	return wire
 }

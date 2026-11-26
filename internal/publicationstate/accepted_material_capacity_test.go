@@ -24,7 +24,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	baseCandidate := attemptCandidate(f, 0)
 	successorPayload := packFixtureContent(
 		t,
-		baseCandidate.Payload,
+		acceptedPayload(baseCandidate),
 		[]byte("synthetic successor with independent packed content"),
 	)
 	successorCandidate := candidateWithPayload(t, attemptCandidate(f, 1), f.binding, successorPayload)
@@ -34,9 +34,9 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	positiveSuccessorCandidate := cloneAcceptedMaterialCapacityCandidate(successorWitness)
 	require.Equal(t, lowSuccessorCandidate, positiveSuccessorCandidate)
 	defaultCustodyBytes := DefaultAttemptLimits().CustodyBytes
-	require.LessOrEqual(t, uint64(len(baseCandidate.Payload)), defaultCustodyBytes)
-	require.LessOrEqual(t, uint64(len(successorCandidate.Payload)), defaultCustodyBytes)
-	require.LessOrEqual(t, uint64(len(baseCandidate.Payload)+len(successorCandidate.Payload)), defaultCustodyBytes)
+	require.LessOrEqual(t, uint64(len(acceptedPayload(baseCandidate))), defaultCustodyBytes)
+	require.LessOrEqual(t, uint64(len(acceptedPayload(successorCandidate))), defaultCustodyBytes)
+	require.LessOrEqual(t, uint64(len(acceptedPayload(baseCandidate))+len(acceptedPayload(successorCandidate))), defaultCustodyBytes)
 
 	lowOptions := DefaultOpenOptions()
 	lowAttemptLimits := DefaultAttemptLimits()
@@ -63,7 +63,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, lowMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, lowMaterial.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, lowMaterial.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(lowMaterial))
 	lowBefore := readAcceptedMaterialCapacityEvidence(
 		t,
 		lowStore,
@@ -74,11 +74,11 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 		lowAttemptLimits,
 	)
 	require.Equal(t, int64(1), lowBefore.CatalogCount)
-	require.Equal(t, int64(len(baseCandidate.Payload)), lowBefore.CatalogBytes)
+	require.Equal(t, int64(len(acceptedPayload(baseCandidate))), lowBefore.CatalogBytes)
 	require.Equal(t, int64(1), lowBefore.RetainedReferences)
 	require.Zero(t, lowBefore.AttemptReferences)
 	require.Zero(t, lowBefore.ActiveAttempts)
-	require.Equal(t, []string{payloadBasename(baseCandidate.Payload)}, lowBefore.FileNames)
+	require.Equal(t, []string{payloadBasename(acceptedPayload(baseCandidate))}, lowBefore.FileNames)
 
 	proposal, err := lowStore.PrepareAttempt(ctx, lowSuccessorCandidate, lowPredecessorView, lowReview)
 	assert.Equal(t, AttemptProposal{}, proposal)
@@ -100,7 +100,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, lowMaterialAfterRefusal.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, lowMaterialAfterRefusal.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, lowMaterialAfterRefusal.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(lowMaterialAfterRefusal))
 	lowAfterRead := readAcceptedMaterialCapacityEvidence(
 		t,
 		lowStore,
@@ -121,7 +121,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, reopenedMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, reopenedMaterial.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, reopenedMaterial.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(reopenedMaterial))
 	lowAfterReopen := readAcceptedMaterialCapacityEvidence(
 		t,
 		reopened,
@@ -228,7 +228,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	require.NoError(t, err)
 	assert.Equal(t, positiveSuccessorCandidate.SnapshotRecord, positiveCandidateMaterial.SnapshotRecord)
 	assert.Equal(t, positiveSuccessorCandidate.HeadRecord, positiveCandidateMaterial.HeadRecord)
-	assert.Equal(t, positiveSuccessorCandidate.Payload, positiveCandidateMaterial.Payload)
+	assert.Equal(t, acceptedPayload(positiveSuccessorCandidate), acceptedPayload(positiveCandidateMaterial))
 	positivePositionLimitsAfter, positiveAttemptLimitsAfter := readAcceptedMaterialCapacityLimitBytes(
 		t,
 		positiveStore,
@@ -288,7 +288,7 @@ func readAcceptedMaterialCapacityEvidence(
 	require.Equal(t, OutcomeCurrent, public.Attempt.Outcome)
 	require.Equal(t, expectedCandidate.SnapshotRecord, public.Candidate.SnapshotRecord)
 	require.Equal(t, expectedCandidate.HeadRecord, public.Candidate.HeadRecord)
-	require.Equal(t, expectedCandidate.Payload, public.Candidate.Payload)
+	require.Equal(t, acceptedPayload(expectedCandidate), acceptedPayload(public.Candidate))
 
 	var catalogCount, catalogBytes int64
 	require.NoError(
@@ -305,10 +305,10 @@ func readAcceptedMaterialCapacityEvidence(
 		store.conn.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects").
 			Scan(&catalogCID, &catalogSize, &catalogBasename),
 	)
-	require.Equal(t, expectedFloor.BlobCID, catalogCID)
-	require.Equal(t, int64(expectedFloor.BlobSize), catalogSize)
-	require.Equal(t, int64(expectedFloor.BlobSize), catalogBytes)
-	wantedBasename, err := payloadBasenameFromCID(expectedFloor.BlobCID)
+	require.Equal(t, testBlobCID(expectedFloor), catalogCID)
+	require.Equal(t, int64(testBlobSize(expectedFloor)), catalogSize)
+	require.Equal(t, int64(testBlobSize(expectedFloor)), catalogBytes)
+	wantedBasename, err := payloadBasenameFromCID(testBlobCID(expectedFloor))
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(wantedBasename))
 	require.Equal(t, wantedBasename, catalogBasename)
@@ -316,7 +316,7 @@ func readAcceptedMaterialCapacityEvidence(
 	var retainedReferences, attemptReferences, activeAttempts, attemptCount int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(expectedFloor.Revision), expectedFloor.BlobCID).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(expectedFloor.Revision), testBlobCID(expectedFloor)).
 			Scan(&retainedReferences),
 	)
 	require.NoError(
@@ -356,10 +356,10 @@ func readAcceptedMaterialCapacityEvidence(
 	require.Equal(t, []string{wantedBasename}, fileNames)
 
 	payloadPath := filepath.Join(payloadDirectory, wantedBasename)
-	physical, err := observeAcceptedMaterialPayloadFile(payloadPath, int(expectedFloor.BlobSize))
+	physical, err := observeAcceptedMaterialPayloadFile(payloadPath, int(testBlobSize(expectedFloor)))
 	require.NoError(t, err)
 	require.True(t, physical.Exists)
-	require.Equal(t, expectedCandidate.Payload, physical.Bytes)
+	require.Equal(t, acceptedPayload(expectedCandidate), physical.Bytes)
 	require.Equal(t, uint32(unix.S_IFREG|0o600), physical.Mode&uint32(unix.S_IFMT|0o777))
 	require.Equal(t, uint32(os.Geteuid()), physical.UID)
 	require.Equal(t, uint64(1), physical.Nlink)
@@ -409,11 +409,11 @@ func assertAcceptedMaterialCapacityPositiveInventory(
 			Scan(&objectCount, &objectBytes),
 	)
 	assert.Equal(t, int64(2), objectCount)
-	assert.Equal(t, int64(len(baseCandidate.Payload)+len(successorCandidate.Payload)), objectBytes)
+	assert.Equal(t, int64(len(acceptedPayload(baseCandidate))+len(acceptedPayload(successorCandidate))), objectBytes)
 	var matchingObjects int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid IN (?,?)", floor.BlobCID, blobForCandidate(t, successorCandidate).CID).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM payload_objects WHERE blob_cid IN (?,?)", testBlobCID(floor), blobForCandidate(t, successorCandidate).CID).
 			Scan(&matchingObjects),
 	)
 	assert.Equal(t, int64(2), matchingObjects)
@@ -421,7 +421,7 @@ func assertAcceptedMaterialCapacityPositiveInventory(
 	var retainedReferences, baseAttemptReferences, successorAttemptReferences, activeAttempts, attemptCount int64
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(floor.Revision), floor.BlobCID).
+		store.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM retained_publications WHERE accepted_revision=? AND blob_cid=?", int64(floor.Revision), testBlobCID(floor)).
 			Scan(&retainedReferences),
 	)
 	require.NoError(
@@ -447,15 +447,15 @@ func assertAcceptedMaterialCapacityPositiveInventory(
 
 	payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 	fileNames := readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, 2)
-	wantNames := []string{payloadBasename(baseCandidate.Payload), payloadBasename(successorCandidate.Payload)}
+	wantNames := []string{payloadBasename(acceptedPayload(baseCandidate)), payloadBasename(acceptedPayload(successorCandidate))}
 	sort.Strings(wantNames)
 	assert.Equal(t, wantNames, fileNames)
 	for _, candidate := range []CandidateInput{baseCandidate, successorCandidate} {
-		path := filepath.Join(payloadDirectory, payloadBasename(candidate.Payload))
-		physical, err := observeAcceptedMaterialPayloadFile(path, len(candidate.Payload))
+		path := filepath.Join(payloadDirectory, payloadBasename(acceptedPayload(candidate)))
+		physical, err := observeAcceptedMaterialPayloadFile(path, len(acceptedPayload(candidate)))
 		require.NoError(t, err)
 		assert.True(t, physical.Exists)
-		assert.Equal(t, candidate.Payload, physical.Bytes)
+		assert.Equal(t, acceptedPayload(candidate), physical.Bytes)
 		assert.Equal(t, uint32(unix.S_IFREG|0o600), physical.Mode&uint32(unix.S_IFMT|0o777))
 		assert.Equal(t, uint32(os.Geteuid()), physical.UID)
 		assert.Equal(t, uint64(1), physical.Nlink)
@@ -483,12 +483,12 @@ func assertAcceptedMaterialCapacitySuccessor(
 	baseCandidate, successorCandidate CandidateInput,
 ) {
 	t.Helper()
-	require.NotEmpty(t, baseCandidate.Payload)
-	require.NotEmpty(t, successorCandidate.Payload)
-	require.NotEqual(t, baseCandidate.Payload, successorCandidate.Payload)
+	require.NotEmpty(t, acceptedPayload(baseCandidate))
+	require.NotEmpty(t, acceptedPayload(successorCandidate))
+	require.NotEqual(t, acceptedPayload(baseCandidate), acceptedPayload(successorCandidate))
 	require.NotEqual(t, blobForCandidate(t, baseCandidate).CID, blobForCandidate(t, successorCandidate).CID)
-	require.NoError(t, publication.VerifyPayload(successorCandidate.Payload, blobForCandidate(t, successorCandidate)))
-	_, err := publication.DecodePayload(successorCandidate.Payload, blobForCandidate(t, successorCandidate))
+	require.NoError(t, publication.VerifyPayload(acceptedPayload(successorCandidate), blobForCandidate(t, successorCandidate)))
+	_, err := publication.DecodePayload(acceptedPayload(successorCandidate), blobForCandidate(t, successorCandidate))
 	require.NoError(t, err)
 	baseRecord, err := publication.DecodeSnapshot(baseCandidate.SnapshotRecord)
 	require.NoError(t, err)
@@ -502,17 +502,17 @@ func assertAcceptedMaterialCapacitySuccessor(
 	require.Equal(t, uint64(1), successorRecord.PublicationSeq)
 	require.Equal(t, baseCID, successorRecord.Parent)
 	require.Equal(t, f.binding.Vault, successorRecord.Vault)
-	require.Equal(t, uint64(len(successorCandidate.Payload)), successorRecord.Blob.Size)
+	require.Equal(t, uint64(len(acceptedPayload(successorCandidate))), testBlob(successorRecord).Size)
 	require.Equal(t, f.blocks[1].Key, successorCandidate.SnapshotKey)
-	wantSuccessorCID, err := publication.RawPayloadCID(successorCandidate.Payload)
+	wantSuccessorCID, err := publication.RawPayloadCID(acceptedPayload(successorCandidate))
 	require.NoError(t, err)
-	require.Equal(t, wantSuccessorCID, successorRecord.Blob.CID)
+	require.Equal(t, wantSuccessorCID, testBlob(successorRecord).CID)
 	wantHead, err := publication.DecodeHead(successorCandidate.HeadRecord)
 	require.NoError(t, err)
 	require.Equal(t, wantHead.PublicationSeq, successorRecord.PublicationSeq)
 	require.Equal(t, wantHead.Vault, successorRecord.Vault)
 	require.Equal(t, wantHead.SnapshotCID, successorCID)
-	require.Equal(t, wantHead.BlobCID, successorRecord.Blob.CID)
+	require.Equal(t, testBlobCID(wantHead), testBlob(successorRecord).CID)
 }
 
 func mustSuccessorParent(t *testing.T, candidate CandidateInput) []byte {
@@ -527,6 +527,6 @@ func cloneAcceptedMaterialCapacityCandidate(candidate CandidateInput) CandidateI
 		SnapshotKey:    candidate.SnapshotKey,
 		SnapshotRecord: bytes.Clone(candidate.SnapshotRecord),
 		HeadRecord:     bytes.Clone(candidate.HeadRecord),
-		Payload:        bytes.Clone(candidate.Payload),
+		Payload:        bytes.Clone(acceptedPayload(candidate)),
 	}
 }

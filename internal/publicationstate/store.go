@@ -269,7 +269,7 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	}
 	store.attemptMutationRevision = binary.BigEndian.Uint64(mutationBytes)
 	copy(store.databaseID[:], dbidBytes)
-	store.schemaVersion = 3
+	store.schemaVersion = 4
 	if _, err := store.readState(context.Background(), conn, StageOpen); err != nil {
 		if _, ok := errors.AsType[*Error](err); ok {
 			return nil, err
@@ -547,7 +547,7 @@ func initializeSchema(
 			_ = tx.Rollback()
 		}
 	}()
-	inventory, err := schemaInventoryForVersion(3)
+	inventory, err := schemaInventoryForVersion(4)
 	if err != nil {
 		return err
 	}
@@ -590,10 +590,10 @@ func initializeSchema(
 	if _, err := tx.ExecContext(ctx, "PRAGMA application_id=1146376242"); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=3"); err != nil {
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=4"); err != nil {
 		return err
 	}
-	if err := checkSchemaVersion(ctx, tx, 3); err != nil {
+	if err := checkSchemaVersion(ctx, tx, 4); err != nil {
 		return err
 	}
 	if err := checkAttemptMetadata(ctx, tx, attemptLimitsValue); err != nil {
@@ -637,7 +637,7 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if appID != applicationID || version != 3 {
+	if appID != applicationID || version != 4 {
 		return errSchemaMismatch
 	}
 	rows, err := conn.QueryContext(
@@ -665,7 +665,7 @@ func checkSchema(ctx context.Context, conn *sql.Conn) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	inventory, err := schemaInventoryForVersion(3)
+	inventory, err := schemaInventoryForVersion(4)
 	if err != nil {
 		return err
 	}

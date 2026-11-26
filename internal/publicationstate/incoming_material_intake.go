@@ -19,13 +19,23 @@ type materialEntry struct {
 	blob    publication.BlobReference
 }
 
-type materialAttachment struct {
-	form    PayloadForm
-	payload []byte
+type materialSegment struct {
+	summary SegmentSummary
 	blob    publication.BlobReference
-	name    string
-	fileSet *FileSetPayload
+	payload []byte
 	entries []materialEntry
+}
+
+type materialAttachment struct {
+	segments []materialSegment
+}
+
+func (m materialAttachment) summaries() []SegmentSummary {
+	summaries := make([]SegmentSummary, 0, len(m.segments))
+	for _, segment := range m.segments {
+		summaries = append(summaries, segment.summary)
+	}
+	return summaries
 }
 
 func (s *Store) AcceptMaterial(
@@ -62,7 +72,7 @@ func (s *Store) AcceptMaterialInput(
 	if err := s.requireReadback(StageAcceptMaterial); err != nil {
 		return zeroFloor(), err
 	}
-	if s.schemaVersion != 3 {
+	if s.schemaVersion != 4 {
 		return zeroFloor(), classified(ErrSchema, StageAcceptMaterial, ReasonUpgradeRequired)
 	}
 	if !validMode(mode) {
@@ -76,8 +86,13 @@ func (s *Store) AcceptMaterialInput(
 	if err != nil {
 		return zeroFloor(), err
 	}
-	if material.form == PayloadFormPacked && validatePayloadForCustody(material.payload, material.blob, material.name) != nil {
-		return zeroFloor(), classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
+	for _, segment := range material.segments {
+		if segment.summary.Form != PayloadFormPacked {
+			continue
+		}
+		if validatePayloadForCustody(segment.payload, segment.blob, payloadBasename(segment.payload)) != nil {
+			return zeroFloor(), classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
+		}
 	}
 	if err := s.preflightSidecars(); err != nil {
 		return zeroFloor(), storageFailure(ctx, StageAcceptMaterial, err)
@@ -208,46 +223,44 @@ func (s *Store) verifyOwnedMaterial(
 	material materialAttachment,
 	stage Stage,
 ) error {
-	if owner.form != material.form || !bytes.Equal(owner.record, expectedRecord) {
-		return classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	if owner.form == PayloadFormFileSet {
-		if !sameFileSetPayload(owner.fileSet, material.fileSet) {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-	} else if owner.name != material.name || !bytes.Equal(owner.blob.CID, material.blob.CID) ||
-		owner.blob.Size != material.blob.Size {
+	if !bytes.Equal(owner.record, expectedRecord) || !sameSegmentSummaries(owner.segments, material.summaries()) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return classifyAcceptedMaterialDirectory(err, stage)
 	}
-	if owner.form == PayloadFormFileSet {
-		return s.verifyFileSetMaterialCustody(ctx, material)
-	}
-	if _, err := s.inspectPayloadFile(owner.name, nil, owner.blob); err != nil {
-		return classifyMaterialCustody(err)
-	}
-	return nil
-}
-
-func (s *Store) verifyFileSetMaterialCustody(ctx context.Context, material materialAttachment) error {
-	seen := make(map[string]bool, len(material.entries))
-	for _, entry := range material.entries {
-		key := string(entry.blob.CID)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if err := s.checkContext(ctx, StageAcceptMaterial); err != nil {
-			return err
-		}
-		name, err := payloadBasenameFromCID(entry.blob.CID)
-		if err != nil || !validPayloadBasename(name) {
-			return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
-		}
-		if _, err := s.inspectCustodyObject(name, nil, entry.blob, PayloadFormFileSet); err != nil {
-			return classifyMaterialCustody(err)
+	for _, segment := range material.segments {
+		switch segment.summary.Form {
+		case PayloadFormPacked:
+			name, err := payloadBasenameFromCID(segment.blob.CID)
+			if err != nil || !validPayloadBasename(name) {
+				return classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			if _, err := s.inspectPayloadFile(name, nil, segment.blob); err != nil {
+				return classifyMaterialCustody(err)
+			}
+		case PayloadFormFileSet:
+			seen := make(map[string]bool, len(segment.entries))
+			for _, entry := range segment.entries {
+				key := string(entry.blob.CID)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				if err := s.checkContext(ctx, stage); err != nil {
+					return err
+				}
+				name, err := payloadBasenameFromCID(entry.blob.CID)
+				if err != nil || !validPayloadBasename(name) {
+					return classified(ErrSchema, stage, ReasonCorrupt)
+				}
+				if _, err := s.inspectCustodyObject(name, nil, entry.blob, PayloadFormFileSet); err != nil {
+					return classifyMaterialCustody(err)
+				}
+			}
+		case PayloadFormSettings:
+		default:
+			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 	}
 	return nil
@@ -259,98 +272,98 @@ func (s *Store) attachIncomingMaterialTx(
 	floor Floor,
 	material materialAttachment,
 ) error {
-	if material.form == PayloadFormFileSet {
-		return s.attachIncomingFileSetTx(ctx, tx, floor, material)
+	objects := make(map[string]uint64)
+	for _, segment := range material.segments {
+		switch segment.summary.Form {
+		case PayloadFormPacked:
+			objects[payloadBasename(segment.payload)] = segment.blob.Size
+		case PayloadFormFileSet:
+			for _, entry := range segment.entries {
+				name := payloadBasename(entry.content)
+				if existing, present := objects[name]; present && existing != entry.blob.Size {
+					return classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
+				}
+				objects[name] = entry.blob.Size
+			}
+		}
 	}
-	if err := s.checkPayloadCapacityWithQueryer(ctx, tx, material.name, material.blob.Size, true); err != nil {
+	if err := s.checkPayloadBatchCapacity(ctx, tx, objects, true); err != nil {
 		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)
 	}
-	if _, _, err := s.persistPayload(ctx, tx, material.payload, material.blob, material.name); err != nil {
-		return classifyMaterialCustody(err)
-	}
-	if _, err := tx.ExecContext(
-		ctx,
-		"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
-		material.blob.CID,
-		int64(material.blob.Size),
-		material.name,
-		int64(material.blob.Size),
-	); err != nil {
-		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
-	}
-	if err := requireCataloguedPayloadObject(ctx, tx, material.blob, material.name); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(
-		ctx,
-		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'packed',?,NULL)",
-		int64(floor.Revision),
-		floor.RecordCID,
-		floor.BlobCID,
-	); err != nil {
-		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
-	}
-	return nil
-}
-
-func (s *Store) attachIncomingFileSetTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	floor Floor,
-	material materialAttachment,
-) error {
-	if err := s.checkIncomingFileSetCapacity(ctx, tx, material); err != nil {
-		return err
-	}
-	seen := make(map[string]bool, len(material.entries))
-	for _, entry := range material.entries {
-		key := string(entry.blob.CID)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		name := payloadBasename(entry.content)
-		if _, _, err := s.persistPayloadObject(ctx, tx, entry.content, entry.blob, name, PayloadFormFileSet); err != nil {
-			return classifyMaterialCustody(err)
-		}
-		if _, err := tx.ExecContext(
-			ctx,
-			"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
-			entry.blob.CID,
-			int64(entry.blob.Size),
-			name,
-			int64(entry.blob.Size),
-		); err != nil {
-			return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
-		}
-		if err := requireCataloguedPayloadObject(ctx, tx, entry.blob, name); err != nil {
-			return err
+	for _, segment := range material.segments {
+		switch segment.summary.Form {
+		case PayloadFormPacked:
+			name := payloadBasename(segment.payload)
+			if _, _, err := s.persistPayload(ctx, tx, segment.payload, segment.blob, name); err != nil {
+				return classifyMaterialCustody(err)
+			}
+			if err := cataloguePayload(ctx, tx, segment.blob, name); err != nil {
+				return err
+			}
+		case PayloadFormFileSet:
+			seen := make(map[string]bool, len(segment.entries))
+			for _, entry := range segment.entries {
+				key := string(entry.blob.CID)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				name := payloadBasename(entry.content)
+				if _, _, err := s.persistPayloadObject(ctx, tx, entry.content, entry.blob, name, PayloadFormFileSet); err != nil {
+					return classifyMaterialCustody(err)
+				}
+				if err := cataloguePayload(ctx, tx, entry.blob, name); err != nil {
+					return err
+				}
+			}
+		case PayloadFormSettings:
+		default:
+			return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 		}
 	}
-	fileSet, err := encodeRetainedFileSet(material.fileSet)
+	encoded, err := encodeSegmentSummaries(material.summaries())
 	if err != nil {
 		return classified(ErrSchema, StageAcceptMaterial, ReasonCorrupt)
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,form,blob_cid,file_set) VALUES(?,?,'file_set',NULL,?)",
+		"INSERT INTO accepted_material_refs(accepted_revision,record_cid,segments) VALUES(?,?,?)",
 		int64(floor.Revision),
 		floor.RecordCID,
-		fileSet,
+		encoded,
 	); err != nil {
 		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
 	}
 	return nil
 }
 
+func cataloguePayload(ctx context.Context, tx *sql.Tx, blob publication.BlobReference, name string) error {
+	if _, err := tx.ExecContext(
+		ctx,
+		"INSERT INTO payload_objects(blob_cid,size,basename,logical_bytes) VALUES(?,?,?,?) ON CONFLICT(blob_cid) DO NOTHING",
+		blob.CID,
+		int64(blob.Size),
+		name,
+		int64(blob.Size),
+	); err != nil {
+		return classified(ErrStorage, StageAcceptMaterial, ReasonIO)
+	}
+	if err := requireCataloguedPayloadObject(ctx, tx, blob, name); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Store) checkIncomingFileSetCapacity(ctx context.Context, q queryer, material materialAttachment) error {
-	objects := make(map[string]uint64, len(material.entries))
-	for _, entry := range material.entries {
-		name := payloadBasename(entry.content)
-		if existing, present := objects[name]; present && existing != entry.blob.Size {
-			return classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
+	objects := make(map[string]uint64)
+	for _, segment := range material.segments {
+		for _, entry := range segment.entries {
+			name := payloadBasename(entry.content)
+			if existing, present := objects[name]; present && existing != entry.blob.Size {
+				return classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
+			}
+			objects[name] = entry.blob.Size
 		}
-		objects[name] = entry.blob.Size
 	}
 	if err := s.checkPayloadBatchCapacity(ctx, q, objects, true); err != nil {
 		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)

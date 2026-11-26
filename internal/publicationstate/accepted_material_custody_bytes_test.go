@@ -18,7 +18,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Len(t, f.blocks, 2)
 
 	baseCandidate := attemptCandidate(f, 0)
-	successorPayload := packFixtureContent(t, baseCandidate.Payload, []byte("tiny successor payload"))
+	successorPayload := packFixtureContent(t, acceptedPayload(baseCandidate), []byte("tiny successor payload"))
 	successorCandidate := candidateWithPayload(t, attemptCandidate(f, 1), f.binding, successorPayload)
 	assertAcceptedMaterialCapacitySuccessor(t, f, baseCandidate, successorCandidate)
 	successorWitness := cloneAcceptedMaterialCapacityCandidate(successorCandidate)
@@ -26,9 +26,9 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	positiveSuccessorCandidate := cloneAcceptedMaterialCapacityCandidate(successorWitness)
 	require.Equal(t, lowSuccessorCandidate, positiveSuccessorCandidate)
 
-	lowCustodyBytes := uint64(len(baseCandidate.Payload))
-	basePayloadBytes := uint64(len(baseCandidate.Payload))
-	successorPayloadBytes := uint64(len(successorCandidate.Payload))
+	lowCustodyBytes := uint64(len(acceptedPayload(baseCandidate)))
+	basePayloadBytes := uint64(len(acceptedPayload(baseCandidate)))
+	successorPayloadBytes := uint64(len(acceptedPayload(successorCandidate)))
 	require.Positive(t, basePayloadBytes)
 	require.Positive(t, successorPayloadBytes)
 	require.LessOrEqual(t, basePayloadBytes, uint64(16<<10))
@@ -40,7 +40,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	totalPayloadBytes := basePayloadBytes + successorPayloadBytes
 	require.Greater(t, totalPayloadBytes, lowCustodyBytes)
 	require.LessOrEqual(t, totalPayloadBytes, DefaultAttemptLimits().CustodyBytes)
-	require.NotEqual(t, baseCandidate.Payload, successorCandidate.Payload)
+	require.NotEqual(t, acceptedPayload(baseCandidate), acceptedPayload(successorCandidate))
 	require.NotEqual(t, blobForCandidate(t, baseCandidate).CID, blobForCandidate(t, successorCandidate).CID)
 
 	lowAttemptLimits := DefaultAttemptLimits()
@@ -64,14 +64,14 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	lowFloor := cloneFloor(lowFinalized.Floor)
 	require.Equal(t, uint64(0), lowFloor.Sequence)
 	require.Equal(t, mustRecordCID(t, baseCandidate.SnapshotRecord), lowFloor.RecordCID)
-	require.Equal(t, blobForCandidate(t, baseCandidate).CID, lowFloor.BlobCID)
-	require.Equal(t, basePayloadBytes, lowFloor.BlobSize)
+	require.Equal(t, blobForCandidate(t, baseCandidate).CID, testBlobCID(lowFloor))
+	require.Equal(t, basePayloadBytes, testBlobSize(lowFloor))
 
 	lowMaterial, err := lowStore.ReadAcceptedMaterial(ctx, f.binding, lowFloor)
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, lowMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, lowMaterial.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, lowMaterial.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(lowMaterial))
 	lowBefore := readAcceptedMaterialCapacityEvidence(
 		t,
 		lowStore,
@@ -85,12 +85,12 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.Equal(t, int64(lowCustodyBytes), lowBefore.CatalogBytes)
 	require.Equal(t, int64(lowCustodyBytes), lowBefore.CatalogSize)
 	require.Equal(t, int64(lowCustodyBytes), lowBefore.File.Size)
-	require.Equal(t, baseCandidate.Payload, lowBefore.File.Bytes)
+	require.Equal(t, acceptedPayload(baseCandidate), lowBefore.File.Bytes)
 	require.Equal(t, int64(1), lowBefore.RetainedReferences)
 	require.Zero(t, lowBefore.AttemptReferences)
 	require.Zero(t, lowBefore.ActiveAttempts)
 	require.Less(t, uint32(lowBefore.CatalogCount), lowOptions.AttemptLimits.ManagedObjects)
-	require.Equal(t, []string{payloadBasename(baseCandidate.Payload)}, lowBefore.FileNames)
+	require.Equal(t, []string{payloadBasename(acceptedPayload(baseCandidate))}, lowBefore.FileNames)
 
 	lowPredecessorView := attemptView(f, f.observation(1), false)
 	lowReview := attemptReview()
@@ -113,7 +113,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, lowMaterialAfterRefusal.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, lowMaterialAfterRefusal.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, lowMaterialAfterRefusal.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(lowMaterialAfterRefusal))
 	lowAfterRead, err := lowStore.ReadAcceptedMaterial(ctx, f.binding, lowFloor)
 	require.NoError(t, err)
 	require.Equal(t, lowMaterialAfterRefusal, lowAfterRead)
@@ -137,7 +137,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.NoError(t, err)
 	require.Equal(t, lowFloor, reopenedMaterial.Floor)
 	require.Equal(t, baseCandidate.SnapshotRecord, reopenedMaterial.SnapshotRecord)
-	require.Equal(t, baseCandidate.Payload, reopenedMaterial.Payload)
+	require.Equal(t, acceptedPayload(baseCandidate), acceptedPayload(reopenedMaterial))
 	lowAfterReopen := readAcceptedMaterialCapacityEvidence(
 		t,
 		reopened,
@@ -238,7 +238,7 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtAggregateCustodyByteCap
 	require.NoError(t, err)
 	require.Equal(t, positiveSuccessorCandidate.SnapshotRecord, positiveCandidateMaterial.SnapshotRecord)
 	require.Equal(t, positiveSuccessorCandidate.HeadRecord, positiveCandidateMaterial.HeadRecord)
-	require.Equal(t, positiveSuccessorCandidate.Payload, positiveCandidateMaterial.Payload)
+	require.Equal(t, acceptedPayload(positiveSuccessorCandidate), acceptedPayload(positiveCandidateMaterial))
 	positivePositionLimitBytesAfter, positiveAttemptLimitBytesAfter := readAcceptedMaterialCapacityLimitBytes(
 		t,
 		positiveStore,

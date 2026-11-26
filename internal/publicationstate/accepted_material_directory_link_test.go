@@ -189,9 +189,9 @@ func newAcceptedMaterialDirectoryLinkCase(t *testing.T) *acceptedMaterialDirecto
 	require.GreaterOrEqual(t, len(fixture.payload), 2)
 
 	candidate := attemptCandidate(fixture, 0)
-	require.NotEmpty(t, candidate.Payload)
-	require.GreaterOrEqual(t, len(candidate.Payload), 2)
-	require.LessOrEqual(t, uint64(len(candidate.Payload)), publication.MaxBlobBytes)
+	require.NotEmpty(t, acceptedPayload(candidate))
+	require.GreaterOrEqual(t, len(acceptedPayload(candidate)), 2)
+	require.LessOrEqual(t, uint64(len(acceptedPayload(candidate))), publication.MaxBlobBytes)
 	store, directory := newStore(t, fixture)
 	t.Cleanup(func() {
 		require.NoError(t, store.Close())
@@ -199,22 +199,22 @@ func newAcceptedMaterialDirectoryLinkCase(t *testing.T) *acceptedMaterialDirecto
 	attempt, finalized := acceptedMaterialRevisionFinalizeGenesis(t, store, fixture, candidate)
 	expectedFloor := cloneFloor(finalized.Floor)
 	record := bytes.Clone(candidate.SnapshotRecord)
-	payload := bytes.Clone(candidate.Payload)
-	basename, err := payloadBasenameFromCID(expectedFloor.BlobCID)
+	payload := bytes.Clone(acceptedPayload(candidate))
+	basename, err := payloadBasenameFromCID(testBlobCID(expectedFloor))
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
 	require.Equal(t, payloadBasename(payload), basename)
-	require.Equal(t, expectedFloor.BlobSize, uint64(len(payload)))
+	require.Equal(t, testBlobSize(expectedFloor), uint64(len(payload)))
 
 	material, err := store.ReadAcceptedMaterial(context.Background(), fixture.binding, expectedFloor)
 	require.NoError(t, err)
 	require.Equal(t, expectedFloor, material.Floor)
 	require.Equal(t, record, material.SnapshotRecord)
-	require.Equal(t, payload, material.Payload)
+	require.Equal(t, payload, acceptedPayload(material))
 	publicState := readAcceptedMaterialCustodyState(t, store, attempt.ID, candidate)
 	require.Equal(t, expectedFloor, publicState.Floor)
 	require.Equal(t, record, publicState.Candidate.SnapshotRecord)
-	require.Equal(t, payload, publicState.Candidate.Payload)
+	require.Equal(t, payload, acceptedPayload(publicState.Candidate))
 	logicalRows := readAttemptLogicalRows(t, store)
 
 	require.GreaterOrEqual(t, store.rootFD, 0)
@@ -256,7 +256,7 @@ func assertAcceptedMaterialDirectoryLinkPublicState(t *testing.T, fixture *accep
 	assert.Equal(t, fixture.logicalRows, readAttemptLogicalRows(t, fixture.store))
 	assert.Equal(t, fixture.expectedFloor, fixture.publicState.Floor)
 	assert.Equal(t, fixture.record, fixture.candidate.SnapshotRecord)
-	assert.Equal(t, fixture.payload, fixture.candidate.Payload)
+	assert.Equal(t, fixture.payload, acceptedPayload(fixture.candidate))
 }
 
 type acceptedMaterialDirectoryIdentity struct {

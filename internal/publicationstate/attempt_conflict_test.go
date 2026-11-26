@@ -115,7 +115,7 @@ func TestFirstConflictResolveRefreshReopenRepinRetireAndPayloadLoss(t *testing.T
 	)
 	assert.Zero(t, refs)
 	assert.Zero(t, reservations)
-	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 	require.NoError(t, os.Remove(payloadPath))
 	require.NoError(t, reopened.Close())
 
@@ -220,7 +220,7 @@ func TestFirstConflictInsertionAndEventFailuresRollbackTogether(t *testing.T) {
 			attempt := createAndSubmitSuccessor(t, store, f, candidate, preflight, review)
 			conflict := competingSuccessorView(t, f, preflight, candidate, 0x31, []byte{0x32})
 			before := readAttemptLogicalRows(t, store)
-			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 			beforePayload, err := os.ReadFile(payloadPath)
 			require.NoError(t, err)
 			_, err = store.conn.ExecContext(ctx, fault.ddl)
@@ -272,7 +272,7 @@ func TestFirstConflictDirectAbandonRetirementFailureRollsBackAllRecords(t *testi
 	proposal, err := store.PrepareAbandon(ctx, attempt.ID, &conflict)
 	require.NoError(t, err)
 	before := readAttemptLogicalRows(t, store)
-	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+	payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 	beforePayload, err := os.ReadFile(payloadPath)
 	require.NoError(t, err)
 	_, err = store.conn.ExecContext(
@@ -579,7 +579,6 @@ func competingSuccessorView(
 			Vault:          lastRecord.Vault,
 			PublicationSeq: lastRecord.PublicationSeq,
 			SnapshotCID:    lastCID,
-			BlobCID:        lastRecord.Blob.CID,
 		},
 	)
 	require.NoError(t, err)

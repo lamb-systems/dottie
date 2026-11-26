@@ -96,7 +96,7 @@ func TestSubmittedAbsenceViewCannotAuthorizeAbandonment(t *testing.T) {
 				assert.Equal(t, OutcomeAbsentUnresolved, resolution.Outcome)
 			}
 			before := readAttemptLogicalRows(t, store)
-			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 			beforePayload, err := os.ReadFile(payloadPath)
 			require.NoError(t, err)
 
@@ -192,12 +192,12 @@ func TestMissingCorruptAndUnsafeCandidateDoNotBlockOutcomeInspection(t *testing.
 			review := attemptReview()
 			attempt := createAndSubmitGenesis(t, store, f, empty, candidate, review)
 			require.NoError(t, store.Close())
-			path := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+			path := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 			switch damage {
 			case "missing":
 				require.NoError(t, os.Remove(path))
 			case "corrupt":
-				corrupt := bytes.Clone(candidate.Payload)
+				corrupt := bytes.Clone(acceptedPayload(candidate))
 				corrupt[len(corrupt)/2] ^= 0x01
 				require.NoError(t, os.WriteFile(path, corrupt, 0o600))
 			case "symlink":
@@ -387,10 +387,10 @@ func TestDirectTerminalAbandonmentPersistsOutcomeAndRetirementAcrossReopen(t *te
 			)
 			assert.Equal(t, 0, attemptRefs)
 			assert.Equal(t, 0, reservations)
-			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+			payloadPath := filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 			beforePayload, err := os.ReadFile(payloadPath)
 			require.NoError(t, err)
-			assert.Equal(t, candidate.Payload, beforePayload)
+			assert.Equal(t, acceptedPayload(candidate), beforePayload)
 			require.NoError(t, store.Close())
 			reopened, err := Open(directory, f.binding)
 			require.NoError(t, err)
@@ -409,10 +409,10 @@ func TestDirectTerminalAbandonmentPersistsOutcomeAndRetirementAcrossReopen(t *te
 				assert.Equal(t, firstConflict.Head, storedConflict.Head)
 				assert.Equal(t, firstConflict.HeadRecord, storedConflict.HeadRecord)
 			}
-			payloadPath = filepath.Join(directory, payloadDirectoryName, payloadBasename(candidate.Payload))
+			payloadPath = filepath.Join(directory, payloadDirectoryName, payloadBasename(acceptedPayload(candidate)))
 			payloadBytes, readErr := os.ReadFile(payloadPath)
 			require.NoError(t, readErr)
-			assert.Equal(t, candidate.Payload, payloadBytes)
+			assert.Equal(t, acceptedPayload(candidate), payloadBytes)
 			page, err := reopened.AttemptHistory(ctx, [16]byte{}, 10)
 			require.NoError(t, err)
 			require.Len(t, page.Attempts, 1)
@@ -438,7 +438,6 @@ func competingGenesisView(t *testing.T, f fixture) SuppliedRepositoryView {
 			Vault:          record.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    cid,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)

@@ -14,7 +14,6 @@ import (
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/platform"
-	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
@@ -437,20 +436,9 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 		output.WriteString("accepted floor: none (first publication)\n")
 	}
 	fmt.Fprintf(&output, "candidate record: %x\n", preparation.Proposal.Proposal.CandidateRecordCID)
-	if preparation.Form == publication.PayloadFormFileSet {
-		fmt.Fprintf(
-			&output,
-			"candidate file-set: entries=%d entry-set=%x\n",
-			preparation.Record.CandidateEntryCount,
-			preparation.Record.CandidateEntryDigest,
-		)
-	} else {
-		fmt.Fprintf(
-			&output,
-			"candidate payload: %x size=%d\n",
-			preparation.Proposal.Proposal.CandidateBlobCID,
-			preparation.Proposal.Blob.Size,
-		)
+	segments, err := publicationstate.DecodeSegmentSummaries(preparation.Record.Segments)
+	if err == nil {
+		fmt.Fprintf(&output, "candidate segments: %d payload-set=%x\n", len(segments), preparation.Record.PayloadsDigest)
 	}
 	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
 		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,

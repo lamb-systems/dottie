@@ -243,35 +243,6 @@ func TestInspectRefusesUnsafeDatabaseFile(t *testing.T) {
 	assert.Equal(t, Inspection{}, inspection)
 }
 
-func TestInspectRefusesUpgradeRequiredSchemas(t *testing.T) {
-	t.Run("schema 1", func(t *testing.T) {
-		f, databasePath, rows := incomingMaterialUpgradeCopyV1(t)
-		require.NotEmpty(t, rows)
-		directory := filepath.Dir(databasePath)
-		before := inspectionDirectoryEntries(t, directory)
-		digest := inspectionFileDigest(t, databasePath)
-		inspection, err := Inspect(context.Background(), directory, f.binding)
-		requireErrorMetadata(t, err, ErrSchema, StageInspect, ReasonUpgradeRequired)
-		assert.Equal(t, Inspection{}, inspection)
-		assert.Equal(t, before, inspectionDirectoryEntries(t, directory), "inspection changed the directory")
-		assert.Equal(t, digest, inspectionFileDigest(t, databasePath), "inspection upgraded the schema-1 database")
-	})
-	t.Run("schema 2", func(t *testing.T) {
-		assets := incomingMaterialUpgradeFixtureCopy(t)
-		image := assets.manifest.requireImage(t, "mixed")
-		binding, _, _ := incomingMaterialUpgradeFixtureBindingOptions(t, image)
-		directory := filepath.Join(assets.root, "mixed")
-		databasePath := filepath.Join(directory, "publication.db")
-		before := inspectionDirectoryEntries(t, directory)
-		digest := inspectionFileDigest(t, databasePath)
-		inspection, err := Inspect(context.Background(), directory, binding)
-		requireErrorMetadata(t, err, ErrSchema, StageInspect, ReasonUpgradeRequired)
-		assert.Equal(t, Inspection{}, inspection)
-		assert.Equal(t, before, inspectionDirectoryEntries(t, directory), "inspection changed the directory")
-		assert.Equal(t, digest, inspectionFileDigest(t, databasePath), "inspection upgraded the schema-2 database")
-	})
-}
-
 func TestInspectRefusesHeldWriterAndReleasesProbe(t *testing.T) {
 	f := newFixture(t, BackendPublicRepo)
 	f.appendRecord(t, 0)

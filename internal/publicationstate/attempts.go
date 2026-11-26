@@ -126,8 +126,7 @@ func (s *Store) PrepareAttempt(
 		CapturedFloor:      cloneFloorPointer(state.floor),
 		CapturedGeneration: state.generation,
 		CandidateRecordCID: bytes.Clone(validated.snapshotCID),
-		CandidateBlobCID:   bytes.Clone(validated.blobCID),
-		CandidateBlobSize:  validated.snapshot.Blob.Size,
+		CandidateSegments:  summariesOfRecord(validated.snapshot.Segments),
 	}, nil
 }
 
@@ -329,12 +328,20 @@ func (s *Store) CreateAttempt(
 		); err != nil {
 			return classified(ErrStorage, StageAttempt, ReasonIO)
 		}
-		if validated.form == PayloadFormPacked {
+		segments, err := segmentSummariesFromWire(core.Segments)
+		if err != nil {
+			return classified(ErrSchema, StageAttempt, ReasonCorrupt)
+		}
+		for ordinal, summary := range segments {
+			if summary.Form != PayloadFormPacked {
+				continue
+			}
 			if _, err := tx.ExecContext(
 				ctx,
-				"INSERT INTO attempt_payload_refs(attempt_id,blob_cid) VALUES(?,?)",
+				"INSERT INTO attempt_payload_refs(attempt_id,ordinal,blob_cid) VALUES(?,?,?)",
 				validated.id[:],
-				validated.blobCID,
+				int64(ordinal),
+				summary.BlobCID,
 			); err != nil {
 				return classified(ErrStorage, StageAttempt, ReasonIO)
 			}
@@ -528,9 +535,7 @@ func (s *Store) makeAttemptCore(
 		SnapshotCID:             bytes.Clone(candidate.snapshotCID),
 		HeadRecord:              bytes.Clone(candidate.headRaw),
 		HeadCID:                 bytes.Clone(candidate.headCID),
-		BlobCID:                 bytes.Clone(candidate.blobCID),
-		BlobSize:                candidate.snapshot.Blob.Size,
-		Entries:                 fileSetPayloadToWire(fileSetPayloadOf(candidate.snapshot)),
+		Segments:                segmentSummariesToWire(summariesOfRecord(candidate.snapshot.Segments)),
 		InitialContext:          contextToWire(candidate.view.input.SuppliedContext),
 		InitialViewDigest:       bytes.Clone(candidate.view.digest[:]),
 		Review:                  reviewToWire(review),
@@ -978,38 +983,7 @@ func (s *Store) ReadCandidate(ctx context.Context, id [16]byte) (CandidateMateri
 	if err != nil {
 		return CandidateMaterial{}, err
 	}
-	if attemptCoreForm(stored.core) == PayloadFormFileSet {
-		return s.readFileSetCandidate(ctx, stored, StageCustody)
-	}
-	if err := s.openPayloadDirectoryForRead(); err != nil {
-		return CandidateMaterial{}, classifyCandidateDirectory(err, StageCustody)
-	}
-	var basename string
-	var sizeValue any
-	if err := s.conn.QueryRowContext(ctx, "SELECT basename,size FROM (SELECT payload_objects.basename,payload_objects.size FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=? UNION ALL SELECT payload_objects.basename,payload_objects.size FROM retained_publications JOIN payload_objects USING(blob_cid) WHERE retained_publications.attempt_id=?) LIMIT 1", id[:], id[:]).
-		Scan(&basename, &sizeValue); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return CandidateMaterial{}, classified(ErrStorage, StageCustody, ReasonCandidateMissing)
-		}
-		return CandidateMaterial{}, storageFailure(ctx, StageCustody, err)
-	}
-	size, ok := rawInt64(sizeValue)
-	if !ok || size <= 0 || uint64(size) != stored.core.BlobSize {
-		return CandidateMaterial{}, classified(ErrSchema, StageCustody, ReasonCorrupt)
-	}
-	blob := blobReference(stored.core.SnapshotRecord)
-	data, err := s.inspectPayloadFile(basename, nil, blob)
-	if err != nil {
-		return CandidateMaterial{}, classifyCandidateRead(err, StageCustody)
-	}
-	return CandidateMaterial{
-		AttemptID:      id,
-		SnapshotKey:    stored.core.SnapshotKey,
-		SnapshotRecord: bytes.Clone(stored.core.SnapshotRecord),
-		HeadRecord:     bytes.Clone(stored.core.HeadRecord),
-		Payload:        data,
-		Blob:           blob,
-	}, nil
+	return s.readCandidateUnlocked(ctx, stored, StageCustody)
 }
 
 func classifyCandidateDirectory(err error, stage Stage) error {
@@ -1063,9 +1037,7 @@ func projectAttempt(
 		SnapshotKey:        core.SnapshotKey,
 		SnapshotRecordCID:  bytes.Clone(core.SnapshotCID),
 		HeadRecordCID:      bytes.Clone(core.HeadCID),
-		BlobCID:            bytes.Clone(core.BlobCID),
-		BlobSize:           core.BlobSize,
-		FileSet:            fileSetPayloadOf(snapshot),
+		Segments:           summariesOfRecord(snapshot.Segments),
 		CapturedFloor:      floor,
 		CapturedRevision:   core.CapturedRevision,
 		CapturedGeneration: core.CapturedGeneration,
@@ -1195,7 +1167,6 @@ func validateStoredAttemptCore(
 	if err != nil || !sameBinding(storedBinding, binding) || len(core.AttemptID) != 16 ||
 		len(core.DatabaseID) != 32 ||
 		!bytes.Equal(core.DatabaseID, databaseID[:]) ||
-		core.BlobSize > publication.MaxBlobBytes ||
 		len(core.CandidateConfirmation) != 32 ||
 		core.ReservedCompletionBytes != 512<<10 ||
 		len(core.Review.SelectionDigest) != 32 ||
@@ -1285,15 +1256,19 @@ func validateAttemptCorePayload(
 	if attemptCoreVersion(snapshot) != core.Version {
 		return errors.New("payload form")
 	}
-	if payloadFormOf(snapshot) == PayloadFormFileSet {
-		fileSet, err := fileSetPayloadFromWire(core.Entries)
-		if err != nil || !fileSetPayloadMatchesRecord(fileSet, snapshot) {
+	segments, err := segmentSummariesFromWire(core.Segments)
+	if err != nil || !sameSegmentSummaries(segments, summariesOfRecord(snapshot.Segments)) {
+		return errors.New("payload form")
+	}
+	for _, summary := range segments {
+		if summary.BlobSize > publication.MaxBlobBytes {
 			return errors.New("payload form")
 		}
-		return validateFileSetPayloadCustody(fileSet, attemptLimits)
-	}
-	if !bytes.Equal(snapshot.Blob.CID, core.BlobCID) || snapshot.Blob.Size != core.BlobSize {
-		return errors.New("snapshot")
+		if summary.Form == PayloadFormFileSet {
+			if err := validateSegmentMaterialLimits(summary, attemptLimits); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -1956,44 +1931,17 @@ func (s *Store) validateAttemptPayloadReference(
 	attempt storedAttempt,
 	stage Stage,
 ) error {
-	if attemptCoreForm(attempt.core) == PayloadFormFileSet {
-		return s.validateFileSetAttemptPayloadReference(ctx, q, attempt, stage)
-	}
-	var refCIDValue, objectCIDValue, sizeValue, basenameValue any
-	if err := q.QueryRowContext(ctx, "SELECT attempt_payload_refs.blob_cid,payload_objects.blob_cid,payload_objects.size,payload_objects.basename FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", attempt.core.AttemptID).
-		Scan(&refCIDValue, &objectCIDValue, &sizeValue, &basenameValue); err != nil {
-		return classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	refCID, refOK := rawBytes(refCIDValue)
-	objectCID, objectOK := rawBytes(objectCIDValue)
-	size, sizeOK := rawInt64(sizeValue)
-	basename, nameOK := basenameValue.(string)
-	wantedName, nameErr := payloadBasenameFromCID(attempt.core.BlobCID)
-	if !refOK || !objectOK || !bytes.Equal(refCID, attempt.core.BlobCID) ||
-		!bytes.Equal(objectCID, attempt.core.BlobCID) ||
-		!sizeOK ||
-		size <= 0 ||
-		uint64(size) != attempt.core.BlobSize ||
-		!nameOK ||
-		!validPayloadBasename(basename) ||
-		nameErr != nil ||
-		wantedName != basename {
-		return classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	return nil
-}
-
-func (s *Store) validateFileSetAttemptPayloadReference(
-	ctx context.Context,
-	q queryer,
-	attempt storedAttempt,
-	stage Stage,
-) error {
-	fileSet, err := fileSetPayloadFromWire(attempt.core.Entries)
+	segments, err := segmentSummariesFromWire(attempt.core.Segments)
 	if err != nil {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	return s.checkFileSetPayloadReferences(ctx, q, fileSet, stage)
+	cache := make(fileSetCatalogCache)
+	for _, summary := range segments {
+		if err := s.checkSegmentCatalog(ctx, q, summary, stage, cache); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) checkFileSetPayloadReferences(
@@ -2021,14 +1969,10 @@ func (s *Store) checkFileSetPayloadReferences(
 }
 
 type retainedPublicationRow struct {
-	recordCID     []byte
-	sequence      int64
-	revision      int64
-	form          PayloadForm
-	blobCID       []byte
-	size          int64
-	hasFileSet    bool
-	fileSetLength int64
+	recordCID []byte
+	sequence  int64
+	revision  int64
+	segments  []SegmentSummary
 }
 
 func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, attempt storedAttempt, stage Stage) error {
@@ -2049,11 +1993,16 @@ func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, atte
 		!bytes.Equal(acceptedFloor.RecordCID, attempt.core.SnapshotCID) ||
 		acceptedFloor.Sequence != snapshot.PublicationSeq ||
 		!bytes.Equal(acceptedFloor.AcceptedEventDigest[:], digest) ||
-		!sameBinding(acceptedFloor.Binding, s.binding) {
+		!sameBinding(acceptedFloor.Binding, s.binding) ||
+		!sameSegmentSummaries(row.segments, summariesOfRecord(snapshot.Segments)) ||
+		!sameSegmentSummaries(acceptedFloor.Segments, row.segments) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if err := s.validateRetainedPayload(ctx, q, attempt, row, &snapshot, acceptedFloor, stage); err != nil {
-		return err
+	cache := make(fileSetCatalogCache)
+	for _, summary := range row.segments {
+		if err := s.checkSegmentCatalog(ctx, q, summary, stage, cache); err != nil {
+			return err
+		}
 	}
 	var acceptedRecord any
 	if err := q.QueryRowContext(ctx, "SELECT raw FROM accepted_records WHERE cid=?", attempt.core.SnapshotCID).
@@ -2067,154 +2016,43 @@ func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, atte
 	return nil
 }
 
-func (s *Store) validateRetainedPayload(
-	ctx context.Context,
-	q queryer,
-	attempt storedAttempt,
-	row retainedPublicationRow,
-	snapshot *publication.SnapshotRecord,
-	acceptedFloor Floor,
-	stage Stage,
-) error {
-	switch row.form {
-	case PayloadFormPacked:
-		if row.hasFileSet || !bytes.Equal(row.blobCID, attempt.core.BlobCID) || row.size <= 0 ||
-			uint64(row.size) != attempt.core.BlobSize ||
-			!bytes.Equal(acceptedFloor.BlobCID, attempt.core.BlobCID) ||
-			acceptedFloor.BlobSize != attempt.core.BlobSize || acceptedFloor.FileSet != nil {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		return nil
-	case PayloadFormFileSet:
-		if len(row.blobCID) != 0 || row.size != 0 || len(attempt.core.BlobCID) != 0 ||
-			attempt.core.BlobSize != 0 || !floorPayloadMatchesRecord(acceptedFloor, *snapshot) {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		fileSet, err := s.readRetainedFileSet(ctx, q, attempt, row.fileSetLength, stage)
-		if err != nil {
-			return err
-		}
-		if !sameFileSetPayload(fileSet, fileSetPayloadOf(*snapshot)) ||
-			!sameFileSetPayload(fileSet, acceptedFloor.FileSet) {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		return s.checkFileSetPayloadReferences(ctx, q, fileSet, stage)
-	}
-	return classified(ErrSchema, stage, ReasonCorrupt)
-}
-
 func (s *Store) readRetainedPublication(
 	ctx context.Context,
 	q queryer,
 	attempt storedAttempt,
 	stage Stage,
 ) (retainedPublicationRow, error) {
-	if s.schemaVersion < 3 {
-		return s.readPackedRetainedPublication(ctx, q, attempt, stage)
-	}
-	return s.readUnionRetainedPublication(ctx, q, attempt, stage)
-}
-
-func (s *Store) readPackedRetainedPublication(
-	ctx context.Context,
-	q queryer,
-	attempt storedAttempt,
-	stage Stage,
-) (retainedPublicationRow, error) {
-	var recordValue, blobValue, seqValue, sizeValue, revisionValue any
-	var recordLengthValue, blobLengthValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),substr(blob_cid,1,129),length(blob_cid),sequence,size,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
-		Scan(&recordValue, &recordLengthValue, &blobValue, &blobLengthValue, &seqValue, &sizeValue, &revisionValue); err != nil {
+	var recordValue, recordLengthValue any
+	var segmentsTypeValue, segmentsLengthValue, segmentsValue any
+	var seqValue, revisionValue any
+	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),typeof(segments),length(CAST(segments AS BLOB)),substr(CAST(segments AS BLOB),1,2097153),sequence,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
+		Scan(&recordValue, &recordLengthValue, &segmentsTypeValue, &segmentsLengthValue, &segmentsValue, &seqValue, &revisionValue); err != nil {
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	record, recordOK := rawBytes(recordValue)
 	recordLength, recordLengthOK := rawInt64(recordLengthValue)
-	blob, blobOK := rawBytes(blobValue)
-	blobLength, blobLengthOK := rawInt64(blobLengthValue)
+	segmentsType, segmentsTypeOK := segmentsTypeValue.(string)
+	segmentsLength, segmentsLengthOK := rawInt64(segmentsLengthValue)
+	segmentsRaw, segmentsOK := rawBytes(segmentsValue)
 	seq, seqOK := rawInt64(seqValue)
-	size, sizeOK := rawInt64(sizeValue)
 	revision, revisionOK := rawInt64(revisionValue)
 	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
 		int64(len(record)) != recordLength ||
-		!blobOK || !blobLengthOK || blobLength <= 0 || blobLength > publication.MaxCIDBytes ||
-		int64(len(blob)) != blobLength ||
-		!seqOK || seq < 0 || !sizeOK || size <= 0 || !revisionOK || revision <= 0 {
+		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
+		!seqOK || seq < 0 || !revisionOK || revision <= 0 {
+		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	segments, err := decodeSegmentSummaries(segmentsRaw)
+	if err != nil {
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return retainedPublicationRow{
 		recordCID: bytes.Clone(record),
 		sequence:  seq,
 		revision:  revision,
-		form:      PayloadFormPacked,
-		blobCID:   bytes.Clone(blob),
-		size:      size,
+		segments:  segments,
 	}, nil
-}
-
-func (s *Store) readUnionRetainedPublication(
-	ctx context.Context,
-	q queryer,
-	attempt storedAttempt,
-	stage Stage,
-) (retainedPublicationRow, error) {
-	var recordValue, recordLengthValue any
-	var formTypeValue, formValue, formLengthValue any
-	var blobTypeValue, blobValue, blobLengthValue any
-	var sizeTypeValue, sizeValue any
-	var fileSetTypeValue, fileSetLengthValue any
-	var seqValue, revisionValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(record_cid,1,129),length(record_cid),typeof(form),CASE WHEN typeof(form)='text' THEN substr(form,1,8) END,length(CAST(form AS BLOB)),typeof(blob_cid),substr(blob_cid,1,129),length(blob_cid),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(file_set),length(CAST(file_set AS BLOB)),sequence,accepted_revision FROM retained_publications WHERE attempt_id=?", attempt.core.AttemptID).
-		Scan(&recordValue, &recordLengthValue, &formTypeValue, &formValue, &formLengthValue, &blobTypeValue, &blobValue, &blobLengthValue, &sizeTypeValue, &sizeValue, &fileSetTypeValue, &fileSetLengthValue, &seqValue, &revisionValue); err != nil {
-		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	record, recordOK := rawBytes(recordValue)
-	recordLength, recordLengthOK := rawInt64(recordLengthValue)
-	formType, formTypeOK := formTypeValue.(string)
-	form, formOK := formValue.(string)
-	formLength, formLengthOK := rawInt64(formLengthValue)
-	blobType, blobTypeOK := blobTypeValue.(string)
-	blob, blobOK := rawBytes(blobValue)
-	blobLength, blobLengthOK := rawInt64(blobLengthValue)
-	sizeType, sizeTypeOK := sizeTypeValue.(string)
-	size, sizeOK := rawInt64(sizeValue)
-	fileSetType, fileSetTypeOK := fileSetTypeValue.(string)
-	fileSetLength, fileSetLengthOK := rawInt64(fileSetLengthValue)
-	seq, seqOK := rawInt64(seqValue)
-	revision, revisionOK := rawInt64(revisionValue)
-	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
-		int64(len(record)) != recordLength ||
-		!formTypeOK || formType != "text" || !formOK || !formLengthOK || formLength != int64(len(form)) ||
-		!seqOK || seq < 0 || !revisionOK || revision <= 0 || !fileSetTypeOK {
-		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	row := retainedPublicationRow{
-		recordCID: bytes.Clone(record),
-		sequence:  seq,
-		revision:  revision,
-	}
-	switch PayloadForm(form) {
-	case PayloadFormPacked:
-		if !blobTypeOK || blobType != "blob" || !blobOK || !blobLengthOK || blobLength <= 0 ||
-			blobLength > publication.MaxCIDBytes || int64(len(blob)) != blobLength ||
-			!sizeTypeOK || sizeType != "integer" || !sizeOK || size <= 0 ||
-			fileSetType != "null" {
-			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		row.form = PayloadFormPacked
-		row.blobCID = bytes.Clone(blob)
-		row.size = size
-	case PayloadFormFileSet:
-		if blobType != "null" || sizeType != "null" || fileSetType != "blob" ||
-			!fileSetLengthOK || fileSetLength <= 0 || fileSetLength > publication.MaxFileSetRecordBytes {
-			return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		row.form = PayloadFormFileSet
-		row.hasFileSet = true
-		row.fileSetLength = fileSetLength
-	default:
-		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	return row, nil
 }
 
 func (s *Store) readRetainedAcceptedEvent(
@@ -2237,29 +2075,6 @@ func (s *Store) readRetainedAcceptedEvent(
 		return Floor{}, nil, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return acceptedFloor, digest, nil
-}
-
-func (s *Store) readRetainedFileSet(
-	ctx context.Context,
-	q queryer,
-	attempt storedAttempt,
-	fileSetLength int64,
-	stage Stage,
-) (*FileSetPayload, error) {
-	var fileSetValue any
-	if err := q.QueryRowContext(ctx, "SELECT substr(file_set,1,?) FROM retained_publications WHERE attempt_id=?", publication.MaxFileSetRecordBytes+1, attempt.core.AttemptID).
-		Scan(&fileSetValue); err != nil {
-		return nil, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	raw, rawOK := rawBytes(fileSetValue)
-	if !rawOK || int64(len(raw)) != fileSetLength {
-		return nil, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	fileSet, err := decodeRetainedFileSet(raw)
-	if err != nil {
-		return nil, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	return fileSet, nil
 }
 
 func (s *Store) reconcileAttemptMutationRevision(ctx context.Context, q queryer, stage Stage) (uint64, error) {

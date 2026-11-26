@@ -262,22 +262,8 @@ func (s *Store) validateEvidenceHeadAndSuffix(
 	}
 	head, err := publication.DecodeHead(wire.Head)
 	if err != nil || head.PublicationSeq != lastRecord.PublicationSeq || !bytes.Equal(head.SnapshotCID, previousCID) ||
-		headPayloadMatchesRecord(head, lastRecord) != nil ||
 		publication.VerifyHeadBinding(wire.Head, previousRaw, wire.Suffix[len(wire.Suffix)-1].Key) != nil {
 		return errors.New("evidence head")
-	}
-	return nil
-}
-
-func headPayloadMatchesRecord(head publication.HeadRecord, record publication.SnapshotRecord) error {
-	if payloadFormOf(record) == PayloadFormFileSet {
-		if len(head.BlobCID) != 0 {
-			return errors.New("file-set evidence head")
-		}
-		return nil
-	}
-	if !bytes.Equal(head.BlobCID, record.Blob.CID) {
-		return errors.New("packed evidence head")
 	}
 	return nil
 }

@@ -208,9 +208,7 @@ type Floor struct {
 	Sequence            uint64
 	PublicationID       [16]byte
 	RecordCID           []byte
-	BlobCID             []byte
-	BlobSize            uint64
-	FileSet             *FileSetPayload
+	Segments            []SegmentSummary
 	ObservationDigest   [32]byte
 	AcceptedEventDigest [32]byte
 }

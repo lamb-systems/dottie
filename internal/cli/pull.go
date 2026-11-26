@@ -316,25 +316,8 @@ func comparePullPosition(floor publicationstate.Floor, view publicationstate.Sup
 	if err != nil {
 		return pullFinding{Kind: pullFindingUnreadable, Reason: pullReasonRecord}
 	}
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			len(floor.FileSet.Entries) != len(record.Entries) {
-			return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
-		}
-		for index, entry := range record.Entries {
-			reference := floor.FileSet.Entries[index]
-			if reference.Path != entry.Path || reference.Size != entry.Size ||
-				!bytes.Equal(reference.CID, entry.Blob.CID) {
-				return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
-			}
-		}
-		return pullFinding{Kind: pullFindingMatches}
-	}
-	if floor.FileSet != nil {
+	if !service.PublicationFloorMatchesRecord(floor, record) {
 		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadForm}
-	}
-	if record.Blob.Size != floor.BlobSize {
-		return pullFinding{Kind: pullFindingDiverges, Reason: pullDivergencePayloadSize}
 	}
 	return pullFinding{Kind: pullFindingMatches}
 }
@@ -1335,9 +1318,6 @@ func pullApplySnapshots(
 		return pullApplyMaterial{}, err
 	}
 	targets := payload.Snapshot.Targets
-	if payload.Form == publication.PayloadFormFileSet {
-		targets = terminal.Targets
-	}
 	if !present {
 		return pullApplyMaterial{
 			Base:      model.Snapshot{Version: model.SnapshotVersion},
@@ -1387,26 +1367,24 @@ func pullApplyResolvedPayload(
 	remote pullRemote,
 	record publication.SnapshotRecord,
 ) (publication.Payload, []byte, error) {
-	if record.PayloadForm() == publication.PayloadFormPacked {
-		if remote.Blob == nil {
-			return publication.Payload{}, nil, errPullApplySnapshotUnavailable
-		}
-		payload, err := remote.Blob(ctx, record)
-		if err != nil {
-			return publication.Payload{}, nil, err
-		}
-		snapshot, err := publication.DecodePayload(payload, record.Blob)
-		if err != nil {
-			return publication.Payload{}, nil, errPullApplySnapshotUnavailable
-		}
-		return publication.Payload{Form: publication.PayloadFormPacked, Snapshot: snapshot}, payload, nil
-	}
-	if remote.Entry == nil {
+	if remote.Blob == nil || remote.Entry == nil {
 		return publication.Payload{}, nil, errPullApplySnapshotUnavailable
 	}
 	limits := publication.PayloadLimits{
 		MaxEntries: publication.MaxSnapshotEntries, MaxEntryBytes: pullApplyMaxEntryBytes,
 		MaxTotalBytes: pullApplyMaxTotalBytes,
+	}
+	var raw []byte
+	for _, segment := range record.Segments {
+		if segment.Form != publication.SegmentFormPacked {
+			continue
+		}
+		blob, err := remote.Blob(ctx, record)
+		if err != nil {
+			return publication.Payload{}, nil, err
+		}
+		raw = blob
+		break
 	}
 	payload, err := publication.ResolvePayload(record, limits, func(blob publication.BlobReference) ([]byte, error) {
 		return remote.Entry(ctx, blob)
@@ -1414,26 +1392,11 @@ func pullApplyResolvedPayload(
 	if err != nil {
 		return publication.Payload{}, nil, err
 	}
-	return payload, nil, nil
+	return payload, raw, nil
 }
 
 func pullApplyFloorMatchesRecord(floor publicationstate.Floor, record publication.SnapshotRecord) bool {
-	if record.PayloadForm() == publication.PayloadFormFileSet {
-		if floor.FileSet == nil || len(floor.BlobCID) != 0 || floor.BlobSize != 0 ||
-			len(floor.FileSet.Entries) != len(record.Entries) {
-			return false
-		}
-		for index, entry := range record.Entries {
-			reference := floor.FileSet.Entries[index]
-			if reference.Path != entry.Path || reference.Size != entry.Size ||
-				!bytes.Equal(reference.CID, entry.Blob.CID) {
-				return false
-			}
-		}
-		return true
-	}
-	return floor.FileSet == nil && bytes.Equal(floor.BlobCID, record.Blob.CID) &&
-		floor.BlobSize == record.Blob.Size
+	return service.PublicationFloorMatchesRecord(floor, record)
 }
 
 func pullApplyObservation(view publicationstate.SuppliedRepositoryView) publicationstate.Observation {
@@ -1907,7 +1870,11 @@ func productionPullRemoteFactory(openKeyring accountKeyringFactory, env func(str
 			return fail(err)
 		}
 		blob := func(ctx context.Context, record publication.SnapshotRecord) ([]byte, error) {
-			return blobs.FetchBlob(ctx, identity.DID, record.Blob.CID, int64(record.Blob.Size))
+			reference, ok := record.SegmentBlob()
+			if !ok {
+				return nil, errPullApplySnapshotUnavailable
+			}
+			return blobs.FetchBlob(ctx, identity.DID, reference.CID, int64(reference.Size))
 		}
 		entry := func(ctx context.Context, reference publication.BlobReference) ([]byte, error) {
 			return blobs.FetchBlob(ctx, identity.DID, reference.CID, int64(reference.Size))

@@ -185,60 +185,96 @@ func validateMaterialInput(
 	limits AttemptLimits,
 ) (materialAttachment, error) {
 	record, err := publication.DecodeSnapshot(observation.candidate.raw)
-	if err != nil {
+	if err != nil || len(record.Segments) == 0 {
 		return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
 	}
-	switch payloadFormOf(record) {
-	case PayloadFormPacked:
-		if len(input.Entries) != 0 {
+	payloads := append([][]byte(nil), input.Payloads...)
+	if len(input.Payload) != 0 {
+		if len(payloads) != 0 {
 			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 		}
-		if _, err := publication.DecodePayload(input.Payload, record.Blob); err != nil {
-			return materialAttachment{}, err
-		}
-		return materialAttachment{
-			form:    PayloadFormPacked,
-			payload: input.Payload,
-			blob:    record.Blob,
-			name:    payloadBasename(input.Payload),
-		}, nil
-	case PayloadFormFileSet:
-		if len(input.Entries) == 0 {
-			return materialAttachment{}, fileSetPayloadUnsupported(StageInput)
-		}
-		if len(input.Payload) != 0 || len(input.Entries) != len(record.Entries) {
-			return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		for index, entry := range record.Entries {
-			supplied := input.Entries[index]
-			if supplied.Path != entry.Path || supplied.Mode != entry.Mode ||
-				supplied.Size != entry.Size || uint64(len(supplied.Content)) != entry.Size {
+		payloads = append(payloads, input.Payload)
+	}
+	attachment := materialAttachment{segments: make([]materialSegment, 0, len(record.Segments))}
+	entryIndex, payloadIndex := 0, 0
+	managed := make(map[string]bool)
+	var custody uint64
+	for _, segment := range record.Segments {
+		switch segment.Form {
+		case publication.SegmentFormEntries:
+			count := len(segment.Entries)
+			if count == 0 || entryIndex+count > len(input.Entries) {
 				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 			}
-		}
-		fileSet := fileSetPayloadOf(record)
-		if err := validateFileSetMaterialLimits(fileSet, limits); err != nil {
-			return materialAttachment{}, err
-		}
-		entries := make([]materialEntry, 0, len(record.Entries))
-		for index, entry := range record.Entries {
-			contentCID, err := publication.RawPayloadCID(input.Entries[index].Content)
-			if err != nil || !bytes.Equal(contentCID, entry.Blob.CID) {
-				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			entries := make([]materialEntry, 0, count)
+			for index, entry := range segment.Entries {
+				supplied := input.Entries[entryIndex+index]
+				if supplied.Path != entry.Path || supplied.Mode != entry.Mode ||
+					supplied.Size != entry.Size || uint64(len(supplied.Content)) != entry.Size {
+					return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+				}
+				contentCID, err := publication.RawPayloadCID(supplied.Content)
+				if err != nil || !bytes.Equal(contentCID, entry.Blob.CID) {
+					return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+				}
+				entries = append(entries, materialEntry{
+					content: bytes.Clone(supplied.Content),
+					blob: publication.BlobReference{
+						CID:      bytes.Clone(entry.Blob.CID),
+						Size:     entry.Size,
+						MIMEType: entry.Blob.MIMEType,
+					},
+				})
+				managed[string(entry.Blob.CID)] = true
+				custody += entry.Size
 			}
-			entries = append(entries, materialEntry{
-				content: bytes.Clone(input.Entries[index].Content),
-				blob: publication.BlobReference{
-					CID:      bytes.Clone(entry.Blob.CID),
-					Size:     entry.Size,
-					MIMEType: entry.Blob.MIMEType,
-				},
+			entryIndex += count
+			attachment.segments = append(attachment.segments, materialSegment{
+				summary: summaryOfSegment(segment),
+				entries: entries,
 			})
+		case publication.SegmentFormPacked:
+			if payloadIndex >= len(payloads) {
+				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			}
+			payload := payloads[payloadIndex]
+			payloadIndex++
+			if _, err := publication.DecodePayload(payload, segment.Blob); err != nil {
+				return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+			}
+			attachment.segments = append(attachment.segments, materialSegment{
+				summary: summaryOfSegment(segment),
+				blob:    segment.Blob,
+				payload: payload,
+			})
+		case publication.SegmentFormSettings:
+			attachment.segments = append(attachment.segments, materialSegment{summary: summaryOfSegment(segment)})
+		default:
+			return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
 		}
-		return materialAttachment{form: PayloadFormFileSet, fileSet: fileSet, entries: entries}, nil
-	default:
-		return materialAttachment{}, classified(ErrSchema, StageInput, ReasonCorrupt)
 	}
+	if entryIndex != len(input.Entries) || payloadIndex != len(payloads) {
+		return materialAttachment{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
+	}
+	if uint64(len(managed)) > uint64(limits.ManagedObjects) {
+		return materialAttachment{}, &fileSetCapacityError{
+			element: fileSetCapacityManagedObjects,
+			have:    uint64(len(managed)),
+			limit:   uint64(limits.ManagedObjects),
+		}
+	}
+	if custody > limits.CustodyBytes {
+		return materialAttachment{}, &fileSetCapacityError{
+			element: fileSetCapacityCustodyBytes,
+			have:    custody,
+			limit:   limits.CustodyBytes,
+		}
+	}
+	return attachment, nil
+}
+
+func summaryOfSegment(segment publication.SnapshotSegment) SegmentSummary {
+	return summariesOfRecord([]publication.SnapshotSegment{segment})[0]
 }
 
 func validateObservationWithFileSet(input Observation, binding Binding, limits Limits, allowFileSet bool) (validatedObservation, error) {

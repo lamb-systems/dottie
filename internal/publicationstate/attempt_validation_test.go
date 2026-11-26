@@ -46,7 +46,6 @@ func TestPublicationAttemptAdmissionRejectsMalformedJoinsWithoutCustodyMutation(
 					Vault:          f.binding.Vault,
 					PublicationSeq: 0,
 					SnapshotCID:    otherCID,
-					BlobCID:        record.Blob.CID,
 				},
 			)
 			require.NoError(t, err)

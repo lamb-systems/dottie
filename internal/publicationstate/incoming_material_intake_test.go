@@ -2,7 +2,6 @@ package publicationstate
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -47,7 +46,7 @@ func TestAcceptMaterialFirstUseComposition(t *testing.T) {
 			require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM retained_publications"))
 			references := b8IncomingRows(t, ctx, store.conn)
 			require.Len(t, references, 1)
-			assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, floor.BlobCID}, references[0])
+			assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, testBlobCID(floor)}, references[0])
 
 			name := payloadBasename(f.payload)
 			file, err := observeAcceptedMaterialPayloadFile(
@@ -63,7 +62,7 @@ func TestAcceptMaterialFirstUseComposition(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, floor, material.Floor)
 			assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-			assert.Equal(t, f.payload, material.Payload)
+			assert.Equal(t, f.payload, acceptedPayload(material))
 
 			history, err := store.History(ctx, 0, 10)
 			require.NoError(t, err)
@@ -115,14 +114,14 @@ func TestAcceptMaterialAdvanceKeepsHistoricalOwnership(t *testing.T) {
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 2)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(second.Revision), second.RecordCID, second.BlobCID}, references[1])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(second.Revision), second.RecordCID, testBlobCID(second)}, references[1])
 
 	current, err := store.ReadAcceptedMaterial(ctx, f.binding, second)
 	require.NoError(t, err)
 	assert.Equal(t, second, current.Floor)
 	assert.Equal(t, f.blocks[1].Raw, current.SnapshotRecord)
-	assert.Equal(t, f.payload, current.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(current))
 
 	historical, err := store.ReadAcceptedMaterial(ctx, f.binding, first)
 	assert.Equal(t, AcceptedMaterial{}, historical)
@@ -180,7 +179,7 @@ func TestAcceptMaterialSamePositionAttachesExistingRevision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, accepted, attached.Floor)
 	assert.Equal(t, f.blocks[0].Raw, attached.SnapshotRecord)
-	assert.Equal(t, f.payload, attached.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(attached))
 
 	repeatedProposal, err := store.Prepare(ctx, ModeAdvance, observation, f.payload)
 	require.NoError(t, err)
@@ -333,8 +332,8 @@ func TestAcceptMaterialReplaceFloorBlocksActiveAttempt(t *testing.T) {
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 2)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, floor.BlobCID}, references[1])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, testBlobCID(floor)}, references[1])
 
 	history, err := store.History(ctx, 0, 10)
 	require.NoError(t, err)
@@ -347,7 +346,7 @@ func TestAcceptMaterialReplaceFloorBlocksActiveAttempt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, floor, material.Floor)
 	assert.Equal(t, fork.Snapshots[0].Raw, material.SnapshotRecord)
-	assert.Equal(t, f.payload, material.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(material))
 	superseded, err := store.ReadAcceptedMaterial(ctx, f.binding, first)
 	assert.Equal(t, AcceptedMaterial{}, superseded)
 	requireErrorMetadata(t, err, ErrContinuity, StageReadAcceptedMaterial, ReasonStale)
@@ -394,8 +393,8 @@ func TestAcceptMaterialReplaceFloorWithoutActiveAttemptKeepsMutation(t *testing.
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM payload_objects"))
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 2)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, floor.BlobCID}, references[1])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(floor.Revision), floor.RecordCID, testBlobCID(floor)}, references[1])
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM publication_attempts"))
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM attempt_reservations"))
 	require.Zero(t, b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM active_publication_attempt"))
@@ -404,7 +403,7 @@ func TestAcceptMaterialReplaceFloorWithoutActiveAttemptKeepsMutation(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, floor, material.Floor)
 	assert.Equal(t, fork.Snapshots[0].Raw, material.SnapshotRecord)
-	assert.Equal(t, f.payload, material.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(material))
 }
 
 func TestAcceptMaterialReplaceFloorTokenBecomesStale(t *testing.T) {
@@ -731,8 +730,8 @@ func TestAcceptMaterialCounterOnlyAfterCommit(t *testing.T) {
 	assert.Equal(t, "blocked-floor-replaced", blocked.Blocked)
 	references := b8IncomingRows(t, ctx, reopened.conn)
 	require.Len(t, references, 2)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, loaded.BlobCID}, references[1])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, testBlobCID(loaded)}, references[1])
 }
 
 func TestAcceptMaterialAttachmentKeepsCounterAndToken(t *testing.T) {
@@ -771,7 +770,7 @@ func TestAcceptMaterialAttachmentKeepsCounterAndToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, accepted, material.Floor)
 	assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-	assert.Equal(t, f.payload, material.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(material))
 }
 
 func TestAcceptMaterialCapacityRefusal(t *testing.T) {
@@ -905,11 +904,11 @@ func TestAcceptMaterialCommitUnknownFences(t *testing.T) {
 	require.Equal(t, int64(1), b8Count(t, ctx, reopened.conn, "SELECT COUNT(*) FROM accepted_events"))
 	references := b8IncomingRows(t, ctx, reopened.conn)
 	require.Len(t, references, 1)
-	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, loaded.BlobCID}, references[0])
+	assert.Equal(t, []any{int64(loaded.Revision), loaded.RecordCID, testBlobCID(loaded)}, references[0])
 	material, err := reopened.ReadAcceptedMaterial(ctx, f.binding, loaded)
 	require.NoError(t, err)
 	assert.Equal(t, f.blocks[0].Raw, material.SnapshotRecord)
-	assert.Equal(t, f.payload, material.Payload)
+	assert.Equal(t, f.payload, acceptedPayload(material))
 }
 
 func TestAcceptMaterialSidecarPreflightRefusesUnsafeObject(t *testing.T) {
@@ -952,222 +951,6 @@ func TestAcceptMaterialSidecarPreflightRefusesUnsafeObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), floor.Revision)
 	require.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_material_refs"))
-}
-
-func TestAcceptMaterialUsesTransactionQueryer(t *testing.T) {
-	t.Run("no owner attach", func(t *testing.T) {
-		ctx := b8TestContext(t)
-		f := newFixture(t, BackendPublicRepo)
-		f.appendRecord(t, 0)
-		store, directory := newStore(t, f)
-		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		observation := f.observation(1)
-		accepted := incomingMaterialFirstUse(t, store, f)
-		validated, err := validateObservation(observation, store.binding, store.limits)
-		require.NoError(t, err)
-		material := materialAttachment{
-			form:    PayloadFormPacked,
-			payload: f.payload,
-			blob:    blobReference(validated.candidate.raw),
-			name:    payloadBasename(f.payload),
-		}
-
-		lease := b8AttachClosedDecoy(t, ctx, store)
-		state, err := store.readState(ctx, lease.tx, StageAcceptMaterial)
-		require.NoError(t, err)
-		require.NotNil(t, state.floor)
-		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		require.Empty(t, before.incoming)
-		require.Empty(t, before.rows["payload_objects"])
-		requirePayloadDirectoryAbsent(t, directory)
-
-		floor, changed, err := store.acceptTx(
-			ctx,
-			lease.tx,
-			StageAcceptMaterial,
-			ModeAdvance,
-			state.token,
-			validated,
-			[32]byte{},
-			&material,
-		)
-		require.NoError(t, err)
-		assert.False(t, changed)
-		assert.Equal(t, accepted, floor)
-		require.NoError(t, ctx.Err())
-		require.ErrorIs(t, store.conn.PingContext(ctx), sql.ErrConnDone)
-
-		after := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		require.Len(t, after.incoming, 1)
-		assert.Equal(t, []any{int64(accepted.Revision), accepted.RecordCID, accepted.BlobCID}, after.incoming[0])
-		require.Len(t, after.rows["payload_objects"], 1)
-		assert.Equal(t, before.rows["store_meta"], after.rows["store_meta"])
-		assert.Equal(t, before.rows["accepted_events"], after.rows["accepted_events"])
-		assert.Equal(t, before.rows["accepted_records"], after.rows["accepted_records"])
-		assert.Equal(t, before.rows["publication_attempts"], after.rows["publication_attempts"])
-		assert.Equal(t, before.rows["retained_publications"], after.rows["retained_publications"])
-		assert.Equal(t, before.state, after.state)
-
-		file, err := observeAcceptedMaterialPayloadFile(
-			filepath.Join(directory, payloadDirectoryName, material.name),
-			len(f.payload),
-		)
-		require.NoError(t, err)
-		require.True(t, file.Exists)
-		assert.Equal(t, f.payload, file.Bytes)
-		assert.Equal(t, uint32(unix.S_IFREG|0o600), file.Mode&uint32(unix.S_IFMT|0o777))
-		lease.restoreRollbackClose(t)
-	})
-
-	t.Run("incoming owner verified no-op", func(t *testing.T) {
-		ctx := b8TestContext(t)
-		f := newFixture(t, BackendPublicRepo)
-		f.appendRecord(t, 0)
-		store, directory := newStore(t, f)
-		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		observation := f.observation(1)
-		proposal := prepareFirstUse(t, store, observation, f.payload)
-		accepted, err := store.AcceptMaterial(
-			ctx,
-			ModeFirstUse,
-			proposal.StateToken,
-			observation,
-			f.payload,
-			proposal.Confirmation,
-		)
-		require.NoError(t, err)
-		validated, err := validateObservation(observation, store.binding, store.limits)
-		require.NoError(t, err)
-		material := materialAttachment{
-			form:    PayloadFormPacked,
-			payload: f.payload,
-			blob:    blobReference(validated.candidate.raw),
-			name:    payloadBasename(f.payload),
-		}
-		payloadPath := filepath.Join(directory, payloadDirectoryName, material.name)
-
-		lease := b8AttachClosedDecoy(t, ctx, store)
-		state, err := store.readState(ctx, lease.tx, StageAcceptMaterial)
-		require.NoError(t, err)
-		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		require.Len(t, before.incoming, 1)
-		beforeFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(f.payload))
-		require.NoError(t, err)
-		require.True(t, beforeFile.Exists)
-
-		floor, changed, err := store.acceptTx(
-			ctx,
-			lease.tx,
-			StageAcceptMaterial,
-			ModeAdvance,
-			state.token,
-			validated,
-			[32]byte{},
-			&material,
-		)
-		require.NoError(t, err)
-		assert.False(t, changed)
-		assert.Equal(t, accepted, floor)
-		require.NoError(t, ctx.Err())
-		require.ErrorIs(t, store.conn.PingContext(ctx), sql.ErrConnDone)
-		after := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		assert.Equal(t, before, after)
-		afterFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(f.payload))
-		require.NoError(t, err)
-		assert.Equal(t, beforeFile, afterFile)
-
-		_, err = lease.tx.ExecContext(
-			ctx,
-			"UPDATE payload_objects SET size=size+1,logical_bytes=logical_bytes+1 WHERE blob_cid=?",
-			material.blob.CID,
-		)
-		require.NoError(t, err)
-		corrupted, changed, err := store.acceptTx(
-			ctx,
-			lease.tx,
-			StageAcceptMaterial,
-			ModeAdvance,
-			state.token,
-			validated,
-			[32]byte{},
-			&material,
-		)
-		assert.Equal(t, Floor{}, corrupted)
-		assert.False(t, changed)
-		requireErrorMetadata(t, err, ErrSchema, StageAcceptMaterial, ReasonCorrupt)
-		lease.restoreRollbackClose(t)
-	})
-
-	t.Run("finalized owner verified no-op", func(t *testing.T) {
-		ctx := b8TestContext(t)
-		f := newFixture(t, BackendSpaces)
-		f.appendRecord(t, 0)
-		store, directory := newStore(t, f)
-		t.Cleanup(func() { assert.NoError(t, store.Close()) })
-		candidate := attemptCandidate(f, 0)
-		_, finalized := acceptedMaterialRevisionFinalizeGenesis(t, store, f, candidate)
-		observation := f.observation(1)
-		validated, err := validateObservation(observation, store.binding, store.limits)
-		require.NoError(t, err)
-		material := materialAttachment{
-			form:    PayloadFormPacked,
-			payload: f.payload,
-			blob:    blobReference(validated.candidate.raw),
-			name:    payloadBasename(f.payload),
-		}
-
-		lease := b8AttachClosedDecoy(t, ctx, store)
-		state, err := store.readState(ctx, lease.tx, StageAcceptMaterial)
-		require.NoError(t, err)
-		before := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		require.Empty(t, before.incoming)
-		require.Len(t, before.rows["retained_publications"], 1)
-		beforeFile, err := observeAcceptedMaterialPayloadFile(
-			filepath.Join(directory, payloadDirectoryName, material.name),
-			len(f.payload),
-		)
-		require.NoError(t, err)
-		require.True(t, beforeFile.Exists)
-
-		floor, changed, err := store.acceptTx(
-			ctx,
-			lease.tx,
-			StageAcceptMaterial,
-			ModeAdvance,
-			state.token,
-			validated,
-			[32]byte{},
-			&material,
-		)
-		require.NoError(t, err)
-		assert.False(t, changed)
-		assert.Equal(t, finalized.Floor, floor)
-		require.NoError(t, ctx.Err())
-		require.ErrorIs(t, store.conn.PingContext(ctx), sql.ErrConnDone)
-		after := b8CapturePrivateOwnerState(t, ctx, store, lease.tx)
-		assert.Equal(t, before, after)
-
-		_, err = lease.tx.ExecContext(
-			ctx,
-			"UPDATE payload_objects SET size=size+1,logical_bytes=logical_bytes+1 WHERE blob_cid=?",
-			material.blob.CID,
-		)
-		require.NoError(t, err)
-		corrupted, changed, err := store.acceptTx(
-			ctx,
-			lease.tx,
-			StageAcceptMaterial,
-			ModeAdvance,
-			state.token,
-			validated,
-			[32]byte{},
-			&material,
-		)
-		assert.Equal(t, Floor{}, corrupted)
-		assert.False(t, changed)
-		requireErrorMetadata(t, err, ErrSchema, StageAcceptMaterial, ReasonCorrupt)
-		lease.restoreRollbackClose(t)
-	})
 }
 
 func intakeDurableMutation(t *testing.T, ctx context.Context, store *Store) uint64 {

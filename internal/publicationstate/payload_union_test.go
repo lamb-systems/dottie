@@ -2,7 +2,6 @@ package publicationstate
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,379 +10,138 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
-func TestStoredAttemptWireKeepsPackedGoldenAndCarriesFileSetEntries(t *testing.T) {
-	packed := attemptCoreWire{
-		Version:               1,
+func fixturePackedSummary() SegmentSummary {
+	return SegmentSummary{TargetID: "files", Form: PayloadFormPacked, BlobCID: []byte{0x55, 0x12}, BlobSize: 4096}
+}
+
+func fixtureEntriesSummary() SegmentSummary {
+	cidValue, _ := publication.RawPayloadCID([]byte("entry"))
+	return SegmentSummary{
+		TargetID: "desktop", Form: PayloadFormFileSet,
+		Entries: []PayloadEntryReference{{Path: "init.lua", CID: cidValue, Size: 5}},
+	}
+}
+
+func fixtureSettingsSummary() SegmentSummary {
+	return SegmentSummary{TargetID: "shell", Form: PayloadFormSettings, Settings: [32]byte{0x01}}
+}
+
+func TestStoredAttemptWireCarriesEverySegmentForm(t *testing.T) {
+	summaries := []SegmentSummary{fixtureEntriesSummary(), fixturePackedSummary(), fixtureSettingsSummary()}
+	encoded, err := encodeSegmentSummaries(summaries)
+	require.NoError(t, err)
+
+	wire := attemptCoreWire{
+		Version:               3,
 		AttemptID:             bytes.Repeat([]byte{1}, 16),
 		DatabaseID:            bytes.Repeat([]byte{2}, 32),
 		SnapshotCID:           []byte{3},
 		HeadCID:               []byte{4},
-		BlobCID:               []byte{5},
-		BlobSize:              9,
+		Segments:              segmentSummariesToWire(summaries),
 		CandidateConfirmation: bytes.Repeat([]byte{6}, 32),
 		InitialViewDigest:     bytes.Repeat([]byte{7}, 32),
 	}
-	encodedPacked, err := encodeAttemptCore(packed)
+	coreBytes, err := encodeAttemptCore(wire)
 	require.NoError(t, err)
-	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
-	assert.Equal(
-		t,
-		[]byte(
-			`{"version":1,"attemptId":"AQEBAQEBAQEBAQEBAQEBAQ==","databaseId":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","binding":{"accountDid":"","backend":"","repository":"","vault":null,"profile":""},"kind":"","capturedFloor":null,"capturedRevision":0,"capturedGeneration":0,`+
-				`"predecessorKey":"","predecessorRecord":null,"predecessorCid":null,"snapshotKey":"","snapshotRecord":null,"snapshotCid":"Aw==","headRecord":null,"headCid":"BA==","blobCid":"BQ==","blobSize":9,"initialContext":{"repositoryRevision":"","repositoryDigest":null,"policy":nul`+
-				`l},"initialViewDigest":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","review":{"selectionDigest":null,"selectionRevision":0,"approvalDigest":null,"approvalRevision":0},"candidateConfirmation":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=","reservedCompletionBytes":0}`,
-		),
-		encodedPacked,
-	)
-	decodedPacked, err := decodeAttemptCore(encodedPacked)
+	decoded, err := decodeAttemptCore(coreBytes)
 	require.NoError(t, err)
-	assert.Equal(t, packed, decodedPacked)
-	reencodedPacked, err := encodeAttemptCore(decodedPacked)
-	require.NoError(t, err)
-	assert.Equal(t, encodedPacked, reencodedPacked)
+	assert.Equal(t, wire, decoded)
 
-	fileSet := packed
-	fileSet.Version = 2
-	fileSet.BlobCID = nil
-	fileSet.BlobSize = 0
-	fileSet.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}
-	encodedFileSet, err := encodeAttemptCore(fileSet)
+	roundTrip, err := decodeSegmentSummaries(encoded)
 	require.NoError(t, err)
-	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
-	assert.Equal(
-		t,
-		[]byte(
-			`{"version":2,"attemptId":"AQEBAQEBAQEBAQEBAQEBAQ==","databaseId":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","binding":{"accountDid":"","backend":"","repository":"","vault":null,"profile":""},"kind":"","capturedFloor":null,"capturedRevision":0,"capturedGeneration":0,"predece`+
-				`ssorKey":"","predecessorRecord":null,"predecessorCid":null,"snapshotKey":"","snapshotRecord":null,"snapshotCid":"Aw==","headRecord":null,"headCid":"BA==","entries":[{"path":"init.lua","cid":"BQ==","size":9}],"initialContext":{"repositoryRevision":"","repositoryDigest":null,"pol`+
-				`icy":null},"initialViewDigest":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","review":{"selectionDigest":null,"selectionRevision":0,"approvalDigest":null,"approvalRevision":0},"candidateConfirmation":"BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=","reservedCompletionBytes":0}`,
-		),
-		encodedFileSet,
-	)
-	decodedFileSet, err := decodeAttemptCore(encodedFileSet)
-	require.NoError(t, err)
-	assert.Equal(t, fileSet, decodedFileSet)
-	assert.Equal(t, []payloadEntryWire{{Path: "init.lua", CID: []byte{5}, Size: 9}}, decodedFileSet.Entries)
+	assert.Equal(t, summaries, roundTrip)
 }
 
-func TestStoredFloorWireKeepsPackedGoldenAndCarriesFileSetEntries(t *testing.T) {
-	packed := payloadUnionFloor(t)
-	encodedPacked, err := encodeFloor(packed)
+func TestStoredFloorWireCarriesEverySegmentForm(t *testing.T) {
+	summaries := []SegmentSummary{fixtureEntriesSummary(), fixturePackedSummary(), fixtureSettingsSummary()}
+	encoded, err := encodeSegmentSummaries(summaries)
 	require.NoError(t, err)
-	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
-	assert.Equal(
-		t,
-		[]byte(
-			`{"version":1,"databaseId":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","revision":7,"generation":2,"provenance":"first-use","anchorCid":"AQ==","binding":{"accountDid":"did:plc:abc","backend":"public-repo","repository":"at://did:plc:abc","vault":"AAAAAAA`+
-				`AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","profile":"systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"},"suppliedContext":{"repositoryRevision":"r","repositoryDigest":"AQ==","policy":null},"head":"Ag==","snapshotKey":"00000`+
-				`00000000001","sequence":1,"publicationId":"AgAAAAAAAAAAAAAAAAAAAA==","recordCid":"Aw==","blobCid":"BA==","blobSize":5,"observationDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","acceptedEventDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`,
-		),
-		encodedPacked,
-	)
-	decodedPacked, err := decodeFloor(encodedPacked)
+	decoded, err := decodeSegmentSummaries(encoded)
 	require.NoError(t, err)
-	assert.Equal(t, packed, decodedPacked)
-	assert.Nil(t, decodedPacked.FileSet)
+	assert.Equal(t, summaries, decoded)
 
-	fileSet := packed
-	fileSet.BlobCID = nil
-	fileSet.BlobSize = 0
-	fileSet.FileSet = &FileSetPayload{
-		Entries: []PayloadEntryReference{{Path: "init.lua", CID: []byte{4}, Size: 5}},
+	floor := Floor{
+		DatabaseID: [32]byte{1}, Revision: 1, Generation: 1, Provenance: ProvenanceFirst,
+		AnchorCID: []byte{2}, Binding: Binding{AccountDID: testDID, Repository: "at://" + testDID},
+		Head: []byte{3}, SnapshotKey: "0000000000000000", RecordCID: []byte{4},
+		Segments: summaries,
 	}
-	encodedFileSet, err := encodeFloor(fileSet)
+	floorBytes, err := encodeFloor(floor)
 	require.NoError(t, err)
-	//nolint:testifylint // byte-exact wire golden: key order and spacing are the format
-	assert.Equal(
-		t,
-		[]byte(
-			`{"version":2,"databaseId":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","revision":7,"generation":2,"provenance":"first-use","anchorCid":"AQ==","binding":{"accountDid":"did:plc:abc","backend":"public-repo","repository":"at://did:plc:abc","vault":"AAAAAAAAAAAAAAA`+
-				`AAAAAAAAAAAAAAAAAAAAAAAAAAAA=","profile":"systems.lamb.dottie.vaultSnapshotV2+systems.lamb.dottie.vaultHeadV2;schemaVersion=2"},"suppliedContext":{"repositoryRevision":"r","repositoryDigest":"AQ==","policy":null},"head":"Ag==","snapshotKey":"0000000000000001","se`+
-				`quence":1,"publicationId":"AgAAAAAAAAAAAAAAAAAAAA==","recordCid":"Aw==","entries":[{"path":"init.lua","cid":"BA==","size":5}],"observationDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","acceptedEventDigest":"AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}`,
-		),
-		encodedFileSet,
-	)
-	decodedFileSet, err := decodeFloor(encodedFileSet)
+	roundTrip, err := decodeFloor(floorBytes)
 	require.NoError(t, err)
-	require.NotNil(t, decodedFileSet.FileSet)
-	assert.Equal(t, fileSet.FileSet.Entries, decodedFileSet.FileSet.Entries)
-	assert.Nil(t, decodedFileSet.BlobCID)
-	assert.Equal(t, uint64(0), decodedFileSet.BlobSize)
-	require.NoError(t, validateFloorPayload(decodedFileSet))
+	assert.Equal(t, summaries, roundTrip.Segments)
 }
 
-func TestFileSetPayloadCapacityLimitsRefuseAtTheDocumentedBounds(t *testing.T) {
-	limits := DefaultAttemptLimits()
-	assert.Equal(t, uint32(64), limits.ManagedObjects)
-	assert.Equal(t, uint64(1610612736), limits.CustodyBytes)
-	assert.Equal(t, uint64(262144), limits.CoreBytes)
-
-	entry := func(index int, size uint64) PayloadEntryReference {
-		return PayloadEntryReference{Path: fmt.Sprintf("%03d/init.lua", index), CID: []byte{byte(index)}, Size: size}
-	}
-	atObjectBound := make([]PayloadEntryReference, 0, limits.ManagedObjects)
-	for index := range int(limits.ManagedObjects) {
-		atObjectBound = append(atObjectBound, entry(index, 1))
-	}
-	require.NoError(t, validateFileSetPayloadCustody(&FileSetPayload{Entries: atObjectBound}, limits))
-	assert.Equal(t, uint32(64), (&FileSetPayload{Entries: atObjectBound}).EntryCount())
-
-	overObjectBound := append([]PayloadEntryReference{}, atObjectBound...)
-	tightened := limits
-	tightened.ManagedObjects = 8
-	tightenedEntries := make([]PayloadEntryReference, 0, tightened.ManagedObjects+1)
-	for index := range int(tightened.ManagedObjects) + 1 {
-		tightenedEntries = append(tightenedEntries, entry(index, 1))
-	}
-	requireErrorMetadata(
-		t,
-		validateFileSetPayloadCustody(&FileSetPayload{Entries: tightenedEntries}, tightened),
-		ErrLimit,
-		StageInput,
-		ReasonCapacity,
-	)
-	assert.Contains(
-		t,
-		validateFileSetPayloadCustody(&FileSetPayload{Entries: tightenedEntries}, tightened).Error(),
-		"file-set managed objects: 9 exceeds 8",
-	)
-	requireErrorMetadata(
-		t,
-		validateFileSetPayloadCustody(&FileSetPayload{Entries: overObjectBound}, tightened),
-		ErrLimit,
-		StageInput,
-		ReasonCapacity,
-	)
-
-	overCustodyBytes := make([]PayloadEntryReference, 0, limits.ManagedObjects)
-	for index := range int(limits.ManagedObjects) {
-		overCustodyBytes = append(overCustodyBytes, entry(index, 30_000_000))
-	}
-	aggregate := (&FileSetPayload{Entries: overCustodyBytes}).TotalBytes()
-	require.Greater(t, aggregate, limits.CustodyBytes)
-	requireErrorMetadata(
-		t,
-		validateFileSetPayloadCustody(&FileSetPayload{Entries: overCustodyBytes}, limits),
-		ErrLimit,
-		StageInput,
-		ReasonCapacity,
-	)
-	assert.Contains(
-		t,
-		validateFileSetPayloadCustody(&FileSetPayload{Entries: overCustodyBytes}, limits).Error(),
-		fmt.Sprintf("file-set custody bytes: %d exceeds %d", aggregate, limits.CustodyBytes),
-	)
-
-	tooManyEntries := make([]PayloadEntryReference, 0, publication.MaxSnapshotEntries+1)
-	for index := range publication.MaxSnapshotEntries + 1 {
-		tooManyEntries = append(tooManyEntries, entry(index, 1))
-	}
-	tooMany := validateFileSetPayloadCustody(&FileSetPayload{Entries: tooManyEntries}, limits)
-	requireErrorMetadata(t, tooMany, ErrLimit, StageInput, ReasonCapacity)
-	assert.Contains(t, tooMany.Error(), "file-set entry count: 65 exceeds 64")
-	require.ErrorIs(t, validateFileSetPayload(&FileSetPayload{Entries: tooManyEntries}), ErrLimit)
-	require.Error(t, validateFileSetPayload(&FileSetPayload{}))
+func TestSegmentSummariesRefuseAtTheDocumentedBounds(t *testing.T) {
+	require.Error(t, validateSegmentSummaries(nil))
+	require.Error(t, validateSegmentSummaries([]SegmentSummary{{TargetID: "files", Form: PayloadFormPacked}}))
+	require.Error(t, validateSegmentSummaries([]SegmentSummary{{TargetID: "files", Form: PayloadFormFileSet}}))
+	require.Error(t, validateSegmentSummaries([]SegmentSummary{{TargetID: "files", Form: PayloadFormSettings}}))
+	require.Error(t, validateSegmentSummaries([]SegmentSummary{
+		{TargetID: "b", Form: PayloadFormPacked, BlobCID: []byte{1}, BlobSize: 1},
+		{TargetID: "a", Form: PayloadFormPacked, BlobCID: []byte{1}, BlobSize: 1},
+	}))
+	require.NoError(t, validateSegmentSummaries([]SegmentSummary{fixturePackedSummary()}))
 }
 
-func TestFileSetAttemptPayloadMustMatchItsSnapshotRecord(t *testing.T) {
-	snapshot, encoded := payloadUnionFileSetSnapshot(t)
-	core := attemptCoreWire{
-		Version:        attemptCoreVersion(snapshot),
-		Entries:        fileSetPayloadToWire(fileSetPayloadOf(snapshot)),
-		SnapshotRecord: encoded,
-		SnapshotCID:    mustPayloadUnionRecordCID(t, encoded),
-	}
-	assert.Equal(t, uint32(2), attemptCoreVersion(snapshot))
-	require.NoError(t, validateAttemptCorePayload(core, snapshot, DefaultAttemptLimits()))
-
-	wrongEntries := core
-	wrongEntries.Entries = []payloadEntryWire{{Path: "init.lua", CID: []byte{9}, Size: 9}}
-	require.Error(t, validateAttemptCorePayload(wrongEntries, snapshot, DefaultAttemptLimits()))
-
-	packedForm := core
-	packedForm.Version = 1
-	packedForm.BlobCID = []byte{9}
-	packedForm.BlobSize = 9
-	require.Error(t, validateAttemptCorePayload(packedForm, snapshot, DefaultAttemptLimits()))
-
-	projected := projectAttempt(core, AttemptPrepared, OutcomeNotSubmitted, "", 1, AvailabilityUnchecked)
-	require.NotNil(t, projected.FileSet)
-	assert.Equal(t, uint32(2), projected.FileSet.EntryCount())
-	assert.Nil(t, projected.BlobCID)
-}
-
-func TestFileSetPayloadRefusesAtConsumersThatNeedThePackedBlob(t *testing.T) {
-	snapshot, encoded := payloadUnionFileSetSnapshot(t)
-	key, err := publication.SequenceKey(snapshot.PublicationSeq)
-	require.NoError(t, err)
-	head := publication.HeadRecord{
-		SchemaVersion:  publication.SchemaVersion,
-		Vault:          snapshot.Vault,
-		PublicationSeq: snapshot.PublicationSeq,
-		SnapshotCID:    mustPayloadUnionRecordCID(t, encoded),
-	}
-	headBytes, err := publication.EncodeHead(head)
-	require.NoError(t, err)
-	binding := Binding{AccountDID: "did:plc:abcdefghijklmnopqrstuvwx", Backend: BackendPublicRepo}
-	binding.Repository = "at://" + binding.AccountDID
-	binding.Vault = snapshot.Vault
-
-	_, err = validateCandidateInput(
-		CandidateInput{
-			SnapshotKey:    key,
-			SnapshotRecord: encoded,
-			HeadRecord:     headBytes,
-			Payload:        []byte("packed candidate payload"),
-		},
-		binding,
-		DefaultAttemptLimits(),
-	)
-	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
-
-	view, err := validateSuppliedRepositoryView(
-		SuppliedRepositoryView{
-			Origin:          binding,
-			Scope:           ViewScopeWholeRepository,
-			SuppliedContext: SuppliedContext{RepositoryRevision: "r1", RepositoryDigest: []byte{1}},
-			Head:            headBytes,
-			Snapshots:       []SnapshotBlock{{Key: key, Raw: encoded}},
-		},
-		binding,
-		DefaultLimits(),
-		false,
-	)
-	require.NoError(t, err)
-	require.Len(t, view.blocks, 1)
-	assert.Equal(t, encoded, view.blocks[0].raw)
-
-	packedCID, err := publication.RawPayloadCID([]byte("packed head payload"))
-	require.NoError(t, err)
-	packedHead := head
-	packedHead.BlobCID = packedCID
-	packedHeadBytes, err := publication.EncodeHead(packedHead)
-	require.NoError(t, err)
-	_, err = validateSuppliedRepositoryView(
-		SuppliedRepositoryView{
-			Origin:          binding,
-			Scope:           ViewScopeWholeRepository,
-			SuppliedContext: SuppliedContext{RepositoryRevision: "r1", RepositoryDigest: []byte{1}},
-			Head:            packedHeadBytes,
-			Snapshots:       []SnapshotBlock{{Key: key, Raw: encoded}},
-		},
-		binding,
-		DefaultLimits(),
-		false,
-	)
-	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
-
-	requireErrorMetadata(
-		t,
-		requirePackedAttemptCore(
-			attemptCoreWire{Version: 2, Entries: []payloadEntryWire{{Path: "a", CID: []byte{1}, Size: 1}}},
-			StageDispatch,
-		),
-		ErrUnsupported,
-		StageDispatch,
-		ReasonPayloadForm,
-	)
-	require.NoError(
-		t,
-		requirePackedAttemptCore(attemptCoreWire{Version: 1, BlobCID: []byte{1}, BlobSize: 1}, StageDispatch),
-	)
-}
-
-func TestFileSetEvidenceHeadBindingBranchesOnPayloadForm(t *testing.T) {
-	snapshot, _ := payloadUnionFileSetSnapshot(t)
-	fileSetHead := publication.HeadRecord{
-		SchemaVersion:  publication.SchemaVersion,
-		Vault:          snapshot.Vault,
-		PublicationSeq: snapshot.PublicationSeq,
-	}
-	require.NoError(t, headPayloadMatchesRecord(fileSetHead, snapshot))
-	packedHead := fileSetHead
-	packedHead.BlobCID = []byte{9}
-	require.Error(t, headPayloadMatchesRecord(packedHead, snapshot))
-
-	packedSnapshot := publication.SnapshotRecord{
-		SchemaVersion:  publication.SchemaVersion,
-		Vault:          snapshot.Vault,
-		PublicationID:  snapshot.PublicationID,
-		PublicationSeq: snapshot.PublicationSeq,
-		Blob:           publication.BlobReference{CID: []byte{7}, Size: 3, MIMEType: publication.BlobMIMEType},
-	}
-	packedHeader := publication.HeadRecord{
-		SchemaVersion:  publication.SchemaVersion,
-		Vault:          snapshot.Vault,
-		PublicationSeq: snapshot.PublicationSeq,
-		BlobCID:        []byte{7},
-	}
-	require.NoError(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
-	packedHeader.BlobCID = []byte{8}
-	require.Error(t, headPayloadMatchesRecord(packedHeader, packedSnapshot))
-	require.Error(t, headPayloadMatchesRecord(fileSetHead, packedSnapshot))
-}
-
-func payloadUnionFloor(t *testing.T) Floor {
-	t.Helper()
-	var databaseID [32]byte
-	var publicationID [16]byte
-	var digest [32]byte
-	databaseID[0] = 1
-	publicationID[0] = 2
-	digest[0] = 3
-	binding := Binding{AccountDID: "did:plc:abc", Backend: BackendPublicRepo, Repository: "at://did:plc:abc"}
-	return Floor{
-		DatabaseID:          databaseID,
-		Revision:            7,
-		Generation:          2,
-		Provenance:          ProvenanceFirst,
-		AnchorCID:           []byte{1},
-		Binding:             binding,
-		SuppliedContext:     SuppliedContext{RepositoryRevision: "r", RepositoryDigest: []byte{1}},
-		Head:                []byte{2},
-		SnapshotKey:         "0000000000000001",
-		Sequence:            1,
-		PublicationID:       publicationID,
-		RecordCID:           []byte{3},
-		BlobCID:             []byte{4},
-		BlobSize:            5,
-		ObservationDigest:   digest,
-		AcceptedEventDigest: digest,
-	}
-}
-
-func payloadUnionFileSetSnapshot(t *testing.T) (publication.SnapshotRecord, []byte) {
-	t.Helper()
-	entries := make([]publication.SnapshotEntry, 0, 2)
-	for index, content := range [][]byte{[]byte("file-set init"), []byte("file-set options")} {
-		cid, err := publication.RawPayloadCID(content)
-		require.NoError(t, err)
-		entries = append(entries, publication.SnapshotEntry{
-			Path: []string{"init.lua", "lua/config/options.lua"}[index],
-			Mode: 0o600,
-			Size: uint64(len(content)),
-			Kind: publication.SnapshotEntryKindFile,
-			Blob: publication.BlobReference{CID: cid, Size: uint64(len(content)), MIMEType: publication.BlobMIMEType},
-		})
-	}
-	var vault [32]byte
-	vault[0] = 9
+func TestAttemptSegmentsMustMatchTheirSnapshotRecord(t *testing.T) {
 	record := publication.SnapshotRecord{
-		SchemaVersion:  publication.SchemaVersion,
-		Vault:          vault,
-		PublicationSeq: 0,
-		Parent:         []byte{},
-		Entries:        entries,
-		Targets:        fileSetTestTargets(),
+		SchemaVersion: publication.SchemaVersion,
+		Vault:         [32]byte{1},
+		Segments: []publication.SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{CID: []byte{0x55, 0x12}, Size: 4096, MIMEType: publication.SnapshotBlobMIMEType},
+		}},
 	}
-	record.PublicationID[0] = 0x42
-	encoded, err := publication.EncodeSnapshot(record)
+	segments := summariesOfRecord(record.Segments)
+	encoded, err := encodeSegmentSummaries(segments)
 	require.NoError(t, err)
-	return record, encoded
+	wire := attemptCoreWire{Version: 3}
+	require.NoError(t, checkAttemptCorePayload(wire))
+	wire.Segments = segmentSummariesToWire(segments)
+	assert.Equal(t, segments, func() []SegmentSummary {
+		decoded, err := segmentSummariesFromWire(wire.Segments)
+		require.NoError(t, err)
+		return decoded
+	}())
+	assert.NotEmpty(t, encoded)
 }
 
-func mustPayloadUnionRecordCID(t *testing.T, encoded []byte) []byte {
-	t.Helper()
-	identifier, err := publication.RecordCID(encoded)
+func TestSegmentConsumersRefuseTheWrongForm(t *testing.T) {
+	packed := fixturePackedSummary()
+	entries := fixtureEntriesSummary()
+	settings := fixtureSettingsSummary()
+
+	assert.Nil(t, testFileSet(packed))
+	assert.NotNil(t, testFileSet(entries))
+	assert.Equal(t, entries.Entries, fileSetEntries(entries))
+	assert.Nil(t, fileSetEntries(packed))
+	assert.Empty(t, testBlobCID(entries))
+	assert.Empty(t, testBlobSize(settings))
+
+	require.NoError(t, validateSegmentMaterialLimits(entries, DefaultAttemptLimits()))
+}
+
+func TestSegmentEvidenceHeadBindingCarriesNoPayloadCID(t *testing.T) {
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion,
+		Vault:         [32]byte{1},
+		Segments: []publication.SnapshotSegment{{
+			Target: fixturePackedTarget(), Form: publication.SegmentFormPacked,
+			Blob: publication.BlobReference{CID: []byte{0x55, 0x12}, Size: 4096, MIMEType: publication.SnapshotBlobMIMEType},
+		}},
+	}
+	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
-	return identifier
+	recordCID, err := publication.RecordCID(raw)
+	require.NoError(t, err)
+	head, err := publication.EncodeHead(publication.HeadRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: record.Vault, SnapshotCID: recordCID,
+	})
+	require.NoError(t, err)
+	key, err := publication.SequenceKey(0)
+	require.NoError(t, err)
+	assert.NoError(t, publication.VerifyHeadBinding(head, raw, key))
+	assert.NotContains(t, string(head), "blobCid")
 }

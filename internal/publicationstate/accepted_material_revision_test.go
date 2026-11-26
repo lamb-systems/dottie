@@ -29,7 +29,7 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	require.NoError(t, err)
 	require.Equal(t, initialFloor, initialMaterial.Floor)
 	assert.Equal(t, candidate.SnapshotRecord, initialMaterial.SnapshotRecord)
-	assert.Equal(t, candidate.Payload, initialMaterial.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(initialMaterial))
 
 	advanceObservation := f.observation(2)
 	advanceProposal, err := store.Prepare(ctx, ModeAdvance, advanceObservation, f.payload)
@@ -69,8 +69,8 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	assert.Equal(t, candidate.HeadRecord, replacementFloor.Head)
 	assert.Equal(t, initialFloor.Head, replacementFloor.Head)
 	assert.Equal(t, initialFloor.RecordCID, replacementFloor.RecordCID)
-	assert.Equal(t, initialFloor.BlobCID, replacementFloor.BlobCID)
-	assert.Equal(t, initialFloor.BlobSize, replacementFloor.BlobSize)
+	assert.Equal(t, testBlobCID(initialFloor), testBlobCID(replacementFloor))
+	assert.Equal(t, testBlobSize(initialFloor), testBlobSize(replacementFloor))
 	assert.Equal(t, candidate.SnapshotRecord, f.blocks[0].Raw)
 	assert.Equal(t, candidate.SnapshotRecord, replacementObservation.Snapshots[0].Raw)
 	assert.Equal(t, candidate.HeadRecord, replacementObservation.Head)
@@ -121,7 +121,7 @@ func TestPublicationReadAcceptedMaterialRepinSameBytesRequiresCurrentRevisionOwn
 	assert.Equal(t, before, after)
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 	assert.Equal(t, candidate.SnapshotRecord, after.Candidate.SnapshotRecord)
-	assert.Equal(t, candidate.Payload, after.Candidate.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(after.Candidate))
 }
 
 func TestPublicationReadAcceptedMaterialRecreatedStoreRequiresOwnDatabaseFloor(t *testing.T) {
@@ -145,10 +145,10 @@ func TestPublicationReadAcceptedMaterialRecreatedStoreRequiresOwnDatabaseFloor(t
 	assert.Equal(t, finalizedA.Floor.Sequence, finalizedB.Floor.Sequence)
 	assert.Equal(t, finalizedA.Floor.Head, finalizedB.Floor.Head)
 	assert.Equal(t, finalizedA.Floor.RecordCID, finalizedB.Floor.RecordCID)
-	assert.Equal(t, finalizedA.Floor.BlobCID, finalizedB.Floor.BlobCID)
-	assert.Equal(t, finalizedA.Floor.BlobSize, finalizedB.Floor.BlobSize)
+	assert.Equal(t, testBlobCID(finalizedA.Floor), testBlobCID(finalizedB.Floor))
+	assert.Equal(t, testBlobSize(finalizedA.Floor), testBlobSize(finalizedB.Floor))
 	assert.Equal(t, candidateA.SnapshotRecord, candidateB.SnapshotRecord)
-	assert.Equal(t, candidateA.Payload, candidateB.Payload)
+	assert.Equal(t, acceptedPayload(candidateA), acceptedPayload(candidateB))
 	assert.NotEqual(t, [32]byte{}, finalizedA.Floor.DatabaseID)
 	assert.NotEqual(t, [32]byte{}, finalizedB.Floor.DatabaseID)
 	assert.NotEqual(t, finalizedA.Floor.DatabaseID, finalizedB.Floor.DatabaseID)
@@ -172,12 +172,12 @@ func TestPublicationReadAcceptedMaterialRecreatedStoreRequiresOwnDatabaseFloor(t
 	require.NoError(t, err)
 	require.Equal(t, finalizedB.Floor, material.Floor)
 	assert.Equal(t, candidateB.SnapshotRecord, material.SnapshotRecord)
-	assert.Equal(t, candidateB.Payload, material.Payload)
+	assert.Equal(t, acceptedPayload(candidateB), acceptedPayload(material))
 	afterPositive := readAcceptedMaterialRevisionOwnedState(t, storeB, attemptB.ID)
 	assert.Equal(t, beforePositive, afterPositive)
 	assert.Equal(t, beforePositiveRows, readAttemptLogicalRows(t, storeB))
 	assert.Equal(t, candidateB.SnapshotRecord, afterPositive.Candidate.SnapshotRecord)
-	assert.Equal(t, candidateB.Payload, afterPositive.Candidate.Payload)
+	assert.Equal(t, acceptedPayload(candidateB), acceptedPayload(afterPositive.Candidate))
 
 	attemptAState, err := storeA.LoadAttempt(ctx, attemptA.ID)
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotRecord, beforeAbandon.SnapshotRecord)
 	assert.Equal(t, candidate.HeadRecord, beforeAbandon.HeadRecord)
-	assert.Equal(t, candidate.Payload, beforeAbandon.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(beforeAbandon))
 
 	abandonProposal, err := store.PrepareAbandon(ctx, attempt.ID, nil)
 	require.NoError(t, err)
@@ -231,13 +231,13 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Zero(t, attemptReferences)
 
 	catalogBeforeAccept := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
-	assert.Equal(t, candidate.Payload, catalogBeforeAccept.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(catalogBeforeAccept))
 	assert.Zero(t, catalogBeforeAccept.AttemptRefs)
 	assert.Zero(t, catalogBeforeAccept.RetainedByBlob)
 	candidateSnapshot, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
 	require.NoError(t, err)
-	assert.Equal(t, candidateSnapshot.Blob.CID, catalogBeforeAccept.CID)
-	assert.Equal(t, int64(candidateSnapshot.Blob.Size), catalogBeforeAccept.Size)
+	assert.Equal(t, testBlob(candidateSnapshot).CID, catalogBeforeAccept.CID)
+	assert.Equal(t, int64(testBlob(candidateSnapshot).Size), catalogBeforeAccept.Size)
 
 	abandonedCandidate, err := store.ReadCandidate(ctx, attempt.ID)
 	assert.Equal(t, CandidateMaterial{}, abandonedCandidate)
@@ -263,8 +263,8 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, candidateRecordCID, acceptedFloor.RecordCID)
 	assert.Equal(t, candidate.HeadRecord, acceptedFloor.Head)
-	assert.Equal(t, candidateSnapshot.Blob.CID, acceptedFloor.BlobCID)
-	assert.Equal(t, candidateSnapshot.Blob.Size, acceptedFloor.BlobSize)
+	assert.Equal(t, testBlob(candidateSnapshot).CID, testBlobCID(acceptedFloor))
+	assert.Equal(t, testBlob(candidateSnapshot).Size, testBlobSize(acceptedFloor))
 	assert.Equal(t, candidate.SnapshotRecord, observation.Snapshots[0].Raw)
 	assert.Equal(t, candidate.HeadRecord, observation.Head)
 
@@ -307,7 +307,7 @@ func TestPublicationReadAcceptedMaterialIgnoresAbandonedCandidateBytes(t *testin
 	assert.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 	catalogAfterRead := readAcceptedMaterialAbandonedObject(t, store, directory, candidate, attempt.ID)
 	assert.Equal(t, catalogBeforeRead, catalogAfterRead)
-	assert.Equal(t, candidate.Payload, catalogAfterRead.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(catalogAfterRead))
 }
 
 type acceptedMaterialRevisionOwnedState struct {
@@ -442,11 +442,11 @@ func readAcceptedMaterialAbandonedObject(
 	var basename string
 	require.NoError(
 		t,
-		store.conn.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", snapshot.Blob.CID).
+		store.conn.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", testBlob(snapshot).CID).
 			Scan(&catalogCID, &catalogSize, &basename),
 	)
-	assert.Equal(t, snapshot.Blob.CID, catalogCID)
-	assert.Equal(t, int64(snapshot.Blob.Size), catalogSize)
+	assert.Equal(t, testBlob(snapshot).CID, catalogCID)
+	assert.Equal(t, int64(testBlob(snapshot).Size), catalogSize)
 	wantedBasename, err := payloadBasenameFromCID(catalogCID)
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
@@ -458,7 +458,7 @@ func readAcceptedMaterialAbandonedObject(
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	payload, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, payload)
+	assert.Equal(t, acceptedPayload(candidate), payload)
 	var attemptRefs int64
 	require.NoError(
 		t,

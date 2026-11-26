@@ -59,9 +59,9 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	f.appendRecord(t, 0)
 	candidate := attemptCandidate(f, 0)
 	blob := blobForCandidate(t, candidate)
-	name := payloadBasename(candidate.Payload)
-	require.NoError(t, publication.VerifyPayload(candidate.Payload, blob))
-	_, err := publication.DecodePayload(candidate.Payload, blob)
+	name := payloadBasename(acceptedPayload(candidate))
+	require.NoError(t, publication.VerifyPayload(acceptedPayload(candidate), blob))
+	_, err := publication.DecodePayload(acceptedPayload(candidate), blob)
 	require.NoError(t, err)
 	canonicalName, err := payloadBasenameFromCID(blob.CID)
 	require.NoError(t, err)
@@ -79,25 +79,25 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.Empty(t, before["publication_attempts"])
 	require.Empty(t, before["attempt_payload_refs"])
 	require.Empty(t, before["retained_publications"])
-	freshName, freshBytes, persistErr := store.persistPayload(ctx, tx, candidate.Payload, blob, name)
+	freshName, freshBytes, persistErr := store.persistPayload(ctx, tx, acceptedPayload(candidate), blob, name)
 	require.NoError(t, persistErr)
 	assert.Equal(t, name, freshName)
-	assert.True(t, bytes.Equal(candidate.Payload, freshBytes))
+	assert.True(t, bytes.Equal(acceptedPayload(candidate), freshBytes))
 	assert.GreaterOrEqual(t, store.payloadFD, 0)
 	freshDevice, freshInode := assertSharedCustodyPayloadFile(
 		t,
 		filepath.Join(directory, payloadDirectoryName, name),
-		candidate.Payload,
+		acceptedPayload(candidate),
 	)
 
-	orphanName, orphanBytes, orphanErr := store.persistPayload(ctx, tx, candidate.Payload, blob, name)
+	orphanName, orphanBytes, orphanErr := store.persistPayload(ctx, tx, acceptedPayload(candidate), blob, name)
 	require.NoError(t, orphanErr)
 	assert.Equal(t, name, orphanName)
 	assert.Nil(t, orphanBytes)
 	orphanDevice, orphanInode := assertSharedCustodyPayloadFile(
 		t,
 		filepath.Join(directory, payloadDirectoryName, name),
-		candidate.Payload,
+		acceptedPayload(candidate),
 	)
 	assert.Equal(t, freshDevice, orphanDevice)
 	assert.Equal(t, freshInode, orphanInode)
@@ -117,7 +117,7 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	attempt, err := store.CreateAttempt(ctx, proposal.StateToken, candidate, view, review, proposal.Confirmation)
 	require.NoError(t, err)
 	require.Equal(t, proposal.AttemptID, attempt.ID)
-	assertSharedCustodyPayloadFile(t, filepath.Join(directory, payloadDirectoryName, name), candidate.Payload)
+	assertSharedCustodyPayloadFile(t, filepath.Join(directory, payloadDirectoryName, name), acceptedPayload(candidate))
 
 	catalogTx, restoreCatalog := beginSharedCustodyTransaction(t, ctx, store)
 	catalogBefore, err := sharedCustodyLogicalRows(ctx, catalogTx)
@@ -128,14 +128,14 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.GreaterOrEqual(t, store.payloadFD, 0)
 	capacityErr := store.checkPayloadCapacityWithQueryer(ctx, catalogTx, name, blob.Size, false)
 	require.NoError(t, capacityErr)
-	catalogName, catalogBytes, catalogErr := store.persistPayload(ctx, catalogTx, candidate.Payload, blob, name)
+	catalogName, catalogBytes, catalogErr := store.persistPayload(ctx, catalogTx, acceptedPayload(candidate), blob, name)
 	require.NoError(t, catalogErr)
 	assert.Equal(t, name, catalogName)
 	assert.Nil(t, catalogBytes)
 	catalogDevice, catalogInode := assertSharedCustodyPayloadFile(
 		t,
 		filepath.Join(directory, payloadDirectoryName, name),
-		candidate.Payload,
+		acceptedPayload(candidate),
 	)
 	assert.Equal(t, freshDevice, catalogDevice)
 	assert.Equal(t, freshInode, catalogInode)
@@ -151,7 +151,7 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(candidate.SnapshotRecord, loaded.SnapshotRecord))
 	assert.True(t, bytes.Equal(candidate.HeadRecord, loaded.HeadRecord))
-	assert.True(t, bytes.Equal(candidate.Payload, loaded.Payload))
+	assert.True(t, bytes.Equal(acceptedPayload(candidate), acceptedPayload(loaded)))
 	floor, present, err := store.Load(ctx)
 	require.NoError(t, err)
 	require.False(t, present)
@@ -166,7 +166,7 @@ func TestSharedPayloadPersistenceRejectsInvalidInputBeforeFilesystem(t *testing.
 			f := newFixture(t, BackendPublicRepo)
 			f.appendRecord(t, 0)
 			candidate := attemptCandidate(f, 0)
-			payload := bytes.Clone(candidate.Payload)
+			payload := bytes.Clone(acceptedPayload(candidate))
 			blob := blobForCandidate(t, candidate)
 			name := payloadBasename(payload)
 			require.NotEmpty(t, payload)

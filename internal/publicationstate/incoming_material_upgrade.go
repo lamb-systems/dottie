@@ -362,7 +362,7 @@ func migrateIncomingMaterialTx(
 			return storageFailure(ctx, StageOpen, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=3"); err != nil {
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version=4"); err != nil {
 		return storageFailure(ctx, StageOpen, err)
 	}
 	if fault != nil {
@@ -393,7 +393,7 @@ func rebuildRetainedPublicationsTx(ctx context.Context, tx *sql.Tx, sourceVersio
 	); err != nil {
 		return storageFailure(ctx, StageOpen, err)
 	}
-	if _, err := tx.ExecContext(ctx, schema3RetainedPublicationsStatement); err != nil {
+	if _, err := tx.ExecContext(ctx, schema4RetainedPublicationsStatement); err != nil {
 		return storageFailure(ctx, StageOpen, err)
 	}
 	if _, err := tx.ExecContext(

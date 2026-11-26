@@ -159,14 +159,20 @@ func (s *Store) BeginUpload(
 		return UploadMaterial{}, err
 	}
 	s.attemptMutationRevision = nextMutation
-	material := UploadMaterial{AttemptID: id}
-	if attemptCoreForm(stored.core) == PayloadFormFileSet {
-		record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
-		if err != nil || len(candidate.Entries) != len(record.Entries) {
-			return UploadMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
+	if err != nil || !sameSegmentSummaries(summariesOfRecord(record.Segments), candidate.Segments) {
+		return UploadMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+	}
+	material := UploadMaterial{AttemptID: id, Segments: candidate.Segments, Payloads: candidate.Payloads}
+	entryIndex := 0
+	for _, segment := range record.Segments {
+		if segment.Form != publication.SegmentFormEntries {
+			continue
 		}
-		material.Entries = make([]UploadEntry, 0, len(record.Entries))
-		for index, entry := range record.Entries {
+		for _, entry := range segment.Entries {
+			if entryIndex >= len(candidate.Entries) {
+				return UploadMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+			}
 			material.Entries = append(material.Entries, UploadEntry{
 				Path: entry.Path,
 				Blob: publication.BlobReference{
@@ -174,13 +180,11 @@ func (s *Store) BeginUpload(
 					Size:     entry.Size,
 					MIMEType: entry.Blob.MIMEType,
 				},
-				Payload: bytes.Clone(candidate.Entries[index].Content),
+				Payload: bytes.Clone(candidate.Entries[entryIndex].Content),
 			})
+			entryIndex++
 		}
-		return material, nil
 	}
-	material.Payload = bytes.Clone(candidate.Payload)
-	material.Blob = blobReference(stored.core.SnapshotRecord)
 	return material, nil
 }
 
@@ -279,14 +283,9 @@ func (s *Store) beginSubmission(
 	if err != nil {
 		return SubmissionMaterial{}, err
 	}
-	if fileSet {
-		fileSet, err := fileSetPayloadFromWire(stored.core.Entries)
-		if err != nil {
-			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
-		}
-		if !uploadedEntriesMatch(uploaded, fileSet) {
-			return SubmissionMaterial{}, classified(ErrConsent, StageDispatch, ReasonUploadIncomplete)
-		}
+	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
+	if err != nil || !uploadedEntriesMatch(uploaded, record.Segments) {
+		return SubmissionMaterial{}, classified(ErrConsent, StageDispatch, ReasonUploadIncomplete)
 	}
 	if err := s.preflightSidecars(); err != nil {
 		return SubmissionMaterial{}, storageFailure(ctx, StageDispatch, err)
@@ -362,14 +361,17 @@ func (s *Store) beginSubmission(
 		RequiresAtomicBatch:   true,
 		RequiresCreateExclude: true,
 		RequiresPolicyCheck:   s.binding.Backend == BackendSpaces,
-		PayloadForm:           attemptCoreForm(stored.core),
+		PayloadForm:           PayloadForm(record.PayloadForm()),
 	}
-	if fileSet {
-		fileSet, err := fileSetPayloadFromWire(stored.core.Entries)
-		if err != nil {
-			return SubmissionMaterial{}, classified(ErrSchema, StageDispatch, ReasonCorrupt)
+	for _, segment := range record.Segments {
+		if segment.Form != publication.SegmentFormEntries {
+			continue
 		}
-		material.Entries = fileSet.Entries
+		for _, entry := range segment.Entries {
+			material.Entries = append(material.Entries, PayloadEntryReference{
+				Path: entry.Path, CID: bytes.Clone(entry.Blob.CID), Size: entry.Size,
+			})
+		}
 	}
 	if len(stored.core.PredecessorCID) > 0 {
 		material.ExpectedPredecessor = &RecordReference{
@@ -381,18 +383,25 @@ func (s *Store) beginSubmission(
 	return material, nil
 }
 
-func uploadedEntriesMatch(uploaded []PayloadEntryReference, fileSet *FileSetPayload) bool {
-	if fileSet == nil || len(uploaded) != len(fileSet.Entries) {
-		return false
-	}
-	for index, entry := range fileSet.Entries {
-		supplied := uploaded[index]
-		if supplied.Path != entry.Path || supplied.Size != entry.Size ||
-			!bytes.Equal(supplied.CID, entry.CID) {
-			return false
+func uploadedEntriesMatch(uploaded []PayloadEntryReference, segments []publication.SnapshotSegment) bool {
+	total := 0
+	for _, segment := range segments {
+		if segment.Form != publication.SegmentFormEntries {
+			continue
 		}
+		for index, entry := range segment.Entries {
+			if total+index >= len(uploaded) {
+				return false
+			}
+			supplied := uploaded[total+index]
+			if supplied.Path != entry.Path || supplied.Size != entry.Size ||
+				!bytes.Equal(supplied.CID, entry.Blob.CID) {
+				return false
+			}
+		}
+		total += len(segment.Entries)
 	}
-	return true
+	return total == len(uploaded)
 }
 
 func (s *Store) validateDispatchReview(
@@ -492,82 +501,71 @@ func samePolicy(left, right *Policy) bool {
 		bytes.Equal(left.Identity, right.Identity)
 }
 
-func (s *Store) readFileSetCandidate(
-	ctx context.Context,
-	stored storedAttempt,
-	stage Stage,
-) (CandidateMaterial, error) {
-	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
-	if err != nil || payloadFormOf(record) != PayloadFormFileSet {
-		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	if err := s.openPayloadDirectoryForRead(); err != nil {
-		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)
-	}
-	var id [16]byte
-	copy(id[:], stored.core.AttemptID)
-	material := CandidateMaterial{
-		AttemptID:      id,
-		SnapshotKey:    stored.core.SnapshotKey,
-		SnapshotRecord: bytes.Clone(stored.core.SnapshotRecord),
-		HeadRecord:     bytes.Clone(stored.core.HeadRecord),
-		Entries:        make([]publication.PayloadEntry, 0, len(record.Entries)),
-	}
-	for _, entry := range record.Entries {
-		var basename string
-		var sizeValue any
-		if err := s.conn.QueryRowContext(ctx, "SELECT basename,size FROM payload_objects WHERE blob_cid=?", entry.Blob.CID).
-			Scan(&basename, &sizeValue); err != nil {
-			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		size, ok := rawInt64(sizeValue)
-		if !ok || size <= 0 || uint64(size) != entry.Size {
-			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		blob := publication.BlobReference{
-			CID:      bytes.Clone(entry.Blob.CID),
-			Size:     entry.Size,
-			MIMEType: entry.Blob.MIMEType,
-		}
-		content, err := s.inspectCustodyObject(basename, nil, blob, PayloadFormFileSet)
-		if err != nil {
-			return CandidateMaterial{}, classifyCandidateRead(err, stage)
-		}
-		material.Entries = append(material.Entries, publication.PayloadEntry{
-			Path:    entry.Path,
-			Mode:    entry.Mode,
-			Size:    entry.Size,
-			Content: content,
-		})
-	}
-	return material, nil
-}
-
 func (s *Store) readCandidateUnlocked(
 	ctx context.Context,
 	stored storedAttempt,
 	stage Stage,
 ) (CandidateMaterial, error) {
-	if attemptCoreForm(stored.core) == PayloadFormFileSet {
-		return s.readFileSetCandidate(ctx, stored, stage)
+	segments, err := segmentSummariesFromWire(stored.core.Segments)
+	if err != nil {
+		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+	}
+	record, err := publication.DecodeSnapshot(stored.core.SnapshotRecord)
+	if err != nil || !sameSegmentSummaries(summariesOfRecord(record.Segments), segments) {
+		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if err := s.openPayloadDirectoryForRead(); err != nil {
 		return CandidateMaterial{}, classifyCandidateDirectory(err, stage)
 	}
-	var basename string
-	var sizeValue any
-	if err := s.conn.QueryRowContext(ctx, "SELECT payload_objects.basename,payload_objects.size FROM attempt_payload_refs JOIN payload_objects USING(blob_cid) WHERE attempt_payload_refs.attempt_id=?", stored.core.AttemptID).
-		Scan(&basename, &sizeValue); err != nil {
-		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+	recordSegments := make(map[string]publication.SnapshotSegment, len(record.Segments))
+	for _, segment := range record.Segments {
+		recordSegments[segment.Target.ID] = segment
 	}
-	size, ok := rawInt64(sizeValue)
-	if !ok || size <= 0 || uint64(size) != stored.core.BlobSize {
-		return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
-	}
-	blob := blobReference(stored.core.SnapshotRecord)
-	payload, err := s.inspectPayloadFile(basename, nil, blob)
-	if err != nil {
-		return CandidateMaterial{}, classifyCandidateRead(err, stage)
+	payloads := make([][]byte, len(segments))
+	entries := make([]publication.PayloadEntry, 0)
+	for index, summary := range segments {
+		switch summary.Form {
+		case PayloadFormPacked:
+			name, nameErr := payloadBasenameFromCID(summary.BlobCID)
+			if nameErr != nil || !validPayloadBasename(name) {
+				return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			blob := publication.BlobReference{
+				CID: bytes.Clone(summary.BlobCID), Size: summary.BlobSize,
+				MIMEType: publication.SnapshotBlobMIMEType,
+			}
+			payload, readErr := s.inspectPayloadFile(name, nil, blob)
+			if readErr != nil {
+				return CandidateMaterial{}, classifyCandidateRead(readErr, stage)
+			}
+			payloads[index] = payload
+		case PayloadFormFileSet:
+			segment := recordSegments[summary.TargetID]
+			if len(segment.Entries) != len(summary.Entries) {
+				return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+			}
+			for entryIndex, reference := range summary.Entries {
+				name, nameErr := payloadBasenameFromCID(reference.CID)
+				if nameErr != nil || !validPayloadBasename(name) {
+					return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+				}
+				blob := publication.BlobReference{
+					CID: bytes.Clone(reference.CID), Size: reference.Size,
+					MIMEType: publication.SnapshotBlobMIMEType,
+				}
+				content, readErr := s.inspectCustodyObject(name, nil, blob, PayloadFormFileSet)
+				if readErr != nil {
+					return CandidateMaterial{}, classifyCandidateRead(readErr, stage)
+				}
+				entries = append(entries, publication.PayloadEntry{
+					Path: reference.Path, Mode: segment.Entries[entryIndex].Mode,
+					Size: reference.Size, Content: content,
+				})
+			}
+		case PayloadFormSettings:
+		default:
+			return CandidateMaterial{}, classified(ErrSchema, stage, ReasonCorrupt)
+		}
 	}
 	var id [16]byte
 	copy(id[:], stored.core.AttemptID)
@@ -576,7 +574,8 @@ func (s *Store) readCandidateUnlocked(
 		SnapshotKey:    stored.core.SnapshotKey,
 		SnapshotRecord: bytes.Clone(stored.core.SnapshotRecord),
 		HeadRecord:     bytes.Clone(stored.core.HeadRecord),
-		Payload:        payload,
-		Blob:           blob,
+		Segments:       segments,
+		Payloads:       payloads,
+		Entries:        entries,
 	}, nil
 }

@@ -67,11 +67,11 @@ func TestPublicationReadAcceptedMaterialDoesNotBorrowActiveCandidatePayload(t *t
 	candidateBlob := blobForCandidate(t, candidate)
 	require.Equal(t, positionFloor.RecordCID, candidateRecord.Parent)
 	require.NotEqual(t, positionFloor.RecordCID, candidateCID)
-	require.Equal(t, positionFloor.BlobCID, candidateBlob.CID)
-	require.Equal(t, positionFloor.BlobSize, candidateBlob.Size)
-	require.Equal(t, f.payload, candidate.Payload)
-	require.NoError(t, publication.VerifyPayload(candidate.Payload, candidateBlob))
-	_, err = publication.DecodePayload(candidate.Payload, candidateBlob)
+	require.Equal(t, testBlobCID(positionFloor), candidateBlob.CID)
+	require.Equal(t, testBlobSize(positionFloor), candidateBlob.Size)
+	require.Equal(t, f.payload, acceptedPayload(candidate))
+	require.NoError(t, publication.VerifyPayload(acceptedPayload(candidate), candidateBlob))
+	_, err = publication.DecodePayload(acceptedPayload(candidate), candidateBlob)
 	require.NoError(t, err)
 
 	before := observeAcceptedMaterialActiveCandidate(
@@ -210,9 +210,9 @@ func observeAcceptedMaterialActiveCandidate(
 	require.Equal(t, expectedCandidate.SnapshotKey, candidate.SnapshotKey)
 	require.Equal(t, expectedCandidate.SnapshotRecord, candidate.SnapshotRecord)
 	require.Equal(t, expectedCandidate.HeadRecord, candidate.HeadRecord)
-	require.Equal(t, expectedCandidate.Payload, candidate.Payload)
+	require.Equal(t, acceptedPayload(expectedCandidate), acceptedPayload(candidate))
 	candidateBlob := blobForCandidate(t, expectedCandidate)
-	require.Equal(t, candidateBlob, candidate.Blob)
+	require.Equal(t, candidateBlob, materialBlob(candidate))
 	var attemptReference []byte
 	require.NoError(
 		t,
@@ -220,8 +220,8 @@ func observeAcceptedMaterialActiveCandidate(
 			Scan(&attemptReference),
 	)
 	require.Equal(t, candidateBlob.CID, attemptReference)
-	require.Equal(t, floor.BlobCID, candidate.Blob.CID)
-	require.Equal(t, floor.BlobSize, candidate.Blob.Size)
+	require.Equal(t, testBlobCID(floor), materialBlob(candidate).CID)
+	require.Equal(t, testBlobSize(floor), materialBlob(candidate).Size)
 
 	counts := readAcceptedMaterialUnownedCounts(t, store)
 	require.Equal(
@@ -230,21 +230,21 @@ func observeAcceptedMaterialActiveCandidate(
 		counts,
 	)
 
-	basename, err := payloadBasenameFromCID(floor.BlobCID)
+	basename, err := payloadBasenameFromCID(testBlobCID(floor))
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
-	require.Equal(t, payloadBasename(expectedCandidate.Payload), basename)
+	require.Equal(t, payloadBasename(acceptedPayload(expectedCandidate)), basename)
 	require.GreaterOrEqual(t, store.payloadFD, 0)
 	var directoryStat unix.Stat_t
 	require.NoError(t, unix.Fstat(store.payloadFD, &directoryStat))
 	require.Equal(t, uint32(unix.S_IFDIR|0o700), directoryStat.Mode&uint32(unix.S_IFMT|0o777))
 	file, err := observeAcceptedMaterialPayloadFile(
 		filepath.Join(directory, payloadDirectoryName, basename),
-		len(expectedCandidate.Payload),
+		len(acceptedPayload(expectedCandidate)),
 	)
 	require.NoError(t, err)
 	require.True(t, file.Exists)
-	require.Equal(t, expectedCandidate.Payload, file.Bytes)
+	require.Equal(t, acceptedPayload(expectedCandidate), file.Bytes)
 	require.Equal(t, uint32(unix.S_IFREG|0o600), file.Mode&uint32(unix.S_IFMT|0o777))
 	require.Equal(t, uint32(os.Geteuid()), file.UID)
 	require.Equal(t, uint64(1), file.Nlink)
@@ -266,15 +266,15 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 
 	candidate := attemptCandidate(f, 0)
 	candidateBlob := blobForCandidate(t, candidate)
-	require.NotEmpty(t, candidate.Payload)
-	require.LessOrEqual(t, uint64(len(candidate.Payload)), publication.MaxBlobBytes)
-	require.NoError(t, publication.VerifyPayload(candidate.Payload, candidateBlob))
-	_, err := publication.DecodePayload(candidate.Payload, candidateBlob)
+	require.NotEmpty(t, acceptedPayload(candidate))
+	require.LessOrEqual(t, uint64(len(acceptedPayload(candidate))), publication.MaxBlobBytes)
+	require.NoError(t, publication.VerifyPayload(acceptedPayload(candidate), candidateBlob))
+	_, err := publication.DecodePayload(acceptedPayload(candidate), candidateBlob)
 	require.NoError(t, err)
 	basename, err := payloadBasenameFromCID(candidateBlob.CID)
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
-	require.Equal(t, payloadBasename(candidate.Payload), basename)
+	require.Equal(t, payloadBasename(acceptedPayload(candidate)), basename)
 	require.NoError(t, assertPayloadDirectoryAbsent(directory))
 
 	view := attemptView(f, f.observation(1), true)
@@ -348,8 +348,8 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	require.Equal(t, uint32(unix.S_IFREG), secondSync.NamedMode&unix.S_IFMT)
 	require.Equal(t, uint64(1), secondSync.Nlink)
 	require.Equal(t, uint64(1), secondSync.NamedNlink)
-	require.Equal(t, int64(len(candidate.Payload)), secondSync.Size)
-	require.Equal(t, int64(len(candidate.Payload)), secondSync.NamedSize)
+	require.Equal(t, int64(len(acceptedPayload(candidate))), secondSync.Size)
+	require.Equal(t, int64(len(acceptedPayload(candidate))), secondSync.NamedSize)
 
 	require.Equal(t, beforeRows, readAttemptLogicalRows(t, store))
 	require.Equal(t, acceptedMaterialUnownedCounts{}, readAcceptedMaterialUnownedCounts(t, store))
@@ -360,10 +360,10 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	require.Equal(t, uint32(unix.S_IFDIR|0o700), directoryStat.Mode&uint32(unix.S_IFMT|0o777))
 	require.Equal(t, []string{basename}, readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, 1))
 	orphanPath := filepath.Join(payloadDirectory, basename)
-	orphan, err := observeAcceptedMaterialPayloadFile(orphanPath, len(candidate.Payload))
+	orphan, err := observeAcceptedMaterialPayloadFile(orphanPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.True(t, orphan.Exists)
-	require.Equal(t, candidate.Payload, orphan.Bytes)
+	require.Equal(t, acceptedPayload(candidate), orphan.Bytes)
 	require.Equal(t, uint32(unix.S_IFREG|0o600), orphan.Mode&uint32(unix.S_IFMT|0o777))
 	require.Equal(t, uint32(os.Geteuid()), orphan.UID)
 	require.Equal(t, uint64(1), orphan.Nlink)
@@ -389,8 +389,8 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	acceptedRecordCID, err := publication.RecordCID(candidate.SnapshotRecord)
 	require.NoError(t, err)
 	require.Equal(t, acceptedRecordCID, acceptedFloor.RecordCID)
-	require.Equal(t, candidateBlob.CID, acceptedFloor.BlobCID)
-	require.Equal(t, candidateBlob.Size, acceptedFloor.BlobSize)
+	require.Equal(t, candidateBlob.CID, testBlobCID(acceptedFloor))
+	require.Equal(t, candidateBlob.Size, testBlobSize(acceptedFloor))
 	require.Equal(t, candidate.SnapshotKey, acceptedFloor.SnapshotKey)
 	require.Equal(t, acceptedRecord.PublicationID, acceptedFloor.PublicationID)
 	require.Len(t, observation.Snapshots, 1)
@@ -406,7 +406,7 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	require.Equal(t, acceptedFloor, history.Events[0].NewFloor)
 	require.Equal(t, acceptedMaterialUnownedCounts{}, readAcceptedMaterialUnownedCounts(t, store))
 	beforeReadRows := readAttemptLogicalRows(t, store)
-	beforeReadFile, err := observeAcceptedMaterialPayloadFile(orphanPath, len(candidate.Payload))
+	beforeReadFile, err := observeAcceptedMaterialPayloadFile(orphanPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.Equal(t, orphan, beforeReadFile)
 
@@ -423,7 +423,7 @@ func TestPublicationReadAcceptedMaterialRejectsPositionOnlyFloorBackedByValidOrp
 	afterHistory, err := store.History(ctx, 0, 10)
 	require.NoError(t, err)
 	require.Equal(t, history, afterHistory)
-	afterReadFile, err := observeAcceptedMaterialPayloadFile(orphanPath, len(candidate.Payload))
+	afterReadFile, err := observeAcceptedMaterialPayloadFile(orphanPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.Equal(t, orphan, afterReadFile)
 }
@@ -455,7 +455,7 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	require.NoError(t, err)
 	require.Equal(t, expectedFloor, positive.Floor)
 	require.Equal(t, candidate.SnapshotRecord, positive.SnapshotRecord)
-	require.Equal(t, candidate.Payload, positive.Payload)
+	require.Equal(t, acceptedPayload(candidate), acceptedPayload(positive))
 	require.NoError(t, store.Close())
 
 	reopened, err := Open(directory, f.binding)
@@ -465,15 +465,15 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	healthyPublic := observeAcceptedMaterialAuditPublicState(t, reopened, attempt.ID)
 	require.Equal(t, expectedFloor, healthyPublic.Floor)
 	healthyRows := readAttemptLogicalRows(t, reopened)
-	basename, err := payloadBasenameFromCID(expectedFloor.BlobCID)
+	basename, err := payloadBasenameFromCID(testBlobCID(expectedFloor))
 	require.NoError(t, err)
 	require.True(t, validPayloadBasename(basename))
-	require.Equal(t, payloadBasename(candidate.Payload), basename)
+	require.Equal(t, payloadBasename(acceptedPayload(candidate)), basename)
 	payloadPath := filepath.Join(directory, payloadDirectoryName, basename)
-	healthyFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(candidate.Payload))
+	healthyFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.True(t, healthyFile.Exists)
-	require.Equal(t, candidate.Payload, healthyFile.Bytes)
+	require.Equal(t, acceptedPayload(candidate), healthyFile.Bytes)
 	require.Equal(t, uint32(unix.S_IFREG|0o600), healthyFile.Mode&uint32(unix.S_IFMT|0o777))
 	require.Equal(t, uint32(os.Geteuid()), healthyFile.UID)
 	require.Equal(t, uint64(1), healthyFile.Nlink)
@@ -505,7 +505,7 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	faultedRows := readAttemptLogicalRows(t, reopened)
 	require.NotEqual(t, healthyRows, faultedRows)
 	require.Equal(t, -1, reopened.payloadFD)
-	faultedFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(candidate.Payload))
+	faultedFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.Equal(t, healthyFile, faultedFile)
 
@@ -517,7 +517,7 @@ func TestPublicationReadAcceptedMaterialRejectsCorruptAuditBeforeOwnerAndPayload
 	require.Equal(t, -1, reopened.payloadFD)
 	require.Equal(t, faultedRows, readAttemptLogicalRows(t, reopened))
 	require.Equal(t, faultedEvent, readAcceptedMaterialAuditEvent(t, reopened, int64(expectedFloor.Revision)))
-	afterFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(candidate.Payload))
+	afterFile, err := observeAcceptedMaterialPayloadFile(payloadPath, len(acceptedPayload(candidate)))
 	require.NoError(t, err)
 	require.Equal(t, faultedFile, afterFile)
 }

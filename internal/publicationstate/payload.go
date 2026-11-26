@@ -11,8 +11,9 @@ import (
 type PayloadForm string
 
 const (
-	PayloadFormPacked  PayloadForm = PayloadForm(publication.PayloadFormPacked)
-	PayloadFormFileSet PayloadForm = PayloadForm(publication.PayloadFormFileSet)
+	PayloadFormPacked   PayloadForm = PayloadForm(publication.PayloadFormPacked)
+	PayloadFormFileSet  PayloadForm = PayloadForm(publication.PayloadFormFileSet)
+	PayloadFormSettings PayloadForm = PayloadForm(publication.PayloadFormSettings)
 )
 
 type PayloadEntryReference struct {
@@ -26,8 +27,14 @@ type FileSetPayload struct {
 }
 
 type MaterialInput struct {
-	Payload []byte
-	Entries []publication.PayloadEntry
+	Payload  []byte
+	Payloads [][]byte
+	Entries  []publication.PayloadEntry
+}
+
+type CandidateSegments struct {
+	Segments []CandidateSegment
+	Payloads [][]byte
 }
 
 func (p FileSetPayload) EntryCount() uint32 { return uint32(len(p.Entries)) }
@@ -60,11 +67,12 @@ func payloadFormOf(record publication.SnapshotRecord) PayloadForm {
 }
 
 func fileSetPayloadOf(record publication.SnapshotRecord) *FileSetPayload {
-	if len(record.Entries) == 0 {
+	recordEntries, _ := record.SegmentEntries()
+	if len(recordEntries) == 0 {
 		return nil
 	}
-	entries := make([]PayloadEntryReference, 0, len(record.Entries))
-	for _, entry := range record.Entries {
+	entries := make([]PayloadEntryReference, 0, len(recordEntries))
+	for _, entry := range recordEntries {
 		entries = append(entries, PayloadEntryReference{
 			Path: entry.Path,
 			CID:  bytes.Clone(entry.Blob.CID),
@@ -195,24 +203,35 @@ func fileSetPayloadMatchesRecord(snapshot *FileSetPayload, record publication.Sn
 }
 
 func floorPayloadMatchesRecord(floor Floor, record publication.SnapshotRecord) bool {
-	if payloadFormOf(record) == PayloadFormFileSet {
-		return floor.FileSet != nil && len(floor.BlobCID) == 0 && floor.BlobSize == 0 &&
-			fileSetPayloadMatchesRecord(floor.FileSet, record)
-	}
-	return floor.FileSet == nil && bytes.Equal(record.Blob.CID, floor.BlobCID) && record.Blob.Size == floor.BlobSize
+	return sameSegmentSummaries(floor.Segments, summariesOfRecord(record.Segments))
 }
 
 func validateFloorPayload(floor Floor) error {
-	if floor.FileSet == nil {
-		if len(floor.BlobCID) == 0 || len(floor.BlobCID) > publication.MaxCIDBytes {
-			return errors.New("floor payload")
+	return validateSegmentSummaries(floor.Segments)
+}
+
+func validateSegmentMaterialLimits(summary SegmentSummary, limits AttemptLimits) error {
+	distinct := make(map[string]bool, len(summary.Entries))
+	var total uint64
+	for _, entry := range summary.Entries {
+		distinct[string(entry.CID)] = true
+		total += entry.Size
+	}
+	if uint64(len(distinct)) > uint64(limits.ManagedObjects) {
+		return &fileSetCapacityError{
+			element: fileSetCapacityManagedObjects,
+			have:    uint64(len(distinct)),
+			limit:   uint64(limits.ManagedObjects),
 		}
-		return nil
 	}
-	if len(floor.BlobCID) != 0 || floor.BlobSize != 0 {
-		return errors.New("floor payload")
+	if total > limits.CustodyBytes {
+		return &fileSetCapacityError{
+			element: fileSetCapacityCustodyBytes,
+			have:    total,
+			limit:   limits.CustodyBytes,
+		}
 	}
-	return validateFileSetPayload(floor.FileSet)
+	return nil
 }
 
 func fileSetPayloadUnsupported(stage Stage) error {

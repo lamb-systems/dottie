@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "The v2 current publication pointer. snapshotCid is the CID of the canonical DAG-CBOR snapshot record. blobCid is the CID of the packed raw plaintext payload and is present exactly when the pointed-at snapshot carries a packed payload; a file-set snapshot has no single payload CID, so the head record omits blobCid and snapshotCid alone identifies the position.",
+      "description": "The v2 current publication pointer. snapshotCid is the CID of the canonical DAG-CBOR snapshot record, which names every payload object the position carries. The head carries no payload CID of its own.",
       "key": "literal:self",
       "record": {
         "type": "object",
@@ -30,11 +30,6 @@
             "maximum": 9007199254740991
           },
           "snapshotCid": {
-            "type": "bytes",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "blobCid": {
             "type": "bytes",
             "minLength": 1,
             "maxLength": 128

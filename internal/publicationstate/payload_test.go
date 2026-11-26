@@ -21,11 +21,11 @@ func TestMatchingCIDMalformedPayloadCannotProduceProposalOrFloor(t *testing.T) {
 		Vault:          f.binding.Vault,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Blob: publication.BlobReference{
+		Segments: []publication.SnapshotSegment{{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
 			CID:      blobCID,
 			Size:     uint64(len(malformed)),
 			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		}}},
 	}
 	record.PublicationID[15] = 0x71
 	recordRaw, err := publication.EncodeSnapshot(record)
@@ -38,7 +38,6 @@ func TestMatchingCIDMalformedPayloadCannotProduceProposalOrFloor(t *testing.T) {
 			Vault:          f.binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    recordCID,
-			BlobCID:        blobCID,
 		},
 	)
 	require.NoError(t, err)

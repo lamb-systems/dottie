@@ -38,25 +38,23 @@ type proposalBindingFile struct {
 }
 
 type proposalRecordFile struct {
-	Version              uint64              `json:"version"`
-	Binding              proposalBindingFile `json:"binding"`
-	DatabaseID           string              `json:"database_id"`
-	Generation           uint64              `json:"generation"`
-	FloorRevision        uint64              `json:"floor_revision"`
-	CandidateRecordCID   string              `json:"candidate_record_cid"`
-	Form                 string              `json:"form,omitempty"`
-	CandidatePayloadCID  string              `json:"candidate_payload_cid"`
-	CandidatePayloadSize uint64              `json:"candidate_payload_size"`
-	CandidateEntryCount  int                 `json:"candidate_entry_count,omitempty"`
-	CandidateEntryDigest string              `json:"candidate_entry_digest,omitempty"`
-	SelectionDigest      string              `json:"selection_digest"`
-	SelectionRevision    uint64              `json:"selection_revision"`
-	ApprovalDigest       string              `json:"approval_digest"`
-	ApprovalRevision     uint64              `json:"approval_revision"`
-	PublicationID        string              `json:"publication_id"`
-	Lifecycle            string              `json:"lifecycle"`
-	Consumed             bool                `json:"consumed"`
-	Confirmation         string              `json:"confirmation"`
+	Version            uint64              `json:"version"`
+	Binding            proposalBindingFile `json:"binding"`
+	DatabaseID         string              `json:"database_id"`
+	Generation         uint64              `json:"generation"`
+	FloorRevision      uint64              `json:"floor_revision"`
+	CandidateRecordCID string              `json:"candidate_record_cid"`
+	Form               string              `json:"form,omitempty"`
+	Segments           string              `json:"segments"`
+	PayloadsDigest     string              `json:"payloads_digest"`
+	SelectionDigest    string              `json:"selection_digest"`
+	SelectionRevision  uint64              `json:"selection_revision"`
+	ApprovalDigest     string              `json:"approval_digest"`
+	ApprovalRevision   uint64              `json:"approval_revision"`
+	PublicationID      string              `json:"publication_id"`
+	Lifecycle          string              `json:"lifecycle"`
+	Consumed           bool                `json:"consumed"`
+	Confirmation       string              `json:"confirmation"`
 }
 
 type publicationProposalStore struct {
@@ -74,23 +72,21 @@ func encodeProposalRecord(record service.PublicationProposalRecord) ([]byte, err
 			AccountDID: record.Binding.AccountDID, Backend: string(record.Binding.Backend),
 			Repository: record.Binding.Repository, Vault: hex.EncodeToString(record.Binding.Vault[:]),
 		},
-		DatabaseID:           hex.EncodeToString(record.DatabaseID[:]),
-		Generation:           record.Generation,
-		FloorRevision:        record.FloorRevision,
-		CandidateRecordCID:   hex.EncodeToString(record.CandidateRecordCID),
-		Form:                 string(record.Form),
-		CandidatePayloadCID:  hex.EncodeToString(record.CandidatePayloadCID),
-		CandidatePayloadSize: record.CandidatePayloadSize,
-		CandidateEntryCount:  record.CandidateEntryCount,
-		CandidateEntryDigest: hex.EncodeToString(record.CandidateEntryDigest[:]),
-		SelectionDigest:      hex.EncodeToString(record.Review.SelectionDigest[:]),
-		SelectionRevision:    record.Review.SelectionRevision,
-		ApprovalDigest:       hex.EncodeToString(record.Review.ApprovalDigest[:]),
-		ApprovalRevision:     record.Review.ApprovalRevision,
-		PublicationID:        hex.EncodeToString(record.PublicationID[:]),
-		Lifecycle:            string(record.Lifecycle),
-		Consumed:             record.Consumed,
-		Confirmation:         hex.EncodeToString(record.Confirmation[:]),
+		DatabaseID:         hex.EncodeToString(record.DatabaseID[:]),
+		Generation:         record.Generation,
+		FloorRevision:      record.FloorRevision,
+		CandidateRecordCID: hex.EncodeToString(record.CandidateRecordCID),
+		Form:               string(record.Form),
+		Segments:           hex.EncodeToString(record.Segments),
+		PayloadsDigest:     hex.EncodeToString(record.PayloadsDigest[:]),
+		SelectionDigest:    hex.EncodeToString(record.Review.SelectionDigest[:]),
+		SelectionRevision:  record.Review.SelectionRevision,
+		ApprovalDigest:     hex.EncodeToString(record.Review.ApprovalDigest[:]),
+		ApprovalRevision:   record.Review.ApprovalRevision,
+		PublicationID:      hex.EncodeToString(record.PublicationID[:]),
+		Lifecycle:          string(record.Lifecycle),
+		Consumed:           record.Consumed,
+		Confirmation:       hex.EncodeToString(record.Confirmation[:]),
 	}
 	encoded, err := json.Marshal(file)
 	if err != nil {
@@ -120,11 +116,9 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 			AccountDID: file.Binding.AccountDID, Backend: publicationstate.Backend(file.Binding.Backend),
 			Repository: file.Binding.Repository,
 		},
-		Generation:           file.Generation,
-		FloorRevision:        file.FloorRevision,
-		Form:                 publication.PayloadForm(file.Form),
-		CandidatePayloadSize: file.CandidatePayloadSize,
-		CandidateEntryCount:  file.CandidateEntryCount,
+		Generation:    file.Generation,
+		FloorRevision: file.FloorRevision,
+		Form:          publication.PayloadForm(file.Form),
 		Review: publicationstate.LocalReviewContext{
 			SelectionRevision: file.SelectionRevision, ApprovalRevision: file.ApprovalRevision,
 		},
@@ -152,15 +146,14 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 	if record.CandidateRecordCID, err = decodeHexField(file.CandidateRecordCID); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
-	if record.Form == publication.PayloadFormFileSet {
-		digest, err := decodeFixedHex(file.CandidateEntryDigest, 32)
-		if err != nil {
-			return service.PublicationProposalRecord{}, errProposalRecordInvalid
-		}
-		copy(record.CandidateEntryDigest[:], digest)
-	} else if record.CandidatePayloadCID, err = decodeHexField(file.CandidatePayloadCID); err != nil {
+	if record.Segments, err = decodeHexField(file.Segments); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
+	payloadsDigest, err := decodeFixedHex(file.PayloadsDigest, 32)
+	if err != nil {
+		return service.PublicationProposalRecord{}, errProposalRecordInvalid
+	}
+	copy(record.PayloadsDigest[:], payloadsDigest)
 	if err := service.VerifyPublicationProposalRecord(record); err != nil {
 		return service.PublicationProposalRecord{}, errProposalRecordInvalid
 	}

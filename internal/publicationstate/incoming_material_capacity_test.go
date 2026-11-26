@@ -32,11 +32,11 @@ func incomingCapacityAppendDistinctRecord(t *testing.T, f *fixture, sequence uin
 		Vault:          f.binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
+		Segments: []publication.SnapshotSegment{{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
 			CID:      blobCID,
 			Size:     uint64(len(payload)),
 			MIMEType: publication.SnapshotBlobMIMEType,
-		},
+		}}},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
@@ -137,8 +137,8 @@ func TestAcceptMaterialObjectCapacityAdmitsExactBoundary(t *testing.T) {
 
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 2)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(second.Revision), second.RecordCID, second.BlobCID}, references[1])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(second.Revision), second.RecordCID, testBlobCID(second)}, references[1])
 	assert.NotEqual(t, references[0][2], references[1][2])
 	require.Equal(t, int64(2), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
 
@@ -335,8 +335,8 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		assert.Equal(t, wantNames, names)
 		references := b8IncomingRows(t, ctx, store.conn)
 		require.Len(t, references, 2)
-		assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-		assert.Equal(t, []any{int64(second.Revision), second.RecordCID, second.BlobCID}, references[1])
+		assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+		assert.Equal(t, []any{int64(second.Revision), second.RecordCID, testBlobCID(second)}, references[1])
 
 		loaded, present, err := store.Load(ctx)
 		require.NoError(t, err)
@@ -404,7 +404,7 @@ func TestAcceptMaterialAggregateByteCapacityBoundary(t *testing.T) {
 		assert.False(t, absentB.Exists)
 		references := b8IncomingRows(t, ctx, store.conn)
 		require.Len(t, references, 1)
-		assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
+		assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
 		assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_records"))
 		assert.Equal(t, int64(1), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
 
@@ -491,10 +491,10 @@ func TestAcceptMaterialCataloguedReuseNotChargedTwice(t *testing.T) {
 
 	references := b8IncomingRows(t, ctx, store.conn)
 	require.Len(t, references, 3)
-	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, first.BlobCID}, references[0])
-	assert.Equal(t, []any{int64(middle.Revision), middle.RecordCID, middle.BlobCID}, references[1])
-	assert.Equal(t, []any{int64(previous.Revision), previous.RecordCID, previous.BlobCID}, references[2])
-	assert.Equal(t, first.BlobCID, references[2][2])
+	assert.Equal(t, []any{int64(first.Revision), first.RecordCID, testBlobCID(first)}, references[0])
+	assert.Equal(t, []any{int64(middle.Revision), middle.RecordCID, testBlobCID(middle)}, references[1])
+	assert.Equal(t, []any{int64(previous.Revision), previous.RecordCID, testBlobCID(previous)}, references[2])
+	assert.Equal(t, testBlobCID(first), references[2][2])
 	require.Equal(t, int64(3), b8Count(t, ctx, store.conn, "SELECT COUNT(*) FROM accepted_events"))
 
 	loaded, present, err := store.Load(ctx)

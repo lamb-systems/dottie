@@ -192,7 +192,7 @@ func TestPublicationAttemptFloorReplacementBlocksAtomically(t *testing.T) {
 	assert.Equal(t, AttemptPrepared, blocked.Lifecycle)
 	material, err := store.ReadCandidate(ctx, attempt.ID)
 	require.NoError(t, err)
-	assert.Equal(t, candidate.Payload, material.Payload)
+	assert.Equal(t, acceptedPayload(candidate), acceptedPayload(material))
 	_, err = store.BeginUpload(ctx, attempt.ID, uploadProposal.StateToken, view, review, uploadProposal.Confirmation)
 	requireErrorMetadata(t, err, ErrContinuity, StageDispatch, ReasonFloorReplaced)
 
@@ -403,7 +403,6 @@ func forkGenesisObservation(t *testing.T, f fixture) Observation {
 			Vault:          f.binding.Vault,
 			PublicationSeq: 0,
 			SnapshotCID:    cid,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(t, err)

@@ -85,11 +85,15 @@ func (f *fixture) appendRecord(t *testing.T, sequence uint64) SnapshotBlock {
 		Vault:          f.binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(f.payload)),
-			MIMEType: f.recordMIMEType,
-		},
+		Segments: []publication.SnapshotSegment{{
+			Target: fixturePackedTarget(),
+			Form:   publication.SegmentFormPacked,
+			Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(f.payload)),
+				MIMEType: f.recordMIMEType,
+			},
+		}},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)
@@ -120,7 +124,6 @@ func (f *fixture) observation(count int) Observation {
 			Vault:          f.binding.Vault,
 			PublicationSeq: record.PublicationSeq,
 			SnapshotCID:    cid,
-			BlobCID:        record.Blob.CID,
 		},
 	)
 	require.NoError(f.t, err)
@@ -162,8 +165,8 @@ func assertFloorMatchesFixture(t *testing.T, floor Floor, observation Observatio
 	assert.Equal(t, record.PublicationSeq, floor.Sequence)
 	assert.Equal(t, record.PublicationID, floor.PublicationID)
 	assert.Equal(t, cid, floor.RecordCID)
-	assert.Equal(t, record.Blob.CID, floor.BlobCID)
-	assert.Equal(t, record.Blob.Size, floor.BlobSize)
+	assert.Equal(t, testBlob(record).CID, testBlobCID(floor))
+	assert.Equal(t, testBlob(record).Size, testBlobSize(floor))
 }
 
 func prepareFirstUse(t *testing.T, store *Store, observation Observation, payload []byte) Proposal {
@@ -561,4 +564,11 @@ func bindingReason(err error) string {
 		return string(closed.reason)
 	}
 	return ""
+}
+
+func fixturePackedTarget() model.Target {
+	return model.Target{
+		ID: "files", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}
 }

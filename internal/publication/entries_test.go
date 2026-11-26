@@ -1,7 +1,6 @@
 package publication
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,31 +13,18 @@ import (
 	"github.com/lamb-systems/dottie/internal/model"
 )
 
-func TestSnapshotRecordRefusesBothOrNeitherPayloadForm(t *testing.T) {
-	packed := fixtureSnapshotValue(t)
-	fileSet := fixtureFileSetRecord(t)
-
-	both := packed
-	both.Entries = fileSet.Entries
-	encoded, err := EncodeSnapshot(both)
+func TestSnapshotRecordRefusesEmptySegments(t *testing.T) {
+	record := fixtureSnapshotValue(t)
+	record.Segments = nil
+	encoded, err := EncodeSnapshot(record)
 	assert.Nil(t, encoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
+	requireViolation(t, err, ErrInvalidRecord, "segments", "empty")
 
-	decoded, err := DecodeSnapshot(testCBOR(independentSnapshotValueWithEntries(t, packed, fileSet.Entries)))
+	value := independentSnapshotValue(t, fixtureSnapshotValue(t))
+	value["segments"] = []any{}
+	decoded, err := DecodeSnapshot(testCBOR(value))
 	assert.Equal(t, SnapshotRecord{}, decoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
-
-	neither := packed
-	neither.Blob = BlobReference{}
-	encoded, err = EncodeSnapshot(neither)
-	assert.Nil(t, encoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "missing_payload_form")
-
-	withoutPayload := independentSnapshotValue(t, packed)
-	delete(withoutPayload, "blob")
-	decoded, err = DecodeSnapshot(testCBOR(withoutPayload))
-	assert.Equal(t, SnapshotRecord{}, decoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "missing_payload_form")
+	requireViolation(t, err, ErrInvalidRecord, "segments", "empty")
 }
 
 func TestSnapshotRecordFileSetEncodingRoundTripsCanonically(t *testing.T) {
@@ -50,8 +36,8 @@ func TestSnapshotRecordFileSetEncodingRoundTripsCanonically(t *testing.T) {
 	decoded, err := DecodeSnapshot(encoded)
 	require.NoError(t, err)
 	assert.Equal(t, record, decoded)
-	assert.Nil(t, decoded.Blob.CID)
-	assert.Empty(t, decoded.Blob.MIMEType)
+	assert.Nil(t, blobOf(decoded).CID)
+	assert.Empty(t, blobOf(decoded).MIMEType)
 
 	reencoded, err := EncodeSnapshot(decoded)
 	require.NoError(t, err)
@@ -68,7 +54,7 @@ func TestSnapshotRecordPackedEncodingIsUnchangedByTheUnion(t *testing.T) {
 	payload := []byte("union canary payload")
 	record, encoded := fixtureSnapshot(t, payload, 3, independentCID(t, []byte("union canary parent"), cid.DagCBOR), 2)
 	assert.Equal(t, independentSnapshotBytes(t, record), encoded)
-	assert.Nil(t, record.Entries)
+	assert.Nil(t, entriesOf(record))
 
 	decoded, err := DecodeSnapshot(encoded)
 	require.NoError(t, err)
@@ -81,70 +67,70 @@ func TestSnapshotRecordPackedEncodingIsUnchangedByTheUnion(t *testing.T) {
 func TestSnapshotRecordRefusesMalformedFileSetEntries(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(*SnapshotRecord)
+		mutate func([]SnapshotEntry)
 		field  string
 		reason string
 	}{
-		{name: "absolute path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "/etc/passwd"
+		{name: "absolute path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "/etc/passwd"
 		}, field: "entries.path", reason: "absolute"},
-		{name: "drive prefix path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "C:/init.lua"
+		{name: "drive prefix path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "C:/init.lua"
 		}, field: "entries.path", reason: "absolute"},
-		{name: "parent segment", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "lua/../init.lua"
+		{name: "parent segment", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "lua/../init.lua"
 		}, field: "entries.path", reason: "dot_segment"},
-		{name: "root path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "."
+		{name: "root path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "."
 		}, field: "entries.path", reason: "dot_segment"},
-		{name: "empty segment", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "lua//init.lua"
+		{name: "empty segment", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "lua//init.lua"
 		}, field: "entries.path", reason: "empty_segment"},
-		{name: "empty path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = ""
+		{name: "empty path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = ""
 		}, field: "entries.path", reason: "length"},
-		{name: "overlong path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = strings.Repeat("a", MaxEntryPathBytes+1)
+		{name: "overlong path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = strings.Repeat("a", MaxEntryPathBytes+1)
 		}, field: "entries.path", reason: "length"},
-		{name: "nul path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "lua/\x00init.lua"
+		{name: "nul path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "lua/\x00init.lua"
 		}, field: "entries.path", reason: "text"},
-		{name: "backslash path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = `lua\init.lua`
+		{name: "backslash path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = `lua\init.lua`
 		}, field: "entries.path", reason: "text"},
-		{name: "duplicate path", mutate: func(record *SnapshotRecord) {
-			record.Entries[1].Path = record.Entries[0].Path
+		{name: "duplicate path", mutate: func(entries []SnapshotEntry) {
+			entries[1].Path = entries[0].Path
 		}, field: "entries.path", reason: "duplicate"},
-		{name: "unsorted path", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Path = "zzz.lua"
+		{name: "unsorted path", mutate: func(entries []SnapshotEntry) {
+			entries[0].Path = "zzz.lua"
 		}, field: "entries.path", reason: "order"},
-		{name: "unsupported mode", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Mode = 0o755
+		{name: "unsupported mode", mutate: func(entries []SnapshotEntry) {
+			entries[0].Mode = 0o755
 		}, field: "entries.mode", reason: "unsupported"},
-		{name: "absent mode", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Mode = 0
+		{name: "absent mode", mutate: func(entries []SnapshotEntry) {
+			entries[0].Mode = 0
 		}, field: "entries.mode", reason: "unsupported"},
-		{name: "directory kind", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Kind = "directory"
+		{name: "directory kind", mutate: func(entries []SnapshotEntry) {
+			entries[0].Kind = "directory"
 		}, field: "entries.kind", reason: "unsupported"},
-		{name: "absent kind", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Kind = ""
+		{name: "absent kind", mutate: func(entries []SnapshotEntry) {
+			entries[0].Kind = ""
 		}, field: "entries.kind", reason: "unsupported"},
-		{name: "size mismatch", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Size++
+		{name: "size mismatch", mutate: func(entries []SnapshotEntry) {
+			entries[0].Size++
 		}, field: "entries.size", reason: "mismatch"},
-		{name: "zero size", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Size = 0
-			record.Entries[0].Blob.Size = 0
+		{name: "zero size", mutate: func(entries []SnapshotEntry) {
+			entries[0].Size = 0
+			entries[0].Blob.Size = 0
 		}, field: "entries.size", reason: "range"},
-		{name: "unsupported blob media type", mutate: func(record *SnapshotRecord) {
-			record.Entries[0].Blob.MIMEType = "image/png"
+		{name: "unsupported blob media type", mutate: func(entries []SnapshotEntry) {
+			entries[0].Blob.MIMEType = "image/png"
 		}, field: "entries.blob.mimeType", reason: "unsupported"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			record := fixtureFileSetRecord(t)
-			test.mutate(&record)
+			test.mutate(entriesOf(record))
 			encoded, err := EncodeSnapshot(record)
 			assert.Nil(t, encoded)
 			requireViolation(t, err, ErrInvalidRecord, test.field, test.reason)
@@ -152,17 +138,18 @@ func TestSnapshotRecordRefusesMalformedFileSetEntries(t *testing.T) {
 	}
 
 	roleRecord := fixtureFileSetRecord(t)
-	roleRecord.Entries[0].Blob.CID = independentCID(t, []byte("wrong file-set role"), cid.DagCBOR)
+	entriesOf(roleRecord)[0].Blob.CID = independentCID(t, []byte("wrong file-set role"), cid.DagCBOR)
 	roleEncoded, err := EncodeSnapshot(roleRecord)
 	assert.Nil(t, roleEncoded)
 	requireViolation(t, err, ErrCID, "entries.blob.ref", "role")
 
 	overCap := fixtureFileSetRecord(t)
-	overCap.Entries = make([]SnapshotEntry, 0, MaxSnapshotEntries+1)
+	overCapEntries := make([]SnapshotEntry, 0, MaxSnapshotEntries+1)
 	for index := range MaxSnapshotEntries + 1 {
 		name := fmt.Sprintf("file-%03d", index)
-		overCap.Entries = append(overCap.Entries, fixtureEntry(t, name, []byte("canary"), 0o600))
+		overCapEntries = append(overCapEntries, fixtureEntry(t, name, []byte("canary"), 0o600))
 	}
+	overCap.Segments[0].Entries = overCapEntries
 	overCapEncoded, err := EncodeSnapshot(overCap)
 	assert.Nil(t, overCapEncoded)
 	requireViolation(t, err, ErrInvalidRecord, "entries", "count")
@@ -176,14 +163,14 @@ func TestDecodeSnapshotRefusesMalformedFileSetEntries(t *testing.T) {
 		reason string
 	}{
 		{name: "entries not array", mutate: func(value map[string]any) {
-			value["entries"] = "inline"
+			segmentValue(value, 0)["entries"] = "inline"
 		}, field: "entries", reason: "type"},
 		{name: "entry not object", mutate: func(value map[string]any) {
-			value["entries"] = []any{"inline"}
+			segmentValue(value, 0)["entries"] = []any{"inline"}
 		}, field: "entries", reason: "type"},
 		{name: "empty entries", mutate: func(value map[string]any) {
-			value["entries"] = []any{}
-		}, field: "record", reason: "missing_payload_form"},
+			segmentValue(value, 0)["entries"] = []any{}
+		}, field: "entries", reason: "empty"},
 		{name: "missing entry field", mutate: func(value map[string]any) {
 			delete(fileSetEntryValue(t, value, 0), "kind")
 		}, field: "record", reason: "fields"},
@@ -224,11 +211,11 @@ func TestDecodeSnapshotRefusesMalformedFileSetEntries(t *testing.T) {
 			fileSetEntryValue(t, value, 0)["blob"].(map[string]any)["size"] = int64(0)
 		}, field: "entries.blob.size", reason: "range"},
 		{name: "duplicate path", mutate: func(value map[string]any) {
-			entries := value["entries"].([]any)
+			entries := segmentValue(value, 0)["entries"].([]any)
 			entries[1].(map[string]any)["path"] = entries[0].(map[string]any)["path"]
 		}, field: "entries.path", reason: "duplicate"},
 		{name: "unsorted path", mutate: func(value map[string]any) {
-			entries := value["entries"].([]any)
+			entries := segmentValue(value, 0)["entries"].([]any)
 			entries[0].(map[string]any)["path"] = "zzz.lua"
 		}, field: "entries.path", reason: "order"},
 	}
@@ -247,11 +234,11 @@ func TestFileSetRecordRefusesPackedOnlyConsumers(t *testing.T) {
 	packed := fixtureSnapshotValue(t)
 	reference, err := packed.PackedPayload()
 	require.NoError(t, err)
-	assert.Equal(t, packed.Blob, reference)
+	assert.Equal(t, blobOf(packed), reference)
 
 	fileSet := fixtureFileSetRecord(t)
 	_, err = fileSet.PackedPayload()
-	requireViolation(t, err, ErrPackedPayloadRequired, "entries", "packed_only")
+	requireViolation(t, err, ErrPackedPayloadRequired, "segments", "packed_only")
 
 	encoded, err := EncodeSnapshot(fileSet)
 	require.NoError(t, err)
@@ -422,8 +409,9 @@ func TestFileSetEntriesSortRegularFilesIntoARecord(t *testing.T) {
 		SchemaVersion: SchemaVersion,
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
-		Entries:       entries,
-		Targets:       fixtureFileSetTargets(),
+		Segments: []SnapshotSegment{{
+			Target: fixtureFileSetTargets()[0], Form: SegmentFormEntries, Entries: entries,
+		}},
 	}
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -432,7 +420,7 @@ func TestFileSetEntriesSortRegularFilesIntoARecord(t *testing.T) {
 	assert.Equal(t, record, decoded)
 }
 
-func TestFileSetRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
+func TestFileSetRecordRefusesPastTheRecordSizeBound(t *testing.T) {
 	segments := strings.Repeat("p", MaxEntryPathBytes-4)
 	entries := make([]SnapshotEntry, 0, MaxSnapshotEntries)
 	for index := range MaxSnapshotEntries {
@@ -442,16 +430,15 @@ func TestFileSetRecordAtTheEntryBoundsEncodesAndDecodes(t *testing.T) {
 		SchemaVersion: SchemaVersion,
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
-		Entries:       entries,
-		Targets:       fixtureFileSetTargets(),
+		Segments: []SnapshotSegment{{
+			Target: fixtureFileSetTargets()[0], Form: SegmentFormEntries, Entries: entries,
+		}},
 	}
 	encoded, err := EncodeSnapshot(record)
 	require.NoError(t, err)
-	assert.Greater(t, len(encoded), MaxRecordBytes)
-
 	decoded, err := DecodeSnapshot(encoded)
-	require.NoError(t, err)
-	assert.Equal(t, record, decoded)
+	assert.Equal(t, SnapshotRecord{}, decoded)
+	requireViolation(t, err, ErrInvalidRecord, "record", "size_limit")
 }
 
 func fixtureFileSetRecord(t testing.TB) SnapshotRecord {
@@ -460,11 +447,14 @@ func fixtureFileSetRecord(t testing.TB) SnapshotRecord {
 		SchemaVersion: SchemaVersion,
 		Vault:         fixtureVault(),
 		PublicationID: fixturePublicationID(),
-		Entries: []SnapshotEntry{
-			fixtureEntry(t, "init.lua", []byte("file-set init"), 0o600),
-			fixtureEntry(t, "lua/config/options.lua", []byte("file-set options"), 0o644),
-		},
-		Targets: fixtureFileSetTargets(),
+		Segments: []SnapshotSegment{{
+			Target: fixtureFileSetTargets()[0],
+			Form:   SegmentFormEntries,
+			Entries: []SnapshotEntry{
+				fixtureEntry(t, "init.lua", []byte("file-set init"), 0o600),
+				fixtureEntry(t, "lua/config/options.lua", []byte("file-set options"), 0o644),
+			},
+		}},
 	}
 }
 
@@ -512,20 +502,7 @@ func independentEntriesValue(t testing.TB, entries []SnapshotEntry) []any {
 
 func independentFileSetValue(t testing.TB, record SnapshotRecord) map[string]any {
 	t.Helper()
-	parent := bytes.Clone(record.Parent)
-	if parent == nil {
-		parent = []byte{}
-	}
-	return map[string]any{
-		"$type":          SnapshotNSID,
-		"schemaVersion":  SchemaVersion,
-		"vault":          bytes.Clone(record.Vault[:]),
-		"publicationId":  bytes.Clone(record.PublicationID[:]),
-		"publicationSeq": int64(record.PublicationSeq),
-		"parent":         parent,
-		"entries":        independentEntriesValue(t, record.Entries),
-		"targets":        independentTargetsValue(record.Targets),
-	}
+	return independentSnapshotValue(t, record)
 }
 
 func independentTargetsValue(targets []model.Target) []any {
@@ -553,13 +530,15 @@ func independentFileSetBytes(t testing.TB, record SnapshotRecord) []byte {
 func independentSnapshotValueWithEntries(t testing.TB, packed SnapshotRecord, entries []SnapshotEntry) map[string]any {
 	t.Helper()
 	value := independentSnapshotValue(t, packed)
-	value["entries"] = independentEntriesValue(t, entries)
+	segments, _ := value["segments"].([]any)
+	segmentValue, _ := segments[0].(map[string]any)
+	segmentValue["entries"] = independentEntriesValue(t, entries)
 	return value
 }
 
 func fileSetEntryValue(t testing.TB, value map[string]any, index int) map[string]any {
 	t.Helper()
-	entries, ok := value["entries"].([]any)
+	entries, ok := segmentValue(value, 0)["entries"].([]any)
 	require.True(t, ok)
 	require.Less(t, index, len(entries))
 	entry, ok := entries[index].(map[string]any)
@@ -567,32 +546,17 @@ func fileSetEntryValue(t testing.TB, value map[string]any, index int) map[string
 	return entry
 }
 
-func TestSnapshotRecordFileSetToleratesALegacyRecordWithoutATarget(t *testing.T) {
-	legacy := fixtureFileSetRecord(t)
-	legacy.Targets = nil
-	value := independentFileSetValue(t, legacy)
-	delete(value, "targets")
-	decoded, err := DecodeSnapshot(testCBOR(value))
-	require.NoError(t, err)
-	assert.Nil(t, decoded.Targets)
-	assert.Equal(t, legacy.Entries, decoded.Entries)
-
-	encoded, err := EncodeSnapshot(decoded)
-	require.NoError(t, err)
-	assert.Equal(t, testCBOR(value), encoded, "the legacy record did not re-encode canonically")
-}
-
 func TestSnapshotRecordRefusesAFileTargetWithADifferentEntryPath(t *testing.T) {
 	record := fixtureFileSetRecord(t)
-	record.Entries = record.Entries[:1]
-	record.Targets[0].Root = &model.FileRoot{
+	record.Segments[0].Entries = record.Segments[0].Entries[:1]
+	record.Segments[0].Target.Root = &model.FileRoot{
 		Base: model.RootXDGConfig, Path: "dotfiles/other.lua", Kind: model.SelectionFile,
 	}
 	encoded, err := EncodeSnapshot(record)
 	assert.Nil(t, encoded)
-	requireViolation(t, err, ErrInvalidRecord, "targets.root", "mismatch")
+	requireViolation(t, err, ErrInvalidRecord, "segments.target", "mismatch")
 
-	record.Targets[0].Root.Path = "dotfiles/init.lua"
+	record.Segments[0].Target.Root.Path = "dotfiles/init.lua"
 	encoded, err = EncodeSnapshot(record)
 	require.NoError(t, err)
 	decoded, err := DecodeSnapshot(encoded)
@@ -600,25 +564,35 @@ func TestSnapshotRecordRefusesAFileTargetWithADifferentEntryPath(t *testing.T) {
 	assert.Equal(t, record, decoded)
 }
 
-func TestSnapshotRecordRefusesTargetsOnAPackedPayload(t *testing.T) {
-	record := fixtureSnapshotValue(t)
-	record.Targets = fixtureFileSetTargets()
+func TestSnapshotRecordRefusesASegmentWithAnUnsupportedSource(t *testing.T) {
+	record := fixtureFileSetRecord(t)
+	record.Segments[0].Target.Source = model.SourceGNOME
+	record.Segments[0].Target.Root = nil
 	encoded, err := EncodeSnapshot(record)
 	assert.Nil(t, encoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
-
-	value := independentSnapshotValue(t, fixtureSnapshotValue(t))
-	value["targets"] = independentTargetsValue(record.Targets)
-	decoded, err := DecodeSnapshot(testCBOR(value))
-	assert.Equal(t, SnapshotRecord{}, decoded)
-	requireViolation(t, err, ErrInvalidRecord, "record", "both_payload_forms")
+	requireViolation(t, err, ErrInvalidRecord, "segments.form", "entries")
 }
 
-func TestSnapshotRecordRefusesAFileSetTargetWithAnUnsupportedSource(t *testing.T) {
-	record := fixtureFileSetRecord(t)
-	record.Targets[0].Source = model.SourceGNOME
-	record.Targets[0].Root = nil
-	encoded, err := EncodeSnapshot(record)
-	assert.Nil(t, encoded)
-	requireViolation(t, err, ErrInvalidRecord, "targets.target", "unsupported")
+func independentSettingsValues(settings []SnapshotSetting) []any {
+	values := make([]any, 0, len(settings))
+	for _, setting := range settings {
+		entry := map[string]any{
+			"schemaId": setting.SchemaID, "path": setting.Path, "key": setting.Key,
+			"state": string(setting.State),
+		}
+		if setting.Value != nil {
+			entry["value"] = map[string]any{"$type": setting.Value.Type, "text": setting.Value.Text}
+		}
+		values = append(values, entry)
+	}
+	return values
+}
+
+func segmentValue(value map[string]any, index int) map[string]any {
+	segments, ok := value["segments"].([]any)
+	if !ok || index >= len(segments) {
+		return nil
+	}
+	segment, _ := segments[index].(map[string]any)
+	return segment
 }

@@ -105,6 +105,8 @@ type CandidateInput struct {
 	HeadRecord     []byte
 	Payload        []byte
 	Entries        []publication.PayloadEntry
+	Segments       []CandidateSegment
+	Payloads       [][]byte
 }
 
 type AttemptProposal struct {
@@ -116,8 +118,7 @@ type AttemptProposal struct {
 	CapturedFloor      *Floor
 	CapturedGeneration uint64
 	CandidateRecordCID []byte
-	CandidateBlobCID   []byte
-	CandidateBlobSize  uint64
+	CandidateSegments  []SegmentSummary
 }
 
 type Attempt struct {
@@ -130,9 +131,7 @@ type Attempt struct {
 	SnapshotKey        string
 	SnapshotRecordCID  []byte
 	HeadRecordCID      []byte
-	BlobCID            []byte
-	BlobSize           uint64
-	FileSet            *FileSetPayload
+	Segments           []SegmentSummary
 	CapturedFloor      *Floor
 	CapturedRevision   uint64
 	CapturedGeneration uint64
@@ -159,8 +158,8 @@ type CandidateMaterial struct {
 	SnapshotKey    string
 	SnapshotRecord []byte
 	HeadRecord     []byte
-	Payload        []byte
-	Blob           publication.BlobReference
+	Segments       []SegmentSummary
+	Payloads       [][]byte
 	Entries        []publication.PayloadEntry
 }
 
@@ -179,8 +178,8 @@ type UploadEntry struct {
 
 type UploadMaterial struct {
 	AttemptID [16]byte
-	Payload   []byte
-	Blob      publication.BlobReference
+	Segments  []SegmentSummary
+	Payloads  [][]byte
 	Entries   []UploadEntry
 }
 
