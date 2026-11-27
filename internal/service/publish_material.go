@@ -1259,10 +1259,13 @@ func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
 		published[segment.TargetID] = struct{}{}
 	}
 	for index, id := range record.Drop {
-		if _, ok := published[id]; !ok {
+		if id == "" {
 			return ErrPublicationProposal
 		}
 		if index > 0 && record.Drop[index-1] >= id {
+			return ErrPublicationProposal
+		}
+		if _, ok := published[id]; ok {
 			return ErrPublicationProposal
 		}
 	}

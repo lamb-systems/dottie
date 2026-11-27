@@ -546,3 +546,18 @@ func AcceptedPublicationSnapshot(
 func PublicationPayloadSnapshot(payload publication.Payload) (model.Snapshot, error) {
 	return publicationPayloadSnapshot(payload)
 }
+
+func EncodePublicationCandidateWithCarry(
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	floor publicationstate.Floor,
+	present bool,
+	accepted model.Snapshot,
+	carry PublicationCarry,
+	publicationID [16]byte,
+) (publicationstate.CandidateInput, error) {
+	return encodePublicationCandidateWithCarry(
+		binding, snapshot, floor, present, publicationAcceptedPathsOfSnapshot(accepted),
+		carry, publicationID,
+	)
+}

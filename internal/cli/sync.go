@@ -373,6 +373,7 @@ type syncPushIdentity struct {
 	SnapshotCID []byte
 	Targets     int
 	Entries     int
+	Carried     []string
 	Dropped     []string
 	Review      publicationstate.LocalReviewContext
 }
@@ -607,9 +608,23 @@ func runSyncCommand(
 		return err
 	}
 	if len(preparation.Sources.Configuration.Targets) == 0 {
+		if len(drop) != 0 {
+			return urfave.Exit(
+				"sync refused: --drop-target was requested but this machine configures no target to publish from; "+
+					"the drop was not processed; nothing was changed",
+				3,
+			)
+		}
 		return nil
 	}
 	if finding.Kind == pullFindingDiverges && preparation.Plan.Changes == 0 {
+		if len(drop) != 0 {
+			return urfave.Exit(
+				"sync refused: the provider position differs from the accepted floor and the pull half changes nothing, "+
+					"so the drop cannot be published; run dottie pull to accept the position, then repeat; nothing was changed",
+				3,
+			)
+		}
 		return urfave.Exit(
 			"sync refused: the provider position differs from the accepted floor but the pull half changes nothing; the accepted floor cannot advance; nothing was changed",
 			3,
@@ -642,6 +657,7 @@ func runSyncCommand(
 	)
 	output := renderPullSkipped(preparation.Skipped)
 	output += renderPullApplyPlan(preparation.Plan)
+	output += renderSyncPullEffects(preparation.Plan, drop)
 	output += renderSyncPushPreview(identity)
 	output += fmt.Sprintf("confirmation: %x\n", token)
 	if !command.IsSet("confirm") {
@@ -871,14 +887,12 @@ func runSyncPushHalf(
 		}
 		return syncPushRefusal(command, output, "the push half could not be prepared", "post_pull_prepare")
 	}
-	if len(preparation.Carried) != 0 {
+	if !slices.Equal(preparation.Carried, identity.Carried) {
 		return syncPushRefusal(
 			command,
 			output,
-			"the published position carries targets this machine does not configure ("+
-				strings.Join(escapeFields(preparation.Carried), " ")+
-				"); this build cannot carry them, so nothing was published",
-			"post_pull_carry",
+			"the post-pull carried targets differ from the reviewed ones; nothing was published",
+			"post_pull_carry_mismatch",
 		)
 	}
 	if !slices.Equal(preparation.Dropped, identity.Dropped) {
@@ -1163,8 +1177,16 @@ func prepareSyncPushIdentity(
 			3,
 		)
 	}
-	material, err := service.EncodePublicationCandidate(
-		binding, snapshot, position, present, remote, publicationID,
+	terminal := view.Snapshots[len(view.Snapshots)-1]
+	carry, err := service.PublicationCarryOfRecord(terminal.Raw, preview.Configuration, drop)
+	if err != nil {
+		return syncPushIdentity{}, urfave.Exit(
+			"sync refused: the published position cannot be carried forward; nothing was changed",
+			3,
+		)
+	}
+	material, err := service.EncodePublicationCandidateWithCarry(
+		binding, snapshot, position, present, remote, carry, publicationID,
 	)
 	if err != nil {
 		return syncPushIdentity{}, urfave.Exit(
@@ -1173,8 +1195,9 @@ func prepareSyncPushIdentity(
 		)
 	}
 	identity := syncPushIdentity{
-		Targets: len(snapshot.Targets),
+		Targets: len(snapshot.Targets) + len(carry.Segments),
 		Entries: len(snapshot.Entries),
+		Carried: carry.TargetIDs(),
 		Dropped: append([]string(nil), drop...),
 		Review:  review,
 	}
@@ -1231,6 +1254,10 @@ func syncConfirmationToken(
 	_, _ = digest.Write(identity.Review.ApprovalDigest[:])
 	binary.BigEndian.PutUint64(scratch[:], identity.Review.ApprovalRevision)
 	_, _ = digest.Write(scratch[:])
+	writeField(strconv.Itoa(len(identity.Carried)))
+	for _, id := range identity.Carried {
+		writeField(id)
+	}
 	writeField(strconv.Itoa(len(identity.Dropped)))
 	for _, id := range identity.Dropped {
 		writeField(id)
@@ -1375,4 +1402,37 @@ func syncViewFailure(command *urfave.Command, err error) error {
 		return urfave.Exit("sync is indeterminate: the provider position read did not resolve; re-run dottie sync", 4)
 	}
 	return urfave.Exit("sync refused: the provider position cannot be read or validated; nothing was changed", 3)
+}
+
+func renderSyncPullEffects(plan service.PublicationApplyPlan, drop []string) string {
+	deletions := 0
+	writes := 0
+	for _, entry := range plan.Entries {
+		switch entry.Operation {
+		case service.PublicationApplyDelete:
+			deletions++
+		case service.PublicationApplyWrite, service.PublicationApplyMkdir:
+			writes++
+		}
+	}
+	if deletions == 0 && len(drop) == 0 {
+		return ""
+	}
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf(
+		"sync: pull effects: local-deletions=%d local-writes=%d\n",
+		deletions,
+		writes,
+	))
+	if deletions != 0 {
+		output.WriteString(
+			"sync: the pull half settles before the push half runs, so these local deletions survive a refused push\n",
+		)
+	}
+	if len(drop) != 0 {
+		output.WriteString(
+			"sync: the drop is published only if the push half completes; a refused push leaves the published targets unchanged\n",
+		)
+	}
+	return output.String()
 }

@@ -218,3 +218,33 @@ func ValidatePublicationDrop(
 func PublicationConfigurationWithoutDrop(configuration config.Config, drop []string) config.Config {
 	return publicationConfigurationWithout(configuration, drop)
 }
+
+func PublicationCarryOfRecord(
+	recordRaw []byte,
+	configuration config.Config,
+	drop []string,
+) (PublicationCarry, error) {
+	record, err := publication.DecodeSnapshot(recordRaw)
+	if err != nil {
+		return PublicationCarry{}, ErrPublicationCarry
+	}
+	carry := PublicationCarry{
+		Payloads: make(map[string][]byte, len(record.Segments)),
+		Entries:  make(map[string][]publication.PayloadEntry, len(record.Segments)),
+	}
+	configured := make(map[string]struct{}, len(configuration.Targets))
+	for _, target := range configuration.Targets {
+		configured[target.ID] = struct{}{}
+	}
+	dropped := publicationDropSet(drop)
+	for _, segment := range record.Segments {
+		if _, ok := configured[segment.Target.ID]; ok {
+			continue
+		}
+		if _, ok := dropped[segment.Target.ID]; ok {
+			continue
+		}
+		carry.Segments = append(carry.Segments, segment)
+	}
+	return carry, nil
+}

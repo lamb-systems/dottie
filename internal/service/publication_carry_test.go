@@ -361,3 +361,101 @@ func TestPublicationCarryComposesAnEmptyUnionAsARefusal(t *testing.T) {
 }
 
 var _ = context.Background
+
+func TestPublicationCarryOfRecordKeepsUnconfiguredSegmentsOnly(t *testing.T) {
+	first := carryTestTarget("first", "first")
+	second := carryTestTarget("second", "second")
+	_, firstSegment := carryTestPacked(t, first)
+	_, secondSegment := carryTestPacked(t, second)
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: [32]byte{0x62},
+		PublicationID: [16]byte{0x51},
+		Segments:      []publication.SnapshotSegment{firstSegment, secondSegment},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+
+	carry, err := PublicationCarryOfRecord(raw, carryTestConfiguration("first", "first"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"second"}, carry.TargetIDs())
+
+	carry, err = PublicationCarryOfRecord(
+		raw, carryTestConfiguration("first", "first"), []string{"second"},
+	)
+	require.NoError(t, err)
+	assert.True(t, carry.Empty())
+
+	_, err = PublicationCarryOfRecord([]byte{0x00}, carryTestConfiguration("first", "first"), nil)
+	require.ErrorIs(t, err, ErrPublicationCarry)
+}
+
+func TestPublicationCarryOfRecordAndMaterialEncodeTheSameRecord(t *testing.T) {
+	target := carryTestTarget("retired", "carried")
+	definition, segment := carryTestPacked(t, target)
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: [32]byte{0x62},
+		PublicationID: [16]byte{0x51}, Segments: []publication.SnapshotSegment{segment},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	configuration := carryTestConfiguration("current", "navi")
+	material := publicationstate.AcceptedMaterial{
+		SnapshotRecord: raw,
+		Segments: []publicationstate.AcceptedMaterialSegment{{
+			Summary: carryTestSummary(segment), Blob: definition.payload,
+		}},
+	}
+	verified, err := publicationCarryOf(record, material, configuration, nil)
+	require.NoError(t, err)
+	previewed, err := PublicationCarryOfRecord(raw, configuration, nil)
+	require.NoError(t, err)
+
+	snapshot := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{carryTestTarget("current", "navi")},
+	}
+	binding := carryTestBinding()
+	fromStore, err := encodePublicationCandidateWithCarry(
+		binding, snapshot, publicationstate.Floor{}, false, nil, verified, [16]byte{0x53},
+	)
+	require.NoError(t, err)
+	fromPreview, err := encodePublicationCandidateWithCarry(
+		binding, snapshot, publicationstate.Floor{}, false, nil, previewed, [16]byte{0x53},
+	)
+	require.NoError(t, err)
+	storeCID, err := publication.RecordCID(fromStore.SnapshotRecord)
+	require.NoError(t, err)
+	previewCID, err := publication.RecordCID(fromPreview.SnapshotRecord)
+	require.NoError(t, err)
+	assert.Equal(t, storeCID, previewCID, "the preview and the store carry produced different records")
+	assert.Equal(t, fromStore.SnapshotRecord, fromPreview.SnapshotRecord)
+}
+
+func TestVerifyPublicationProposalRecordBindsTheDropSetToTheOmittedTargets(t *testing.T) {
+	target := carryTestTarget("retired", "carried")
+	_, segment := carryTestPacked(t, target)
+	summaries := []publicationstate.SegmentSummary{carryTestSummary(segment)}
+	carried, err := publicationstate.EncodeSegmentSummaries(summaries)
+	require.NoError(t, err)
+	record := PublicationProposalRecord{
+		Version:    publicationProposalRecordVersion,
+		Binding:    carryTestBinding(),
+		DatabaseID: [32]byte{0x64}, Generation: 1, FloorRevision: 1,
+		CandidateRecordCID: []byte{0x66}, Form: publication.PayloadFormPacked,
+		Segments:       carried,
+		Drop:           []string{"retired"},
+		PayloadsDigest: [32]byte{0x67},
+		Review: publicationstate.LocalReviewContext{
+			SelectionDigest: [32]byte{0x68}, SelectionRevision: 1,
+			ApprovalDigest: [32]byte{0x69}, ApprovalRevision: 1,
+		},
+		PublicationID: [16]byte{0x71}, Lifecycle: publicationstate.AttemptPrepared,
+		Confirmation: [32]byte{0x6a},
+	}
+	require.Error(t, VerifyPublicationProposalRecord(record), "a drop id that the record still carries was accepted")
+
+	record.Drop = []string{"elsewhere"}
+	require.NoError(t, VerifyPublicationProposalRecord(record))
+	record.Drop = []string{"twice", "twice"}
+	require.Error(t, VerifyPublicationProposalRecord(record))
+}

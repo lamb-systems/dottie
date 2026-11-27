@@ -54,11 +54,18 @@ never decides what other machines' segments mean.
 ## Consequences
 
 `push` publishes a head that preserves targets it does not know about, and reports them as carried in
-its review. `sync` validates a drop against the verified terminal record before the pull half mutates
-anything, binds the drop set into its confirmation token, and refuses to publish with
-`post_pull_carry` when the accepted position holds a target this machine does not configure: carrying
-inside `sync` needs the accepted material in its pre-pull preview, which the sync preview path does
-not read yet, so it fails closed and names the target rather than dropping it silently.
+its review. `sync` computes the same carry from the verified terminal record before it prints a
+confirmation, binds the carried and dropped target ids into its token, and re-checks both after the
+pull half: a carried target the review did not name, or a drop set that moved, refuses with
+`post_pull_carry_mismatch` or `post_pull_drop_mismatch` and publishes nothing. The preview computes
+carry from the record alone, which is enough because the record, not the payload bytes, is what the
+candidate CID covers; the push half still verifies the bytes before it uploads them.
+
+`sync` also states its partial success. Its pull half settles before the push half runs, so a refused
+push leaves local deletions in place; the preview counts local deletions and writes separately from
+the published effect of a drop and says which of them survive a refused push. A drop that cannot be
+processed — no configured target, or a diverging position whose pull half changes nothing — refuses
+instead of reporting success.
 
 A carried segment costs one blob GET for the material the store already keeps and one idempotent
 upload per packed target. A peer that still configures a dropped target can publish it again under

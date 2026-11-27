@@ -32,7 +32,9 @@ for targets this machine does not configure: their segments are copied byte for 
 material for them must reproduce the recorded CIDs and sizes or the publication refuses, and their
 blobs are uploaded again rather than referenced by a manufactured receipt. `--drop-target` is the only
 way to omit an accepted target, and the drop selection is bound into the review and the confirmation.
-A `sync` that would have to carry such a target refuses instead of publishing a head without it. It
+`sync` computes the same carry from the verified terminal record before it shows a confirmation, binds
+the carried and dropped ids into its token, and re-checks both after its pull half, so a moved carry or
+drop set publishes nothing. A drop that cannot be processed refuses instead of reporting success. It
 does not load a Dottie device key. The reader verifies
 account identity, publication scopes, record membership in a signed commit, the head/snapshot
 chain, each payload CID and size, and the payload format. Those checks establish repository-scoped authenticity and

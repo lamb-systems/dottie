@@ -104,3 +104,29 @@ func TestSyncDropSelectionBindsTheReviewedTerminalRecord(t *testing.T) {
 }
 
 var _ = publicationstate.Binding{}
+
+func TestRenderSyncPullEffectsNamesWhatSurvivesARefusedPush(t *testing.T) {
+	plan := service.PublicationApplyPlan{
+		Changes: 2,
+		Entries: []service.PublicationApplyPlanEntry{
+			{TargetID: "files", Path: "init.lua", Operation: service.PublicationApplyWrite},
+			{TargetID: "files", Path: "options.lua", Operation: service.PublicationApplyDelete},
+			{TargetID: "files", Path: "kept.lua", Operation: service.PublicationApplyUnchanged},
+		},
+	}
+	output := renderSyncPullEffects(plan, []string{"retired"})
+	assert.Contains(t, output, "sync: pull effects: local-deletions=1 local-writes=1")
+	assert.Contains(t, output, "these local deletions survive a refused push")
+	assert.Contains(t, output, "the drop is published only if the push half completes")
+
+	quiet := renderSyncPullEffects(service.PublicationApplyPlan{
+		Entries: []service.PublicationApplyPlanEntry{
+			{TargetID: "files", Path: "kept.lua", Operation: service.PublicationApplyUnchanged},
+		},
+	}, nil)
+	assert.Empty(t, quiet, "a plan without deletions or a drop printed a partial-success note")
+
+	dropOnly := renderSyncPullEffects(service.PublicationApplyPlan{}, []string{"retired"})
+	assert.NotContains(t, dropOnly, "local deletions survive")
+	assert.Contains(t, dropOnly, "the drop is published only if the push half completes")
+}

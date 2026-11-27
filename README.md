@@ -83,9 +83,10 @@ verifies every payload blob against its CID and size and reads the inline settin
 unchanged, so a machine that configures only some targets publishes a head that still holds the
 others with their identities intact. Leaving an accepted target out is explicit: `--drop-target <id>`
 on `push` or `sync` is bound into the review and the confirmation, and a stale or surplus drop
-selection refuses. `sync` checks a drop against the verified remote position before its pull half
-changes anything, and refuses to publish when the accepted position carries a target this machine does
-not configure. `docs/adr/018-carry-forward.md` records the reasoning.
+selection refuses. `sync` computes the same carry and drop set against the verified terminal record
+before it prints a confirmation, re-checks both after its pull half, counts the local deletions a
+refused push would leave in place, and refuses rather than reporting success when a drop cannot be
+processed. `docs/adr/018-carry-forward.md` records the reasoning.
 
 Every segment names the target it was captured from: an id and, for files segments, a portable root
 of base, relative path and kind. A record is only a proposal: a target is created on its own
