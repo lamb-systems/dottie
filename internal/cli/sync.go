@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -371,6 +373,7 @@ type syncPushIdentity struct {
 	SnapshotCID []byte
 	Targets     int
 	Entries     int
+	Dropped     []string
 	Review      publicationstate.LocalReviewContext
 }
 
@@ -437,6 +440,9 @@ func newSyncCommand(
 			&urfave.StringFlag{Name: "vault", Usage: "local vault fingerprint", OnlyOnce: true},
 			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier sync plan", OnlyOnce: true},
+			&urfave.StringSliceFlag{
+				Name: "drop-target", Usage: "leave an accepted target out of the next publication",
+			},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runSyncCommand(
@@ -501,6 +507,10 @@ func runSyncCommand(
 			return usageExit("--confirm must be the 32-byte hexadecimal confirmation printed by dottie sync")
 		}
 		copy(confirmation[:], decoded)
+	}
+	drop, err := publicationDropTargets(command)
+	if err != nil {
+		return err
 	}
 	did, err := syntax.ParseDID(command.String("did"))
 	if err != nil {
@@ -573,6 +583,20 @@ func runSyncCommand(
 	if finding.Kind == pullFindingAbsent {
 		return urfave.Exit("sync refused: the provider position holds no records to reconcile; nothing was changed", 3)
 	}
+	if len(drop) != 0 {
+		terminal := view.Snapshots[len(view.Snapshots)-1]
+		configuration := config.Config{Version: config.Version}
+		if err := service.ValidatePublicationDrop(drop, terminal.Raw, configuration); err != nil {
+			if errors.Is(err, service.ErrPublicationCarry) {
+				return urfave.Exit(
+					"sync refused: --drop-target names "+strings.Join(escapeFields(drop), " ")+
+						" but that set is not a sorted, unique subset of the published targets, or it would empty the publication; nothing was changed",
+					3,
+				)
+			}
+			return urfave.Exit("sync refused: the drop selection cannot be verified; nothing was changed", 3)
+		}
+	}
 	planRequest := pullApplyPlanRequest{
 		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
 		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
@@ -601,6 +625,7 @@ func runSyncCommand(
 		preparation.Material.Base,
 		preparation.Material.Remote,
 		viewDigest,
+		drop,
 	)
 	if err != nil {
 		return err
@@ -666,7 +691,7 @@ func runSyncCommand(
 	}
 	return runSyncPushHalf(
 		ctx, command, session, binding, view, viewDigest, inspection.Floor, preparation.applies(),
-		journalGuard, identity, output, pushes,
+		journalGuard, identity, drop, output, pushes,
 	)
 }
 
@@ -681,6 +706,7 @@ func runSyncPushHalf(
 	pullApplied bool,
 	journalGuard *pullApplyJournalGuard,
 	identity syncPushIdentity,
+	drop []string,
 	output string,
 	pushes pushSourcesFactory,
 ) error {
@@ -825,10 +851,18 @@ func runSyncPushHalf(
 			"post_pull_review_mismatch",
 		)
 	}
+	if len(identity.Dropped) != 0 && !slices.Equal(identity.Dropped, drop) {
+		return syncPushRefusal(
+			command,
+			output,
+			"the reviewed drop selection is not the one bound to this plan",
+			"post_pull_drop_mismatch",
+		)
+	}
 	request := service.PublicationPushRequest{
 		Store: position, Transport: sources.Transport, Reader: sources.Reader, Records: sources.Records,
 		Binding: binding, Configuration: sources.Configuration, Reviews: sources.Reviews,
-		PublicationID: publicationID,
+		Drop: append([]string(nil), drop...), PublicationID: publicationID,
 	}
 	preparation, prepareErr := sources.Coordinator.PreparePublicationPush(ctx, request)
 	if prepareErr != nil {
@@ -836,6 +870,24 @@ func runSyncPushHalf(
 			return syncPushRefusal(command, output, escapeErrorMessage(prepareErr.Error()), "post_pull_rebind")
 		}
 		return syncPushRefusal(command, output, "the push half could not be prepared", "post_pull_prepare")
+	}
+	if len(preparation.Carried) != 0 {
+		return syncPushRefusal(
+			command,
+			output,
+			"the published position carries targets this machine does not configure ("+
+				strings.Join(escapeFields(preparation.Carried), " ")+
+				"); this build cannot carry them, so nothing was published",
+			"post_pull_carry",
+		)
+	}
+	if !slices.Equal(preparation.Dropped, identity.Dropped) {
+		return syncPushRefusal(
+			command,
+			output,
+			"the post-pull drop selection differs from the reviewed one; nothing was published",
+			"post_pull_drop_mismatch",
+		)
 	}
 	if preparation.NoOp {
 		observed, viewErr := sources.Transport.ReadView(ctx)
@@ -1067,6 +1119,7 @@ func prepareSyncPushIdentity(
 	view publicationstate.SuppliedRepositoryView,
 	floor, remote model.Snapshot,
 	viewDigest [32]byte,
+	drop []string,
 ) (syncPushIdentity, error) {
 	preview, err := previews(ctx, command, binding)
 	if err != nil {
@@ -1099,7 +1152,7 @@ func prepareSyncPushIdentity(
 		)
 	}
 	snapshot, err := preview.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
-		Configuration:  preview.Configuration,
+		Configuration:  service.PublicationConfigurationWithoutDrop(preview.Configuration, drop),
 		FloorSnapshot:  floor,
 		RemoteSnapshot: remote,
 		PublicationID:  publicationID,
@@ -1122,6 +1175,7 @@ func prepareSyncPushIdentity(
 	identity := syncPushIdentity{
 		Targets: len(snapshot.Targets),
 		Entries: len(snapshot.Entries),
+		Dropped: append([]string(nil), drop...),
 		Review:  review,
 	}
 	identity.SnapshotCID, err = syncCandidateRecordCID(material.SnapshotRecord, publicationID)
@@ -1148,7 +1202,7 @@ func syncConfirmationToken(
 		_, _ = digest.Write(length[:])
 		_, _ = digest.Write([]byte(value))
 	}
-	writeField("dottie/sync/v2")
+	writeField("dottie/sync/v3")
 	if present {
 		writeField("present")
 	} else {
@@ -1177,6 +1231,10 @@ func syncConfirmationToken(
 	_, _ = digest.Write(identity.Review.ApprovalDigest[:])
 	binary.BigEndian.PutUint64(scratch[:], identity.Review.ApprovalRevision)
 	_, _ = digest.Write(scratch[:])
+	writeField(strconv.Itoa(len(identity.Dropped)))
+	for _, id := range identity.Dropped {
+		writeField(id)
+	}
 	var token [32]byte
 	copy(token[:], digest.Sum(nil))
 	return token

@@ -27,7 +27,13 @@ applied from a journal image. GSettings has no revision or compare-and-set, so a
 writer can undo a value; convergence can therefore restore an older value, and that is the documented
 limit of the guarantee rather than a hidden one. A published settings target the local configuration
 selects refuses the pull when the build has no settings backend, and a settings target is never
-adopted without one. It does not load a Dottie device key. The reader verifies
+adopted without one. `push` treats the accepted record, not the local configuration, as the authority
+for targets this machine does not configure: their segments are copied byte for byte, the store's
+material for them must reproduce the recorded CIDs and sizes or the publication refuses, and their
+blobs are uploaded again rather than referenced by a manufactured receipt. `--drop-target` is the only
+way to omit an accepted target, and the drop selection is bound into the review and the confirmation.
+A `sync` that would have to carry such a target refuses instead of publishing a head without it. It
+does not load a Dottie device key. The reader verifies
 account identity, publication scopes, record membership in a signed commit, the head/snapshot
 chain, each payload CID and size, and the payload format. Those checks establish repository-scoped authenticity and
 integrity, not global freshness or device authorization.

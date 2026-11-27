@@ -210,7 +210,7 @@ func TestPreparePublicationPushIssuesOneRetainedRecordAndReprintsTheSameConfirma
 	assert.Equal(t, fixture.binding, preparation.Record.Binding)
 	assert.Equal(t, preparation.Proposal.Proposal.CapturedGeneration, preparation.Record.Generation)
 	assert.Equal(t, preparation.Proposal.Proposal.CandidateRecordCID, preparation.Record.CandidateRecordCID)
-	assert.Equal(t, uint64(2), preparation.Record.Version)
+	assert.Equal(t, uint64(3), preparation.Record.Version)
 	record, found := fixture.records.has(fixture.publicationID)
 	require.True(t, found)
 	assert.Equal(t, preparation.Record, record)

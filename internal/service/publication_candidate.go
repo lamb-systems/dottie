@@ -22,6 +22,7 @@ type PublicationCandidateRequest struct {
 	Configuration  config.Config
 	BaseSnapshot   model.Snapshot
 	RemoteSnapshot model.Snapshot
+	Carry          PublicationCarry
 	PublicationID  [16]byte
 }
 
@@ -81,10 +82,13 @@ func buildPublicationMaterial(
 	floor publicationstate.Floor,
 	present bool,
 	accepted PublicationAcceptedPaths,
+	carry PublicationCarry,
 	view publicationstate.SuppliedRepositoryView,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, MaterialWriteBatch, error) {
-	candidate, err := encodePublicationCandidate(binding, snapshot, floor, present, accepted, publicationID)
+	candidate, err := encodePublicationCandidateWithCarry(
+		binding, snapshot, floor, present, accepted, carry, publicationID,
+	)
 	if err != nil {
 		return publicationstate.CandidateInput{}, MaterialWriteBatch{}, err
 	}
@@ -113,6 +117,20 @@ func encodePublicationCandidate(
 	accepted PublicationAcceptedPaths,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, error) {
+	return encodePublicationCandidateWithCarry(
+		binding, snapshot, floor, present, accepted, PublicationCarry{}, publicationID,
+	)
+}
+
+func encodePublicationCandidateWithCarry(
+	binding publicationstate.Binding,
+	snapshot model.Snapshot,
+	floor publicationstate.Floor,
+	present bool,
+	accepted PublicationAcceptedPaths,
+	carry PublicationCarry,
+	publicationID [16]byte,
+) (publicationstate.CandidateInput, error) {
 	var sequence uint64
 	parent := []byte{}
 	if present {
@@ -123,7 +141,7 @@ func encodePublicationCandidate(
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
-	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot, accepted)
+	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot, accepted, carry)
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
@@ -173,16 +191,21 @@ func cloneSegmentSummariesService(summaries []publicationstate.SegmentSummary) [
 	return cloned
 }
 
+type candidatePart struct {
+	segment publication.SnapshotSegment
+	write   publicationstate.CandidateSegment
+	payload []byte
+	entries []publication.PayloadEntry
+}
+
 func candidateSegments(
 	snapshot model.Snapshot,
 	accepted PublicationAcceptedPaths,
+	carry PublicationCarry,
 ) ([]publication.SnapshotSegment, []publicationstate.CandidateSegment, [][]byte, []publication.PayloadEntry, error) {
 	targets := append([]model.Target(nil), snapshot.Targets...)
 	sort.Slice(targets, func(left, right int) bool { return targets[left].ID < targets[right].ID })
-	recordSegments := make([]publication.SnapshotSegment, 0, len(targets))
-	writeSegments := make([]publicationstate.CandidateSegment, 0, len(targets))
-	payloads := make([][]byte, 0, len(targets))
-	entries := make([]publication.PayloadEntry, 0)
+	parts := make([]candidatePart, 0, len(targets)+len(carry.Segments))
 	for _, target := range targets {
 		targetEntries := make([]model.Entry, 0, len(snapshot.Entries))
 		for _, entry := range snapshot.Entries {
@@ -196,30 +219,32 @@ func candidateSegments(
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
-			recordSegments = append(recordSegments, segment)
-			writeSegments = append(writeSegments, publicationstate.CandidateSegment{
-				TargetID: target.ID, Form: publicationstate.PayloadFormSettings,
-				SettingsDigest: publication.SettingsDigest(segment.Settings),
+			parts = append(parts, candidatePart{
+				segment: segment,
+				write: publicationstate.CandidateSegment{
+					TargetID: target.ID, Form: publicationstate.PayloadFormSettings,
+					SettingsDigest: publication.SettingsDigest(segment.Settings),
+				},
 			})
-			payloads = append(payloads, nil)
 		case model.SourceFiles:
 			segment, targetPayloads, ok := entriesSegmentForTarget(target, targetEntries)
 			if ok && publicationTargetDropsAcceptedPath(accepted, target.ID, segment.Entries) {
 				ok = false
 			}
 			if ok {
-				recordSegments = append(recordSegments, segment)
 				references := make([]publicationstate.PayloadEntryReference, 0, len(segment.Entries))
 				for _, entry := range segment.Entries {
 					references = append(references, publicationstate.PayloadEntryReference{
 						Path: entry.Path, CID: bytes.Clone(entry.Blob.CID), Size: entry.Size,
 					})
 				}
-				writeSegments = append(writeSegments, publicationstate.CandidateSegment{
-					TargetID: target.ID, Form: publicationstate.PayloadFormFileSet, Entries: references,
+				parts = append(parts, candidatePart{
+					segment: segment,
+					write: publicationstate.CandidateSegment{
+						TargetID: target.ID, Form: publicationstate.PayloadFormFileSet, Entries: references,
+					},
+					entries: targetPayloads,
 				})
-				payloads = append(payloads, nil)
-				entries = append(entries, targetPayloads...)
 				continue
 			}
 			packed, err := vault.PackTarget(snapshot, target.ID)
@@ -233,16 +258,80 @@ func candidateSegments(
 			blob := publication.BlobReference{
 				CID: cid, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType,
 			}
-			recordSegments = append(recordSegments, publication.SnapshotSegment{
-				Target: target, Form: publication.SegmentFormPacked, Blob: blob,
+			parts = append(parts, candidatePart{
+				segment: publication.SnapshotSegment{
+					Target: target, Form: publication.SegmentFormPacked, Blob: blob,
+				},
+				write: publicationstate.CandidateSegment{
+					TargetID: target.ID, Form: publicationstate.PayloadFormPacked, Blob: &blob,
+				},
+				payload: packed.Payload,
 			})
-			writeSegments = append(writeSegments, publicationstate.CandidateSegment{
-				TargetID: target.ID, Form: publicationstate.PayloadFormPacked, Blob: &blob,
-			})
-			payloads = append(payloads, packed.Payload)
 		default:
 			return nil, nil, nil, nil, publication.ErrInvalidRecord
 		}
+	}
+	local := make(map[string]struct{}, len(snapshot.Targets))
+	for _, target := range snapshot.Targets {
+		local[target.ID] = struct{}{}
+	}
+	merged := make(map[string]struct{}, len(parts)+len(carry.Segments))
+	for _, part := range parts {
+		merged[part.segment.Target.ID] = struct{}{}
+	}
+	for _, segment := range carry.Segments {
+		id := segment.Target.ID
+		if _, ok := local[id]; ok {
+			return nil, nil, nil, nil, ErrPublicationCarry
+		}
+		if _, ok := merged[id]; ok {
+			return nil, nil, nil, nil, ErrPublicationCarry
+		}
+		merged[id] = struct{}{}
+		part := candidatePart{segment: segment}
+		switch segment.Form {
+		case publication.SegmentFormPacked:
+			blob := segment.Blob
+			part.write = publicationstate.CandidateSegment{
+				TargetID: id, Form: publicationstate.PayloadFormPacked, Blob: &blob,
+			}
+			part.payload = carry.Payloads[id]
+		case publication.SegmentFormEntries:
+			references := make([]publicationstate.PayloadEntryReference, 0, len(segment.Entries))
+			for _, entry := range segment.Entries {
+				references = append(references, publicationstate.PayloadEntryReference{
+					Path: entry.Path, CID: bytes.Clone(entry.Blob.CID), Size: entry.Size,
+				})
+			}
+			part.write = publicationstate.CandidateSegment{
+				TargetID: id, Form: publicationstate.PayloadFormFileSet, Entries: references,
+			}
+			part.entries = carry.Entries[id]
+		case publication.SegmentFormSettings:
+			part.write = publicationstate.CandidateSegment{
+				TargetID: id, Form: publicationstate.PayloadFormSettings,
+				SettingsDigest: publication.SettingsDigest(segment.Settings),
+			}
+		default:
+			return nil, nil, nil, nil, ErrPublicationCarry
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return nil, nil, nil, nil, ErrPublicationCarry
+	}
+	sort.Slice(parts, func(left, right int) bool {
+		return parts[left].segment.Target.ID < parts[right].segment.Target.ID
+	})
+	recordSegments := make([]publication.SnapshotSegment, 0, len(parts))
+	writeSegments := make([]publicationstate.CandidateSegment, 0, len(parts))
+	payloads := make([][]byte, 0, len(parts))
+	entries := make([]publication.PayloadEntry, 0)
+	for _, part := range parts {
+		recordSegments = append(recordSegments, part.segment)
+		writeSegments = append(writeSegments, part.write)
+		payloads = append(payloads, part.payload)
+		entries = append(entries, part.entries...)
 	}
 	return recordSegments, writeSegments, payloads, entries, nil
 }

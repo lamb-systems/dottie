@@ -79,6 +79,14 @@ inline GNOME setting entries. `vaultHeadV2` is the single mutable pointer at `se
 current snapshot record. `pull` reads the head, walks back through the chain, then fetches and
 verifies every payload blob against its CID and size and reads the inline settings from the record.
 
+`push` composes the targets your `config.toml` names and copies the rest from the accepted record
+unchanged, so a machine that configures only some targets publishes a head that still holds the
+others with their identities intact. Leaving an accepted target out is explicit: `--drop-target <id>`
+on `push` or `sync` is bound into the review and the confirmation, and a stale or surplus drop
+selection refuses. `sync` checks a drop against the verified remote position before its pull half
+changes anything, and refuses to publish when the accepted position carries a target this machine does
+not configure. `docs/adr/018-carry-forward.md` records the reasoning.
+
 Every segment names the target it was captured from: an id and, for files segments, a portable root
 of base, relative path and kind. A record is only a proposal: a target is created on its own
 confirmation, before any proposed directory is read, in review mode and without excludes, for a

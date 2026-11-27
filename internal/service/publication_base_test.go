@@ -764,7 +764,7 @@ func newAcceptedSnapshotForPublicationBaseTest(t *testing.T, snapshot model.Snap
 		Repository: "at://did:plc:abcdefghijklmnopqrstuvwx",
 		Vault:      [32]byte{0x41, 0x52, 0x63},
 	}
-	segments, _, payloads, entries, err := candidateSegments(snapshot, nil)
+	segments, _, payloads, entries, err := candidateSegments(snapshot, nil, PublicationCarry{})
 	require.NoError(t, err)
 	record := publication.SnapshotRecord{
 		SchemaVersion: publication.SchemaVersion,

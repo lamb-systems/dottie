@@ -74,6 +74,7 @@ func TestBuildPublicationSnapshotAndMaterialDescribeOneReviewedSnapshot(t *testi
 		publicationstate.Floor{},
 		false,
 		nil,
+		PublicationCarry{},
 		view,
 		publicationID,
 	)
@@ -142,7 +143,7 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 	}
 
 	candidate, batch, err := buildPublicationMaterial(
-		binding, snapshot, floor, true, nil, view, [16]byte{0x53},
+		binding, snapshot, floor, true, nil, PublicationCarry{}, view, [16]byte{0x53},
 	)
 	require.NoError(t, err)
 	record, err := publication.DecodeSnapshot(candidate.SnapshotRecord)
@@ -163,6 +164,7 @@ func TestBuildPublicationMaterialExtendsTheSuppliedFloor(t *testing.T) {
 		floor,
 		true,
 		nil,
+		PublicationCarry{},
 		publicationstate.SuppliedRepositoryView{
 			Origin:          binding,
 			Scope:           publicationstate.ViewScopeWholeRepository,

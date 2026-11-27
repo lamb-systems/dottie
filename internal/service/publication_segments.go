@@ -23,34 +23,42 @@ func publicationFloorMatchesRecord(
 		return false
 	}
 	for index, segment := range record.Segments {
-		summary := floor.Segments[index]
-		if summary.TargetID != segment.Target.ID || publicationFormOfSegment(segment) != summary.Form {
+		if !publicationSegmentMatchesSummary(segment, floor.Segments[index]) {
 			return false
-		}
-		switch segment.Form {
-		case publication.SegmentFormPacked:
-			if !bytes.Equal(summary.BlobCID, segment.Blob.CID) || summary.BlobSize != segment.Blob.Size ||
-				len(summary.Entries) != 0 {
-				return false
-			}
-		case publication.SegmentFormEntries:
-			if len(summary.Entries) != len(segment.Entries) || len(summary.BlobCID) != 0 {
-				return false
-			}
-			for entryIndex, entry := range segment.Entries {
-				reference := summary.Entries[entryIndex]
-				if reference.Path != entry.Path || reference.Size != entry.Size ||
-					!bytes.Equal(reference.CID, entry.Blob.CID) {
-					return false
-				}
-			}
-		case publication.SegmentFormSettings:
-			if summary.Settings != publication.SettingsDigest(segment.Settings) {
-				return false
-			}
 		}
 	}
 	return true
+}
+
+func publicationSegmentMatchesSummary(
+	segment publication.SnapshotSegment,
+	summary publicationstate.SegmentSummary,
+) bool {
+	if summary.TargetID != segment.Target.ID || publicationFormOfSegment(segment) != summary.Form {
+		return false
+	}
+	switch segment.Form {
+	case publication.SegmentFormPacked:
+		return bytes.Equal(summary.BlobCID, segment.Blob.CID) && summary.BlobSize == segment.Blob.Size &&
+			len(summary.Entries) == 0
+	case publication.SegmentFormEntries:
+		if len(summary.Entries) != len(segment.Entries) || len(summary.BlobCID) != 0 ||
+			summary.BlobSize != 0 {
+			return false
+		}
+		for entryIndex, entry := range segment.Entries {
+			reference := summary.Entries[entryIndex]
+			if reference.Path != entry.Path || reference.Size != entry.Size ||
+				!bytes.Equal(reference.CID, entry.Blob.CID) {
+				return false
+			}
+		}
+		return true
+	case publication.SegmentFormSettings:
+		return len(summary.Entries) == 0 && len(summary.BlobCID) == 0 && summary.BlobSize == 0 &&
+			summary.Settings == publication.SettingsDigest(segment.Settings)
+	}
+	return false
 }
 
 func publicationFormOfSegment(segment publication.SnapshotSegment) publicationstate.PayloadForm {

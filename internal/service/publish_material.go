@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"slices"
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
@@ -155,6 +156,7 @@ type MaterialPublishRequest struct {
 	Form          publication.PayloadForm
 	Snapshot      model.Snapshot
 	Accepted      *PublicationAccepted
+	Carry         PublicationCarry
 	PublicationID [16]byte
 	Reviews       ReviewSource
 }
@@ -164,6 +166,7 @@ type MaterialPublishProposal struct {
 	Transport     MaterialTransport
 	Binding       publicationstate.Binding
 	Form          publication.PayloadForm
+	Drop          []string
 	Review        publicationstate.LocalReviewContext
 	ConfigToken   config.Token
 	ProposalToken [32]byte
@@ -276,6 +279,7 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 		floor,
 		present,
 		acceptedPaths,
+		request.Carry,
 		view,
 		request.PublicationID,
 	)
@@ -1175,7 +1179,7 @@ var (
 	)
 )
 
-const publicationProposalRecordVersion uint64 = 2
+const publicationProposalRecordVersion uint64 = 3
 
 type PublicationProposalRecord struct {
 	Version            uint64
@@ -1186,6 +1190,7 @@ type PublicationProposalRecord struct {
 	CandidateRecordCID []byte
 	Form               publication.PayloadForm
 	Segments           []byte
+	Drop               []string
 	PayloadsDigest     [32]byte
 	Review             publicationstate.LocalReviewContext
 	PublicationID      [16]byte
@@ -1212,6 +1217,7 @@ type PublicationPushRequest struct {
 	Records       PublicationProposalStore
 	Binding       publicationstate.Binding
 	Configuration config.Config
+	Drop          []string
 	Reviews       ReviewSource
 	PublicationID [16]byte
 	Record        *PublicationProposalRecord
@@ -1227,6 +1233,8 @@ type PublicationPushPreparation struct {
 	Form     publication.PayloadForm
 	Targets  int
 	Entries  int
+	Carried  []string
+	Dropped  []string
 }
 
 func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
@@ -1245,6 +1253,18 @@ func VerifyPublicationProposalRecord(record PublicationProposalRecord) error {
 	segments, err := publicationstate.DecodeSegmentSummaries(record.Segments)
 	if err != nil || len(segments) == 0 {
 		return ErrPublicationProposal
+	}
+	published := make(map[string]struct{}, len(segments))
+	for _, segment := range segments {
+		published[segment.TargetID] = struct{}{}
+	}
+	for index, id := range record.Drop {
+		if _, ok := published[id]; !ok {
+			return ErrPublicationProposal
+		}
+		if index > 0 && record.Drop[index-1] >= id {
+			return ErrPublicationProposal
+		}
 	}
 	if record.Form != publicationFormOfSummaries(segments) {
 		return ErrPublicationProposal
@@ -1287,6 +1307,9 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		if request.Record.PublicationID != request.PublicationID || request.Record.Binding != request.Binding {
 			return PublicationPushPreparation{}, ErrPublicationProposal
 		}
+		if !slices.Equal(request.Record.Drop, request.Drop) {
+			return PublicationPushPreparation{}, ErrPublicationProposalStale
+		}
 	}
 	floor, present, err := request.Store.Load(ctx)
 	if err != nil {
@@ -1295,8 +1318,16 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if present && floor.Binding != request.Binding {
 		return PublicationPushPreparation{}, ErrPublicationProposal
 	}
+	if !present && len(request.Drop) != 0 {
+		return PublicationPushPreparation{}, ErrPublicationCarry
+	}
+	configuration := publicationConfigurationWithout(request.Configuration, request.Drop)
+	if len(configuration.Targets) == 0 && len(request.Drop) == 0 {
+		return PublicationPushPreparation{}, ErrPublicationProposal
+	}
 	base := model.Snapshot{}
 	var acceptedMaterial publicationstate.AcceptedMaterial
+	var carry PublicationCarry
 	if present {
 		acceptedMaterial, err = request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
 		if err != nil {
@@ -1306,10 +1337,22 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
+		carriedRecord, recordErr := publication.DecodeSnapshot(acceptedMaterial.SnapshotRecord)
+		if recordErr != nil {
+			return PublicationPushPreparation{}, recordErr
+		}
+		if err := publicationDropRefusal(request.Drop, carriedRecord, request.Configuration); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		if carry, err = publicationCarryOf(
+			carriedRecord, acceptedMaterial, configuration, request.Drop,
+		); err != nil {
+			return PublicationPushPreparation{}, err
+		}
 	}
 	if present {
-		proposed := make([]model.Target, 0, len(request.Configuration.Targets))
-		for _, target := range request.Configuration.Targets {
+		proposed := make([]model.Target, 0, len(configuration.Targets))
+		for _, target := range configuration.Targets {
 			portable, modelErr := target.Model()
 			if modelErr != nil {
 				return PublicationPushPreparation{}, modelErr
@@ -1333,8 +1376,8 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		return PublicationPushPreparation{}, err
 	}
 	snapshot, err := coordinator.buildPublicationSnapshot(ctx, PublicationCandidateRequest{
-		Configuration: request.Configuration, BaseSnapshot: base,
-		RemoteSnapshot: remote, PublicationID: request.PublicationID,
+		Configuration: configuration, BaseSnapshot: base,
+		RemoteSnapshot: remote, Carry: carry, PublicationID: request.PublicationID,
 	})
 	if err != nil {
 		return PublicationPushPreparation{}, err
@@ -1347,7 +1390,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		}
 		acceptedState = publicationAcceptedOfSnapshot(floor.RecordCID, base)
 		if acceptedRecord.PayloadForm() == publication.PayloadFormFileSet {
-			if target, _, targetErr := fileSetPublicationTarget(request.Configuration); targetErr == nil {
+			if target, _, targetErr := fileSetPublicationTarget(configuration); targetErr == nil {
 				acceptedState = &PublicationAccepted{
 					FloorCID: acceptedState.FloorCID,
 					Targets:  acceptedState.Targets,
@@ -1363,8 +1406,8 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if acceptedState != nil {
 		acceptedPaths = acceptedState.Paths
 	}
-	candidate, err := encodePublicationCandidate(
-		request.Binding, snapshot, floor, present, acceptedPaths, request.PublicationID,
+	candidate, err := encodePublicationCandidateWithCarry(
+		request.Binding, snapshot, floor, present, acceptedPaths, carry, request.PublicationID,
 	)
 	if err != nil {
 		return PublicationPushPreparation{}, err
@@ -1378,8 +1421,10 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		Present: present,
 		Floor:   floor,
 		Form:    form,
-		Targets: len(snapshot.Targets),
+		Targets: len(sealed.Segments),
 		Entries: len(snapshot.Entries),
+		Carried: carry.TargetIDs(),
+		Dropped: append([]string(nil), request.Drop...),
 	}
 	if present {
 		if sameRecordSegments(acceptedRecord.Segments, sealed.Segments) {
@@ -1389,13 +1434,13 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	}
 	proposal, err := coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
 		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
-		Form: form, Snapshot: snapshot, Accepted: acceptedState,
+		Form: form, Snapshot: snapshot, Accepted: acceptedState, Carry: carry,
 		PublicationID: request.PublicationID, Reviews: request.Reviews,
 	})
 	if err != nil {
 		return PublicationPushPreparation{}, coordinator.publicationPushRefusal(ctx, request, err)
 	}
-	record, err := newPublicationProposalRecord(proposal)
+	record, err := newPublicationProposalRecord(proposal, request.Drop)
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
@@ -1580,7 +1625,7 @@ func publicationFormOfSummaries(summaries []publicationstate.SegmentSummary) pub
 	}
 }
 
-func newPublicationProposalRecord(proposal MaterialPublishProposal) (PublicationProposalRecord, error) {
+func newPublicationProposalRecord(proposal MaterialPublishProposal, drop []string) (PublicationProposalRecord, error) {
 	encoded, err := publicationstate.EncodeSegmentSummaries(proposal.Proposal.CandidateSegments)
 	if err != nil {
 		return PublicationProposalRecord{}, err
@@ -1595,6 +1640,7 @@ func newPublicationProposalRecord(proposal MaterialPublishProposal) (Publication
 		CandidateRecordCID: bytes.Clone(proposal.Proposal.CandidateRecordCID),
 		Form:               proposal.Form,
 		Segments:           encoded,
+		Drop:               append([]string(nil), drop...),
 		PayloadsDigest:     digest,
 		Review:             proposal.Review, PublicationID: proposal.PublicationID,
 		Lifecycle: publicationstate.AttemptPrepared, Confirmation: proposal.Confirmation,

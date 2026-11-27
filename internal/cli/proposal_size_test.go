@@ -55,7 +55,7 @@ func publicationProposalRecordFor(
 	publicationID [16]byte,
 ) service.PublicationProposalRecord {
 	return service.PublicationProposalRecord{
-		Version: 2,
+		Version: 3,
 		Binding: publicationstate.Binding{
 			AccountDID: "did:plc:abcdefghijklmnopqrstuvwx",
 			Backend:    publicationstate.BackendPublicRepo,

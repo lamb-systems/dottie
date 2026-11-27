@@ -984,7 +984,7 @@ func TestPublicationProposalStoreRoundTripsTheRetainedRecord(t *testing.T) {
 	_, err := rand.Read(publicationID[:])
 	require.NoError(t, err)
 	record := service.PublicationProposalRecord{
-		Version:            2,
+		Version:            3,
 		Binding:            fixture.binding,
 		DatabaseID:         [32]byte{0x65},
 		Generation:         1,

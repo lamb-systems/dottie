@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -80,6 +81,9 @@ func newPushCommand(
 			&urfave.StringFlag{Name: "did", Usage: "signed-in account DID", OnlyOnce: true},
 			&urfave.StringFlag{Name: "handle", Usage: "signed-in account handle", OnlyOnce: true},
 			&urfave.StringFlag{Name: "confirm", Usage: "confirmation printed by an earlier review", OnlyOnce: true},
+			&urfave.StringSliceFlag{
+				Name: "drop-target", Usage: "leave an accepted target out of the next publication",
+			},
 		},
 		Action: func(ctx context.Context, command *urfave.Command) error {
 			return runPushCommand(ctx, command, sessions, sources, dids)
@@ -136,6 +140,10 @@ func runPushCommand(
 		}
 		copy(confirmation[:], decoded)
 	}
+	drop, err := publicationDropTargets(command)
+	if err != nil {
+		return err
+	}
 	session, err := sessions(ctx, command)
 	if err != nil {
 		return urfave.Exit("push refused: account session is unavailable", 3)
@@ -186,7 +194,7 @@ func runPushCommand(
 	request := service.PublicationPushRequest{
 		Store: store, Transport: ports.Transport, Reader: ports.Reader, Records: ports.Records,
 		Binding: ports.Binding, Configuration: ports.Configuration, Reviews: ports.Reviews,
-		PublicationID: publicationID, Record: retained,
+		Drop: drop, PublicationID: publicationID, Record: retained,
 	}
 	preparation, err := ports.Coordinator.PreparePublicationPush(ctx, request)
 	if err != nil {
@@ -353,6 +361,12 @@ func pushPreparationFailure(command *urfave.Command, paths platform.Paths, err e
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	case errors.Is(err, service.ErrPublicationRebind):
 		return urfave.Exit("push refused: "+escapeErrorMessage(err.Error()), 3)
+	case errors.Is(err, service.ErrPublicationCarry):
+		return urfave.Exit(
+			"push refused: the drop selection is not a sorted, unique subset of the published targets, "+
+				"or it would empty the publication; nothing was published",
+			3,
+		)
 	case errors.Is(err, service.ErrPublicationProposal),
 		errors.Is(err, service.ErrReviewMismatch),
 		errors.Is(err, service.ErrConfigChangedSincePrepare):
@@ -445,8 +459,22 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
 		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,
 		preparation.Proposal.Review.ApprovalDigest, preparation.Proposal.Review.ApprovalRevision)
+	if len(preparation.Carried) != 0 {
+		fmt.Fprintf(&output, "carried targets: %s\n", strings.Join(escapeFields(preparation.Carried), " "))
+	}
+	if len(preparation.Dropped) != 0 {
+		fmt.Fprintf(&output, "dropped targets: %s\n", strings.Join(escapeFields(preparation.Dropped), " "))
+	}
 	fmt.Fprintf(&output, "confirmation: %x\n", preparation.Proposal.Confirmation)
 	return output.String()
+}
+
+func escapeFields(values []string) []string {
+	escaped := make([]string, 0, len(values))
+	for _, value := range values {
+		escaped = append(escaped, escapeField(value))
+	}
+	return escaped
 }
 
 func productionPushSessionFactory(openKeyring accountKeyringFactory, env func(string) string) pushSessionFactory {
@@ -715,4 +743,25 @@ func pushExit(status service.StatusState) error {
 	default:
 		return urfave.Exit("push did not complete", 4)
 	}
+}
+
+func publicationDropTargets(command *urfave.Command) ([]string, error) {
+	if !command.IsSet("drop-target") {
+		return nil, nil
+	}
+	values := command.StringSlice("drop-target")
+	dropped := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			return nil, usageExit("--drop-target requires a target id")
+		}
+		dropped = append(dropped, value)
+	}
+	sort.Strings(dropped)
+	for index := 1; index < len(dropped); index++ {
+		if dropped[index-1] == dropped[index] {
+			return nil, usageExit("--drop-target names " + escapeField(dropped[index]) + " more than once")
+		}
+	}
+	return dropped, nil
 }
