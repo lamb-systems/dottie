@@ -140,6 +140,9 @@ account can read it back.
 - A push from a machine that configures only some of the published targets composes a snapshot from
   its own targets, so the targets it does not configure are not carried forward into the next head.
   Pull them on that machine first, or push from a machine that configures them.
+- A target's portable root is part of its identity. A machine that moves a configured target, or
+  adopts one whose path resolves to a different portable root than the published one, is refused;
+  re-adopt the target at the published path.
 - Concurrent publication from two machines at once is refused rather than merged.
 - No power-loss evidence. Process death, yes; sudden power loss, untested.
 

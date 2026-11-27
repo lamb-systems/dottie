@@ -665,18 +665,47 @@ func TestFileSetPublicationNoOpComparesTheWholeSegmentTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, unchanged.NoOp)
 
+	floor, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+
 	require.NoError(t, os.Rename(
 		filepath.Join(fixture.paths.Home, "config"),
 		filepath.Join(fixture.paths.Home, "renamed"),
 	))
 	fixture.configuration.Targets[0].Root.Path = "renamed"
-	movedRoot, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x12}, nil))
+	_, err = fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x12}, nil))
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrPublicationRebind)
+	assert.Contains(t, err.Error(), "home:config")
+	assert.Contains(t, err.Error(), "home:renamed")
+
+	after, present, err := fixture.store.Load(ctx)
 	require.NoError(t, err)
-	assert.False(t, movedRoot.NoOp, "a changed target root is not the reviewed publication")
-	record, err := publication.DecodeSnapshot(movedRoot.Proposal.Batch.SnapshotRecord)
+	require.True(t, present)
+	assert.Equal(t, floor.RecordCID, after.RecordCID, "a refused rebind published a record")
+	assert.Equal(t, floor.Revision, after.Revision)
+}
+
+func TestPreparePublicationPushAcceptsATargetTheAcceptedPositionDoesNotName(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushFixture(t)
+	fixture.publish(t)
+	setFileSetReaderFromAccepted(t, fixture)
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "extra"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(fixture.paths.Home, "extra", "kept.conf"), []byte("kept"), 0o600))
+	fixture.configuration.Targets = append(fixture.configuration.Targets, config.Target{
+		ID: "extra", Source: model.SourceFiles, Mode: config.Review,
+		Root: &config.Root{Base: model.RootHome, Path: "extra", Kind: model.SelectionDirectory},
+	})
+
+	preparation, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x76, 0x13}, nil))
 	require.NoError(t, err)
-	require.Len(t, record.Segments, 1)
-	assert.Equal(t, "renamed", record.Segments[0].Target.Root.Path)
+	record, err := publication.DecodeSnapshot(preparation.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, record.Segments, 2)
+	assert.Equal(t, "extra", record.Segments[0].Target.ID)
+	assert.Equal(t, "files", record.Segments[1].Target.ID)
 }
 
 func TestPreparePublicationPushFallsBackToPackedForACarriedDirectoryMode(t *testing.T) {

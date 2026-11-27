@@ -861,3 +861,21 @@ func (reviews publicationTwoMachineReviews) Acquire(
 }
 
 func (publicationTwoMachineGuard) Release() {}
+
+func TestTwoMachineEditOnTheSecondMachinePublishesFromIt(t *testing.T) {
+	fixture := newPublicationTwoMachineFixture(t)
+	writePublicationTwoMachineFile(t, fixture.a, publicationTwoMachineAlpha)
+	first := fixture.push(t, fixture.a)
+	joined := fixture.joinFirstUse(t, fixture.b)
+	require.Equal(t, first.Floor.RecordCID, joined.RecordCID)
+
+	writePublicationTwoMachineFile(t, fixture.b, publicationTwoMachineBeta)
+	second := fixture.push(t, fixture.b)
+	require.Greater(t, second.Floor.Revision, joined.Revision)
+	require.NotEqual(t, first.Floor.RecordCID, second.Floor.RecordCID)
+
+	pulled := fixture.pull(t, fixture.a)
+	require.Equal(t, "diverges", pulled.Finding)
+	assert.Equal(t, publicationTwoMachineBeta, readPublicationTwoMachineFile(t, fixture.a))
+	assert.Equal(t, second.Floor.RecordCID, pulled.Accepted.RecordCID)
+}

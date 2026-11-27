@@ -832,6 +832,9 @@ func runSyncPushHalf(
 	}
 	preparation, prepareErr := sources.Coordinator.PreparePublicationPush(ctx, request)
 	if prepareErr != nil {
+		if errors.Is(prepareErr, service.ErrPublicationRebind) {
+			return syncPushRefusal(command, output, escapeErrorMessage(prepareErr.Error()), "post_pull_rebind")
+		}
 		return syncPushRefusal(command, output, "the push half could not be prepared", "post_pull_prepare")
 	}
 	if preparation.NoOp {

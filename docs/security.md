@@ -136,7 +136,9 @@ the resolved root or the derived settings policy. Adopted targets use review mod
 targets that cannot be resolved are skipped and reported rather than adopted, and the sync path
 refuses adoption because its push half is already composed. An existing target is left alone: the
 published portable root must equal the local one, so a record cannot redirect it, and a root that
-differs refuses the apply instead of being rebound. A legacy file-set record without a target names
+differs refuses the apply instead of being rebound. A machine that moves a configured target is
+refused by push and sync with both portable roots named, and adoption refuses a path that resolves to
+a different portable root here, so a target cannot silently change its published path. A legacy file-set record without a target names
 no root, so it cannot be adopted and pull requires a local files target for it. A single-file target publishes its file under the basename of its configured path,
 and pull maps the sole file-set entry back to that file without synthesizing parent directories.
 The pull confirmation binds the local target id, portable root and selection/approval revisions,

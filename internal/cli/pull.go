@@ -503,6 +503,9 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, pullApplyRemoteFailure(input.label(), err)
 	}
+	if err := pullPublishedDescriptorRefusal(input, sources.Configuration, material); err != nil {
+		return pullApplyPreparation{}, err
+	}
 	configuration, adoption, skipped, err := pullApplyAdoption(sources, material, input)
 	if err != nil {
 		return pullApplyPreparation{}, err
@@ -765,6 +768,9 @@ func pullAdoptPublishedTargets(
 			continue
 		}
 		target, err := pullAdoptFilesTarget(sources, published)
+		if errors.Is(err, errPullAdoptionDescriptor) {
+			return config.Config{}, nil, nil, pullAdoptionRefusal(input, err.Error())
+		}
 		if err != nil {
 			skipped = append(skipped, "target "+escapeField(selector)+" is not configured; create the root and run dottie targets add")
 			continue
@@ -835,7 +841,18 @@ func pullAdoptFilesTarget(sources pullApplySources, published model.Target) (con
 	if root.Kind != published.Root.Kind {
 		return config.Target{}, errors.New("the published target " + selector + " resolves to a different kind")
 	}
-	return config.Target{ID: published.ID, Source: model.SourceFiles, Mode: config.Review, Root: &root}, nil
+	adopted := config.Target{ID: published.ID, Source: model.SourceFiles, Mode: config.Review, Root: &root}
+	derived, err := adopted.Model()
+	if err != nil {
+		return config.Target{}, errors.New("the published target " + selector + " cannot be adopted")
+	}
+	if !reflect.DeepEqual(derived, published) {
+		return config.Target{}, fmt.Errorf(
+			"%w: the published target %s resolves to %s here and would be republished under a different root",
+			errPullAdoptionDescriptor, selector, pullPortableSelector(*derived.Root),
+		)
+	}
+	return adopted, nil
 }
 
 func pullFilesRootOwner(
@@ -2157,6 +2174,39 @@ func pullCheckApplyJournalAdmission(
 		return urfave.Exit(
 			label+" refused: the apply journal cannot be read ("+escapeField(pullStoreReason(admission))+"); nothing was published",
 			4,
+		)
+	}
+	return nil
+}
+
+var errPullAdoptionDescriptor = errors.New("adoption would republish a different portable root")
+
+func pullPublishedDescriptorRefusal(
+	input pullApplyPlanRequest,
+	configuration config.Config,
+	material pullApplyMaterial,
+) error {
+	if material.Form == publication.PayloadFormFileSet && input.label() == "pull" {
+		return nil
+	}
+	for _, published := range material.Targets {
+		if published.Source != model.SourceFiles || published.Root == nil {
+			continue
+		}
+		configured, ok := pullTargetByID(configuration, published.ID)
+		if !ok || configured.Source != model.SourceFiles || configured.Root == nil {
+			continue
+		}
+		derived, err := configured.Model()
+		if err != nil || reflect.DeepEqual(derived, published) {
+			continue
+		}
+		return urfave.Exit(
+			input.label()+" refused: target "+escapeField(published.ID)+" is configured at "+
+				pullPortableSelector(*derived.Root)+" and the position published it at "+
+				pullPortableSelector(*published.Root)+
+				"; re-adopt the target at the published path; nothing was changed",
+			3,
 		)
 	}
 	return nil

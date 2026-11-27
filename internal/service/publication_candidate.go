@@ -492,6 +492,58 @@ func publicationSyncAppliedEntry(entry model.Entry) (model.Entry, bool) {
 	return model.Entry{}, false
 }
 
+var ErrPublicationRebind = errors.New("publication target rebind refused")
+
+type PublicationRebindError struct {
+	TargetID string
+	Accepted model.Target
+	Proposed model.Target
+}
+
+func (e *PublicationRebindError) Error() string {
+	return "publication rebind refused: target " + e.TargetID + " was accepted at " +
+		publicationPortableSelector(e.Accepted) + " and is configured at " +
+		publicationPortableSelector(e.Proposed) + "; a machine that moves a target re-adopts it"
+}
+
+func (e *PublicationRebindError) Is(target error) bool { return target == ErrPublicationRebind }
+
+func publicationPortableSelector(target model.Target) string {
+	if target.Root == nil {
+		return target.ID + " without a root"
+	}
+	return string(target.Root.Base) + ":" + target.Root.Path + " (" + string(target.Root.Kind) + ")"
+}
+
+func publicationTargetByID(targets []model.Target, targetID string) (model.Target, bool) {
+	for _, target := range targets {
+		if target.ID == targetID {
+			return target, true
+		}
+	}
+	return model.Target{}, false
+}
+
+func publicationRebindRefusal(accepted, proposed []model.Target) error {
+	for _, target := range proposed {
+		if target.Root == nil || target.Source != model.SourceFiles {
+			continue
+		}
+		existing, ok := publicationTargetByID(accepted, target.ID)
+		if !ok || reflect.DeepEqual(existing, target) {
+			continue
+		}
+		return &PublicationRebindError{TargetID: target.ID, Accepted: existing, Proposed: target}
+	}
+	return nil
+}
+
+type PublicationAccepted struct {
+	FloorCID []byte
+	Targets  []model.Target
+	Paths    PublicationAcceptedPaths
+}
+
 type PublicationAcceptedPaths map[string]map[string]struct{}
 
 func publicationAcceptedPathsOfSnapshot(snapshot model.Snapshot) PublicationAcceptedPaths {
@@ -536,18 +588,25 @@ func publicationAcceptedPathsAs(paths PublicationAcceptedPaths, targetID string)
 	return paths
 }
 
-func publicationAcceptedPathsOfMaterial(
+func publicationAcceptedSnapshotOfMaterial(
 	material publicationstate.AcceptedMaterial,
-) (PublicationAcceptedPaths, error) {
+) (model.Snapshot, error) {
 	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
 	if err != nil {
-		return nil, err
+		return model.Snapshot{}, err
 	}
-	snapshot, err := acceptedSnapshotFromSegments(record, material)
-	if err != nil {
-		return nil, err
+	return acceptedSnapshotFromSegments(record, material)
+}
+
+func publicationAcceptedOfSnapshot(
+	floorCID []byte,
+	snapshot model.Snapshot,
+) *PublicationAccepted {
+	return &PublicationAccepted{
+		FloorCID: bytes.Clone(floorCID),
+		Targets:  snapshot.Targets,
+		Paths:    publicationAcceptedPathsOfSnapshot(snapshot),
 	}
-	return publicationAcceptedPathsOfSnapshot(snapshot), nil
 }
 
 func publicationTargetDropsAcceptedPath(

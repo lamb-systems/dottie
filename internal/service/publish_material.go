@@ -154,8 +154,7 @@ type MaterialPublishRequest struct {
 	Binding       publicationstate.Binding
 	Form          publication.PayloadForm
 	Snapshot      model.Snapshot
-	Accepted      PublicationAcceptedPaths
-	AcceptedFloor []byte
+	Accepted      *PublicationAccepted
 	PublicationID [16]byte
 	Reviews       ReviewSource
 }
@@ -229,17 +228,24 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 			nil,
 		)
 	}
-	accepted := PublicationAcceptedPaths(nil)
-	if present && request.Accepted != nil && bytes.Equal(request.AcceptedFloor, floor.RecordCID) {
+	accepted := (*PublicationAccepted)(nil)
+	if present && request.Accepted != nil && len(request.Accepted.Targets) != 0 &&
+		bytes.Equal(request.Accepted.FloorCID, floor.RecordCID) {
 		accepted = request.Accepted
 	}
-
 	if accepted == nil && present {
 		material, err := request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
 		if err != nil {
 			return MaterialPublishProposal{}, err
 		}
-		if accepted, err = publicationAcceptedPathsOfMaterial(material); err != nil {
+		snapshot, err := publicationAcceptedSnapshotOfMaterial(material)
+		if err != nil {
+			return MaterialPublishProposal{}, err
+		}
+		accepted = publicationAcceptedOfSnapshot(floor.RecordCID, snapshot)
+	}
+	if accepted != nil {
+		if err := publicationRebindRefusal(accepted.Targets, request.Snapshot.Targets); err != nil {
 			return MaterialPublishProposal{}, err
 		}
 	}
@@ -260,12 +266,16 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 			nil,
 		)
 	}
+	var acceptedPaths PublicationAcceptedPaths
+	if accepted != nil {
+		acceptedPaths = accepted.Paths
+	}
 	candidate, batch, err := buildPublicationMaterial(
 		request.Binding,
 		request.Snapshot,
 		floor,
 		present,
-		accepted,
+		acceptedPaths,
 		view,
 		request.PublicationID,
 	)
@@ -1297,6 +1307,19 @@ func (coordinator *Coordinator) PreparePublicationPush(
 			return PublicationPushPreparation{}, err
 		}
 	}
+	if present {
+		proposed := make([]model.Target, 0, len(request.Configuration.Targets))
+		for _, target := range request.Configuration.Targets {
+			portable, modelErr := target.Model()
+			if modelErr != nil {
+				return PublicationPushPreparation{}, modelErr
+			}
+			proposed = append(proposed, portable)
+		}
+		if err := publicationRebindRefusal(base.Targets, proposed); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+	}
 	remote := model.Snapshot{}
 	accepted, err := request.Reader.ReadAcceptedPayload(ctx)
 	switch {
@@ -1316,18 +1339,29 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
-	acceptedPaths := PublicationAcceptedPaths(nil)
+	acceptedState := (*PublicationAccepted)(nil)
 	acceptedRecord := publication.SnapshotRecord{}
 	if present {
 		if acceptedRecord, err = publication.DecodeSnapshot(acceptedMaterial.SnapshotRecord); err != nil {
 			return PublicationPushPreparation{}, err
 		}
-		acceptedPaths = publicationAcceptedPathsOfSnapshot(base)
+		acceptedState = publicationAcceptedOfSnapshot(floor.RecordCID, base)
 		if acceptedRecord.PayloadForm() == publication.PayloadFormFileSet {
 			if target, _, targetErr := fileSetPublicationTarget(request.Configuration); targetErr == nil {
-				acceptedPaths = publicationAcceptedPathsAs(acceptedPaths, target.ID)
+				acceptedState = &PublicationAccepted{
+					FloorCID: acceptedState.FloorCID,
+					Targets:  acceptedState.Targets,
+					Paths:    publicationAcceptedPathsAs(acceptedState.Paths, target.ID),
+				}
 			}
 		}
+		if err := publicationRebindRefusal(acceptedState.Targets, snapshot.Targets); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+	}
+	var acceptedPaths PublicationAcceptedPaths
+	if acceptedState != nil {
+		acceptedPaths = acceptedState.Paths
 	}
 	candidate, err := encodePublicationCandidate(
 		request.Binding, snapshot, floor, present, acceptedPaths, request.PublicationID,
@@ -1355,8 +1389,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	}
 	proposal, err := coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
 		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
-		Form: form, Snapshot: snapshot, Accepted: acceptedPaths,
-		AcceptedFloor: floor.RecordCID,
+		Form: form, Snapshot: snapshot, Accepted: acceptedState,
 		PublicationID: request.PublicationID, Reviews: request.Reviews,
 	})
 	if err != nil {

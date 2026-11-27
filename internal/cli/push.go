@@ -351,6 +351,8 @@ func pushPreparationFailure(command *urfave.Command, paths platform.Paths, err e
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
 	case errors.Is(err, service.ErrPublicationProposalStale):
 		return urfave.Exit(escapeErrorMessage(err.Error()), 3)
+	case errors.Is(err, service.ErrPublicationRebind):
+		return urfave.Exit("push refused: "+escapeErrorMessage(err.Error()), 3)
 	case errors.Is(err, service.ErrPublicationProposal),
 		errors.Is(err, service.ErrReviewMismatch),
 		errors.Is(err, service.ErrConfigChangedSincePrepare):
