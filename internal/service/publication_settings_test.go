@@ -24,6 +24,7 @@ type settingsTestBackend struct {
 	resets  []string
 	observe error
 	mutate  error
+	effect  func()
 }
 
 func newSettingsTestBackend() *settingsTestBackend {
@@ -64,6 +65,9 @@ func (backend *settingsTestBackend) Set(
 	valueType, text string,
 ) error {
 	if backend.mutate != nil {
+		if backend.effect != nil {
+			backend.effect()
+		}
 		return backend.mutate
 	}
 	backend.sets = append(backend.sets, settingsTestIdentity(key))
@@ -452,4 +456,167 @@ func TestApplyPublicationRefusesALockedSettingsRow(t *testing.T) {
 	live, liveErr := fixture.journal.LiveSettingsEntries(context.Background())
 	require.NoError(t, liveErr)
 	assert.Len(t, live, 1, "a locked key classified a settings row")
+}
+
+func TestPlanPublicationSettingsAcceptsAnySchemaPathForANonRelocatableKey(t *testing.T) {
+	backend := newSettingsTestBackend()
+	material := settingsTestRecord(t,
+		settingsTestEntry(t, "color-scheme", &model.VariantValue{Type: "s", Text: "'prefer-dark'"}),
+	)
+	plan, err := PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: material, Backend: backend,
+	})
+	require.NoError(t, err, "a non-relocatable key was rejected for carrying the schema's own path")
+	assert.Equal(t, 1, plan.Changes)
+}
+
+func TestPlanPublicationSettingsRefusesTwoTargetsDisagreeingOnOnePhysicalKey(t *testing.T) {
+	setting := settingsTestEntry(t, "color-scheme", &model.VariantValue{Type: "s", Text: "'prefer-dark'"})
+	other := setting
+	other.Value = &model.VariantValue{Type: "s", Text: "'prefer-light'"}
+	desktop := model.Target{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion}
+	laptop := model.Target{ID: "laptop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion}
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: settingsTestVault(), PublicationID: [16]byte{0x31},
+		Segments: []publication.SnapshotSegment{
+			{Target: desktop, Form: publication.SegmentFormSettings, Settings: []publication.SnapshotSetting{setting}},
+			{Target: laptop, Form: publication.SegmentFormSettings, Settings: []publication.SnapshotSetting{other}},
+		},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+
+	policy := settingsTestPolicy(t, "appearance")
+	configuration := config.Config{Version: config.Version, Targets: []config.Target{
+		{ID: "desktop", Source: model.SourceGNOME, Mode: config.Review, GNOMEPolicy: &policy},
+		{ID: "laptop", Source: model.SourceGNOME, Mode: config.Review, GNOMEPolicy: &policy},
+	}}
+	_, err = PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: configuration, Record: raw,
+		Backend: newSettingsTestBackend(),
+	})
+	require.ErrorIs(t, err, ErrPublicationSettings, "two targets set one physical key to different values")
+
+	record.Segments[1].Settings = []publication.SnapshotSetting{setting}
+	raw, err = publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	plan, err := PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: configuration, Record: raw,
+		Backend: newSettingsTestBackend(),
+	})
+	require.NoError(t, err, "identical operations for one physical key were refused")
+	assert.Len(t, plan.Operations, 1, "an identical duplicate was not coalesced")
+}
+
+func TestApplyPublicationSettingsSettlesAMutationErrorFromObservation(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		after    syncengine.SettingValue
+		expected publicationstate.JournalState
+	}{
+		{
+			name:     "the write landed",
+			after:    syncengine.SettingValue{Present: true, Type: "s", Text: "'blue'", Writable: true},
+			expected: publicationstate.JournalStateApplied,
+		},
+		{
+			name:     "the prior image is still visible",
+			after:    syncengine.SettingValue{},
+			expected: publicationstate.JournalStateFailed,
+		},
+		{
+			name:     "a third image is visible",
+			after:    syncengine.SettingValue{Present: true, Type: "s", Text: "'green'", Writable: true},
+			expected: publicationstate.JournalStateIndeterminate,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			backend := newSettingsTestBackend()
+			journal, _ := settingsTestJournal(t)
+			material := settingsTestRecord(t,
+				settingsTestEntry(t, "accent-color", &model.VariantValue{Type: "s", Text: "'blue'"}),
+			)
+			request := PublicationSettingsRequest{
+				Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+				Record: material, Backend: backend, Journal: journal,
+			}
+			plan, err := PlanPublicationSettings(context.Background(), request)
+			require.NoError(t, err)
+			request.ExpectedPlan = plan.Digest
+			backend.mutate = errors.New("synthetic native failure")
+			backend.effect = func() {
+				backend.values[settingsTestObservedKey(t, "accent-color")] = testCase.after
+			}
+			_, err = ApplyPublicationSettings(context.Background(), request)
+			require.ErrorIs(t, err, ErrPublicationSettings)
+
+			live, liveErr := journal.LiveSettingsEntries(context.Background())
+			require.NoError(t, liveErr)
+			if testCase.expected == publicationstate.JournalStateIndeterminate {
+				require.Len(t, live, 1, "an unclassifiable outcome retired the row")
+				return
+			}
+			assert.Empty(t, live, "a classified outcome left the row live")
+			count, countErr := journal.SettingsEntryCount(context.Background())
+			require.NoError(t, countErr)
+			assert.Equal(t, int64(1), count)
+		})
+	}
+}
+
+func TestApplyPublicationSettingsRefusesWhenThePriorImageMovedBeforeTheWrite(t *testing.T) {
+	backend := newSettingsTestBackend()
+	journal, _ := settingsTestJournal(t)
+	material := settingsTestRecord(t,
+		settingsTestEntry(t, "accent-color", &model.VariantValue{Type: "s", Text: "'blue'"}),
+	)
+	request := PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: material, Backend: backend, Journal: journal,
+	}
+	plan, err := PlanPublicationSettings(context.Background(), request)
+	require.NoError(t, err)
+	request.ExpectedPlan = plan.Digest
+	request.Barrier = func(_ publicationstate.SettingsJournalEntry) error {
+		backend.values[settingsTestObservedKey(t, "accent-color")] =
+			syncengine.SettingValue{Present: true, Type: "s", Text: "'third-party'", Writable: true}
+		return nil
+	}
+	_, err = ApplyPublicationSettings(context.Background(), request)
+	require.ErrorIs(t, err, ErrPublicationSettings)
+	assert.Empty(t, backend.sets, "a drifted preimage was overwritten")
+	live, liveErr := journal.LiveSettingsEntries(context.Background())
+	require.NoError(t, liveErr)
+	assert.Empty(t, live, "the unexecuted intent stayed live")
+	count, countErr := journal.SettingsEntryCount(context.Background())
+	require.NoError(t, countErr)
+	assert.Equal(t, int64(1), count, "the refused intent was not journaled")
+}
+
+func TestPlanPublicationSettingsBindsTheRecordCIDItWasGiven(t *testing.T) {
+	backend := newSettingsTestBackend()
+	material := settingsTestRecord(t,
+		settingsTestEntry(t, "accent-color", &model.VariantValue{Type: "s", Text: "'blue'"}),
+	)
+	record, err := publication.DecodeSnapshot(material)
+	require.NoError(t, err)
+	cid, err := publication.RecordCID(material)
+	require.NoError(t, err)
+
+	plan, err := PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: material, RecordCID: cid, Backend: backend,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, plan.Changes)
+
+	record.PublicationID = [16]byte{0x32}
+	other, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	_, err = PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: other, RecordCID: cid, Backend: backend,
+	})
+	require.ErrorIs(t, err, ErrPublicationSettings, "a record that is not the bound one was planned")
 }

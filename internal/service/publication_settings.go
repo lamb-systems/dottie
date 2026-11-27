@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -23,6 +24,7 @@ type PublicationSettingsRequest struct {
 	FloorRevision uint64
 	Configuration config.Config
 	Record        []byte
+	RecordCID     []byte
 	Backend       syncengine.SettingsBackend
 	Journal       *publicationstate.Journal
 	ExpectedPlan  [32]byte
@@ -64,12 +66,19 @@ func PlanPublicationSettings(
 	request PublicationSettingsRequest,
 ) (PublicationSettingsPlan, error) {
 	plan := PublicationSettingsPlan{Operations: make([]PublicationSettingsOperation, 0)}
+	physicalKeys := make(map[string]PublicationSettingsOperation)
 	if request.Backend == nil || request.Vault == ([32]byte{}) {
 		return plan, ErrPublicationSettings
 	}
 	record, err := publication.DecodeSnapshot(request.Record)
 	if err != nil || record.Vault != request.Vault {
 		return plan, ErrPublicationSettings
+	}
+	if len(request.RecordCID) != 0 {
+		cid, cidErr := publication.RecordCID(request.Record)
+		if cidErr != nil || !bytes.Equal(cid, request.RecordCID) {
+			return plan, ErrPublicationSettings
+		}
 	}
 	for _, segment := range record.Segments {
 		if segment.Form != publication.SegmentFormSettings {
@@ -88,13 +97,25 @@ func PlanPublicationSettings(
 		}
 		for _, setting := range segment.Settings {
 			identity := setting.SchemaID + "\x00" + setting.Key
-			if _, permitted := approved[identity]; !permitted {
+			approvedPath, permitted := approved[identity]
+			if !permitted {
+				return plan, ErrPublicationSettings
+			}
+			if approvedPath != "" && approvedPath != setting.Path {
 				return plan, ErrPublicationSettings
 			}
 			operation, err := publicationSettingsOperation(ctx, request.Backend, segment.Target.ID, setting)
 			if err != nil {
 				return plan, ErrPublicationSettings
 			}
+			physical := operation.SchemaID + "\x00" + operation.Path + "\x00" + operation.Key
+			if existing, seen := physicalKeys[physical]; seen {
+				if existing.Reset != operation.Reset || !publicationSettingMatches(existing.Value, operation.Value) {
+					return plan, ErrPublicationSettings
+				}
+				continue
+			}
+			physicalKeys[physical] = operation
 			observed, observeErr := request.Backend.Observe(ctx, publicationSettingEntryKey(operation))
 			if observeErr != nil || !observed.Writable {
 				return plan, ErrPublicationSettings
@@ -181,8 +202,27 @@ func ApplyPublicationSettings(
 				return report, err
 			}
 		}
-		if err := publicationSettingsMutate(ctx, request.Backend, key, operation); err != nil {
+		settled, settledErr := request.Backend.Observe(ctx, key)
+		switch {
+		case settledErr != nil || !settled.Writable:
 			_ = request.Journal.FailSettingsJournal(ctx, journalEntry)
+			return report, ErrPublicationSettings
+		case !operation.Reset && publicationSettingMatches(settled, operation.Value):
+			if err := request.Journal.CompleteSettingsJournal(
+				ctx, journalEntry, publicationSettingsJournalValue(settled),
+			); err != nil {
+				return report, err
+			}
+			entry.State = publicationstate.JournalStateApplied
+			report.Applied++
+			report.Entries = append(report.Entries, entry)
+			continue
+		case !publicationSettingMatches(settled, observed):
+			_ = request.Journal.FailSettingsJournal(ctx, journalEntry)
+			return report, ErrPublicationSettings
+		}
+		if err := publicationSettingsMutate(ctx, request.Backend, key, operation); err != nil {
+			settlePublicationSettingsFailure(ctx, request, journalEntry, key, operation, observed)
 			return report, ErrPublicationSettings
 		}
 		written, verifyErr := request.Backend.Observe(ctx, key)
@@ -248,7 +288,7 @@ func publicationSettingsTarget(configuration config.Config, targetID string) (co
 	return config.Target{}, false
 }
 
-func publicationApprovedSettingKeys(target config.Target) (map[string]struct{}, error) {
+func publicationApprovedSettingKeys(target config.Target) (map[string]string, error) {
 	policy := target.GNOMEPolicy
 	if policy == nil || policy.Approval != config.GNOMEApprovalApproved ||
 		policy.MatrixVersion != matrix.Version {
@@ -262,9 +302,9 @@ func publicationApprovedSettingKeys(target config.Target) (map[string]struct{}, 
 	if err != nil || hex.EncodeToString(digest[:]) != policy.KeyDigest {
 		return nil, ErrPublicationSettings
 	}
-	approved := make(map[string]struct{}, len(keys))
+	approved := make(map[string]string, len(keys))
 	for _, key := range keys {
-		approved[key.SchemaID+"\x00"+key.Key] = struct{}{}
+		approved[key.SchemaID+"\x00"+key.Key] = key.Path
 	}
 	return approved, nil
 }
@@ -350,4 +390,29 @@ func PublicationSettingsTargets(
 		targets = append(targets, segment.Target)
 	}
 	return targets, nil
+}
+
+func settlePublicationSettingsFailure(
+	ctx context.Context,
+	request PublicationSettingsRequest,
+	entry publicationstate.SettingsJournalEntry,
+	key model.EntryKey,
+	operation PublicationSettingsOperation,
+	prior syncengine.SettingValue,
+) {
+	observed, err := request.Backend.Observe(ctx, key)
+	if err != nil || !observed.Writable {
+		_ = request.Journal.MarkSettingsIndeterminate(ctx, entry)
+		return
+	}
+	switch {
+	case publicationSettingMatches(observed, operation.Value):
+		_ = request.Journal.CompleteSettingsJournal(
+			ctx, entry, publicationSettingsJournalValue(observed),
+		)
+	case publicationSettingMatches(observed, prior):
+		_ = request.Journal.FailSettingsJournal(ctx, entry)
+	default:
+		_ = request.Journal.MarkSettingsIndeterminate(ctx, entry)
+	}
 }

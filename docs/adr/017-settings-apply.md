@@ -37,10 +37,17 @@ watcher, bidirectional merge, a settings form for non-GNOME sources, per-key app
 
 ### Authority
 
-Settings are never applied from a provider head, a reviewed snapshot or a journal image. The only
-authority is the **exact local binding**: the position store's database id, generation, revision and
-record CID, read together with the accepted material that binding names. A plan is built from that
-image, and apply writes only values taken from it.
+Settings are applied from the **verified terminal record the same confirmation will accept**, and
+only under that confirmation: the bytes the reader resolved from the signed chain, the same bytes the
+accept stage binds, and the record CID the command carries into both the settings plan and the accept
+stage. A plan whose record does not hash to the bound CID is refused, so a settings write and a floor
+advance cannot describe different records.
+
+The provider's head is not an independent authority: the record is only reachable through the chain,
+scope and CID checks the pull already performs, and the floor does not advance unless the settings
+and files both applied. The local binding is the authority for *what is already accepted* — recovery,
+carry-forward and the reviewed position all come from it — but a first application has no accepted
+material yet, so it cannot be the source of the values being written.
 
 The journal records intent and the image that was being written. It is never a source of values.
 
@@ -57,7 +64,9 @@ A key has two observable states:
 text is not a comparison of values.
 
 Unobservable is not a state. A missing schema, a failed observation, a locked backend or an
-unreadable key is a refusal, never a match, never a reset.
+unreadable key is a refusal, never a match, never a reset. `Writable` is checked where the decision is
+made: the plan refuses a non-writable key, apply re-checks before journaling, and recovery treats one
+as unobservable so it cannot classify a row.
 
 ### Journal
 
@@ -98,15 +107,24 @@ rows, because a live row can be the only record of an interrupted mutation.
 
 Per key, in the accepted record's order, after the files plan has been applied:
 
-1. hold the live configuration guard and check that the key is approved by the target's local GNOME
-   policy (`approval = approved`, matrix version match, key in the selected set, digest matches);
-2. observe, canonicalize, journal the intent with the observed image;
-3. observe again; if the image moved, restart the operation (bounded retries) or refuse;
-4. `Set` the canonical `(type, text)` or `Reset` for a reset entry;
-5. observe again and settle the row as applied when the written image is visible.
+1. check that the key is approved by the target's local GNOME policy (`approval = approved`, matrix
+   version match, key in the selected set, digest matches), and that the policy's path for a
+   relocatable key matches the record's;
+2. observe and refuse unless the key is writable;
+3. canonicalize, journal the intent with the observed image;
+4. observe again: if the written image is already visible the row is completed without a write, and if
+   the image moved anywhere else the unexecuted intent is settled as failed and the run refuses;
+5. `Set` the canonical `(type, text)` or `Reset` for a reset entry;
+6. observe again and settle the row as applied when the written image is visible.
 
-A failed or unobservable step settles the row as failed or indeterminate; it does not roll back other
-keys, and it does not advance the floor.
+A mutation that reports an error is settled from observation rather than assumed: the written image
+means applied, the prior image means failed, and anything else stays indeterminate. None of this rolls
+back other keys, and none of it advances the floor.
+
+The configuration is read once at review time and carried through apply; a concurrent configuration
+change does not revoke approval mid-run, because the confirmation binds the selection and approval
+revisions it was printed against and a changed configuration changes the token. Holding the
+configuration lock across the write is a future refinement, not a claim this build makes.
 
 The plan digest covers every operation, including the ones that turn out unchanged, so the
 confirmation binds the reviewed set of keys.

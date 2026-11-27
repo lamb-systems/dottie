@@ -79,7 +79,11 @@ func (journal *Journal) BeginSettingsJournal(
 	}
 	var entry SettingsJournalEntry
 	err := journal.withTx(ctx, StageSettingsJournal, func(tx *sql.Tx) error {
-		rows, err := queryInt64(ctx, tx, "SELECT count(*) FROM settings_journal")
+		rows, err := queryInt64(
+			ctx, tx,
+			"SELECT count(*) FROM settings_journal WHERE state IN (?,?)",
+			string(JournalStatePending), string(JournalStateIndeterminate),
+		)
 		if err != nil {
 			return queryReadError(ctx, StageSettingsJournal, err)
 		}

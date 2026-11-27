@@ -638,7 +638,7 @@ func preparePullApply(
 	}
 	settingsRequest := service.PublicationSettingsRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision, Configuration: configuration,
-		Record: material.Record, Backend: sources.Settings,
+		Record: material.Record, RecordCID: material.RecordCID, Backend: sources.Settings,
 	}
 	settingsPlan := service.PublicationSettingsPlan{}
 	settingsTargets, err := service.PublicationSettingsTargets(material.Record, configuration)
