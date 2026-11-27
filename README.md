@@ -62,7 +62,7 @@ it with `--settings <id>=CATEGORY[,CATEGORY]`, which resolves from the local cat
 approved category set and key digest shown in the plan; anything else is reported and skipped. A
 target that already matches a configured one is left alone. Adoption is refused before a
 confirmation token is printed when the resulting configuration would have to apply a settings
-target, because the pull path cannot apply one yet. If your local files differ from the
+target and the build cannot write settings. If your local files differ from the
 published ones and there is no history to compare, pull refuses and tells you which files
 conflict. That is deliberate: it will not overwrite a file you edited, and it will not merge.
 
@@ -145,10 +145,11 @@ account can read it back.
   local store. Dottie refuses an older local store with `rebuild_required` instead of upgrading it,
   and it touches nothing on the way out: an interrupted apply's journal and backups are exactly what
   makes a rebuild safe only once you have kept them.
-- Applying settings is not reachable yet. The journal and the writer for a published settings target
-  exist and are unit-tested, but the pull path still refuses any publication that names a settings
-  target before a token is printed, so this build writes no GSettings keys.
-  `docs/adr/017-settings-apply.md` records the intended model, including the external-writer race.
+- Applying settings needs a build with the GNOME backend. `pull` applies a published settings target
+  beside the files targets: the plan lists the approved keys it will set or reset, each intent is
+  journaled, the written value is verified, and the floor advances only afterwards. Without the
+  backend the whole pull refuses before a token is printed. Keys a concurrent external writer
+  changes can be overwritten, which `docs/adr/017-settings-apply.md` records as the limit.
 - Carrying a target forward preserves it, not its owner. A peer that still configures a target you
   left out with `--drop-target` can publish it again, and that is by design: nothing here promises
   distributed removal.

@@ -487,7 +487,10 @@ func planPublicationApply(
 		if !reflect.DeepEqual(portable, published) {
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonRoot, nil)
 		}
-		if target.Source != model.SourceFiles || target.Root == nil {
+		if target.Source != model.SourceFiles {
+			continue
+		}
+		if target.Root == nil {
 			return nil, publicationApplyFailure(
 				ctx,
 				publicationApplyStagePlan,

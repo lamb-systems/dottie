@@ -38,7 +38,7 @@ func TestPlanPublicationApplyIgnoresAConfiguredUnpublishedTarget(t *testing.T) {
 	assert.Equal(t, fixture.target.ID, plan.Entries[0].TargetID)
 }
 
-func TestPlanPublicationApplyRefusesAPublishedTargetItCannotWrite(t *testing.T) {
+func TestPlanPublicationApplyLeavesAPublishedSettingsTargetToTheSettingsPlanner(t *testing.T) {
 	fixture := newPublicationApplyFixture(t)
 	settings := newPublicationApplySettingsTarget(t)
 	fixture.configuration.Targets = append(fixture.configuration.Targets, settings)
@@ -48,8 +48,12 @@ func TestPlanPublicationApplyRefusesAPublishedTargetItCannotWrite(t *testing.T) 
 	require.NoError(t, err)
 	remote.Targets = append(remote.Targets, portable)
 
-	_, err = PlanPublicationApply(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
-	requirePublicationApplyRefusal(t, err, "apply-plan", "target_unsupported")
+	plan, err := PlanPublicationApply(
+		context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+	)
+	require.NoError(t, err)
+	assert.Zero(t, plan.Changes, "the files planner claimed an operation for a settings target")
+	assert.Empty(t, plan.Entries)
 }
 
 func TestPlanPublicationApplyRefusesAPublishedRootMismatch(t *testing.T) {
