@@ -728,3 +728,170 @@ func TestPreparePublicationPushKeepsDeletionScopedToItsTarget(t *testing.T) {
 	assert.Equal(t, "other", record.Segments[1].Target.ID)
 	assert.Equal(t, publication.SegmentFormEntries, record.Segments[1].Form, "a deletion demoted a sibling target")
 }
+
+func TestPreparePublicationPushPacksADeletionAgainstAPackedAcceptance(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushFixture(t)
+	for _, name := range []string{"second.conf", "third.conf"} {
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(fixture.paths.Home, "config", name), []byte("synthetic "+name), 0o600),
+		)
+	}
+	first := fixture.publish(t)
+	require.Equal(t, publication.PayloadFormFileSet, first.Form)
+	setFileSetReaderFromAccepted(t, fixture)
+
+	require.NoError(t, os.Remove(filepath.Join(fixture.paths.Home, "config", "third.conf")))
+	secondRequest := fixture.request([16]byte{0x77, 0x01}, nil)
+	second, err := fixture.coordinator.PreparePublicationPush(ctx, secondRequest)
+	require.NoError(t, err)
+	require.Equal(t, publication.PayloadFormPacked, second.Form, "a deletion against an entries base was not packed")
+	_, err = fixture.coordinator.ConfirmPublicationPush(
+		ctx, secondRequest, second, second.Proposal.Confirmation,
+	)
+	require.NoError(t, err)
+	floor, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Len(t, floor.Segments, 1)
+	require.Equal(t, publicationstate.PayloadFormPacked, floor.Segments[0].Form,
+		"the packed successor was not the accepted position")
+	setFileSetReaderFromAccepted(t, fixture)
+
+	require.NoError(t, os.Remove(filepath.Join(fixture.paths.Home, "config", "second.conf")))
+	third, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x77, 0x02}, nil))
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormPacked, third.Form,
+		"a deletion against a packed accepted position left the target eligible for the entries form")
+}
+
+func TestPreparePublicationPushDoesNotPackADeletionWithoutAnAcceptedPosition(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushFixture(t)
+	for _, name := range []string{"second.conf", "third.conf"} {
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(fixture.paths.Home, "config", name), []byte("synthetic "+name), 0o600),
+		)
+	}
+	require.NoError(t, os.Remove(filepath.Join(fixture.paths.Home, "config", "third.conf")))
+
+	preparation, err := fixture.coordinator.PreparePublicationPush(
+		ctx,
+		fixture.request([16]byte{0x77, 0x03}, nil),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormFileSet, preparation.Form,
+		"a first publication has no accepted position to delete from")
+}
+
+func newPackedDeletionReceiver(
+	t *testing.T,
+	localContent []byte,
+) (PublicationApplyRequest, string) {
+	t.Helper()
+	ctx := context.Background()
+	source := newPublicationPushFixture(t)
+	second := []byte("synthetic second payload")
+	require.NoError(t, os.WriteFile(filepath.Join(source.paths.Home, "config", "second.conf"), second, 0o600))
+	first := source.publish(t)
+	require.Equal(t, publication.PayloadFormFileSet, first.Form)
+	setFileSetReaderFromAccepted(t, source)
+	require.NoError(t, os.Remove(filepath.Join(source.paths.Home, "config", "second.conf")))
+	successor, err := source.coordinator.PreparePublicationPush(ctx, source.request([16]byte{0x78, 0x01}, nil))
+	require.NoError(t, err)
+	require.Equal(t, publication.PayloadFormPacked, successor.Form,
+		"the deletion was not published packed against a packed acceptance")
+	floor, present, err := source.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	acceptedMaterial, err := source.store.ReadAcceptedMaterial(ctx, source.binding, floor)
+	require.NoError(t, err)
+	base, _, err := acceptedPublicationSnapshot(acceptedMaterial, source.configuration)
+	require.NoError(t, err)
+	require.Len(t, base.Entries, 2)
+	record, err := publication.DecodeSnapshot(successor.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, record.Segments, 1)
+	remote, err := publication.DecodeSegmentPayload(proposalPackedPayload(successor.Proposal), record.Segments[0])
+	require.NoError(t, err)
+
+	target := newPublicationApplyFixture(t)
+	root := filepath.Join(target.paths.Home, "config")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "second.conf"), localContent, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "init.lua"), []byte("synthetic push payload"), 0o600))
+	applyTarget := config.Target{
+		ID: "files", Source: model.SourceFiles,
+		Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}
+	target.configuration = config.Config{Version: config.Version, Targets: []config.Target{applyTarget}}
+	return PublicationApplyRequest{
+		Journal: target.journal, Vault: target.vault, FloorRevision: target.floor,
+		Configuration: target.configuration, BaseSnapshot: base, RemoteSnapshot: remote,
+		Roots: map[string]string{"files": root}, Local: target.local,
+	}, root
+}
+
+func TestPackedDeletionFromAnotherMachineRemovesTheLocalFile(t *testing.T) {
+	second := []byte("synthetic second payload")
+	request, root := newPackedDeletionReceiver(t, second)
+	plan, err := PlanPublicationApply(context.Background(), request)
+	require.NoError(t, err)
+	deletes := 0
+	for _, entry := range plan.Entries {
+		if entry.Operation == PublicationApplyDelete {
+			deletes++
+		}
+	}
+	require.Equal(t, 1, deletes, "a packed deletion did not plan a local delete")
+
+	report, err := ApplyPublication(context.Background(), request)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Applied)
+	_, statErr := os.Lstat(filepath.Join(root, "second.conf"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the deleted file survived the apply")
+	kept, err := os.ReadFile(filepath.Join(root, "init.lua"))
+	require.NoError(t, err)
+	assert.Equal(t, "synthetic push payload", string(kept))
+}
+
+func TestPackedDeletionFromAnotherMachineRefusesADivergentLocalEdit(t *testing.T) {
+	request, root := newPackedDeletionReceiver(t, []byte("edited on the second machine"))
+	_, err := PlanPublicationApply(context.Background(), request)
+	requirePublicationApplyRefusal(t, err, "apply-plan", "plan_conflict")
+
+	content, readErr := os.ReadFile(filepath.Join(root, "second.conf"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "edited on the second machine", string(content), "a refused plan mutated the file")
+}
+
+func TestPreparePublicationPushReturnsASingleFileTargetToTheEntriesForm(t *testing.T) {
+	ctx := context.Background()
+	fixture := newPublicationPushFixture(t)
+	path := filepath.Join(fixture.paths.Home, "config", "init.lua")
+	require.NoError(t, os.Chmod(path, 0o755))
+	fixture.configuration.Targets[0].Root = &config.Root{
+		Base: model.RootHome, Path: "config/init.lua", Kind: model.SelectionFile,
+	}
+
+	packed := fixture.publish(t)
+	require.Equal(t, publication.PayloadFormPacked, packed.Form, "an unusual mode did not pack the target")
+	floor, present, err := fixture.store.Load(ctx)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, publicationstate.PayloadFormPacked, floor.Segments[0].Form)
+	setFileSetReaderFromAccepted(t, fixture)
+
+	require.NoError(t, os.Chmod(path, 0o600))
+	eligible, err := fixture.coordinator.PreparePublicationPush(ctx, fixture.request([16]byte{0x79, 0x01}, nil))
+	require.NoError(t, err)
+	assert.Equal(t, publication.PayloadFormFileSet, eligible.Form,
+		"a single-file target compared the packed path dot against its basename and stayed packed")
+	record, err := publication.DecodeSnapshot(eligible.Proposal.Batch.SnapshotRecord)
+	require.NoError(t, err)
+	require.Len(t, record.Segments, 1)
+	require.Len(t, record.Segments[0].Entries, 1)
+	assert.Equal(t, "init.lua", record.Segments[0].Entries[0].Path)
+}

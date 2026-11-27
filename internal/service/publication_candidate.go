@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"sort"
 
@@ -79,10 +80,11 @@ func buildPublicationMaterial(
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
+	accepted PublicationAcceptedPaths,
 	view publicationstate.SuppliedRepositoryView,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, MaterialWriteBatch, error) {
-	candidate, err := encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
+	candidate, err := encodePublicationCandidate(binding, snapshot, floor, present, accepted, publicationID)
 	if err != nil {
 		return publicationstate.CandidateInput{}, MaterialWriteBatch{}, err
 	}
@@ -108,6 +110,7 @@ func encodePublicationCandidate(
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
+	accepted PublicationAcceptedPaths,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, error) {
 	var sequence uint64
@@ -120,7 +123,7 @@ func encodePublicationCandidate(
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
-	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot, floor)
+	recordSegments, writeSegments, payloads, entries, err := candidateSegments(snapshot, accepted)
 	if err != nil {
 		return publicationstate.CandidateInput{}, err
 	}
@@ -172,7 +175,7 @@ func cloneSegmentSummariesService(summaries []publicationstate.SegmentSummary) [
 
 func candidateSegments(
 	snapshot model.Snapshot,
-	floor publicationstate.Floor,
+	accepted PublicationAcceptedPaths,
 ) ([]publication.SnapshotSegment, []publicationstate.CandidateSegment, [][]byte, []publication.PayloadEntry, error) {
 	targets := append([]model.Target(nil), snapshot.Targets...)
 	sort.Slice(targets, func(left, right int) bool { return targets[left].ID < targets[right].ID })
@@ -201,7 +204,7 @@ func candidateSegments(
 			payloads = append(payloads, nil)
 		case model.SourceFiles:
 			segment, targetPayloads, ok := entriesSegmentForTarget(target, targetEntries)
-			if ok && publicationSegmentDeletesAcceptedFile(floor, target.ID, segment.Entries) {
+			if ok && publicationTargetDropsAcceptedPath(accepted, target.ID, segment.Entries) {
 				ok = false
 			}
 			if ok {
@@ -489,8 +492,66 @@ func publicationSyncAppliedEntry(entry model.Entry) (model.Entry, bool) {
 	return model.Entry{}, false
 }
 
-func publicationSegmentDeletesAcceptedFile(
-	floor publicationstate.Floor,
+type PublicationAcceptedPaths map[string]map[string]struct{}
+
+func publicationAcceptedPathsOfSnapshot(snapshot model.Snapshot) PublicationAcceptedPaths {
+	if len(snapshot.Targets) == 0 {
+		return nil
+	}
+	kinds := make(map[string]model.FileRoot, len(snapshot.Targets))
+	for _, target := range snapshot.Targets {
+		if target.Root != nil {
+			kinds[target.ID] = *target.Root
+		}
+	}
+	paths := make(PublicationAcceptedPaths, len(snapshot.Targets))
+	for _, entry := range snapshot.Entries {
+		if entry.File == nil || entry.File.State != model.FilePresent || entry.File.Kind != model.FileRegular {
+			continue
+		}
+		recordPath := entry.File.Path
+		if root, ok := kinds[entry.TargetID]; ok && root.Kind == model.SelectionFile && recordPath == "." {
+			recordPath = filepath.Base(root.Path)
+		}
+		target := paths[entry.TargetID]
+		if target == nil {
+			target = make(map[string]struct{})
+			paths[entry.TargetID] = target
+		}
+		target[recordPath] = struct{}{}
+	}
+	return paths
+}
+
+func publicationAcceptedPathsAs(paths PublicationAcceptedPaths, targetID string) PublicationAcceptedPaths {
+	if len(paths) != 1 || targetID == "" {
+		return paths
+	}
+	if _, ok := paths[targetID]; ok {
+		return paths
+	}
+	for _, present := range paths {
+		return PublicationAcceptedPaths{targetID: present}
+	}
+	return paths
+}
+
+func publicationAcceptedPathsOfMaterial(
+	material publicationstate.AcceptedMaterial,
+) (PublicationAcceptedPaths, error) {
+	record, err := publication.DecodeSnapshot(material.SnapshotRecord)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := acceptedSnapshotFromSegments(record, material)
+	if err != nil {
+		return nil, err
+	}
+	return publicationAcceptedPathsOfSnapshot(snapshot), nil
+}
+
+func publicationTargetDropsAcceptedPath(
+	accepted PublicationAcceptedPaths,
 	targetID string,
 	entries []publication.SnapshotEntry,
 ) bool {
@@ -498,14 +559,9 @@ func publicationSegmentDeletesAcceptedFile(
 	for _, entry := range entries {
 		present[entry.Path] = struct{}{}
 	}
-	for _, summary := range floor.Segments {
-		if summary.TargetID != targetID || summary.Form != publicationstate.PayloadFormFileSet {
-			continue
-		}
-		for _, accepted := range summary.Entries {
-			if _, ok := present[accepted.Path]; !ok {
-				return true
-			}
+	for path := range accepted[targetID] {
+		if _, ok := present[path]; !ok {
+			return true
 		}
 	}
 	return false

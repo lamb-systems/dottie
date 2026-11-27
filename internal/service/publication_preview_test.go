@@ -687,7 +687,7 @@ func publicationPreviewAcceptSuccessor(
 	snapshot model.Snapshot,
 ) ([]byte, [][]byte, []publication.PayloadEntry, publicationstate.Floor) {
 	t.Helper()
-	segments, _, payloads, entries, err := candidateSegments(snapshot, publicationstate.Floor{})
+	segments, _, payloads, entries, err := candidateSegments(snapshot, nil)
 	require.NoError(t, err)
 	old, err := publication.DecodeSnapshot(fixture.request.snapshotRecord)
 	require.NoError(t, err)

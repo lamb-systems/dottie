@@ -154,6 +154,8 @@ type MaterialPublishRequest struct {
 	Binding       publicationstate.Binding
 	Form          publication.PayloadForm
 	Snapshot      model.Snapshot
+	Accepted      PublicationAcceptedPaths
+	AcceptedFloor []byte
 	PublicationID [16]byte
 	Reviews       ReviewSource
 }
@@ -227,6 +229,20 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 			nil,
 		)
 	}
+	accepted := PublicationAcceptedPaths(nil)
+	if present && request.Accepted != nil && bytes.Equal(request.AcceptedFloor, floor.RecordCID) {
+		accepted = request.Accepted
+	}
+
+	if accepted == nil && present {
+		material, err := request.Store.ReadAcceptedMaterial(ctx, request.Binding, floor)
+		if err != nil {
+			return MaterialPublishProposal{}, err
+		}
+		if accepted, err = publicationAcceptedPathsOfMaterial(material); err != nil {
+			return MaterialPublishProposal{}, err
+		}
+	}
 	view, err := request.Transport.ReadView(ctx)
 	if err != nil {
 		return MaterialPublishProposal{}, publishMaterialFailure(
@@ -249,6 +265,7 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 		request.Snapshot,
 		floor,
 		present,
+		accepted,
 		view,
 		request.PublicationID,
 	)
@@ -1299,8 +1316,21 @@ func (coordinator *Coordinator) PreparePublicationPush(
 	if err != nil {
 		return PublicationPushPreparation{}, err
 	}
+	acceptedPaths := PublicationAcceptedPaths(nil)
+	acceptedRecord := publication.SnapshotRecord{}
+	if present {
+		if acceptedRecord, err = publication.DecodeSnapshot(acceptedMaterial.SnapshotRecord); err != nil {
+			return PublicationPushPreparation{}, err
+		}
+		acceptedPaths = publicationAcceptedPathsOfSnapshot(base)
+		if acceptedRecord.PayloadForm() == publication.PayloadFormFileSet {
+			if target, _, targetErr := fileSetPublicationTarget(request.Configuration); targetErr == nil {
+				acceptedPaths = publicationAcceptedPathsAs(acceptedPaths, target.ID)
+			}
+		}
+	}
 	candidate, err := encodePublicationCandidate(
-		request.Binding, snapshot, floor, present, request.PublicationID,
+		request.Binding, snapshot, floor, present, acceptedPaths, request.PublicationID,
 	)
 	if err != nil {
 		return PublicationPushPreparation{}, err
@@ -1318,19 +1348,16 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		Entries: len(snapshot.Entries),
 	}
 	if present {
-		baseRecord, err := publication.DecodeSnapshot(acceptedMaterial.SnapshotRecord)
-		if err != nil {
-			return PublicationPushPreparation{}, err
-		}
-		if sameRecordSegments(baseRecord.Segments, sealed.Segments) {
+		if sameRecordSegments(acceptedRecord.Segments, sealed.Segments) {
 			counts.NoOp = true
 			return coordinator.preparePublicationPushNoOp(ctx, request, counts)
 		}
 	}
 	proposal, err := coordinator.PreparePublishMaterial(ctx, MaterialPublishRequest{
 		Store: request.Store, Transport: request.Transport, Binding: request.Binding,
-		Form: form, Snapshot: snapshot, PublicationID: request.PublicationID,
-		Reviews: request.Reviews,
+		Form: form, Snapshot: snapshot, Accepted: acceptedPaths,
+		AcceptedFloor: floor.RecordCID,
+		PublicationID: request.PublicationID, Reviews: request.Reviews,
 	})
 	if err != nil {
 		return PublicationPushPreparation{}, coordinator.publicationPushRefusal(ctx, request, err)

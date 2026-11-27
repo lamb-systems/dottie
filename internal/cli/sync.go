@@ -798,7 +798,7 @@ func runSyncPushHalf(
 		return syncPushRefusal(command, output, "the post-pull publication cannot be composed", "post_pull_candidate")
 	}
 	candidateMaterial, err := service.EncodePublicationCandidate(
-		binding, snapshot, candidatePosition, candidatePresent, publicationID,
+		binding, snapshot, candidatePosition, candidatePresent, acceptedSnapshot, publicationID,
 	)
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication identity is unavailable", "post_pull_candidate")
@@ -1108,7 +1108,7 @@ func prepareSyncPushIdentity(
 		)
 	}
 	material, err := service.EncodePublicationCandidate(
-		binding, snapshot, position, present, publicationID,
+		binding, snapshot, position, present, remote, publicationID,
 	)
 	if err != nil {
 		return syncPushIdentity{}, urfave.Exit(

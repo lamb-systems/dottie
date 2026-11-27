@@ -524,9 +524,12 @@ func EncodePublicationCandidate(
 	snapshot model.Snapshot,
 	floor publicationstate.Floor,
 	present bool,
+	accepted model.Snapshot,
 	publicationID [16]byte,
 ) (publicationstate.CandidateInput, error) {
-	return encodePublicationCandidate(binding, snapshot, floor, present, publicationID)
+	return encodePublicationCandidate(
+		binding, snapshot, floor, present, publicationAcceptedPathsOfSnapshot(accepted), publicationID,
+	)
 }
 
 func FileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {

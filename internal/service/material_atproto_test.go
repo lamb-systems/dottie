@@ -727,6 +727,7 @@ func TestMaterialATProtoRefusesFenceChangedAtRepository(t *testing.T) {
 		materialTestSnapshot("synthetic atproto fenced payload"),
 		genesis.Floor,
 		true,
+		nil,
 		[16]byte{0x35, 0x83},
 	)
 	require.NoError(t, err)

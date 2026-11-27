@@ -22,10 +22,12 @@ file-set that names one blob per regular file, one packed tar for that target, o
 settings. The file-set form is used for a files target that holds only non-empty regular files with
 mode `0600` or `0644`: a single selected file, or a directory whose every directory holds at least
 one published file and carries no mode of its own. The change may not delete a file relative to the
-accepted position. Anything else falls back to packed for that target only, including a directory
-that holds no file at all, a selected file that is empty, a symlink or an unusual mode; a settings
-target never affects its sibling targets. There is no per-target form setting. Snapshots are content
-addressed and chained, so a reader can tell a snapshot belongs to the publication it claims to.
+accepted position, and that holds whether the accepted position published the target as an entries
+segment or as a packed blob: a target that drops a file it had accepted is published packed again.
+Anything else falls back to packed for that target only, including a directory that holds no file at
+all, a selected file that is empty, a symlink or an unusual mode; a settings target never affects its
+sibling targets. There is no per-target form setting. Snapshots are content addressed and chained, so
+a reader can tell a snapshot belongs to the publication it claims to.
 
 ## Install
 
