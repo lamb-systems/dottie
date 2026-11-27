@@ -37,7 +37,9 @@ func (backend *pullTestSettingsBackend) Observe(
 	_ context.Context,
 	key model.EntryKey,
 ) (syncengine.SettingValue, error) {
-	return backend.values[backend.identity(key)], nil
+	value := backend.values[backend.identity(key)]
+	value.Writable = true
+	return value, nil
 }
 
 func (backend *pullTestSettingsBackend) Canonicalize(

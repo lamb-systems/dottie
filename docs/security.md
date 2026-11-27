@@ -23,9 +23,10 @@ classified; `sync` resolves it before its push half settles and refuses to publi
 unresolved. A standalone `push` finalizes a retained attempt through the position store and does not
 consult the apply journal. The settings writer journals each intent per key, writes only keys the local category selection
 already approves, verifies the written value, and never applies a value from a journal image.
-`pull` reaches it: a publication that names a settings target and a local configuration that selects
-it are applied together with the files, and without the GNOME backend the whole pull refuses before a
-token is printed. GSettings has no revision or compare-and-set, so a concurrent external writer can
+`pull`, and the pull half of `sync`, reach it: a publication that names a settings target and a local
+configuration that selects it are applied together with the files, and without the GNOME backend the
+whole pull refuses before a token is printed. An observation that reports a locked key is a refusal
+at plan time and an unclassifiable row at recovery time, never a match and never a reset. GSettings has no revision or compare-and-set, so a concurrent external writer can
 undo a value; convergence can therefore restore an older value, and that is the limit of the
 guarantee rather than a hidden one. `push` treats the accepted record, not the local configuration, as the authority
 for targets this machine does not configure: their segments are copied byte for byte, the store's

@@ -159,3 +159,20 @@ func TestLiveJournalRowsCountsSettingsIntents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), live)
 }
+
+func TestCheckAdmissionCountsALiveSettingsRow(t *testing.T) {
+	ctx := context.Background()
+	journal, vault := settingsJournalFixture(t)
+	_, err := journal.BeginSettingsJournal(ctx, settingsJournalIntent(vault, SettingsValue{}))
+	require.NoError(t, err)
+
+	err = journal.CheckAdmission(ctx, 1)
+	var blocked *JournalBlockedError
+	require.ErrorAs(t, err, &blocked, "the admission budget ignored a live settings row")
+
+	live, liveErr := journal.LiveSettingsEntries(ctx)
+	require.NoError(t, liveErr)
+	require.Len(t, live, 1)
+	require.NoError(t, journal.FailSettingsJournal(ctx, live[0]))
+	require.NoError(t, journal.CheckAdmission(ctx, 1))
+}

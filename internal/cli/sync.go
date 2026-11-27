@@ -618,7 +618,7 @@ func runSyncCommand(
 		}
 		return nil
 	}
-	if finding.Kind == pullFindingDiverges && preparation.Plan.Changes == 0 {
+	if finding.Kind == pullFindingDiverges && syncPullChangeCount(preparation) == 0 {
 		if len(drop) != 0 {
 			return urfave.Exit(
 				"sync refused: the provider position differs from the accepted floor and the pull half changes nothing, "+
@@ -658,6 +658,7 @@ func runSyncCommand(
 	)
 	output := renderPullSkipped(preparation.Skipped)
 	output += renderPullApplyPlan(preparation.Plan)
+	output += renderPullSettingsPlan(preparation.SettingsPlan)
 	output += renderSyncPullEffects(preparation.Plan, drop)
 	output += renderSyncPushPreview(identity)
 	output += fmt.Sprintf("confirmation: %x\n", token)
@@ -1448,4 +1449,8 @@ func renderSyncPullEffects(plan service.PublicationApplyPlan, drop []string) str
 		)
 	}
 	return output.String()
+}
+
+func syncPullChangeCount(preparation pullApplyPreparation) int {
+	return preparation.Plan.Changes + preparation.SettingsPlan.Changes
 }

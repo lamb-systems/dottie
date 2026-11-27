@@ -130,3 +130,16 @@ func TestRenderSyncPullEffectsNamesWhatSurvivesARefusedPush(t *testing.T) {
 	assert.NotContains(t, dropOnly, "local deletions survive")
 	assert.Contains(t, dropOnly, "the drop is published only if the push half completes")
 }
+
+func TestSyncPullChangeCountIncludesSettings(t *testing.T) {
+	empty := pullApplyPreparation{}
+	assert.Zero(t, syncPullChangeCount(empty))
+
+	filesOnly := pullApplyPreparation{Plan: service.PublicationApplyPlan{Changes: 1}}
+	assert.Equal(t, 1, syncPullChangeCount(filesOnly))
+
+	settingsOnly := pullApplyPreparation{
+		SettingsPlan: service.PublicationSettingsPlan{Changes: 2},
+	}
+	assert.Equal(t, 2, syncPullChangeCount(settingsOnly), "a settings-only pull was counted as no work")
+}

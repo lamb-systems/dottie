@@ -145,6 +145,7 @@ const (
 
 type PublicationApplyRequest struct {
 	Journal         *publicationstate.Journal
+	Settings        syncengine.SettingsBackend
 	Vault           [32]byte
 	FloorRevision   uint64
 	Configuration   config.Config
@@ -293,6 +294,28 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 			publicationstate.JournalOutcomeFailed,
 			publicationstate.JournalOutcomeRolledBack,
 			publicationstate.JournalOutcomeRollbackPending:
+			continue
+		}
+	}
+	settingsResolutions, err := resolvePublicationSettingsJournal(ctx, request.Journal, request.Settings)
+	if err != nil {
+		return report, publicationApplyFailure(ctx, publicationApplyStageResolve, publicationApplyReasonJournal, err)
+	}
+	for _, resolution := range settingsResolutions {
+		switch resolution.Outcome {
+		case publicationstate.JournalOutcomeUnobserved:
+			return report, &publicationApplyError{
+				stage:  publicationApplyStageResolve,
+				reason: publicationApplyReasonUnobserved,
+				entry:  resolution.Entry,
+			}
+		case publicationstate.JournalOutcomeIndeterminate:
+			return report, &publicationApplyError{
+				stage:  publicationApplyStageResolve,
+				reason: publicationApplyReasonIndeterminate,
+				entry:  resolution.Entry,
+			}
+		case publicationstate.JournalOutcomeApplied, publicationstate.JournalOutcomeFailed:
 			continue
 		}
 	}
@@ -1385,6 +1408,8 @@ func resolvePublicationApplyJournal(
 	)
 }
 
+var errPublicationSettingsUnobservable = errors.New("settings backend observation is not writable")
+
 func resolvePublicationSettingsJournal(
 	ctx context.Context,
 	journal *publicationstate.Journal,
@@ -1418,6 +1443,9 @@ func resolvePublicationSettingsJournal(
 		})
 		if err != nil {
 			return publicationstate.SettingsValue{}, err
+		}
+		if !observed.Writable {
+			return publicationstate.SettingsValue{}, errPublicationSettingsUnobservable
 		}
 		return publicationstate.SettingsValue{
 			Present: observed.Present, Type: observed.Type, Text: observed.Text,

@@ -19,6 +19,7 @@ import (
 
 type settingsTestBackend struct {
 	values  map[string]syncengine.SettingValue
+	locked  map[string]struct{}
 	sets    []string
 	resets  []string
 	observe error
@@ -26,7 +27,10 @@ type settingsTestBackend struct {
 }
 
 func newSettingsTestBackend() *settingsTestBackend {
-	return &settingsTestBackend{values: make(map[string]syncengine.SettingValue)}
+	return &settingsTestBackend{
+		values: make(map[string]syncengine.SettingValue),
+		locked: make(map[string]struct{}),
+	}
 }
 
 func settingsTestIdentity(key model.EntryKey) string {
@@ -40,7 +44,10 @@ func (backend *settingsTestBackend) Observe(
 	if backend.observe != nil {
 		return syncengine.SettingValue{}, backend.observe
 	}
-	return backend.values[settingsTestIdentity(key)], nil
+	value := backend.values[settingsTestIdentity(key)]
+	_, locked := backend.locked[settingsTestIdentity(key)]
+	value.Writable = !locked
+	return value, nil
 }
 
 func (backend *settingsTestBackend) Canonicalize(
@@ -298,4 +305,151 @@ func settingsTestVault() [32]byte {
 	var vault [32]byte
 	vault[0] = 0x62
 	return vault
+}
+
+func TestPlanPublicationSettingsRefusesALockedKey(t *testing.T) {
+	backend := newSettingsTestBackend()
+	locked := settingsTestObservedKey(t, "color-scheme")
+	backend.locked[locked] = struct{}{}
+	backend.values[locked] = syncengine.SettingValue{
+		Present: true, Type: "s", Text: "'prefer-dark'",
+	}
+	material := settingsTestRecord(t,
+		settingsTestEntry(t, "color-scheme", &model.VariantValue{Type: "s", Text: "'prefer-dark'"}),
+	)
+	_, err := PlanPublicationSettings(context.Background(), PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: material, Backend: backend,
+	})
+	require.ErrorIs(t, err, ErrPublicationSettings, "a locked key that matches was accepted")
+}
+
+func TestApplyPublicationSettingsRefusesALockedKey(t *testing.T) {
+	backend := newSettingsTestBackend()
+	material := settingsTestRecord(t,
+		settingsTestEntry(t, "accent-color", &model.VariantValue{Type: "s", Text: "'blue'"}),
+	)
+	journal, _ := settingsTestJournal(t)
+	request := PublicationSettingsRequest{
+		Vault: settingsTestVault(), Configuration: settingsTestConfiguration(t),
+		Record: material, Backend: backend, Journal: journal,
+	}
+	plan, err := PlanPublicationSettings(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, 1, plan.Changes)
+	request.ExpectedPlan = plan.Digest
+
+	backend.locked[settingsTestIdentity(model.EntryKey{
+		Source: model.SourceGNOME, SchemaID: plan.Operations[0].SchemaID,
+		SettingsPath: plan.Operations[0].Path, SettingKey: plan.Operations[0].Key,
+	})] = struct{}{}
+	_, err = ApplyPublicationSettings(context.Background(), request)
+	require.ErrorIs(t, err, ErrPublicationSettings)
+	assert.Empty(t, backend.sets, "a locked key was written")
+}
+
+func TestApplyPublicationResolvesAnInterruptedSettingsRowBeforeWriting(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "synthetic")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+
+	settled := settingsJournalIntentFor(t, fixture.vault, "accent-color")
+	entry, err := fixture.journal.BeginSettingsJournal(context.Background(), settled)
+	require.NoError(t, err)
+	require.NoError(t, fixture.journal.FailSettingsJournal(context.Background(), entry))
+
+	backend := newSettingsTestBackend()
+	request := fixture.request(fixture.local, base, remote)
+	request.Settings = backend
+	report, err := ApplyPublication(context.Background(), request)
+	require.NoError(t, err)
+	for _, entry := range report.Entries {
+		assert.Equal(t, PublicationApplyUnchanged, entry.Operation, "the file plan changed something")
+	}
+
+	live, err := fixture.journal.LiveSettingsEntries(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, live)
+}
+
+func TestApplyPublicationRefusesAnIndeterminateSettingsRow(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "synthetic")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+
+	intent := settingsJournalIntentFor(t, fixture.vault, "accent-color")
+	entry, err := fixture.journal.BeginSettingsJournal(context.Background(), intent)
+	require.NoError(t, err)
+	require.NoError(t, fixture.journal.MarkSettingsIndeterminate(context.Background(), entry))
+
+	backend := newSettingsTestBackend()
+	backend.values[settingsTestIdentity(model.EntryKey{
+		Source: model.SourceGNOME, SchemaID: intent.Anchor.SchemaID,
+		SettingsPath: intent.Anchor.Path, SettingKey: intent.Anchor.Key,
+	})] = syncengine.SettingValue{Present: true, Type: "s", Text: "'third-party'", Writable: true}
+
+	request := fixture.request(fixture.local, base, remote)
+	request.Settings = backend
+	_, err = ApplyPublication(context.Background(), request)
+	require.ErrorIs(t, err, ErrPublicationApply)
+	live, liveErr := fixture.journal.LiveSettingsEntries(context.Background())
+	require.NoError(t, liveErr)
+	assert.Len(t, live, 1, "the indeterminate settings row was retired")
+}
+
+func settingsJournalIntentFor(
+	t *testing.T,
+	vault [32]byte,
+	key string,
+) publicationstate.SettingsJournalIntent {
+	t.Helper()
+	setting := settingsTestEntry(t, key, nil)
+	return publicationstate.SettingsJournalIntent{
+		Vault: vault,
+		Anchor: publicationstate.SettingsJournalAnchor{
+			TargetID: "desktop", SchemaID: setting.SchemaID, Path: setting.Path, Key: setting.Key,
+		},
+		Prior:             publicationstate.SettingsValue{Present: true, Type: "s", Text: "'old'"},
+		Written:           publicationstate.SettingsValue{Present: true, Type: "s", Text: "'new'"},
+		SeenFloorRevision: 1,
+	}
+}
+
+func TestApplyPublicationRefusesALockedSettingsRow(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "note.ini", "synthetic")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"note.ini": "synthetic",
+	}))
+
+	intent := settingsJournalIntentFor(t, fixture.vault, "accent-color")
+	_, err := fixture.journal.BeginSettingsJournal(context.Background(), intent)
+	require.NoError(t, err)
+
+	backend := newSettingsTestBackend()
+	backend.locked[settingsTestIdentity(model.EntryKey{
+		Source: model.SourceGNOME, SchemaID: intent.Anchor.SchemaID,
+		SettingsPath: intent.Anchor.Path, SettingKey: intent.Anchor.Key,
+	})] = struct{}{}
+
+	request := fixture.request(fixture.local, base, remote)
+	request.Settings = backend
+	_, err = ApplyPublication(context.Background(), request)
+	require.ErrorIs(t, err, ErrPublicationApply)
+	live, liveErr := fixture.journal.LiveSettingsEntries(context.Background())
+	require.NoError(t, liveErr)
+	assert.Len(t, live, 1, "a locked key classified a settings row")
 }

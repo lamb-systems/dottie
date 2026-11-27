@@ -145,11 +145,12 @@ account can read it back.
   local store. Dottie refuses an older local store with `rebuild_required` instead of upgrading it,
   and it touches nothing on the way out: an interrupted apply's journal and backups are exactly what
   makes a rebuild safe only once you have kept them.
-- Applying settings needs a build with the GNOME backend. `pull` applies a published settings target
-  beside the files targets: the plan lists the approved keys it will set or reset, each intent is
-  journaled, the written value is verified, and the floor advances only afterwards. Without the
-  backend the whole pull refuses before a token is printed. Keys a concurrent external writer
-  changes can be overwritten, which `docs/adr/017-settings-apply.md` records as the limit.
+- Applying settings needs a build with the GNOME backend. `pull` — and the pull half of `sync` —
+  applies a published settings target beside the files targets: the plan lists the approved keys it
+  will set or reset, each intent is journaled, the written value is verified, and the floor advances
+  only afterwards. Without the backend the whole pull refuses before a token is printed. A key the
+  desktop locks is a refusal, never a match or a reset. Keys a concurrent external writer changes can
+  be overwritten, which `docs/adr/017-settings-apply.md` records as the limit.
 - Carrying a target forward preserves it, not its owner. A peer that still configures a target you
   left out with `--drop-target` can publish it again, and that is by design: nothing here promises
   distributed removal.

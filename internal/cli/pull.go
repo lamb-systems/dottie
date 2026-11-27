@@ -1143,6 +1143,7 @@ func applyPullPreparation(
 	request := preparation.Request
 	request.Journal = journal
 	request.ExpectedPlan = preparation.Plan.Digest
+	request.Settings = preparation.Sources.Settings
 	report, applyErr := service.ApplyPublication(ctx, request)
 	if applyErr != nil {
 		return output, pullApplyFailure(input.Command, input.label(), output, applyErr)

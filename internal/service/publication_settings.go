@@ -96,7 +96,7 @@ func PlanPublicationSettings(
 				return plan, ErrPublicationSettings
 			}
 			observed, observeErr := request.Backend.Observe(ctx, publicationSettingEntryKey(operation))
-			if observeErr != nil {
+			if observeErr != nil || !observed.Writable {
 				return plan, ErrPublicationSettings
 			}
 			switch {
@@ -141,7 +141,7 @@ func ApplyPublicationSettings(
 		}
 		key := publicationSettingEntryKey(operation)
 		observed, observeErr := request.Backend.Observe(ctx, key)
-		if observeErr != nil {
+		if observeErr != nil || !observed.Writable {
 			return report, ErrPublicationSettings
 		}
 		entry := PublicationSettingsEntry{

@@ -732,7 +732,7 @@ func (j *Journal) CheckAdmission(ctx context.Context, floorRevision uint64) erro
 	if err := rows.Err(); err != nil {
 		return storageFailure(ctx, StageJournal, err)
 	}
-	return nil
+	return j.CheckSettingsAdmission(ctx, floorRevision)
 }
 
 func (j *Journal) ResolveInterrupted(
