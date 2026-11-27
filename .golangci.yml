@@ -240,7 +240,7 @@ linters:
       # Default: [ switch ]
       check:
         - switch
-        - mapliteral
+        - map
       # THRESHOLD, not a disable. A switch that ends in an explicit `default`
       # states that its author considered the unlisted cases and decided they
       # share one outcome; that is the normal shape of the status, reason and

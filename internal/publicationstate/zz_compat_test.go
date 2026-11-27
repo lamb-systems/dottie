@@ -208,22 +208,6 @@ func ownerBlob(owner materialOwnership) publication.BlobReference {
 	return publication.BlobReference{}
 }
 
-func incomingMaterialUpgradeStoredMetadata(t *testing.T, ctx context.Context, q queryer) map[string][]byte {
-	t.Helper()
-	rows, err := q.QueryContext(ctx, "SELECT key,value FROM store_meta ORDER BY key")
-	require.NoError(t, err)
-	defer func() { assert.NoError(t, rows.Close()) }()
-	metadata := make(map[string][]byte)
-	for rows.Next() {
-		var key string
-		var value []byte
-		require.NoError(t, rows.Scan(&key, &value))
-		metadata[key] = bytes.Clone(value)
-	}
-	require.NoError(t, rows.Err())
-	return metadata
-}
-
 func b8TestContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

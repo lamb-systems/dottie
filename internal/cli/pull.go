@@ -270,6 +270,7 @@ func runPullCommand(
 	}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
+		writeRebuildRequiredHint(command, err, paths.PublicationStateDir())
 		return pullUnreadableExit(command, pullStoreReason(err))
 	}
 	remote, err := remotes(ctx, command, session, binding)

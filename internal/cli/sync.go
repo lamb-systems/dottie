@@ -557,6 +557,7 @@ func runSyncCommand(
 	}
 	inspection, err := publicationstate.Inspect(ctx, paths.PublicationStateDir(), binding)
 	if err != nil {
+		writeRebuildRequiredHint(command, err, paths.PublicationStateDir())
 		if publicationPositionAbsent(err) {
 			return syncNewcomerRefusal(command, pullStoreReason(err))
 		}

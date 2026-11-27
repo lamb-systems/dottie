@@ -258,7 +258,7 @@ func OpenJournal(directory string) (*Journal, error) {
 	}
 	if !probe.initial && !probe.recognized {
 		if probe.application == journalApplicationID && probe.version < journalSchemaVersion {
-			return nil, classified(ErrSchema, StageJournalOpen, ReasonUpgradeRequired)
+			return nil, classified(ErrSchema, StageJournalOpen, ReasonRebuildRequired)
 		}
 		return nil, classified(ErrSchema, StageJournalOpen, ReasonSchema)
 	}

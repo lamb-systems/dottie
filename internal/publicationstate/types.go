@@ -105,7 +105,7 @@ const (
 	ReasonIO               Reason = "io"
 	ReasonCommitUnknown    Reason = "commit_unknown"
 	ReasonCanceled         Reason = "canceled"
-	ReasonUpgradeRequired  Reason = "upgrade_required"
+	ReasonRebuildRequired  Reason = "rebuild_required"
 	ReasonActiveAttempt    Reason = "active_attempt_exists"
 	ReasonTransition       Reason = "invalid_transition"
 	ReasonSubmittedUnknown Reason = "submitted_unresolved"

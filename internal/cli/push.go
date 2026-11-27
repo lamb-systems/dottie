@@ -164,6 +164,7 @@ func runPushCommand(
 	}
 	store, err := openPublicationPositionStore(ports.Paths.PublicationStateDir(), ports.Binding)
 	if err != nil {
+		writeRebuildRequiredHint(command, err, ports.Paths.PublicationStateDir())
 		return urfave.Exit(escapeErrorMessage(pushStoreFailure(err)), 3)
 	}
 	defer func() { _ = store.Close() }()

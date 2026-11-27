@@ -170,11 +170,8 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	if !probe.initial && !probe.recognized {
 		return nil, classified(ErrSchema, StageOpen, ReasonSchema)
 	}
-	if probe.version == 1 && (!options.UpgradeFromPositions || !options.UpgradeFromAttempts) {
-		return nil, classified(ErrSchema, StageOpen, ReasonUpgradeRequired)
-	}
-	if probe.version == 2 && !options.UpgradeFromAttempts {
-		return nil, classified(ErrSchema, StageOpen, ReasonUpgradeRequired)
+	if probe.version == 1 || probe.version == 2 {
+		return nil, classified(ErrSchema, StageOpen, ReasonRebuildRequired)
 	}
 	db, err := sql.Open("sqlite", dbDSN(dbPath, false))
 	if err != nil {
@@ -207,38 +204,6 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 		); err != nil {
 			return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 		}
-	} else if probe.version == 1 || probe.version == 2 {
-		source, sourceErr := readIncomingMaterialUpgradeSource(
-			context.Background(),
-			conn,
-			probe.version,
-			binding,
-			limits,
-			attemptLimits,
-		)
-		if sourceErr != nil {
-			return nil, sourceErr
-		}
-		outcome, upgradeErr := upgradeIncomingMaterial(
-			context.Background(),
-			conn,
-			source,
-			store.rootFD,
-			options.upgradeFault,
-			options.upgradeCommit,
-		)
-		if outcome != incomingMaterialUpgradeCommitted || upgradeErr != nil {
-			if outcome == incomingMaterialUpgradeNotAttempted && upgradeErr == nil {
-				return nil, classified(ErrStorage, StageOpen, ReasonIO)
-			}
-			return nil, incomingMaterialOpenError(outcome, upgradeErr)
-		}
-		var completionFault func(int) error
-		if options.openFault != nil {
-			completionFault = func(point int) error { return options.openFault(point, store) }
-		}
-		transferred = true
-		return completeIncomingMaterialUpgradeOpen(context.Background(), store, source, outcome, completionFault)
 	} else if err := checkSchema(context.Background(), conn); err != nil {
 		return nil, schemaOrStorageError(context.Background(), StageOpen, err)
 	}
@@ -422,6 +387,9 @@ func probeSchemaWithDSN(
 				break
 			}
 		}
+	}
+	if recognized && version != 4 {
+		return schemaProbe{recognized: true, version: version}, nil
 	}
 	if recognized {
 		metaRows, metaErr := db.QueryContext(ctx, "SELECT key FROM store_meta ORDER BY key")
@@ -930,4 +898,12 @@ func storedOrQueryError(ctx context.Context, stage Stage, err error) error {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return storageFailure(ctx, stage, err)
+}
+
+func IsRebuildRequired(err error) bool {
+	var refused *Error
+	if !errors.As(err, &refused) {
+		return false
+	}
+	return refused.Reason() == ReasonRebuildRequired
 }

@@ -2,8 +2,11 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
+
+	urfave "github.com/urfave/cli/v3"
 
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 )
@@ -63,4 +66,33 @@ func openPublicationPositionStore(directory string, binding publicationstate.Bin
 		return nil, err
 	}
 	return publicationstate.Open(directory, binding)
+}
+
+func writeRebuildRequiredHint(command *urfave.Command, err error, directory string) {
+	if !publicationstate.IsRebuildRequired(err) {
+		return
+	}
+	writer := command.Root().ErrWriter
+	fmt.Fprintln(
+		writer,
+		"dottie: the local publication state was written by an older build and is not upgraded in place",
+	)
+	fmt.Fprintf(writer, "dottie: local state: %s\n", escapeField(directory))
+	fmt.Fprintln(writer, "dottie: it was left unchanged by this run")
+	fmt.Fprintln(
+		writer,
+		"dottie: keep it until you no longer need it: journal.db and its apply backups may hold the only copies of the preimage for an interrupted apply",
+	)
+	rows, rowsErr := publicationstate.LiveJournalRows(directory)
+	if rowsErr == nil && rows > 0 {
+		fmt.Fprintln(writer, "dottie: live apply journal rows are recorded there")
+		fmt.Fprintln(
+			writer,
+			"dottie: resolve them with a build that wrote them, or keep the directory as evidence; nothing here deletes it",
+		)
+	}
+	fmt.Fprintln(
+		writer,
+		"dottie: a rebuild means a fresh state directory, not an in-place change; move the old one aside yourself when you have kept what you need",
+	)
 }

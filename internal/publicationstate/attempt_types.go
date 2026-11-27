@@ -1,8 +1,6 @@
 package publicationstate
 
 import (
-	"database/sql"
-
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
@@ -42,10 +40,6 @@ func DefaultAttemptLimits() AttemptLimits {
 type OpenOptions struct {
 	PositionLimits       Limits
 	AttemptLimits        AttemptLimits
-	UpgradeFromPositions bool
-	UpgradeFromAttempts  bool
-	upgradeFault         func(int) error
-	upgradeCommit        func(*sql.Tx) error
 	openFault            func(int, *Store) error
 	createdDatabaseChmod func(string) error
 }

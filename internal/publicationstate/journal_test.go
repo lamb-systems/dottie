@@ -203,7 +203,7 @@ func TestJournalOpenRefusesUnsafeForeignAndFutureStores(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rewrite.Close())
 	_, err = OpenJournal(oldDirectory)
-	requireJournalError(t, err, ErrSchema, StageJournalOpen, ReasonUpgradeRequired)
+	requireJournalError(t, err, ErrSchema, StageJournalOpen, ReasonRebuildRequired)
 
 	held, heldDirectory := newJournal(t)
 	_, err = OpenJournal(heldDirectory)

@@ -142,7 +142,9 @@ account can read it back.
   snapshot record also changed shape in place (one payload segment per target, and the head no
   longer carries `blobCid`), so a chain or a local publication store written by an earlier build
   cannot be read: publish a new chain from an empty repository state, or clear it, and rebuild the
-  local store.
+  local store. Dottie refuses an older local store with `rebuild_required` instead of upgrading it,
+  and it touches nothing on the way out: an interrupted apply's journal and backups are exactly what
+  makes a rebuild safe only once you have kept them.
 - Applying settings needs a build with the GNOME backend. `pull` plans the approved keys of a
   published settings target, journals each intent, sets or resets the key and verifies the written
   value before the floor advances; without the backend the whole pull refuses before a token is

@@ -70,7 +70,7 @@ func Inspect(ctx context.Context, directory string, binding Binding) (Inspection
 		return Inspection{}, classified(ErrSchema, StageInspect, ReasonSchema)
 	}
 	if probe.version != 4 {
-		return Inspection{}, classified(ErrSchema, StageInspect, ReasonUpgradeRequired)
+		return Inspection{}, classified(ErrSchema, StageInspect, ReasonRebuildRequired)
 	}
 	return readInspection(ctx, databasePath, binding)
 }

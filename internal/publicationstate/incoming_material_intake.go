@@ -73,7 +73,7 @@ func (s *Store) AcceptMaterialInput(
 		return zeroFloor(), err
 	}
 	if s.schemaVersion != 4 {
-		return zeroFloor(), classified(ErrSchema, StageAcceptMaterial, ReasonUpgradeRequired)
+		return zeroFloor(), classified(ErrSchema, StageAcceptMaterial, ReasonRebuildRequired)
 	}
 	if !validMode(mode) {
 		return zeroFloor(), classified(ErrInvalid, StageInput, ReasonMode)

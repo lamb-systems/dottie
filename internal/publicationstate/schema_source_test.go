@@ -8,17 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSchema2UnitStore(t *testing.T, f fixture, limits ...Limits) (*Store, string) {
+func newUnitStore(t *testing.T, f fixture, limits ...Limits) (*Store, string) {
 	t.Helper()
 	require.LessOrEqual(t, len(limits), 1)
 	positionLimits := DefaultLimits()
 	if len(limits) == 1 {
 		positionLimits = limits[0]
 	}
-	return newSchema2UnitStoreWithLimits(t, f, positionLimits, DefaultAttemptLimits())
+	return newUnitStoreWithLimits(t, f, positionLimits, DefaultAttemptLimits())
 }
 
-func newSchema2UnitStoreWithLimits(
+func newUnitStoreWithLimits(
 	t *testing.T,
 	f fixture,
 	limits Limits,
