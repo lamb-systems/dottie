@@ -21,13 +21,13 @@ root safety checks and interrupted-apply recovery still observe the paths they r
 resolves an interrupted apply before it accepts a floor and refuses when the entry cannot be
 classified; `sync` resolves it before its push half settles and refuses to publish while one is
 unresolved. A standalone `push` finalizes a retained attempt through the position store and does not
-consult the apply journal. Inline settings are written back through the GNOME backend: only keys the
-local category selection already approves, journaled per key, verified after the write, and never
-applied from a journal image. GSettings has no revision or compare-and-set, so a concurrent external
-writer can undo a value; convergence can therefore restore an older value, and that is the documented
-limit of the guarantee rather than a hidden one. A published settings target the local configuration
-selects refuses the pull when the build has no settings backend, and a settings target is never
-adopted without one. `push` treats the accepted record, not the local configuration, as the authority
+consult the apply journal. The settings writer journals each intent per key, writes only keys the local category selection
+already approves, verifies the written value, and never applies a value from a journal image.
+`pull` does not reach it yet: a publication that names a settings target is refused before a token is
+printed, on every build, and a settings target is never adopted. GSettings has no revision or
+compare-and-set, so once the writer is reachable a concurrent external writer can undo a value;
+convergence can therefore restore an older value, and that is the limit of the guarantee rather than
+a hidden one. `push` treats the accepted record, not the local configuration, as the authority
 for targets this machine does not configure: their segments are copied byte for byte, the store's
 material for them must reproduce the recorded CIDs and sizes or the publication refuses, and their
 blobs are uploaded again rather than referenced by a manufactured receipt. `--drop-target` is the only

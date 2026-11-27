@@ -248,3 +248,19 @@ func PublicationCarryOfRecord(
 	}
 	return carry, nil
 }
+
+func PublicationCarryOfAccepted(
+	acceptedRecordRaw []byte,
+	material publicationstate.AcceptedMaterial,
+	configuration config.Config,
+	drop []string,
+) (PublicationCarry, error) {
+	if len(acceptedRecordRaw) == 0 {
+		return PublicationCarry{}, ErrPublicationCarry
+	}
+	record, err := publication.DecodeSnapshot(acceptedRecordRaw)
+	if err != nil {
+		return PublicationCarry{}, ErrPublicationCarry
+	}
+	return publicationCarryOf(record, material, configuration, drop)
+}

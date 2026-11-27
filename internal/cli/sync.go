@@ -815,9 +815,21 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be read", "post_pull_floor")
 	}
-	baseline, err := syncAcceptedSnapshot(material, sources.Configuration)
+	pushedConfiguration := service.PublicationConfigurationWithoutDrop(sources.Configuration, drop)
+	baseline, err := syncAcceptedSnapshot(material, pushedConfiguration)
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be decoded", "post_pull_floor")
+	}
+	carry, err := service.PublicationCarryOfAccepted(
+		material.SnapshotRecord, material, sources.Configuration, drop,
+	)
+	if err != nil {
+		return syncPushRefusal(
+			command,
+			output,
+			"the accepted position cannot be carried forward",
+			"post_pull_carry",
+		)
 	}
 	candidatePosition, candidatePresent, positionErr := syncCandidatePosition(view)
 	if positionErr != nil {
@@ -832,7 +844,7 @@ func runSyncPushHalf(
 		return syncPushRefusal(command, output, "a fresh publication identity is unavailable", "post_pull_candidate")
 	}
 	snapshot, err := sources.Coordinator.ComposePublicationSyncSnapshot(ctx, service.PublicationSyncSnapshotRequest{
-		Configuration:  sources.Configuration,
+		Configuration:  pushedConfiguration,
 		FloorSnapshot:  baseline,
 		RemoteSnapshot: acceptedSnapshot,
 		PublicationID:  publicationID,
@@ -840,8 +852,8 @@ func runSyncPushHalf(
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication cannot be composed", "post_pull_candidate")
 	}
-	candidateMaterial, err := service.EncodePublicationCandidate(
-		binding, snapshot, candidatePosition, candidatePresent, acceptedSnapshot, publicationID,
+	candidateMaterial, err := service.EncodePublicationCandidateWithCarry(
+		binding, snapshot, candidatePosition, candidatePresent, acceptedSnapshot, carry, publicationID,
 	)
 	if err != nil {
 		return syncPushRefusal(command, output, "the post-pull publication identity is unavailable", "post_pull_candidate")

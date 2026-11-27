@@ -48,6 +48,7 @@ type proposalRecordFile struct {
 	CandidateRecordCID string              `json:"candidate_record_cid"`
 	Form               string              `json:"form,omitempty"`
 	Segments           string              `json:"segments"`
+	Drop               []string            `json:"drop,omitempty"`
 	PayloadsDigest     string              `json:"payloads_digest"`
 	SelectionDigest    string              `json:"selection_digest"`
 	SelectionRevision  uint64              `json:"selection_revision"`
@@ -80,6 +81,7 @@ func encodeProposalRecord(record service.PublicationProposalRecord) ([]byte, err
 		CandidateRecordCID: hex.EncodeToString(record.CandidateRecordCID),
 		Form:               string(record.Form),
 		Segments:           base64.StdEncoding.EncodeToString(record.Segments),
+		Drop:               append([]string(nil), record.Drop...),
 		PayloadsDigest:     hex.EncodeToString(record.PayloadsDigest[:]),
 		SelectionDigest:    hex.EncodeToString(record.Review.SelectionDigest[:]),
 		SelectionRevision:  record.Review.SelectionRevision,
@@ -137,6 +139,7 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 		},
 		Lifecycle: publicationstate.AttemptLifecycle(file.Lifecycle),
 		Consumed:  file.Consumed,
+		Drop:      append([]string(nil), file.Drop...),
 	}
 	copy(record.Binding.Vault[:], vaultID)
 	for _, field := range []struct {

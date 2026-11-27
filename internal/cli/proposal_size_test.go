@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -186,4 +187,40 @@ func TestPublicationProposalConsumeKeepsTheFileReadable(t *testing.T) {
 	require.NoError(t, err)
 	assert.LessOrEqual(t, info.Size(), int64(publicationProposalFileLimit))
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestPublicationProposalStoreRoundTripsTheBoundDropSet(t *testing.T) {
+	fixture := newPublicationPushTestFixture(t)
+	var publicationID [16]byte
+	_, err := rand.Read(publicationID[:])
+	require.NoError(t, err)
+	record := service.PublicationProposalRecord{
+		Version:            3,
+		Binding:            fixture.binding,
+		DatabaseID:         [32]byte{0x65},
+		Generation:         1,
+		FloorRevision:      1,
+		CandidateRecordCID: []byte{0x66},
+		Form:               publication.PayloadFormPacked,
+		Segments:           cliEncodedPackedSegments(t),
+		Drop:               []string{"retired"},
+		PayloadsDigest:     [32]byte{0x67},
+		Review: publicationstate.LocalReviewContext{
+			SelectionDigest:   [32]byte{0x68},
+			SelectionRevision: 1,
+			ApprovalDigest:    [32]byte{0x69},
+			ApprovalRevision:  1,
+		},
+		PublicationID: publicationID,
+		Lifecycle:     publicationstate.AttemptPrepared,
+		Confirmation:  [32]byte{0x6a},
+	}
+	ctx := context.Background()
+	require.NoError(t, fixture.records.Issue(ctx, record))
+
+	records, err := fixture.records.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, []string{"retired"}, records[0].Drop, "the retained proposal lost its drop instruction")
+	assert.Equal(t, record.Drop, records[0].Drop)
 }

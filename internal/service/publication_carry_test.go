@@ -459,3 +459,37 @@ func TestVerifyPublicationProposalRecordBindsTheDropSetToTheOmittedTargets(t *te
 	record.Drop = []string{"twice", "twice"}
 	require.Error(t, VerifyPublicationProposalRecord(record))
 }
+
+func TestPublicationCarryOfAcceptedMatchesTheRecordCarry(t *testing.T) {
+	target := carryTestTarget("retired", "carried")
+	definition, segment := carryTestPacked(t, target)
+	record := publication.SnapshotRecord{
+		SchemaVersion: publication.SchemaVersion, Vault: [32]byte{0x62},
+		PublicationID: [16]byte{0x51}, Segments: []publication.SnapshotSegment{segment},
+	}
+	raw, err := publication.EncodeSnapshot(record)
+	require.NoError(t, err)
+	configuration := carryTestConfiguration("current", "navi")
+	material := publicationstate.AcceptedMaterial{
+		SnapshotRecord: raw,
+		Segments: []publicationstate.AcceptedMaterialSegment{{
+			Summary: carryTestSummary(segment), Blob: definition.payload,
+		}},
+	}
+	accepted, err := PublicationCarryOfAccepted(raw, material, configuration, nil)
+	require.NoError(t, err)
+	recordOnly, err := PublicationCarryOfRecord(raw, configuration, nil)
+	require.NoError(t, err)
+	assert.Equal(t, recordOnly.TargetIDs(), accepted.TargetIDs(),
+		"the reviewed preview and the pushed carry disagree about which targets are carried")
+
+	_, err = PublicationCarryOfAccepted(nil, material, configuration, nil)
+	require.ErrorIs(t, err, ErrPublicationCarry)
+	tampered := material
+	tampered.Segments = []publicationstate.AcceptedMaterialSegment{{
+		Summary: carryTestSummary(segment), Blob: append([]byte(nil), definition.payload...),
+	}}
+	tampered.Segments[0].Blob[len(tampered.Segments[0].Blob)-1] ^= 0xff
+	_, err = PublicationCarryOfAccepted(raw, tampered, configuration, nil)
+	require.ErrorIs(t, err, ErrPublicationCarry)
+}

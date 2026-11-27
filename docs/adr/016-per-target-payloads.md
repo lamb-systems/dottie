@@ -1,6 +1,6 @@
 # 016 — Publish payloads per target, not per snapshot
 
-Status: accepted, 2026-11-25. Prototype breaking change, not yet implemented. Supersedes the
+Status: accepted, 2026-11-25. Implemented. Supersedes the
 whole-snapshot payload form in the v2 snapshot record; the NSID and `schemaVersion: 2` stay.
 
 ## Context
