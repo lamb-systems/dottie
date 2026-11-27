@@ -103,7 +103,6 @@ type CandidateInput struct {
 	SnapshotKey    string
 	SnapshotRecord []byte
 	HeadRecord     []byte
-	Payload        []byte
 	Entries        []publication.PayloadEntry
 	Segments       []CandidateSegment
 	Payloads       [][]byte

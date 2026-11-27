@@ -62,10 +62,6 @@ func cloneFileSetPayload(payload *FileSetPayload) *FileSetPayload {
 	return &FileSetPayload{Entries: entries}
 }
 
-func payloadFormOf(record publication.SnapshotRecord) PayloadForm {
-	return PayloadForm(record.PayloadForm())
-}
-
 func fileSetPayloadOf(record publication.SnapshotRecord) *FileSetPayload {
 	recordEntries, _ := record.SegmentEntries()
 	if len(recordEntries) == 0 {

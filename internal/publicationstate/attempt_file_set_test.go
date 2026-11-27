@@ -95,11 +95,14 @@ func (f fileSetAttemptFixture) candidate() CandidateInput {
 			Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: bytes.Clone(entry.Content),
 		})
 	}
+	segments, payloads := fixtureCandidateSegments(f.raw, nil)
 	return CandidateInput{
 		SnapshotKey:    f.key,
 		SnapshotRecord: bytes.Clone(f.raw),
 		HeadRecord:     bytes.Clone(f.head),
 		Entries:        entries,
+		Segments:       segments,
+		Payloads:       payloads,
 	}
 }
 
@@ -850,8 +853,19 @@ func TestFileSetCandidateRefusesEntriesThatContradictTheRecord(t *testing.T) {
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
 	packedMaterial := f.candidate()
-	packedMaterial.Payload = []byte("packed payload supplied for a file-set record")
+	packedMaterial.Payloads[0] = []byte("packed payload supplied for a file-set record")
 	_, err = validateCandidateInput(packedMaterial, binding, limits)
+	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
+
+	missingSegments := f.candidate()
+	missingSegments.Segments = nil
+	missingSegments.Payloads = nil
+	_, err = validateCandidateInput(missingSegments, binding, limits)
+	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
+
+	missingSegmentOnly := f.candidate()
+	missingSegmentOnly.Segments = nil
+	_, err = validateCandidateInput(missingSegmentOnly, binding, limits)
 	requireErrorMetadata(t, err, ErrInvalid, StageInput, ReasonRecordSet)
 
 	tightened := limits

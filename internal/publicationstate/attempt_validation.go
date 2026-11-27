@@ -43,7 +43,6 @@ type validatedCandidate struct {
 	snapshotCID []byte
 	headCID     []byte
 	segments    []validatedCandidateSegment
-	form        PayloadForm
 	snapshotRaw []byte
 	headRaw     []byte
 	view        validatedRepositoryView
@@ -197,63 +196,9 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 	if decodeErr != nil || snapshot.Vault != binding.Vault || allZero(snapshot.PublicationID[:]) {
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
-	form := payloadFormOf(snapshot)
-	if len(input.Segments) != 0 {
-		segments, err := validateCandidateSegments(input, snapshot, limits)
-		if err != nil {
-			return validatedCandidate{}, err
-		}
-		key, err := publication.SequenceKey(snapshot.PublicationSeq)
-		if err != nil || input.SnapshotKey != key {
-			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		snapshotCID, err := publication.RecordCID(input.SnapshotRecord)
-		if err != nil {
-			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		head, err := publication.DecodeHead(input.HeadRecord)
-		if err != nil || head.Vault != binding.Vault || head.PublicationSeq != snapshot.PublicationSeq ||
-			!bytes.Equal(head.SnapshotCID, snapshotCID) ||
-			publication.VerifyHeadBinding(input.HeadRecord, input.SnapshotRecord, input.SnapshotKey) != nil {
-			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		headCID, err := publication.RecordCID(input.HeadRecord)
-		if err != nil {
-			return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		form := PayloadFormSettings
-		hasEntries, hasPacked := false, false
-		for _, segment := range snapshot.Segments {
-			switch segment.Form {
-			case publication.SegmentFormEntries:
-				hasEntries = true
-			case publication.SegmentFormPacked:
-				hasPacked = true
-			}
-		}
-		if hasEntries {
-			form = PayloadFormFileSet
-		} else if hasPacked {
-			form = PayloadFormPacked
-		}
-		candidate := validatedCandidate{
-			id: snapshot.PublicationID, sequence: snapshot.PublicationSeq, key: key,
-			snapshot: snapshot, head: head,
-			snapshotCID: bytes.Clone(snapshotCID), headCID: bytes.Clone(headCID),
-			form: form, segments: segments, snapshotRaw: bytes.Clone(input.SnapshotRecord),
-			headRaw: bytes.Clone(input.HeadRecord),
-		}
-		candidate.kind = AttemptSuccessor
-		if snapshot.PublicationSeq == 0 {
-			candidate.kind = AttemptGenesis
-		}
-		return candidate, nil
-	}
-	if form == PayloadFormPacked {
-		if len(input.Payload) == 0 || uint64(len(input.Payload)) > publication.MaxBlobBytes ||
-			len(input.Entries) != 0 {
-			return validatedCandidate{}, classified(ErrLimit, StageInput, ReasonRecordSet)
-		}
+	segments, err := validateCandidateSegments(input, snapshot, limits)
+	if err != nil {
+		return validatedCandidate{}, err
 	}
 	key, err := publication.SequenceKey(snapshot.PublicationSeq)
 	if err != nil || input.SnapshotKey != key {
@@ -274,104 +219,17 @@ func validateCandidateInput(input CandidateInput, binding Binding, limits Attemp
 		return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
 	}
 	candidate := validatedCandidate{
-		id:          snapshot.PublicationID,
-		sequence:    snapshot.PublicationSeq,
-		key:         key,
-		snapshot:    snapshot,
-		head:        head,
-		snapshotCID: bytes.Clone(snapshotCID),
-		headCID:     bytes.Clone(headCID),
-		form:        form,
-		snapshotRaw: bytes.Clone(input.SnapshotRecord),
-		headRaw:     bytes.Clone(input.HeadRecord),
+		id: snapshot.PublicationID, sequence: snapshot.PublicationSeq, key: key,
+		snapshot: snapshot, head: head,
+		snapshotCID: bytes.Clone(snapshotCID), headCID: bytes.Clone(headCID),
+		segments: segments, snapshotRaw: bytes.Clone(input.SnapshotRecord),
+		headRaw: bytes.Clone(input.HeadRecord),
 	}
-	segments := make([]validatedCandidateSegment, 0, len(snapshot.Segments))
-	for _, segment := range snapshot.Segments {
-		item := validatedCandidateSegment{
-			summary: summaryOfSegment(segment),
-			blob:    segment.Blob,
-		}
-		switch segment.Form {
-		case publication.SegmentFormEntries:
-			if len(input.Payload) != 0 || len(input.Entries) == 0 {
-				return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-			}
-			entries, err := validateFileSetCandidateEntries(input, snapshot, limits)
-			if err != nil {
-				return validatedCandidate{}, err
-			}
-			item.entries = entries
-		case publication.SegmentFormPacked:
-			if len(input.Payload) == 0 || len(input.Entries) != 0 {
-				return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-			}
-			if err := publication.VerifyPayload(input.Payload, segment.Blob); err != nil {
-				return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-			}
-			if _, err := publication.DecodeSegmentPayload(input.Payload, segment); err != nil {
-				return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-			}
-			item.payload = bytes.Clone(input.Payload)
-		case publication.SegmentFormSettings:
-			if len(input.Payload) != 0 {
-				return validatedCandidate{}, classified(ErrInvalid, StageInput, ReasonRecordSet)
-			}
-		default:
-			return validatedCandidate{}, classified(ErrSchema, StageInput, ReasonCorrupt)
-		}
-		segments = append(segments, item)
-	}
-	candidate.segments = segments
 	candidate.kind = AttemptSuccessor
 	if snapshot.PublicationSeq == 0 {
 		candidate.kind = AttemptGenesis
 	}
 	return candidate, nil
-}
-
-func validateFileSetCandidateEntries(
-	input CandidateInput,
-	snapshot publication.SnapshotRecord,
-	limits AttemptLimits,
-) ([]validatedPayloadEntry, error) {
-	entries, ok := snapshot.SegmentEntries()
-	if !ok {
-		return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
-	}
-	fileSet := &FileSetPayload{Entries: make([]PayloadEntryReference, 0, len(entries))}
-	for _, entry := range entries {
-		fileSet.Entries = append(fileSet.Entries, PayloadEntryReference{
-			Path: entry.Path,
-			CID:  bytes.Clone(entry.Blob.CID),
-			Size: entry.Size,
-		})
-	}
-	if err := validateFileSetPayloadCustody(fileSet, limits); err != nil {
-		return nil, err
-	}
-	if len(input.Entries) != len(entries) {
-		return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
-	}
-	validated := make([]validatedPayloadEntry, 0, len(entries))
-	for index, record := range entries {
-		supplied := input.Entries[index]
-		contentCID, err := publication.RawPayloadCID(supplied.Content)
-		if err != nil || supplied.Path != record.Path || supplied.Size != record.Size ||
-			uint64(len(supplied.Content)) != record.Size ||
-			!bytes.Equal(contentCID, record.Blob.CID) {
-			return nil, classified(ErrInvalid, StageInput, ReasonRecordSet)
-		}
-		validated = append(validated, validatedPayloadEntry{
-			path:    record.Path,
-			content: bytes.Clone(supplied.Content),
-			blob: publication.BlobReference{
-				CID:      bytes.Clone(record.Blob.CID),
-				Size:     record.Size,
-				MIMEType: record.Blob.MIMEType,
-			},
-		})
-	}
-	return validated, nil
 }
 
 func (s *Store) validateAttemptInput(

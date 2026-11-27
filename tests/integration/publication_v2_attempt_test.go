@@ -93,11 +93,13 @@ func TestPublicationAttemptOfflineLifecycleUsesDurableCustody(t *testing.T) {
 		Scope:           publicationstate.ViewScopeWholeRepository,
 		SuppliedContext: contextValue,
 	}
+	segment := packedTestSegment(t, snapshotBytes)
 	candidate := publicationstate.CandidateInput{
 		SnapshotKey:    "0000000000000000",
 		SnapshotRecord: snapshotBytes,
 		HeadRecord:     headBytes,
-		Payload:        packed.Payload,
+		Segments:       []publicationstate.CandidateSegment{segment},
+		Payloads:       [][]byte{packed.Payload},
 	}
 	review := publicationstate.LocalReviewContext{
 		SelectionDigest:   [32]byte{1},

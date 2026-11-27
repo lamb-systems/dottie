@@ -94,9 +94,9 @@ func acceptedPayload(value any) []byte {
 	case *AcceptedMaterial:
 		return acceptedPayload(*material)
 	case CandidateInput:
-		return material.Payload
+		return candidatePackedPayload(material)
 	case *CandidateInput:
-		return material.Payload
+		return candidatePackedPayload(*material)
 	case UploadMaterial:
 		for index, summary := range material.Segments {
 			if summary.Form == PayloadFormPacked && index < len(material.Payloads) {
@@ -344,4 +344,13 @@ func retainedReferencesCID(t *testing.T, store *Store, cidValue []byte) int64 {
 	}
 	require.NoError(t, rows.Err())
 	return matches
+}
+
+func candidatePackedPayload(candidate CandidateInput) []byte {
+	for index, segment := range candidate.Segments {
+		if segment.Form == PayloadFormPacked && index < len(candidate.Payloads) {
+			return candidate.Payloads[index]
+		}
+	}
+	return nil
 }

@@ -838,11 +838,13 @@ func candidateWithPayload(t *testing.T, candidate CandidateInput, binding Bindin
 		},
 	)
 	require.NoError(t, err)
+	segments, payloads := fixtureCandidateSegments(snapshotRaw, payload)
 	return CandidateInput{
 		SnapshotKey:    candidate.SnapshotKey,
 		SnapshotRecord: snapshotRaw,
 		HeadRecord:     headRaw,
-		Payload:        bytes.Clone(payload),
+		Segments:       segments,
+		Payloads:       payloads,
 	}
 }
 
@@ -864,11 +866,13 @@ func candidateWithPublicationID(t *testing.T, candidate CandidateInput, id [16]b
 		},
 	)
 	require.NoError(t, err)
+	segments, payloads := fixtureCandidateSegments(snapshotRaw, candidatePackedPayload(candidate))
 	return CandidateInput{
 		SnapshotKey:    candidate.SnapshotKey,
 		SnapshotRecord: snapshotRaw,
 		HeadRecord:     headRaw,
-		Payload:        bytes.Clone(acceptedPayload(candidate)),
+		Segments:       segments,
+		Payloads:       payloads,
 	}
 }
 

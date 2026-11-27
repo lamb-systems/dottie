@@ -327,9 +327,10 @@ func finalizePublicationMaterialOwner(
 	setup := encodePublicationReconcileMaterial(t, binding, snapshot, 0, nil, [16]byte{0x25, 0xa2})
 	expectedRecord := bytes.Clone(setup.record)
 	expectedPayload := bytes.Clone(setup.payload)
+	segments, payloads := localPackedCandidateInput(t, setup.record, setup.payload)
 	candidate := publicationstate.CandidateInput{
 		SnapshotKey: setup.key, SnapshotRecord: bytes.Clone(setup.record),
-		HeadRecord: bytes.Clone(setup.head), Payload: bytes.Clone(setup.payload),
+		HeadRecord: bytes.Clone(setup.head), Segments: segments, Payloads: payloads,
 	}
 	view := publicationstate.SuppliedRepositoryView{
 		Origin: binding,
@@ -454,7 +455,7 @@ func finalizePublicationMaterialOwner(
 	clear(setup.payload)
 	clear(setup.record)
 	clear(setup.head)
-	clear(candidate.Payload)
+	clear(candidate.Payloads[0])
 	clear(candidate.SnapshotRecord)
 	clear(candidate.HeadRecord)
 	clear(uploadPackedPayload(upload))

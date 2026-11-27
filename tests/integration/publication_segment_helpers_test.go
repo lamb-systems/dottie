@@ -145,3 +145,21 @@ func candidateBlobs(t *testing.T, candidate publicationstate.CandidateInput) []p
 	}
 	return blobs
 }
+
+func packedTestSegment(t *testing.T, recordRaw []byte) publicationstate.CandidateSegment {
+	t.Helper()
+	record, err := publication.DecodeSnapshot(recordRaw)
+	require.NoError(t, err)
+	return packedTestSegmentOf(t, record)
+}
+
+func packedTestSegmentOf(t *testing.T, record publication.SnapshotRecord) publicationstate.CandidateSegment {
+	t.Helper()
+	require.NotEmpty(t, record.Segments)
+	segment := record.Segments[0]
+	require.Equal(t, publication.SegmentFormPacked, segment.Form)
+	blob := segment.Blob
+	return publicationstate.CandidateSegment{
+		TargetID: segment.Target.ID, Form: publicationstate.PayloadFormPacked, Blob: &blob,
+	}
+}

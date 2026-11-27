@@ -116,7 +116,8 @@ func TestPublicationV2JSONCandidatePreflightLifecycle(t *testing.T) {
 		SnapshotKey:    successorKey,
 		SnapshotRecord: successorRecord,
 		HeadRecord:     successorHead,
-		Payload:        packed.Payload,
+		Segments:       []publicationstate.CandidateSegment{packedTestSegment(t, successorRecord)},
+		Payloads:       [][]byte{packed.Payload},
 	}
 	review := publicationstate.LocalReviewContext{
 		SelectionDigest:   [32]byte{1},
@@ -244,7 +245,7 @@ func exerciseCandidateRecordJSONPreflight(
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotRecord, retained.SnapshotRecord)
 	assert.Equal(t, candidate.HeadRecord, retained.HeadRecord)
-	assert.Equal(t, candidate.Payload, candidatePackedPayload(retained))
+	assert.Equal(t, candidate.Payloads[0], candidatePackedPayload(retained))
 	beforeFloor, beforeAttempt := loadCandidateJSONState(t, store, attempt.ID)
 	preflight := encodeRetainedCandidateRecords(t, retained)
 	afterFloor, afterAttempt := loadCandidateJSONState(t, store, attempt.ID)
@@ -266,7 +267,7 @@ func exerciseCandidateRecordJSONPreflight(
 	require.NoError(t, err)
 	assert.Equal(t, candidate.SnapshotRecord, retained.SnapshotRecord)
 	assert.Equal(t, candidate.HeadRecord, retained.HeadRecord)
-	assert.Equal(t, candidate.Payload, candidatePackedPayload(retained))
+	assert.Equal(t, candidate.Payloads[0], candidatePackedPayload(retained))
 	beforeFloor, beforeAttempt = loadCandidateJSONState(t, store, attempt.ID)
 	reopenedPreflight := encodeRetainedCandidateRecords(t, retained)
 	afterFloor, afterAttempt = loadCandidateJSONState(t, store, attempt.ID)

@@ -522,10 +522,29 @@ func mustSuccessorParent(t *testing.T, candidate CandidateInput) []byte {
 }
 
 func cloneAcceptedMaterialCapacityCandidate(candidate CandidateInput) CandidateInput {
+	segments := make([]CandidateSegment, 0, len(candidate.Segments))
+	for _, segment := range candidate.Segments {
+		cloned := segment
+		if segment.Blob != nil {
+			blob := *segment.Blob
+			blob.CID = bytes.Clone(segment.Blob.CID)
+			cloned.Blob = &blob
+		}
+		cloned.Entries = append([]PayloadEntryReference(nil), segment.Entries...)
+		for index := range cloned.Entries {
+			cloned.Entries[index].CID = bytes.Clone(segment.Entries[index].CID)
+		}
+		segments = append(segments, cloned)
+	}
+	payloads := make([][]byte, 0, len(candidate.Payloads))
+	for _, payload := range candidate.Payloads {
+		payloads = append(payloads, bytes.Clone(payload))
+	}
 	return CandidateInput{
 		SnapshotKey:    candidate.SnapshotKey,
 		SnapshotRecord: bytes.Clone(candidate.SnapshotRecord),
 		HeadRecord:     bytes.Clone(candidate.HeadRecord),
-		Payload:        bytes.Clone(acceptedPayload(candidate)),
+		Segments:       segments,
+		Payloads:       payloads,
 	}
 }

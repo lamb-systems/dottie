@@ -703,7 +703,13 @@ func materialTestCandidate(
 		SnapshotKey:    key,
 		SnapshotRecord: snapshotRecord,
 		HeadRecord:     headRecord,
-		Payload:        payload,
+		Segments: []publicationstate.CandidateSegment{{
+			TargetID: materialTestRecordTarget().ID, Form: publicationstate.PayloadFormPacked,
+			Blob: &publication.BlobReference{
+				CID: blobCID, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType,
+			},
+		}},
+		Payloads: [][]byte{payload},
 	}
 }
 
