@@ -1630,3 +1630,26 @@ func TestPublicationApplyNonConflictRefusalCarriesNoConflictingEntries(t *testin
 	assert.Empty(t, refused.Conflicts())
 	fixture.assertNoJournalRows(t)
 }
+
+func TestPlanPublicationApplyPlansASameContentRenameAsADeleteAndAWrite(t *testing.T) {
+	fixture := newPublicationApplyFixture(t)
+	fixture.write(t, "before.lua", "shared content")
+	fixture.write(t, "kept.lua", "kept")
+	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"before.lua": "shared content", "kept.lua": "kept",
+	}))
+	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{
+		"after.lua": "shared content", "kept.lua": "kept",
+	}))
+
+	plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, base, remote))
+	require.NoError(t, err)
+	operations := make(map[string]PublicationApplyOperation, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		operations[entry.Path] = entry.Operation
+	}
+	assert.Equal(t, PublicationApplyWrite, operations["after.lua"])
+	assert.Equal(t, PublicationApplyDelete, operations["before.lua"])
+	assert.Equal(t, PublicationApplyUnchanged, operations["kept.lua"])
+	assert.Equal(t, 2, plan.Changes, "a rename with identical content was not planned as two changes")
+}

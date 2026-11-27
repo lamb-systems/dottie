@@ -804,7 +804,8 @@ func pullAdoptPublishedTargets(
 			return config.Config{}, nil, nil, pullAdoptionRefusal(input, err.Error())
 		}
 		if err != nil {
-			skipped = append(skipped, "target "+escapeField(selector)+" is not configured; create the root and run dottie targets add")
+			skipped = append(skipped, "target "+escapeField(selector)+
+				" is not configured; create the root and run dottie targets add, or omit it with --drop-target <id> on your next push")
 			continue
 		}
 		if err := appendTarget(target); err != nil {
@@ -2124,7 +2125,8 @@ func pullSkippedUnpublishedTargets(configuration config.Config, material pullApp
 			continue
 		}
 		skipped = append(skipped, "target "+escapeField(target.ID)+
-			" is configured but the published position does not name it; nothing was applied to it")
+			" is configured but the published position does not name it; nothing was applied to it; "+
+			"publish it again from a machine that configures it")
 	}
 	sort.Strings(skipped)
 	return skipped
