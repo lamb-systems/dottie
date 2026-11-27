@@ -837,7 +837,7 @@ func TestPullApplyAdoptionSkipsSettingsTargetsWithoutASelection(t *testing.T) {
 	assert.Equal(t, config.Default(), configuration)
 	require.Len(t, skipped, 1)
 	assert.Contains(t, skipped[0], "settings target desktop is not configured")
-	assert.Contains(t, skipped[0], "--settings desktop=CATEGORY")
+	assert.Contains(t, skipped[0], "this build does not apply settings")
 }
 
 func TestPullApplyAdoptionLeavesAnIdenticalSettingsTargetAlone(t *testing.T) {
@@ -1100,7 +1100,7 @@ kind = "directory"
 		t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token,
 	)
 	require.Equal(t, 0, code, stderr)
-	assert.Contains(t, stdout, "apply: mkdir nested")
+	assert.Contains(t, stdout, "apply: mkdir files nested")
 	nested, err := os.ReadFile(filepath.Join(fixture.paths.Home, "synthetic", "nested", "app.conf"))
 	require.NoError(t, err)
 	assert.Equal(t, entryContent, nested)

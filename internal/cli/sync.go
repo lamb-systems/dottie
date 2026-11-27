@@ -615,7 +615,8 @@ func runSyncCommand(
 		viewDigest,
 		identity,
 	)
-	output := renderPullApplyPlan(preparation.Plan)
+	output := renderPullSkipped(preparation.Skipped)
+	output += renderPullApplyPlan(preparation.Plan)
 	output += renderSyncPushPreview(identity)
 	output += fmt.Sprintf("confirmation: %x\n", token)
 	if !command.IsSet("confirm") {
@@ -638,6 +639,27 @@ func runSyncCommand(
 			return err
 		}
 	} else {
+		guard, guardErr := openPullApplyJournalGuard(
+			ctx,
+			preparation.Sources.Paths.PublicationStateDir(),
+			"sync",
+		)
+		if guardErr != nil {
+			return guardErr
+		}
+		defer guard.Close()
+		resolved, resolveErr := guard.resolve(ctx, "sync", inspection.Floor.Revision)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if resolved != 0 {
+			return syncPushRefusal(
+				command,
+				output,
+				"an interrupted apply was resolved, so the reviewed plan is stale",
+				"post_pull_journal",
+			)
+		}
 		output += "pull: no changes\n"
 	}
 	return runSyncPushHalf(

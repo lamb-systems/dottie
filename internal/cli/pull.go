@@ -506,7 +506,10 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, err
 	}
-	preparation.Skipped = skipped
+	if err := pullSettingsApplyRefusal(input, configuration, material); err != nil {
+		return pullApplyPreparation{}, err
+	}
+	preparation.Skipped = append(skipped, pullSkippedUnpublishedTargets(configuration, material)...)
 	if adoption != nil {
 		preparation.Adoption = adoption
 		token := pullAdoptionConfirmationToken(
@@ -549,6 +552,9 @@ func preparePullApply(
 		)
 	}
 	if material.Form == publication.PayloadFormFileSet {
+		if err := pullProjectionContinuity(input, material); err != nil {
+			return pullApplyPreparation{}, err
+		}
 		target, portable, err := service.FileSetPublicationTarget(configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
@@ -793,7 +799,7 @@ func pullAdoptPublishedTargets(
 			continue
 		}
 		skipped = append(skipped, "settings target "+escapeField(published.ID)+
-			" is not configured; pass --settings "+escapeField(published.ID)+"=CATEGORY[,CATEGORY]")
+			" is not configured; this build does not apply settings")
 	}
 	slices.Sort(skipped)
 
@@ -1212,6 +1218,14 @@ func acceptPullPosition(
 	preparation pullApplyPreparation,
 	output string,
 ) (string, error) {
+	guard, err := openPullApplyJournalGuard(ctx, preparation.Sources.Paths.PublicationStateDir(), "pull")
+	if err != nil {
+		return output, err
+	}
+	defer guard.Close()
+	if _, err := guard.resolve(ctx, "pull", input.Floor.Revision); err != nil {
+		return output, err
+	}
 	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
 	if err != nil || current.Present != input.Present || current.Floor.Revision != input.Floor.Revision {
 		return output, urfave.Exit(
@@ -1591,18 +1605,31 @@ func pullApplyFailure(command *urfave.Command, label, output string, err error) 
 func renderPullApplyPlan(plan service.PublicationApplyPlan) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "apply: changes=%d unchanged=%d\n", plan.Changes, len(plan.Entries)-plan.Changes)
+	targets := publicationApplyPlanTargets(plan)
 	for _, entry := range plan.Entries {
+		prefix := ""
+		if targets > 1 {
+			prefix = escapeField(entry.TargetID) + " "
+		}
 		switch entry.Operation {
 		case service.PublicationApplyWrite:
-			fmt.Fprintf(&output, "apply: write %s size=%d\n", escapeField(entry.Path), entry.Size)
+			fmt.Fprintf(&output, "apply: write %s%s size=%d\n", prefix, escapeField(entry.Path), entry.Size)
 		case service.PublicationApplyMkdir:
-			fmt.Fprintf(&output, "apply: mkdir %s\n", escapeField(entry.Path))
+			fmt.Fprintf(&output, "apply: mkdir %s%s\n", prefix, escapeField(entry.Path))
 		case service.PublicationApplyDelete:
-			fmt.Fprintf(&output, "apply: delete %s\n", escapeField(entry.Path))
+			fmt.Fprintf(&output, "apply: delete %s%s\n", prefix, escapeField(entry.Path))
 		case service.PublicationApplyUnchanged:
 		}
 	}
 	return output.String()
+}
+
+func publicationApplyPlanTargets(plan service.PublicationApplyPlan) int {
+	seen := make(map[string]struct{}, len(plan.Entries))
+	for _, entry := range plan.Entries {
+		seen[entry.TargetID] = struct{}{}
+	}
+	return len(seen)
 }
 
 func renderPullAcceptPosition(plan service.PublicationApplyPlan, material pullApplyMaterial) string {
@@ -1902,4 +1929,150 @@ func openAuthorizedPublicationReader(
 		VerificationMethods: append([]atproto.VerificationMethod(nil), identity.VerificationMethods...),
 	}
 	return identity, transport, reader, func() { _ = keyring.Close() }, nil
+}
+
+func pullSettingsApplyRefusal(
+	input pullApplyPlanRequest,
+	configuration config.Config,
+	material pullApplyMaterial,
+) error {
+	for _, published := range material.Targets {
+		if published.Source != model.SourceGNOME {
+			continue
+		}
+		configured, ok := pullTargetByID(configuration, published.ID)
+		if !ok || configured.Source != model.SourceGNOME {
+			continue
+		}
+		return urfave.Exit(
+			input.label()+" refused: target "+escapeField(published.ID)+
+				" is a settings target and this build cannot apply settings; nothing was changed",
+			3,
+		)
+	}
+	return nil
+}
+
+type pullApplyJournalGuard struct {
+	journal *publicationstate.Journal
+	lease   *publicationstate.JournalLease
+	open    bool
+}
+
+func (guard *pullApplyJournalGuard) Close() {
+	if !guard.open {
+		return
+	}
+	guard.open = false
+	if guard.lease != nil {
+		_ = guard.lease.Close()
+	}
+	if guard.journal != nil {
+		_ = guard.journal.Close()
+	}
+}
+
+func openPullApplyJournalGuard(
+	ctx context.Context,
+	directory string,
+	label string,
+) (*pullApplyJournalGuard, error) {
+	journal, err := publicationstate.OpenJournal(directory)
+	if err != nil {
+		return nil, urfave.Exit(
+			label+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			3,
+		)
+	}
+	guard := &pullApplyJournalGuard{journal: journal}
+	lease, err := journal.AcquireApplyLease(ctx)
+	if err != nil {
+		guard.Close()
+		return nil, urfave.Exit(
+			label+" refused: the apply journal is held by another run ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			3,
+		)
+	}
+	guard.lease = lease
+	guard.open = true
+	return guard, nil
+}
+
+func (guard *pullApplyJournalGuard) resolve(
+	ctx context.Context,
+	label string,
+	floorRevision uint64,
+) (int64, error) {
+	status, err := service.ResolvePublicationApplyJournal(ctx, guard.journal, floorRevision)
+	if err != nil {
+		return 0, urfave.Exit(
+			label+" refused: an interrupted apply could not be resolved ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			4,
+		)
+	}
+	if status.Unsettled != 0 || status.Blocked {
+		return 0, urfave.Exit(
+			label+" refused: an interrupted apply is unresolved; nothing was changed",
+			4,
+		)
+	}
+	return int64(status.Live), nil
+}
+
+func pullSkippedUnpublishedTargets(configuration config.Config, material pullApplyMaterial) []string {
+	if len(material.Targets) == 0 {
+		return nil
+	}
+	published := make(map[string]struct{}, len(material.Targets))
+	for _, target := range material.Targets {
+		published[target.ID] = struct{}{}
+	}
+	projected := ""
+	if material.Form == publication.PayloadFormFileSet {
+		for _, target := range configuration.Targets {
+			if target.ID == material.TargetID {
+				projected = target.ID
+			}
+		}
+	}
+	skipped := make([]string, 0, len(configuration.Targets))
+	for _, target := range configuration.Targets {
+		if _, ok := published[target.ID]; ok {
+			continue
+		}
+		if projected != "" && target.ID == projected {
+			continue
+		}
+		skipped = append(skipped, "target "+escapeField(target.ID)+
+			" is configured but the published position does not name it; nothing was applied to it")
+	}
+	sort.Strings(skipped)
+	return skipped
+}
+
+func pullProjectionContinuity(input pullApplyPlanRequest, material pullApplyMaterial) error {
+	if !input.Present || len(material.Targets) != 1 {
+		return nil
+	}
+	head := material.Targets[0].ID
+	replaced := ""
+	for _, target := range material.Base.Targets {
+		if target.Source != model.SourceFiles {
+			continue
+		}
+		if target.ID == head {
+			return nil
+		}
+		if replaced == "" {
+			replaced = target.ID
+		}
+	}
+	if replaced == "" {
+		return nil
+	}
+	return urfave.Exit(
+		"pull refused: the published position replaced target "+escapeField(replaced)+" with "+
+			escapeField(head)+"; the accepted entries cannot be projected onto the replacement; nothing was changed",
+		3,
+	)
 }

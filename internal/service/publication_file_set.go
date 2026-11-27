@@ -233,11 +233,17 @@ func publicationSnapshotPaths(entries []model.Entry) map[string]struct{} {
 }
 
 func fileSetPublicationTarget(configuration config.Config) (config.Target, model.Target, error) {
-	if len(configuration.Targets) != 1 {
+	files := make([]config.Target, 0, len(configuration.Targets))
+	for _, candidate := range configuration.Targets {
+		if candidate.Source == model.SourceFiles {
+			files = append(files, candidate)
+		}
+	}
+	if len(files) != 1 {
 		return config.Target{}, model.Target{}, ErrFileSetTarget
 	}
-	target := configuration.Targets[0]
-	if target.Source != model.SourceFiles || target.Root == nil ||
+	target := files[0]
+	if target.Root == nil ||
 		(target.Root.Kind != model.SelectionDirectory && target.Root.Kind != model.SelectionFile) {
 		return config.Target{}, model.Target{}, ErrFileSetTarget
 	}

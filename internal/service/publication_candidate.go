@@ -361,8 +361,11 @@ func (coordinator *Coordinator) ComposePublicationSyncSnapshot(
 		return entries, nil
 	}
 	local := func(target config.Target, entries []model.Entry) []model.Entry {
+		remoteEntries, named := publicationSnapshotTargetEntries(request.RemoteSnapshot, target.ID)
+		if !named {
+			return entries
+		}
 		floorEntries, _ := publicationSnapshotTargetEntries(request.FloorSnapshot, target.ID)
-		remoteEntries, _ := publicationSnapshotTargetEntries(request.RemoteSnapshot, target.ID)
 		return publicationSyncPostPullEntries(floorEntries, remoteEntries, entries)
 	}
 	snapshot, _, err := coordinator.composePublicationSnapshotWithLocal(

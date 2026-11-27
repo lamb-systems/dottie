@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -270,12 +271,7 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 	}
 	defer func() { _ = lease.Close() }()
 
-	resolutions, err := request.Journal.ResolveInterrupted(
-		ctx,
-		func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
-			return observePublicationApplyEntry(fileSystem, entry)
-		},
-	)
+	resolutions, err := resolvePublicationApplyJournal(ctx, request.Journal, fileSystem)
 	if err != nil {
 		return report, publicationApplyFailure(ctx, publicationApplyStageResolve, publicationApplyReasonJournal, err)
 	}
@@ -438,6 +434,31 @@ func (request PublicationApplyRequest) fileSetTarget(targetID string) bool {
 	return false
 }
 
+func publicationApplyPublishedTarget(snapshot model.Snapshot, targetID string) (model.Target, bool) {
+	for _, target := range snapshot.Targets {
+		if target.ID == targetID {
+			return target, true
+		}
+	}
+	return model.Target{}, false
+}
+
+func publicationSnapshotPortableEntries(snapshot model.Snapshot, portable model.Target) ([]model.Entry, bool) {
+	for _, target := range snapshot.Targets {
+		if !reflect.DeepEqual(target, portable) {
+			continue
+		}
+		entries := make([]model.Entry, 0)
+		for _, entry := range snapshot.Entries {
+			if entry.TargetID == portable.ID {
+				entries = append(entries, entry)
+			}
+		}
+		return entries, true
+	}
+	return nil, false
+}
+
 func planPublicationApply(
 	ctx context.Context,
 	request PublicationApplyRequest,
@@ -450,13 +471,9 @@ func planPublicationApply(
 		if err := ctx.Err(); err != nil {
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonCanceled, err)
 		}
-		if target.Source != model.SourceFiles || target.Root == nil {
-			return nil, publicationApplyFailure(
-				ctx,
-				publicationApplyStagePlan,
-				publicationApplyReasonTargetUnsupported,
-				nil,
-			)
+		published, ok := publicationApplyPublishedTarget(request.RemoteSnapshot, target.ID)
+		if !ok {
+			continue
 		}
 		portable, err := target.Model()
 		if err != nil {
@@ -467,7 +484,18 @@ func planPublicationApply(
 				nil,
 			)
 		}
-		selection, err := selectPublicationTarget(ctx, request.Local, request.Configuration, target.ID, portable)
+		if !reflect.DeepEqual(portable, published) {
+			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonRoot, nil)
+		}
+		if target.Source != model.SourceFiles || target.Root == nil {
+			return nil, publicationApplyFailure(
+				ctx,
+				publicationApplyStagePlan,
+				publicationApplyReasonTargetUnsupported,
+				nil,
+			)
+		}
+		selection, err := selectPublicationTarget(ctx, request.Local, request.Configuration, target.ID, published)
 		if err != nil {
 			return nil, err
 		}
@@ -486,7 +514,7 @@ func planPublicationApply(
 		if len(remote.untracked) != 0 {
 			return nil, publicationApplyFailure(ctx, publicationApplyStagePlan, publicationApplyReasonUntracked, nil)
 		}
-		baseEntries, defined := publicationSnapshotTargetEntries(request.BaseSnapshot, target.ID)
+		baseEntries, defined := publicationSnapshotPortableEntries(request.BaseSnapshot, published)
 		baseView := syncengine.BaseView{Status: syncengine.BaseMissing}
 		if defined {
 			baseView = syncengine.BaseView{Status: syncengine.BaseKnown, Entries: baseEntries}
@@ -1290,4 +1318,55 @@ func publicationApplyEnsureParents(fileSystem files.ApplyFileSystem, root, key s
 		}
 	}
 	return nil
+}
+
+type PublicationApplyJournalStatus struct {
+	Live      int
+	Unsettled int
+	Blocked   bool
+}
+
+func ResolvePublicationApplyJournal(
+	ctx context.Context,
+	journal *publicationstate.Journal,
+	floorRevision uint64,
+) (PublicationApplyJournalStatus, error) {
+	resolutions, err := resolvePublicationApplyJournal(ctx, journal, files.DefaultApplyFileSystem())
+	if err != nil {
+		return PublicationApplyJournalStatus{}, err
+	}
+	status := PublicationApplyJournalStatus{Live: len(resolutions)}
+	for _, resolution := range resolutions {
+		switch resolution.Outcome {
+		case publicationstate.JournalOutcomeUnobserved,
+			publicationstate.JournalOutcomeIndeterminate,
+			publicationstate.JournalOutcomeRollbackPending:
+			status.Unsettled++
+		}
+	}
+	admission := journal.CheckAdmission(ctx, floorRevision)
+	var blocked *publicationstate.JournalBlockedError
+	switch {
+	case errors.As(admission, &blocked):
+		status.Blocked = true
+	case admission != nil:
+		return PublicationApplyJournalStatus{}, admission
+	}
+	return status, nil
+}
+
+func resolvePublicationApplyJournal(
+	ctx context.Context,
+	journal *publicationstate.Journal,
+	fileSystem files.ApplyFileSystem,
+) ([]publicationstate.JournalResolution, error) {
+	if journal == nil {
+		return nil, publicationApplyFailure(ctx, publicationApplyStageResolve, publicationApplyReasonRequestInvalid, nil)
+	}
+	return journal.ResolveInterrupted(
+		ctx,
+		func(entry publicationstate.JournalEntry) (publicationstate.ObservedFile, error) {
+			return observePublicationApplyEntry(fileSystem, entry)
+		},
+	)
 }

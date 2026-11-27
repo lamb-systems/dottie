@@ -80,9 +80,14 @@ of base, relative path and kind. A record is only a proposal: a target is create
 confirmation, before any proposed directory is read, in review mode and without excludes, for a
 files target through the same checks and canonicalization as `targets add`, and for a settings
 target through the local category selection and its resolved digest. A published target whose id is
-already configured is left alone. A publication whose single segment is an entries file-set is still
-re-projected onto the one local files target, so it can be applied to the root of your choosing; a
-multi-segment publication applies each segment to the local target with the same id and root. A
+already configured is left alone. `pull` plans and applies only the targets the position names: a
+configured target the position does not name is reported as skipped and is not planned, captured or
+mutated, though the root safety checks and any interrupted-apply recovery still visit the paths they
+recorded. A
+publication whose single segment is an entries file-set is still re-projected onto the sole local files
+target, so it can be applied to the root of your choosing; a multi-segment publication applies each
+segment to the local target with the same id and root, and a configured target whose root differs from
+the published one refuses the apply instead of being rebound. A
 single-file target publishes its file under the basename of its configured path, for example
 `init.lua`, and pull maps that one entry back to the selected file. Several targets can be adopted
 under one confirmation, each under its own rules.
@@ -126,9 +131,9 @@ account can read it back.
   cannot be read: publish a new chain from an empty repository state, or clear it, and rebuild the
   local store.
 - Applying settings is not implemented. `pull` fetches and verifies inline GNOME settings, but a
-  configured settings target refuses the apply plan (`target_unsupported`) and only files targets are
-  written. Adoption is committed after the apply plan is accepted, so `--settings` cannot yet
-  provision a settings target through `pull`.
+  published settings segment that local configuration selects refuses the apply plan
+  (`target_unsupported`), and only files targets are written. `--settings` refuses before printing a
+  confirmation token, so an adoption is never offered when the settings cannot be applied afterwards.
 - A push from a machine that configures only some of the published targets composes a snapshot from
   its own targets, so the targets it does not configure are not carried forward into the next head.
   Pull them on that machine first, or push from a machine that configures them.

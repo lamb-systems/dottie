@@ -15,9 +15,14 @@ any of it.
 
 A fresh-machine `dottie pull` resolves the publication, fetches and decodes every packed blob and
 entry blob, and reads the inline settings from the snapshot record, using the account session and
-the published `vaultHeadV2` record. It applies files targets; writing inline settings back to a
-settings backend is not implemented in this tree, so a configured settings target refuses the apply
-plan instead of being applied silently. It does not load a Dottie device key. The reader verifies
+the published `vaultHeadV2` record. It applies the files targets the published position names; a
+configured target that the position does not name is not planned, captured or mutated, although the
+root safety checks and interrupted-apply recovery still observe the paths they recorded. An accepted
+floor never advances while an apply journal entry is unresolved: the interrupted operation is resolved
+first, and an operation that cannot be classified blocks the run. Writing inline settings back to a
+settings backend is not implemented in this tree, so a published settings segment the local
+configuration selects refuses the apply plan instead of being applied silently, and a settings target
+is never adopted without a build that can write it. It does not load a Dottie device key. The reader verifies
 account identity, publication scopes, record membership in a signed commit, the head/snapshot
 chain, each payload CID and size, and the payload format. Those checks establish repository-scoped authenticity and
 integrity, not global freshness or device authorization.
