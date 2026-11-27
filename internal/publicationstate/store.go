@@ -170,7 +170,7 @@ func OpenWithOptions(directory string, binding Binding, options OpenOptions) (*S
 	if !probe.initial && !probe.recognized {
 		return nil, classified(ErrSchema, StageOpen, ReasonSchema)
 	}
-	if probe.version == 1 || probe.version == 2 {
+	if !probe.initial && probe.version != 4 {
 		return nil, classified(ErrSchema, StageOpen, ReasonRebuildRequired)
 	}
 	db, err := sql.Open("sqlite", dbDSN(dbPath, false))

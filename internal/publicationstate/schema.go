@@ -62,6 +62,63 @@ type schemaInventory struct {
 	metadataKeys []string
 }
 
+var schema2AttemptStatements = []string{
+	"CREATE TABLE publication_attempts (attempt_id BLOB PRIMARY KEY NOT NULL, core BLOB NOT NULL, lifecycle TEXT NOT NULL, outcome TEXT NOT NULL, blocked TEXT NOT NULL, state_digest BLOB NOT NULL, mutation_revision INTEGER NOT NULL, created_order INTEGER NOT NULL, logical_bytes INTEGER NOT NULL, terminal_evidence BLOB, retirement_evidence BLOB)",
+	"CREATE TABLE active_publication_attempt (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id))",
+	"CREATE TABLE pending_genesis (singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1), attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), vault BLOB NOT NULL)",
+	"CREATE TABLE attempt_events (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), ordinal INTEGER NOT NULL, kind TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, ordinal))",
+	"CREATE TABLE attempt_evidence (attempt_id BLOB NOT NULL REFERENCES publication_attempts(attempt_id), role TEXT NOT NULL, body BLOB NOT NULL, digest BLOB NOT NULL, PRIMARY KEY(attempt_id, role))",
+	"CREATE TABLE payload_objects (blob_cid BLOB PRIMARY KEY NOT NULL, size INTEGER NOT NULL, basename TEXT NOT NULL UNIQUE, logical_bytes INTEGER NOT NULL)",
+	"CREATE TABLE attempt_payload_refs (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))",
+	"CREATE TABLE retained_publications (record_cid BLOB PRIMARY KEY NOT NULL, attempt_id BLOB NOT NULL UNIQUE REFERENCES publication_attempts(attempt_id), sequence INTEGER NOT NULL, blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid), size INTEGER NOT NULL, accepted_revision INTEGER NOT NULL)",
+	"CREATE TABLE attempt_reservations (attempt_id BLOB PRIMARY KEY NOT NULL REFERENCES publication_attempts(attempt_id), metadata_bytes INTEGER NOT NULL, accepted_bytes INTEGER NOT NULL, accepted_records INTEGER NOT NULL, accepted_events INTEGER NOT NULL, retained_points INTEGER NOT NULL)",
+	"CREATE INDEX publication_attempts_order ON publication_attempts(created_order, attempt_id)",
+	"CREATE INDEX payload_objects_basename ON payload_objects(basename)",
+}
+
+const schema3AcceptedMaterialStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), blob_cid BLOB NOT NULL REFERENCES payload_objects(blob_cid))"
+
+var legacyStoreMetadataKeys = []string{
+	"attempt_limits",
+	"attempt_mutation_revision",
+	"binding",
+	"database_id",
+	"generation",
+	"limits",
+	"revision",
+}
+
+func schema2Inventory() schemaInventory {
+	statements := make([]string, 0, len(schemaV1Statements)+len(schema2AttemptStatements))
+	statements = append(statements, schemaV1Statements...)
+	statements = append(statements, schema2AttemptStatements...)
+	objects := make(map[string]string, len(schemaV1Objects)+len(schema2AttemptStatements))
+	maps.Copy(objects, schemaV1Objects)
+	for _, statement := range schema2AttemptStatements {
+		objects[statementTableName(statement)] = statementTableKind(statement)
+	}
+	return schemaInventory{
+		statements:   statements,
+		objects:      objects,
+		metadataKeys: legacyStoreMetadataKeys,
+	}
+}
+
+func schema3Inventory() schemaInventory {
+	base := schema2Inventory()
+	statements := append(append([]string(nil), base.statements...), schema3AcceptedMaterialStatement)
+	objects := cloneSchemaObjects(base.objects)
+	objects[statementTableName(schema3AcceptedMaterialStatement)] = "table"
+	return schemaInventory{statements: statements, objects: objects, metadataKeys: base.metadataKeys}
+}
+
+func statementTableKind(statement string) string {
+	if strings.HasPrefix(statement, "CREATE INDEX") {
+		return "index"
+	}
+	return "table"
+}
+
 func schemaInventoryForVersion(version int) (schemaInventory, error) {
 	switch version {
 	case 1:
@@ -71,25 +128,9 @@ func schemaInventoryForVersion(version int) (schemaInventory, error) {
 			metadataKeys: []string{"binding", "database_id", "generation", "limits", "revision"},
 		}, nil
 	case 2:
-		statements := make([]string, 0, len(schemaV1Statements)+len(attemptSchemaStatements))
-		statements = append(statements, schemaV1Statements...)
-		statements = append(statements, attemptSchemaStatements...)
-		objects := make(map[string]string, len(schemaV1Objects)+len(attemptSchemaObjects))
-		maps.Copy(objects, schemaV1Objects)
-		maps.Copy(objects, attemptSchemaObjects)
-		return schemaInventory{
-			statements: statements,
-			objects:    objects,
-			metadataKeys: []string{
-				"attempt_limits",
-				"attempt_mutation_revision",
-				"binding",
-				"database_id",
-				"generation",
-				"limits",
-				"revision",
-			},
-		}, nil
+		return schema2Inventory(), nil
+	case 3:
+		return schema3Inventory(), nil
 	case 4:
 		statements := make([]string, 0, len(schemaV1Statements)+len(schema4AttemptSchemaStatements)+1)
 		statements = append(statements, schemaV1Statements...)

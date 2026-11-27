@@ -537,10 +537,13 @@ func preparePullApply(
 		if len(skipped) != 0 {
 			_ = writeCommandOutput(input.Command, renderPullSkipped(skipped))
 		}
-		return pullApplyPreparation{}, urfave.Exit(
-			input.label()+" refused: no target is configured and the published position names none to adopt; run dottie targets add or pass --settings; nothing was changed",
-			3,
-		)
+		reason := input.label() +
+			" refused: no target is configured and the published position names none to adopt; " +
+			"run dottie targets add or pass --settings; nothing was changed"
+		if live, liveErr := publicationstate.LiveJournalRows(sources.Paths.PublicationStateDir()); liveErr == nil && live > 0 {
+			reason += "; an interrupted apply is still recorded there and needs a configured target to resolve it"
+		}
+		return pullApplyPreparation{}, urfave.Exit(reason, 3)
 	}
 	if sources.Local == nil {
 		return pullApplyPreparation{}, urfave.Exit(

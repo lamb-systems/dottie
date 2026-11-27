@@ -56,3 +56,33 @@ that wrote them first; if that build is gone, keep the directory as evidence.
 
 A database that is not a Dottie store at all is refused as `schema`, not as `rebuild_required`, so a
 wrong directory is never mistaken for an outdated one.
+
+## Frozen legacy store images
+
+The rebuild refusal is tested against images written by the builds that produced those schemas, kept
+under `internal/publicationstate/testdata/`:
+
+| Image | Schema | Source |
+| --- | --- | --- |
+| `positions-v1/schema1-baseline.db` | 1 | the pre-attempt position store |
+| `positions-v2/schema2-mixed.db` | 2 | pinned schema-2 fixture produced by the baseline commit `f5387d6`, restored from this repository's history (`cb4e881`); SHA-256 `e9560148…a0939` matches its manifest |
+| `positions-v2/schema2-pending-genesis.db` | 2 | same provenance; SHA-256 `d2e446ca…5f108` |
+| `positions-v3/schema3-empty.db` | 3 | written by the build at commit `479b2c5`, the tree that wrote schema 3 |
+| `positions-v3/schema3-upgraded.db` | 3 | same build, produced by its own supported upgrade from the pinned schema-2 `mixed` image |
+
+The v2 and v3 inventories are frozen constants rather than the current table definitions: the current
+`attemptSchemaStatements` describe the schema-4 `retained_publications` and `attempt_payload_refs`, so
+deriving a legacy inventory from them would identify nothing.
+
+## Recovery is per file, not per run
+
+The apply journal makes an individual file write or delete recoverable: a row records the intent and
+the preimage before the change, and the next run classifies the row from what is on disk. It is not a
+whole-run rollback, and it does not order or undo the files that a run already changed. A run that
+stops after one file's postimage but before the run's remaining operations leaves the earlier files
+applied; the journal settles that one row and the next run plans the rest against the settled state.
+
+A pull resolves those rows before it accepts a floor, including on the acceptance-only path where no
+file would be written and the configured targets are not the ones the row wrote. An indeterminate row
+blocks the run and the floor does not advance. A pull with nothing configured to resolve the row
+refuses and says the row is still recorded rather than reporting a clean state.

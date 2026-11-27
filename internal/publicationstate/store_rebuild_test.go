@@ -11,9 +11,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var legacyPositionsImages = []string{
+	filepath.Join("testdata", "positions-v1", "schema1-baseline.db"),
+	filepath.Join("testdata", "positions-v2", "schema2-mixed.db"),
+	filepath.Join("testdata", "positions-v2", "schema2-pending-genesis.db"),
+	filepath.Join("testdata", "positions-v3", "schema3-empty.db"),
+	filepath.Join("testdata", "positions-v3", "schema3-upgraded.db"),
+}
+
 func legacyPositionsDirectory(t *testing.T) string {
 	t.Helper()
-	source := filepath.Join("testdata", "positions-v1", "schema1-baseline.db")
+	return legacyPositionsDirectoryOf(t, legacyPositionsImages[0])
+}
+
+func legacyPositionsDirectoryOf(t *testing.T, source string) string {
+	t.Helper()
 	raw, err := os.ReadFile(source)
 	require.NoError(t, err)
 	directory := t.TempDir()
@@ -32,7 +44,24 @@ func legacyPositionsBinding() Binding {
 }
 
 func TestOpenRefusesALegacyPositionsStoreAsRebuildRequired(t *testing.T) {
-	directory := legacyPositionsDirectory(t)
+	for _, image := range legacyPositionsImages {
+		t.Run(filepath.Base(image), func(t *testing.T) {
+			requireLegacyStoreRefused(t, image)
+		})
+	}
+}
+
+func TestInspectRefusesALegacyPositionsStoreAsRebuildRequired(t *testing.T) {
+	for _, image := range legacyPositionsImages {
+		t.Run(filepath.Base(image), func(t *testing.T) {
+			requireLegacyInspectionRefused(t, image)
+		})
+	}
+}
+
+func requireLegacyStoreRefused(t *testing.T, image string) {
+	t.Helper()
+	directory := legacyPositionsDirectoryOf(t, image)
 	before, err := os.ReadFile(filepath.Join(directory, "publication.db"))
 	require.NoError(t, err)
 
@@ -48,8 +77,9 @@ func TestOpenRefusesALegacyPositionsStoreAsRebuildRequired(t *testing.T) {
 	}
 }
 
-func TestInspectRefusesALegacyPositionsStoreAsRebuildRequired(t *testing.T) {
-	directory := legacyPositionsDirectory(t)
+func requireLegacyInspectionRefused(t *testing.T, image string) {
+	t.Helper()
+	directory := legacyPositionsDirectoryOf(t, image)
 	before, err := os.ReadFile(filepath.Join(directory, "publication.db"))
 	require.NoError(t, err)
 
