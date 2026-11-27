@@ -182,7 +182,7 @@ func TestJournalOpenRefusesUnsafeForeignAndFutureStores(t *testing.T) {
 	futurePath := filepath.Join(futureDirectory, journalDatabaseName)
 	rewrite, err := sql.Open("sqlite", dbDSN(futurePath, false))
 	require.NoError(t, err)
-	_, err = rewrite.ExecContext(ctx, "PRAGMA user_version=3")
+	_, err = rewrite.ExecContext(ctx, "PRAGMA user_version=4")
 	require.NoError(t, err)
 	require.NoError(t, rewrite.Close())
 	_, err = OpenJournal(futureDirectory)
@@ -229,11 +229,14 @@ func TestJournalSchemaAndFileModes(t *testing.T) {
 	version, versionOK := rawInt64(versionValue)
 	require.True(t, versionOK)
 	assert.Equal(t, int64(journalApplicationID), application)
-	assert.Equal(t, int64(2), version)
+	assert.Equal(t, int64(3), version)
 
 	objects, err := queryJournalObjects(ctx, journal)
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"backups": "table", "journal": "table", "journal_live": "index"}, objects)
+	assert.Equal(t, map[string]string{
+		"backups": "table", "journal": "table", "journal_live": "index",
+		"settings_journal": "table", "settings_journal_live": "index",
+	}, objects)
 
 	for name, mode := range map[string]os.FileMode{journalDatabaseName: 0o600, journalLockName: 0o600} {
 		info, statErr := os.Lstat(filepath.Join(directory, name))

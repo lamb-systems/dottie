@@ -609,7 +609,7 @@ func runSyncCommand(
 		binding,
 		inspection.Floor,
 		inspection.Present,
-		preparation.Plan.Digest,
+		pullApplyCombinedPlanDigest(preparation.Plan.Digest, preparation.SettingsPlan.Digest),
 		preparation.Staged.StateToken,
 		preparation.Staged.ObservationDigest,
 		viewDigest,
@@ -650,7 +650,7 @@ func runSyncCommand(
 		}
 		journalGuard = guard
 		defer guard.Close()
-		resolved, resolveErr := guard.resolve(ctx, "sync", inspection.Floor.Revision)
+		resolved, resolveErr := guard.resolve(ctx, "sync", inspection.Floor.Revision, preparation.Sources.Settings)
 		if resolveErr != nil {
 			return resolveErr
 		}

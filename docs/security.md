@@ -21,10 +21,13 @@ root safety checks and interrupted-apply recovery still observe the paths they r
 resolves an interrupted apply before it accepts a floor and refuses when the entry cannot be
 classified; `sync` resolves it before its push half settles and refuses to publish while one is
 unresolved. A standalone `push` finalizes a retained attempt through the position store and does not
-consult the apply journal. Writing inline settings back to a
-settings backend is not implemented in this tree, so a published settings segment the local
-configuration selects refuses the apply plan instead of being applied silently, and a settings target
-is never adopted without a build that can write it. It does not load a Dottie device key. The reader verifies
+consult the apply journal. Inline settings are written back through the GNOME backend: only keys the
+local category selection already approves, journaled per key, verified after the write, and never
+applied from a journal image. GSettings has no revision or compare-and-set, so a concurrent external
+writer can undo a value; convergence can therefore restore an older value, and that is the documented
+limit of the guarantee rather than a hidden one. A published settings target the local configuration
+selects refuses the pull when the build has no settings backend, and a settings target is never
+adopted without one. It does not load a Dottie device key. The reader verifies
 account identity, publication scopes, record membership in a signed commit, the head/snapshot
 chain, each payload CID and size, and the payload format. Those checks establish repository-scoped authenticity and
 integrity, not global freshness or device authorization.

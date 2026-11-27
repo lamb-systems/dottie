@@ -134,9 +134,10 @@ account can read it back.
   longer carries `blobCid`), so a chain or a local publication store written by an earlier build
   cannot be read: publish a new chain from an empty repository state, or clear it, and rebuild the
   local store.
-- Applying settings is not implemented. `pull` fetches and verifies inline GNOME settings, but a
-  published settings target that local configuration selects refuses the pull before a token is
-  printed, and only files targets are written.
+- Applying settings needs a build with the GNOME backend. `pull` plans the approved keys of a
+  published settings target, journals each intent, sets or resets the key and verifies the written
+  value before the floor advances; without the backend the whole pull refuses before a token is
+  printed. `docs/adr/017-settings-apply.md` records the model, including the external-writer race.
 - A push from a machine that configures only some of the published targets composes a snapshot from
   its own targets, so the targets it does not configure are not carried forward into the next head.
   Pull them on that machine first, or push from a machine that configures them.

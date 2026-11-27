@@ -14,6 +14,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
 func publicationJournalDirectory(t *testing.T) string {
@@ -41,16 +42,21 @@ func TestPullSettingsApplyRefusalBlocksAConfiguredPublishedSettingsTarget(t *tes
 		{ID: "desktop", Source: model.SourceGNOME, SourceVersion: model.SourceVersion},
 	}}
 	filesOnly := config.Config{Version: config.Version, Targets: []config.Target{files}}
-	require.NoError(t, pullSettingsApplyRefusal(pullApplyPlanRequest{}, filesOnly, material))
+	require.NoError(t, pullSettingsApplyRefusal(pullApplyPlanRequest{}, filesOnly, material, pullApplySources{}))
 
 	withSettings := config.Config{Version: config.Version, Targets: []config.Target{files, settings}}
-	err = pullSettingsApplyRefusal(pullApplyPlanRequest{}, withSettings, material)
+	err = pullSettingsApplyRefusal(pullApplyPlanRequest{}, withSettings, material, pullApplySources{})
 	require.Error(t, err)
 	var exitErr urfave.ExitCoder
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 3, exitErr.ExitCode())
 	assert.Contains(t, err.Error(), "desktop")
 	assert.Contains(t, err.Error(), "cannot apply settings")
+
+	require.NoError(t, pullSettingsApplyRefusal(
+		pullApplyPlanRequest{}, withSettings, material,
+		pullApplySources{Settings: &settingsTestBackendStub{}},
+	))
 }
 
 func TestPullProjectionBaseEntriesRefusesAReplacedPublishedTarget(t *testing.T) {
@@ -154,7 +160,7 @@ func TestPullApplyJournalGuardSettlesAnInterruptedApply(t *testing.T) {
 
 	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
 	require.NoError(t, err)
-	resolved, err := guard.resolve(context.Background(), "pull", 0)
+	resolved, err := guard.resolve(context.Background(), "pull", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), resolved)
 	guard.Close()
@@ -191,7 +197,7 @@ func TestPullApplyJournalGuardRefusesAnIndeterminateApply(t *testing.T) {
 	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
 	require.NoError(t, err)
 	defer guard.Close()
-	_, err = guard.resolve(context.Background(), "pull", 0)
+	_, err = guard.resolve(context.Background(), "pull", 0, nil)
 	require.Error(t, err)
 	var exitErr urfave.ExitCoder
 	require.ErrorAs(t, err, &exitErr)
@@ -232,7 +238,7 @@ func TestPullApplyJournalGuardRefusesARowSeenAheadOfTheFloor(t *testing.T) {
 	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
 	require.NoError(t, err)
 	defer guard.Close()
-	_, err = guard.resolve(context.Background(), "pull", 2)
+	_, err = guard.resolve(context.Background(), "pull", 2, nil)
 	require.Error(t, err)
 	var exitErr urfave.ExitCoder
 	require.ErrorAs(t, err, &exitErr)
@@ -365,3 +371,27 @@ func TestPullRefusesAMixedPredecessorReplacedByASingleEntriesHead(t *testing.T) 
 	assert.Contains(t, err.Error(), "replaced target")
 	assert.NotContains(t, err.Error(), "sentinel")
 }
+
+type settingsTestBackendStub struct{}
+
+func (settingsTestBackendStub) Observe(
+	context.Context,
+	model.EntryKey,
+) (syncengine.SettingValue, error) {
+	return syncengine.SettingValue{}, nil
+}
+
+func (settingsTestBackendStub) Canonicalize(
+	context.Context,
+	model.EntryKey,
+	string,
+	string,
+) (syncengine.SettingValue, error) {
+	return syncengine.SettingValue{}, nil
+}
+
+func (settingsTestBackendStub) Set(context.Context, model.EntryKey, string, string) error {
+	return nil
+}
+
+func (settingsTestBackendStub) Reset(context.Context, model.EntryKey) error { return nil }

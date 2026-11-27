@@ -26,6 +26,7 @@ import (
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/remote/atproto"
 	"github.com/lamb-systems/dottie/internal/service"
+	"github.com/lamb-systems/dottie/internal/syncengine"
 )
 
 const (
@@ -82,6 +83,7 @@ type pullApplySources struct {
 	Configuration config.Config
 	Token         config.Token
 	Local         *service.PublicationLocalContext
+	Settings      syncengine.SettingsBackend
 }
 
 type pullApplySourcesFactory func(context.Context, *urfave.Command, publicationstate.Binding) (pullApplySources, error)
@@ -96,6 +98,7 @@ type pullApplyMaterial struct {
 	BaseEntries    []publication.PayloadEntry
 	FileSetTargets []string
 	Targets        []model.Target
+	Record         []byte
 	TargetID       string
 	TargetRoot     model.FileRoot
 	RecordCID      []byte
@@ -464,6 +467,8 @@ type pullApplyPreparation struct {
 	Request         service.PublicationApplyRequest
 	Material        pullApplyMaterial
 	Plan            service.PublicationApplyPlan
+	SettingsRequest service.PublicationSettingsRequest
+	SettingsPlan    service.PublicationSettingsPlan
 	Observation     publicationstate.Observation
 	Staged          service.PublicationAcceptProposal
 	Adoption        *pullApplyTargetAdoption
@@ -510,7 +515,7 @@ func preparePullApply(
 	if err != nil {
 		return pullApplyPreparation{}, err
 	}
-	if err := pullSettingsApplyRefusal(input, configuration, material); err != nil {
+	if err := pullSettingsApplyRefusal(input, configuration, material, sources); err != nil {
 		return pullApplyPreparation{}, err
 	}
 	preparation.Skipped = skipped
@@ -627,8 +632,35 @@ func preparePullApply(
 		request.Configuration = configuration
 		preparation.Request = request
 	}
+	settingsRequest := service.PublicationSettingsRequest{
+		Vault: input.Vault, FloorRevision: input.Floor.Revision, Configuration: configuration,
+		Record: material.Record, Backend: sources.Settings,
+	}
+	settingsPlan := service.PublicationSettingsPlan{}
+	settingsTargets, err := service.PublicationSettingsTargets(material.Record, configuration)
+	if err != nil {
+		return pullApplyPreparation{}, urfave.Exit(
+			input.label()+" refused: the published settings cannot be read; nothing was changed", 3,
+		)
+	}
+	if len(settingsTargets) != 0 {
+		if sources.Settings == nil {
+			return pullApplyPreparation{}, urfave.Exit(
+				input.label()+" refused: the published position names a settings target and this build cannot apply settings; nothing was changed",
+				3,
+			)
+		}
+		settingsPlan, err = service.PlanPublicationSettings(ctx, settingsRequest)
+		if err != nil {
+			return pullApplyPreparation{}, urfave.Exit(
+				input.label()+" refused: the published settings cannot be applied; nothing was changed", 3,
+			)
+		}
+	}
+	preparation.SettingsRequest = settingsRequest
+	preparation.SettingsPlan = settingsPlan
 	observation := pullApplyObservation(input.View)
-	if plan.Changes == 0 {
+	if plan.Changes == 0 && settingsPlan.Changes == 0 {
 		if !input.AcceptPosition {
 			return preparation, nil
 		}
@@ -671,7 +703,7 @@ func preparePullApply(
 	preparation.Staged = staged
 	preparation.Token = pullApplyConfirmationToken(
 		input.Binding,
-		plan.Digest,
+		pullApplyCombinedPlanDigest(plan.Digest, settingsPlan.Digest),
 		staged.StateToken,
 		staged.ObservationDigest,
 		pullApplyTargetBinding{
@@ -1111,6 +1143,19 @@ func applyPullPreparation(
 		return output, pullApplyFailure(input.Command, input.label(), output, applyErr)
 	}
 	output += renderPullApplyReport(report)
+	if len(preparation.SettingsPlan.Operations) != 0 {
+		settingsRequest := preparation.SettingsRequest
+		settingsRequest.Journal = journal
+		settingsRequest.ExpectedPlan = preparation.SettingsPlan.Digest
+		settingsReport, settingsErr := service.ApplyPublicationSettings(ctx, settingsRequest)
+		if settingsErr != nil {
+			return output, urfave.Exit(
+				input.label()+" applied files but the published settings could not be applied; the floor was not advanced",
+				4,
+			)
+		}
+		output += renderPullSettingsReport(settingsReport)
+	}
 	accepted, acceptErr := service.AcceptPublication(ctx, service.PublicationAcceptRequest{
 		Directory: preparation.Sources.Paths.PublicationStateDir(), Binding: input.Binding,
 		Mode: preparation.Staged.Mode, FloorRevision: input.Floor.Revision,
@@ -1161,6 +1206,7 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return nil
 	}
 	output := renderPullSkipped(preparation.Skipped) + renderPullApplyPlan(preparation.Plan)
+	output += renderPullSettingsPlan(preparation.SettingsPlan)
 	output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
 	if !input.Confirmed {
 		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", preparation.Token)
@@ -1198,6 +1244,7 @@ func writePullAdoptionRun(input pullApplyPlanRequest, preparation pullApplyPrepa
 		)
 	case preparation.applies():
 		output += renderPullApplyPlan(preparation.Plan)
+		output += renderPullSettingsPlan(preparation.SettingsPlan)
 		output += fmt.Sprintf("confirmation: %x\n", preparation.Token)
 		output += fmt.Sprintf("pull: plan only; nothing was applied; repeat with --confirm %x\n", preparation.Token)
 	default:
@@ -1247,7 +1294,7 @@ func acceptPullPosition(
 		return output, err
 	}
 	defer guard.Close()
-	if _, err := guard.resolve(ctx, "pull", input.Floor.Revision); err != nil {
+	if _, err := guard.resolve(ctx, "pull", input.Floor.Revision, preparation.Sources.Settings); err != nil {
 		return output, err
 	}
 	current, err := publicationstate.Inspect(ctx, preparation.Sources.Paths.PublicationStateDir(), input.Binding)
@@ -1329,6 +1376,7 @@ func pullApplySnapshots(
 			Entries:        payload.Entries,
 			FileSetTargets: pullApplyEntriesTargets(terminal),
 			Targets:        targets,
+			Record:         bytes.Clone(terminalBlock.Raw),
 			RecordCID:      recordCID,
 			Sequence:       terminal.PublicationSeq,
 		}, nil
@@ -1360,6 +1408,7 @@ func pullApplySnapshots(
 		BaseEntries:    basePayload.Entries,
 		FileSetTargets: pullApplyEntriesTargets(terminal),
 		Targets:        targets,
+		Record:         bytes.Clone(terminalBlock.Raw),
 		RecordCID:      recordCID,
 		Sequence:       terminal.PublicationSeq,
 	}, nil
@@ -1861,6 +1910,9 @@ func productionPullApplySourcesFactory(env func(string) string, settings service
 			return pullApplySources{}, err
 		}
 		sources.Local = local
+		if settings != nil {
+			sources.Settings = settings.Backend()
+		}
 		return sources, nil
 	}
 }
@@ -1959,7 +2011,11 @@ func pullSettingsApplyRefusal(
 	input pullApplyPlanRequest,
 	configuration config.Config,
 	material pullApplyMaterial,
+	sources pullApplySources,
 ) error {
+	if sources.Settings != nil {
+		return nil
+	}
 	for _, published := range material.Targets {
 		if published.Source != model.SourceGNOME {
 			continue
@@ -2025,8 +2081,9 @@ func (guard *pullApplyJournalGuard) resolve(
 	ctx context.Context,
 	label string,
 	floorRevision uint64,
+	settings syncengine.SettingsBackend,
 ) (int64, error) {
-	status, err := service.ResolvePublicationApplyJournal(ctx, guard.journal, floorRevision)
+	status, err := service.ResolvePublicationApplyJournal(ctx, guard.journal, floorRevision, settings)
 	if err != nil {
 		return 0, urfave.Exit(
 			label+" refused: an interrupted apply could not be resolved ("+escapeField(pullStoreReason(err))+"); nothing was changed",
@@ -2210,4 +2267,39 @@ func pullPublishedDescriptorRefusal(
 		)
 	}
 	return nil
+}
+
+func pullApplyCombinedPlanDigest(files [32]byte, settings [32]byte) [32]byte {
+	digest := sha256.New()
+	_, _ = digest.Write(files[:])
+	_, _ = digest.Write(settings[:])
+	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result
+}
+
+func renderPullSettingsPlan(plan service.PublicationSettingsPlan) string {
+	var output strings.Builder
+	for _, operation := range plan.Operations {
+		prefix := "apply: setting set "
+		if operation.Reset {
+			prefix = "apply: setting reset "
+		}
+		output.WriteString(prefix)
+		output.WriteString(escapeField(operation.TargetID))
+		output.WriteString(" ")
+		output.WriteString(escapeField(operation.SchemaID))
+		output.WriteString(" ")
+		output.WriteString(escapeField(operation.Key))
+		output.WriteString("\n")
+	}
+	return output.String()
+}
+
+func renderPullSettingsReport(report service.PublicationSettingsReport) string {
+	return fmt.Sprintf(
+		"pull: settings applied=%d unchanged=%d\n",
+		report.Applied,
+		report.Unchanged,
+	)
 }

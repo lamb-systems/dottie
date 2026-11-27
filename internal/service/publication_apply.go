@@ -1330,17 +1330,28 @@ func ResolvePublicationApplyJournal(
 	ctx context.Context,
 	journal *publicationstate.Journal,
 	floorRevision uint64,
+	settings syncengine.SettingsBackend,
 ) (PublicationApplyJournalStatus, error) {
 	resolutions, err := resolvePublicationApplyJournal(ctx, journal, files.DefaultApplyFileSystem())
 	if err != nil {
 		return PublicationApplyJournalStatus{}, err
 	}
-	status := PublicationApplyJournalStatus{Live: len(resolutions)}
+	settingsResolutions, err := resolvePublicationSettingsJournal(ctx, journal, settings)
+	if err != nil {
+		return PublicationApplyJournalStatus{}, err
+	}
+	status := PublicationApplyJournalStatus{Live: len(resolutions) + len(settingsResolutions)}
 	for _, resolution := range resolutions {
 		switch resolution.Outcome {
 		case publicationstate.JournalOutcomeUnobserved,
 			publicationstate.JournalOutcomeIndeterminate,
 			publicationstate.JournalOutcomeRollbackPending:
+			status.Unsettled++
+		}
+	}
+	for _, resolution := range settingsResolutions {
+		switch resolution.Outcome {
+		case publicationstate.JournalOutcomeUnobserved, publicationstate.JournalOutcomeIndeterminate:
 			status.Unsettled++
 		}
 	}
@@ -1369,4 +1380,44 @@ func resolvePublicationApplyJournal(
 			return observePublicationApplyEntry(fileSystem, entry)
 		},
 	)
+}
+
+func resolvePublicationSettingsJournal(
+	ctx context.Context,
+	journal *publicationstate.Journal,
+	backend syncengine.SettingsBackend,
+) ([]publicationstate.SettingsJournalResolution, error) {
+	if journal == nil {
+		return nil, nil
+	}
+	if backend == nil {
+		live, err := journal.LiveSettingsEntries(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resolutions := make([]publicationstate.SettingsJournalResolution, 0, len(live))
+		for _, entry := range live {
+			resolutions = append(
+				resolutions,
+				publicationstate.SettingsJournalResolution{
+					Entry: entry.Entry, Outcome: publicationstate.JournalOutcomeUnobserved,
+				},
+			)
+		}
+		return resolutions, nil
+	}
+	return journal.ResolveInterruptedSettings(ctx, func(
+		anchor publicationstate.SettingsJournalAnchor,
+	) (publicationstate.SettingsValue, error) {
+		observed, err := backend.Observe(ctx, model.EntryKey{
+			TargetID: anchor.TargetID, Source: model.SourceGNOME,
+			SchemaID: anchor.SchemaID, SettingsPath: anchor.Path, SettingKey: anchor.Key,
+		})
+		if err != nil {
+			return publicationstate.SettingsValue{}, err
+		}
+		return publicationstate.SettingsValue{
+			Present: observed.Present, Type: observed.Type, Text: observed.Text,
+		}, nil
+	})
 }

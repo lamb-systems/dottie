@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	journalSchemaVersion        = 2
+	journalSchemaVersion        = 3
 	journalMaxBackupBytes int64 = 8 << 20
 	journalMaxTotalBytes  int64 = 256 << 20
 	journalMaxEntries           = 4096
@@ -57,12 +57,17 @@ const (
 	journalLiveStatement    = "CREATE INDEX journal_live ON journal(state, stage)"
 )
 
-var journalSchemaStatements = []string{journalBackupsStatement, journalEntriesStatement, journalLiveStatement}
+var journalSchemaStatements = []string{
+	journalBackupsStatement, journalEntriesStatement, journalLiveStatement,
+	settingsJournalStatement, settingsJournalLiveStatement,
+}
 
 var journalSchemaObjects = map[string]string{
-	"backups":      "table",
-	"journal":      "table",
-	"journal_live": "index",
+	"backups":               "table",
+	"journal":               "table",
+	"journal_live":          "index",
+	"settings_journal":      "table",
+	"settings_journal_live": "index",
 }
 
 type JournalState string
@@ -393,7 +398,17 @@ func LiveJournalRows(directory string) (int64, error) {
 	if err != nil {
 		return 0, classified(ErrStorage, StageJournal, ReasonIO)
 	}
-	return count, nil
+	settings, err := queryInt64(
+		context.Background(),
+		db,
+		"SELECT count(*) FROM settings_journal WHERE state=? OR state=?",
+		string(JournalStatePending),
+		string(JournalStateIndeterminate),
+	)
+	if err != nil {
+		return 0, classified(ErrStorage, StageJournal, ReasonIO)
+	}
+	return count + settings, nil
 }
 
 func (j *Journal) checkContext(ctx context.Context, stage Stage) error {
