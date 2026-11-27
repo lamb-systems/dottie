@@ -58,7 +58,9 @@ that proposal creates them, and the following run plans and applies under its ow
 targets are adopted only when their root already exists, and a settings target only when you name
 it with `--settings <id>=CATEGORY[,CATEGORY]`, which resolves from the local catalog into an
 approved category set and key digest shown in the plan; anything else is reported and skipped. A
-target that already matches a configured one is left alone. If your local files differ from the
+target that already matches a configured one is left alone. Adoption is refused before a
+confirmation token is printed when the resulting configuration would have to apply a settings
+target, because this build cannot write settings. If your local files differ from the
 published ones and there is no history to compare, pull refuses and tells you which files
 conflict. That is deliberate: it will not overwrite a file you edited, and it will not merge.
 
@@ -131,9 +133,8 @@ account can read it back.
   cannot be read: publish a new chain from an empty repository state, or clear it, and rebuild the
   local store.
 - Applying settings is not implemented. `pull` fetches and verifies inline GNOME settings, but a
-  published settings segment that local configuration selects refuses the apply plan
-  (`target_unsupported`), and only files targets are written. `--settings` refuses before printing a
-  confirmation token, so an adoption is never offered when the settings cannot be applied afterwards.
+  published settings target that local configuration selects refuses the pull before a token is
+  printed, and only files targets are written.
 - A push from a machine that configures only some of the published targets composes a snapshot from
   its own targets, so the targets it does not configure are not carried forward into the next head.
   Pull them on that machine first, or push from a machine that configures them.

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,13 +22,14 @@ const (
 	publicationProposalFileVersion = 1
 	publicationProposalFilePrefix  = "proposal-"
 	publicationProposalFileSuffix  = ".json"
-	publicationProposalFileLimit   = 8 << 10
+	publicationProposalFileLimit   = 2 * publication.MaxFileSetRecordBytes
 )
 
 var (
 	errProposalRecordUnsafe    = errors.New("retained publication proposal is not an owned private regular file")
 	errProposalRecordInvalid   = errors.New("retained publication proposal is unreadable or invalid")
 	errProposalRecordDuplicate = errors.New("retained publication proposal already exists")
+	errProposalRecordTooLarge  = errors.New("retained publication proposal exceeds the size bound")
 )
 
 type proposalBindingFile struct {
@@ -77,7 +79,7 @@ func encodeProposalRecord(record service.PublicationProposalRecord) ([]byte, err
 		FloorRevision:      record.FloorRevision,
 		CandidateRecordCID: hex.EncodeToString(record.CandidateRecordCID),
 		Form:               string(record.Form),
-		Segments:           hex.EncodeToString(record.Segments),
+		Segments:           base64.StdEncoding.EncodeToString(record.Segments),
 		PayloadsDigest:     hex.EncodeToString(record.PayloadsDigest[:]),
 		SelectionDigest:    hex.EncodeToString(record.Review.SelectionDigest[:]),
 		SelectionRevision:  record.Review.SelectionRevision,
@@ -93,6 +95,17 @@ func encodeProposalRecord(record service.PublicationProposalRecord) ([]byte, err
 		return nil, errProposalRecordInvalid
 	}
 	return append(encoded, '\n'), nil
+}
+
+func encodeProposalFile(record service.PublicationProposalRecord) ([]byte, error) {
+	encoded, err := encodeProposalRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) > publicationProposalFileLimit {
+		return nil, errProposalRecordTooLarge
+	}
+	return encoded, nil
 }
 
 func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, error) {
@@ -146,7 +159,7 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 	if record.CandidateRecordCID, err = decodeHexField(file.CandidateRecordCID); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
-	if record.Segments, err = decodeHexField(file.Segments); err != nil {
+	if record.Segments, err = decodeProposalSegments(file.Segments); err != nil {
 		return service.PublicationProposalRecord{}, err
 	}
 	payloadsDigest, err := decodeFixedHex(file.PayloadsDigest, 32)
@@ -158,6 +171,23 @@ func decodeProposalRecord(encoded []byte) (service.PublicationProposalRecord, er
 		return service.PublicationProposalRecord{}, errProposalRecordInvalid
 	}
 	return record, nil
+}
+
+func decodeProposalSegments(value string) ([]byte, error) {
+	for _, decode := range []func(string) ([]byte, error){
+		base64.StdEncoding.DecodeString,
+		hex.DecodeString,
+	} {
+		decoded, err := decode(value)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+		if _, err := publicationstate.DecodeSegmentSummaries(decoded); err != nil {
+			continue
+		}
+		return decoded, nil
+	}
+	return nil, errProposalRecordInvalid
 }
 
 func decodeHexField(value string) ([]byte, error) {
@@ -241,7 +271,7 @@ func (store publicationProposalStore) Issue(ctx context.Context, record service.
 	if err := service.VerifyPublicationProposalRecord(record); err != nil {
 		return err
 	}
-	encoded, err := encodeProposalRecord(record)
+	encoded, err := encodeProposalFile(record)
 	if err != nil {
 		return err
 	}
@@ -279,7 +309,7 @@ func (store publicationProposalStore) Consume(ctx context.Context, publicationID
 		return nil
 	}
 	record.Consumed = true
-	encoded, err := encodeProposalRecord(record)
+	encoded, err := encodeProposalFile(record)
 	if err != nil {
 		return err
 	}

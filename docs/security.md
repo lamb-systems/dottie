@@ -17,9 +17,11 @@ A fresh-machine `dottie pull` resolves the publication, fetches and decodes ever
 entry blob, and reads the inline settings from the snapshot record, using the account session and
 the published `vaultHeadV2` record. It applies the files targets the published position names; a
 configured target that the position does not name is not planned, captured or mutated, although the
-root safety checks and interrupted-apply recovery still observe the paths they recorded. An accepted
-floor never advances while an apply journal entry is unresolved: the interrupted operation is resolved
-first, and an operation that cannot be classified blocks the run. Writing inline settings back to a
+root safety checks and interrupted-apply recovery still observe the paths they recorded. `pull`
+resolves an interrupted apply before it accepts a floor and refuses when the entry cannot be
+classified; `sync` resolves it before its push half settles and refuses to publish while one is
+unresolved. A standalone `push` finalizes a retained attempt through the position store and does not
+consult the apply journal. Writing inline settings back to a
 settings backend is not implemented in this tree, so a published settings segment the local
 configuration selects refuses the apply plan instead of being applied silently, and a settings target
 is never adopted without a build that can write it. It does not load a Dottie device key. The reader verifies
@@ -133,15 +135,18 @@ plan that reads a target is composed only after adoption is confirmed, and its c
 the resolved root or the derived settings policy. Adopted targets use review mode and no excludes,
 targets that cannot be resolved are skipped and reported rather than adopted, and the sync path
 refuses adoption because its push half is already composed. An existing target is left alone: the
-published root is not enforced against it, so a record cannot redirect it, and a legacy file-set
-record without a target names no root, so it cannot be adopted and pull requires a local files
-target for it. A single-file target publishes its file under the basename of its configured path,
+published portable root must equal the local one, so a record cannot redirect it, and a root that
+differs refuses the apply instead of being rebound. A legacy file-set record without a target names
+no root, so it cannot be adopted and pull requires a local files target for it. A single-file target publishes its file under the basename of its configured path,
 and pull maps the sole file-set entry back to that file without synthesizing parent directories.
 The pull confirmation binds the local target id, portable root and selection/approval revisions,
 including any adopted target, so changing the local target, root or
-configuration between review and confirmation refuses. Multi-target configurations cannot consume a
-file-set base; they fall back to packed only when the accepted base is packed. The target root must
-exist before apply. Missing parent directories named implicitly by a directory file-set entry are
+configuration between review and confirmation refuses. A configuration that already holds a
+settings target does not block a files publication: only the published targets are planned, and a
+published settings target is refused before a token is printed. A single entries publication is
+still re-projected onto the sole local files target, but the accepted predecessor is taken from the
+same published identity, and a replaced identity refuses instead of authorising deletions. The
+target root must exist before apply. Missing parent directories named implicitly by a directory file-set entry are
 created with mode `0755`; directory modes are not carried in the record.
 
 Local state is plaintext on disk. The publication position database, the apply journal, journal

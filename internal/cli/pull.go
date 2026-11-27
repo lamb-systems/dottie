@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -509,7 +510,7 @@ func preparePullApply(
 	if err := pullSettingsApplyRefusal(input, configuration, material); err != nil {
 		return pullApplyPreparation{}, err
 	}
-	preparation.Skipped = append(skipped, pullSkippedUnpublishedTargets(configuration, material)...)
+	preparation.Skipped = skipped
 	if adoption != nil {
 		preparation.Adoption = adoption
 		token := pullAdoptionConfirmationToken(
@@ -552,9 +553,6 @@ func preparePullApply(
 		)
 	}
 	if material.Form == publication.PayloadFormFileSet {
-		if err := pullProjectionContinuity(input, material); err != nil {
-			return pullApplyPreparation{}, err
-		}
 		target, portable, err := service.FileSetPublicationTarget(configuration)
 		if err != nil {
 			return pullApplyPreparation{}, urfave.Exit(
@@ -572,13 +570,20 @@ func preparePullApply(
 				3,
 			)
 		}
-		if input.Present && material.BaseForm == publication.PayloadFormFileSet {
-			material.Base, err = service.ProjectFileSetSnapshot(portable, material.BaseEntries)
+		if input.Present {
+			baseEntries, ok, err := pullProjectionBaseEntries(input, material)
 			if err != nil {
-				return pullApplyPreparation{}, urfave.Exit(
-					input.label()+" refused: the accepted file-set position cannot be projected onto the local target; nothing was changed",
-					3,
-				)
+				return pullApplyPreparation{}, err
+			}
+			material.Base = model.Snapshot{}
+			if ok {
+				material.Base, err = service.ProjectFileSetSnapshot(portable, baseEntries)
+				if err != nil {
+					return pullApplyPreparation{}, urfave.Exit(
+						input.label()+" refused: the accepted file-set position cannot be projected onto the local target; nothing was changed",
+						3,
+					)
+				}
 			}
 		}
 	} else if len(material.Targets) == 1 && material.Targets[0].Source == model.SourceFiles &&
@@ -586,6 +591,8 @@ func preparePullApply(
 		material.TargetID = material.Targets[0].ID
 		material.TargetRoot = *material.Targets[0].Root
 	}
+	preparation.Skipped = append(preparation.Skipped, pullSkippedUnpublishedTargets(configuration, material)...)
+	slices.Sort(preparation.Skipped)
 	configurationToken := sources.Token
 	request := service.PublicationApplyRequest{
 		Vault: input.Vault, FloorRevision: input.Floor.Revision,
@@ -1984,7 +1991,7 @@ func openPullApplyJournalGuard(
 			3,
 		)
 	}
-	guard := &pullApplyJournalGuard{journal: journal}
+	guard := &pullApplyJournalGuard{journal: journal, open: true}
 	lease, err := journal.AcquireApplyLease(ctx)
 	if err != nil {
 		guard.Close()
@@ -1994,7 +2001,6 @@ func openPullApplyJournalGuard(
 		)
 	}
 	guard.lease = lease
-	guard.open = true
 	return guard, nil
 }
 
@@ -2050,29 +2056,108 @@ func pullSkippedUnpublishedTargets(configuration config.Config, material pullApp
 	return skipped
 }
 
-func pullProjectionContinuity(input pullApplyPlanRequest, material pullApplyMaterial) error {
-	if !input.Present || len(material.Targets) != 1 {
-		return nil
-	}
-	head := material.Targets[0].ID
+func pullProjectionBaseEntries(
+	input pullApplyPlanRequest,
+	material pullApplyMaterial,
+) ([]publication.PayloadEntry, bool, error) {
+	head := material.Targets[0]
 	replaced := ""
 	for _, target := range material.Base.Targets {
 		if target.Source != model.SourceFiles {
 			continue
 		}
-		if target.ID == head {
-			return nil
+		if reflect.DeepEqual(target, head) {
+			entries, ok := pullPublishedFilePayloadEntries(material.Base, target)
+			if !ok {
+				return nil, false, urfave.Exit(
+					"pull refused: the accepted position for target "+escapeField(target.ID)+
+						" cannot be projected onto the local target; nothing was changed",
+					3,
+				)
+			}
+			return entries, true, nil
+		}
+		if target.ID == head.ID {
+			return nil, false, urfave.Exit(
+				"pull refused: target "+escapeField(head.ID)+
+					" was published at a different root than the accepted position; nothing was changed",
+				3,
+			)
 		}
 		if replaced == "" {
 			replaced = target.ID
 		}
 	}
 	if replaced == "" {
-		return nil
+		return nil, false, nil
 	}
-	return urfave.Exit(
+	return nil, false, urfave.Exit(
 		"pull refused: the published position replaced target "+escapeField(replaced)+" with "+
-			escapeField(head)+"; the accepted entries cannot be projected onto the replacement; nothing was changed",
+			escapeField(head.ID)+"; the accepted entries cannot be projected onto the replacement; nothing was changed",
 		3,
 	)
+}
+
+func pullPublishedFilePayloadEntries(
+	snapshot model.Snapshot,
+	published model.Target,
+) ([]publication.PayloadEntry, bool) {
+	entries := make([]publication.PayloadEntry, 0)
+	for _, entry := range snapshot.Entries {
+		if entry.TargetID != published.ID {
+			continue
+		}
+		if entry.File == nil || entry.File.State != model.FilePresent {
+			return nil, false
+		}
+		if entry.File.Kind == model.FileDirectory {
+			continue
+		}
+		if entry.File.Kind != model.FileRegular {
+			return nil, false
+		}
+		entries = append(entries, publication.PayloadEntry{
+			Path: entry.File.Path, Mode: entry.File.Mode, Size: uint64(len(entry.File.Content)),
+			Content: entry.File.Content,
+		})
+	}
+	return entries, true
+}
+
+func pullCheckApplyJournalAdmission(
+	ctx context.Context,
+	directory string,
+	guard *pullApplyJournalGuard,
+	label string,
+	floorRevision uint64,
+) error {
+	journal := (*publicationstate.Journal)(nil)
+	if guard != nil {
+		journal = guard.journal
+	} else {
+		opened, err := publicationstate.OpenJournal(directory)
+		if err != nil {
+			return urfave.Exit(
+				label+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was published",
+				3,
+			)
+		}
+		defer func() { _ = opened.Close() }()
+		journal = opened
+	}
+	admission := journal.CheckAdmission(ctx, floorRevision)
+	var blocked *publicationstate.JournalBlockedError
+	switch {
+	case errors.As(admission, &blocked):
+		return urfave.Exit(
+			label+" refused: an interrupted apply is unresolved; nothing was published",
+			4,
+		)
+	case admission != nil:
+		return urfave.Exit(
+			label+" refused: the apply journal cannot be read ("+escapeField(pullStoreReason(admission))+"); nothing was published",
+			4,
+		)
+	}
+	return nil
 }

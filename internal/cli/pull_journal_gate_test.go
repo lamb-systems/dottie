@@ -53,32 +53,81 @@ func TestPullSettingsApplyRefusalBlocksAConfiguredPublishedSettingsTarget(t *tes
 	assert.Contains(t, err.Error(), "cannot apply settings")
 }
 
-func TestPullProjectionContinuityRefusesAReplacedPublishedTarget(t *testing.T) {
+func TestPullProjectionBaseEntriesRefusesAReplacedPublishedTarget(t *testing.T) {
+	first := model.Target{
+		ID: "first", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "first", Kind: model.SelectionDirectory},
+	}
+	second := model.Target{
+		ID: "second", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "second", Kind: model.SelectionDirectory},
+	}
 	material := pullApplyMaterial{
-		Targets: []model.Target{{
-			ID: "second", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
-			Root: &model.FileRoot{Base: model.RootHome, Path: "second", Kind: model.SelectionDirectory},
-		}},
-		Base: model.Snapshot{
-			Version: model.SnapshotVersion,
-			Targets: []model.Target{{
-				ID: "first", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
-				Root: &model.FileRoot{Base: model.RootHome, Path: "first", Kind: model.SelectionDirectory},
-			}},
-		},
+		Targets: []model.Target{second},
+		Base:    model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{first}},
 	}
 	input := pullApplyPlanRequest{Present: true}
-	err := pullProjectionContinuity(input, material)
+	_, _, err := pullProjectionBaseEntries(input, material)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "replaced target first with second")
-	assert.NotContains(t, err.Error(), "confirmation")
 
-	material.Targets[0].ID = "first"
-	require.NoError(t, pullProjectionContinuity(input, material))
+	material.Targets = []model.Target{first}
+	entries, ok, err := pullProjectionBaseEntries(input, material)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Empty(t, entries)
 
-	input.Present = false
-	material.Targets[0].ID = "second"
-	require.NoError(t, pullProjectionContinuity(input, material), "first use crossed a published identity")
+	material.Base = model.Snapshot{Version: model.SnapshotVersion}
+	_, ok, err = pullProjectionBaseEntries(input, material)
+	require.NoError(t, err)
+	assert.False(t, ok, "a base without the published target was used as a predecessor")
+
+	material.Base = model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{first}}
+	moved := first
+	moved.Root = &model.FileRoot{Base: model.RootHome, Path: "moved", Kind: model.SelectionDirectory}
+	material.Base.Targets = []model.Target{moved}
+	_, _, err = pullProjectionBaseEntries(input, material)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "different root")
+}
+
+func TestPullProjectionBaseEntriesSelectsTheHeadIdentityFromAMixedBase(t *testing.T) {
+	first := model.Target{
+		ID: "first", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "first", Kind: model.SelectionDirectory},
+	}
+	second := model.Target{
+		ID: "second", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "second", Kind: model.SelectionDirectory},
+	}
+	material := pullApplyMaterial{
+		Targets: []model.Target{second},
+		Base: model.Snapshot{
+			Version: model.SnapshotVersion,
+			Targets: []model.Target{first, second},
+			Entries: []model.Entry{
+				{
+					TargetID: "first",
+					File: &model.FileEntry{
+						Path: "kept.conf", State: model.FilePresent, Kind: model.FileRegular,
+						Content: []byte("sentinel"), Mode: 0o600,
+					},
+				},
+				{
+					TargetID: "second",
+					File: &model.FileEntry{
+						Path: "second.conf", State: model.FilePresent, Kind: model.FileRegular,
+						Content: []byte("second"), Mode: 0o600,
+					},
+				},
+			},
+		},
+	}
+	entries, ok, err := pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, entries, 1, "the predecessor came from the wrong target")
+	assert.Equal(t, "second.conf", entries[0].Path)
 }
 
 func TestPullApplyJournalGuardSettlesAnInterruptedApply(t *testing.T) {
@@ -266,4 +315,53 @@ func TestPullRefusesAnAcceptanceWhileAnApplyIsUnresolved(t *testing.T) {
 	content, err := os.ReadFile(destination)
 	require.NoError(t, err)
 	assert.Equal(t, pullTestBaseContent, string(content), "an unresolved apply was rewritten")
+}
+
+func TestPullRefusesAMixedPredecessorReplacedByASingleEntriesHead(t *testing.T) {
+	first := model.Target{
+		ID: "first", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}
+	second := model.Target{
+		ID: "second", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "other", Kind: model.SelectionDirectory},
+	}
+	base := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{first, second},
+		Entries: []model.Entry{
+			{
+				TargetID: "first",
+				File: &model.FileEntry{
+					Path: "sentinel.conf", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("sentinel"), Mode: 0o600,
+				},
+			},
+			{
+				TargetID: "second",
+				File: &model.FileEntry{
+					Path: "second.conf", State: model.FilePresent, Kind: model.FileRegular,
+					Content: []byte("second"), Mode: 0o600,
+				},
+			},
+		},
+	}
+	material := pullApplyMaterial{
+		Targets: []model.Target{second},
+		Base:    base,
+	}
+	entries, ok, err := pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "second.conf", entries[0].Path, "the projection used the predecessor of another target")
+
+	material.Targets = []model.Target{{
+		ID: "replacement", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
+		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
+	}}
+	_, _, err = pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replaced target")
+	assert.NotContains(t, err.Error(), "sentinel")
 }

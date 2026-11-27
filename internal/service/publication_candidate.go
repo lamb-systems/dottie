@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 
 	"github.com/lamb-systems/dottie/internal/config"
@@ -365,7 +366,10 @@ func (coordinator *Coordinator) ComposePublicationSyncSnapshot(
 		if !named {
 			return entries
 		}
-		floorEntries, _ := publicationSnapshotTargetEntries(request.FloorSnapshot, target.ID)
+		floorEntries := []model.Entry(nil)
+		if publicationSnapshotSameTarget(request.FloorSnapshot, request.RemoteSnapshot, target.ID) {
+			floorEntries, _ = publicationSnapshotTargetEntries(request.FloorSnapshot, target.ID)
+		}
 		return publicationSyncPostPullEntries(floorEntries, remoteEntries, entries)
 	}
 	snapshot, _, err := coordinator.composePublicationSnapshotWithLocal(
@@ -505,4 +509,16 @@ func publicationSegmentDeletesAcceptedFile(
 		}
 	}
 	return false
+}
+
+func publicationSnapshotSameTarget(left, right model.Snapshot, targetID string) bool {
+	leftTarget, ok := publicationApplyPublishedTarget(left, targetID)
+	if !ok {
+		return false
+	}
+	rightTarget, ok := publicationApplyPublishedTarget(right, targetID)
+	if !ok {
+		return false
+	}
+	return reflect.DeepEqual(leftTarget, rightTarget)
 }

@@ -633,6 +633,7 @@ func runSyncCommand(
 		)
 	}
 	pullApplied := preparation.applies()
+	var journalGuard *pullApplyJournalGuard
 	if pullApplied {
 		output, err = applyPullPreparation(ctx, planRequest, preparation, output)
 		if err != nil {
@@ -647,6 +648,7 @@ func runSyncCommand(
 		if guardErr != nil {
 			return guardErr
 		}
+		journalGuard = guard
 		defer guard.Close()
 		resolved, resolveErr := guard.resolve(ctx, "sync", inspection.Floor.Revision)
 		if resolveErr != nil {
@@ -664,7 +666,7 @@ func runSyncCommand(
 	}
 	return runSyncPushHalf(
 		ctx, command, session, binding, view, viewDigest, inspection.Floor, preparation.applies(),
-		identity, output, pushes,
+		journalGuard, identity, output, pushes,
 	)
 }
 
@@ -677,6 +679,7 @@ func runSyncPushHalf(
 	viewDigest [32]byte,
 	reviewedFloor publicationstate.Floor,
 	pullApplied bool,
+	journalGuard *pullApplyJournalGuard,
 	identity syncPushIdentity,
 	output string,
 	pushes pushSourcesFactory,
@@ -718,6 +721,15 @@ func runSyncPushHalf(
 			"the publication position store is not the one that was reviewed",
 			"post_pull_store_moved",
 		)
+	}
+	if err := pullCheckApplyJournalAdmission(
+		ctx,
+		sources.Paths.PublicationStateDir(),
+		journalGuard,
+		"sync",
+		floor.Revision,
+	); err != nil {
+		return err
 	}
 	if err := syncViewMatchesFloor(floor, view); err != nil {
 		return syncPushRefusal(
