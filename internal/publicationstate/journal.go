@@ -44,6 +44,7 @@ const (
 
 const (
 	journalSchemaVersion        = 3
+	journalSchema2Version       = 2
 	journalMaxBackupBytes int64 = 8 << 20
 	journalMaxTotalBytes  int64 = 256 << 20
 	journalMaxEntries           = 4096
@@ -60,6 +61,14 @@ const (
 var journalSchemaStatements = []string{
 	journalBackupsStatement, journalEntriesStatement, journalLiveStatement,
 	settingsJournalStatement, settingsJournalLiveStatement,
+}
+
+var journalSchema2Statements = []string{journalBackupsStatement, journalEntriesStatement, journalLiveStatement}
+
+var journalSchema2Objects = map[string]string{
+	"backups":      "table",
+	"journal":      "table",
+	"journal_live": "index",
 }
 
 var journalSchemaObjects = map[string]string{
@@ -257,7 +266,7 @@ func OpenJournal(directory string) (*Journal, error) {
 		return nil, storageFailure(context.Background(), StageJournalOpen, err)
 	}
 	if !probe.initial && !probe.recognized {
-		if probe.application == journalApplicationID && probe.version < journalSchemaVersion {
+		if probe.legacy {
 			return nil, classified(ErrSchema, StageJournalOpen, ReasonRebuildRequired)
 		}
 		return nil, classified(ErrSchema, StageJournalOpen, ReasonSchema)
@@ -406,7 +415,10 @@ func LiveJournalRows(directory string) (int64, error) {
 		string(JournalStateIndeterminate),
 	)
 	if err != nil {
-		return 0, classified(ErrStorage, StageJournal, ReasonIO)
+		if !sqliteTableAbsent(err) {
+			return 0, classified(ErrStorage, StageJournal, ReasonIO)
+		}
+		settings = 0
 	}
 	return count + settings, nil
 }
@@ -1314,16 +1326,23 @@ func probeJournalSchema(path string) (schemaProbe, error) {
 		return schemaProbe{initial: true}, nil
 	}
 	recognized := appID == journalApplicationID && version == journalSchemaVersion &&
-		sameObjects(objects, journalSchemaObjects)
-	if recognized {
-		for _, statement := range journalSchemaStatements {
-			if strings.TrimSpace(definitions[statementTableName(statement)]) != statement {
-				recognized = false
-				break
-			}
+		sameObjects(objects, journalSchemaObjects) &&
+		journalSchemaMatches(definitions, journalSchemaStatements)
+	legacy := appID == journalApplicationID && version == journalSchema2Version &&
+		sameObjects(objects, journalSchema2Objects) &&
+		journalSchemaMatches(definitions, journalSchema2Statements)
+	return schemaProbe{
+		recognized: recognized, legacy: legacy, version: version, application: appID,
+	}, nil
+}
+
+func journalSchemaMatches(definitions map[string]string, statements []string) bool {
+	for _, statement := range statements {
+		if strings.TrimSpace(definitions[statementTableName(statement)]) != statement {
+			return false
 		}
 	}
-	return schemaProbe{recognized: recognized, version: version, application: appID}, nil
+	return true
 }
 
 func initializeJournalSchema(ctx context.Context, conn *sql.Conn, rootFD int) error {
@@ -1385,4 +1404,8 @@ func checkJournalSchemaVersion(ctx context.Context, conn queryer) error {
 		}
 	}
 	return nil
+}
+
+func sqliteTableAbsent(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
 }

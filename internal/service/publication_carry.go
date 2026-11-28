@@ -185,21 +185,6 @@ func publicationConfigurationWithout(configuration config.Config, drop []string)
 	return configuration
 }
 
-func publicationDropRefusalSet(drop []string, accepted publication.SnapshotRecord) []string {
-	published := make(map[string]struct{}, len(accepted.Segments))
-	for _, segment := range accepted.Segments {
-		published[segment.Target.ID] = struct{}{}
-	}
-	eligible := make([]string, 0, len(drop))
-	for _, id := range drop {
-		if _, ok := published[id]; ok {
-			eligible = append(eligible, id)
-		}
-	}
-	sort.Strings(eligible)
-	return eligible
-}
-
 func ValidatePublicationDrop(
 	drop []string,
 	recordRaw []byte,

@@ -81,6 +81,8 @@ func TestSettingsJournalResolvesAnInterruptedIntentFromObservation(t *testing.T)
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, JournalOutcomeApplied, resolutions[0].Outcome)
 
+	_, err = journal.BeginSettingsJournal(ctx, settingsJournalIntent(vault, written))
+	require.NoError(t, err)
 	resolutions, err = journal.ResolveInterruptedSettings(
 		ctx,
 		func(SettingsJournalAnchor) (SettingsValue, error) {
@@ -88,7 +90,11 @@ func TestSettingsJournalResolvesAnInterruptedIntentFromObservation(t *testing.T)
 		},
 	)
 	require.NoError(t, err)
-	assert.Empty(t, resolutions)
+	require.Len(t, resolutions, 1, "an unobservable row produced no resolution")
+	assert.Equal(t, JournalOutcomeUnobserved, resolutions[0].Outcome)
+	live, liveErr := journal.LiveSettingsEntries(ctx)
+	require.NoError(t, liveErr)
+	assert.Len(t, live, 1, "an unobservable row was retired")
 }
 
 func TestSettingsJournalResolvesAPriorImageAsFailedAndAnythingElseAsIndeterminate(t *testing.T) {

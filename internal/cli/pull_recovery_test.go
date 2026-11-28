@@ -12,6 +12,7 @@ import (
 
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
+	"github.com/lamb-systems/dottie/internal/service"
 )
 
 func interruptedApplyRow(
@@ -147,4 +148,49 @@ func TestPullWithoutAConfiguredTargetRefusesToIgnoreALiveApply(t *testing.T) {
 	live, err := publicationstate.LiveJournalRows(fixture.paths.PublicationStateDir())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), live, "a pull without a configured target discarded a live row")
+}
+
+func TestPullWithAnExistingFloorAndNoConfiguredTargetReportsALiveApply(t *testing.T) {
+	fixture := newPullTestFixture(t)
+	fixture.configure(t, config.Review)
+	reader := &pullTestReader{view: fixture.view(), payloads: fixture.payloads()}
+
+	var stdout, stderr bytes.Buffer
+	code := 0
+	command := newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	require.Equal(t, 0, code, stderr.String())
+	token := pullTestConfirmation(t, stdout.String())
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(
+		command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token,
+	)
+	require.Equal(t, 0, code, stderr.String())
+
+	snapshot, err := service.FileConfigPort{Paths: fixture.paths}.Snapshot(t.Context())
+	require.NoError(t, err)
+	_, err = service.FileConfigPort{Paths: fixture.paths}.Update(
+		t.Context(), snapshot.Token,
+		func(current config.Config) (config.Config, error) {
+			current.Targets = nil
+			return current, nil
+		},
+	)
+	require.NoError(t, err)
+	interruptedApplyRow(t, fixture.paths.PublicationStateDir(), "done", "done")
+
+	stdout.Reset()
+	stderr.Reset()
+	code = 0
+	command = newPullTestCommand(t, fixture, &stdout, &stderr, &code, pullTestSession(), nil, reader, nil)
+	code = runPullForTest(command, &code, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	assert.Equal(t, 4, code, stderr.String())
+	assert.Contains(t, stderr.String(), "interrupted apply")
+
+	live, liveErr := publicationstate.LiveJournalRows(fixture.paths.PublicationStateDir())
+	require.NoError(t, liveErr)
+	assert.Equal(t, int64(1), live, "the live row was discarded")
 }

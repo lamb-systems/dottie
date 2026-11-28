@@ -166,7 +166,6 @@ type MaterialPublishProposal struct {
 	Transport     MaterialTransport
 	Binding       publicationstate.Binding
 	Form          publication.PayloadForm
-	Drop          []string
 	Review        publicationstate.LocalReviewContext
 	ConfigToken   config.Token
 	ProposalToken [32]byte

@@ -203,7 +203,9 @@ func TestJournalOpenRefusesUnsafeForeignAndFutureStores(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rewrite.Close())
 	_, err = OpenJournal(oldDirectory)
-	requireJournalError(t, err, ErrSchema, StageJournalOpen, ReasonRebuildRequired)
+	requireJournalError(
+		t, err, ErrSchema, StageJournalOpen, ReasonSchema,
+	)
 
 	held, heldDirectory := newJournal(t)
 	_, err = OpenJournal(heldDirectory)
@@ -1256,4 +1258,52 @@ func TestJournalEntryCountReadsWithoutMutating(t *testing.T) {
 	state, stage := journalStoredState(t, journal, first.Entry)
 	assert.Equal(t, JournalStateIndeterminate, state)
 	assert.Equal(t, JournalStageIndeterminate, stage)
+}
+
+func legacyJournalDirectory(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "journals-v2", "schema2-pending.db"))
+	require.NoError(t, err)
+	directory := t.TempDir()
+	require.NoError(t, os.Chmod(directory, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, journalDatabaseName), raw, 0o600))
+	return directory
+}
+
+func TestOpenJournalRefusesAFrozenV2JournalAsRebuildRequired(t *testing.T) {
+	directory := legacyJournalDirectory(t)
+	path := filepath.Join(directory, journalDatabaseName)
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	_, err = OpenJournal(directory)
+	requireJournalError(t, err, ErrSchema, StageJournalOpen, ReasonRebuildRequired)
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the refused legacy journal was modified")
+}
+
+func TestALoweredUserVersionIsNotALegacyJournal(t *testing.T) {
+	journal, directory := newJournal(t)
+	require.NoError(t, journal.Close())
+	path := filepath.Join(directory, journalDatabaseName)
+
+	rewrite, err := sql.Open("sqlite", dbDSN(path, false))
+	require.NoError(t, err)
+	_, err = rewrite.ExecContext(context.Background(), "PRAGMA user_version=1")
+	require.NoError(t, err)
+	require.NoError(t, rewrite.Close())
+
+	_, err = OpenJournal(directory)
+	requireJournalError(
+		t, err, ErrSchema, StageJournalOpen, ReasonSchema,
+	)
+}
+
+func TestLiveJournalRowsCountsAFrozenV2Journal(t *testing.T) {
+	directory := legacyJournalDirectory(t)
+	live, err := LiveJournalRows(directory)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), live, "a pre-v3 journal's live row was not counted")
 }

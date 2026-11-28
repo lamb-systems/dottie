@@ -503,7 +503,7 @@ func preparePullApply(
 	}
 	preparation := pullApplyPreparation{Sources: sources}
 	if len(sources.Configuration.Targets) == 0 && input.Present {
-		return preparation, nil
+		return preparation, pullLiveJournalRefusal(input, sources)
 	}
 	material, err := pullApplySnapshots(ctx, input.Remote, input.View, input.Floor, input.Present)
 	if err != nil {
@@ -1132,6 +1132,7 @@ func applyPullPreparation(
 	}
 	journal, err := publicationstate.OpenJournal(preparation.Sources.Paths.PublicationStateDir())
 	if err != nil {
+		writeRebuildRequiredHint(input.Command, err, preparation.Sources.Paths.PublicationStateDir())
 		return output, urfave.Exit(
 			input.label()+" refused: the apply journal cannot be opened ("+escapeField(
 				pullStoreReason(err),
@@ -1200,7 +1201,7 @@ func runPullApply(ctx context.Context, input pullApplyPlanRequest, applySources 
 		return writePullAdoptionRun(input, preparation)
 	}
 	if len(preparation.Sources.Configuration.Targets) == 0 {
-		return nil
+		return pullLiveJournalRefusal(input, preparation.Sources)
 	}
 	if preparation.AcceptOnly {
 		return runPullAcceptPosition(ctx, input, preparation)
@@ -1295,7 +1296,9 @@ func acceptPullPosition(
 	preparation pullApplyPreparation,
 	output string,
 ) (string, error) {
-	guard, err := openPullApplyJournalGuard(ctx, preparation.Sources.Paths.PublicationStateDir(), "pull")
+	guard, err := openPullApplyJournalGuard(
+		ctx, input.Command, preparation.Sources.Paths.PublicationStateDir(), "pull",
+	)
 	if err != nil {
 		return output, err
 	}
@@ -2060,11 +2063,13 @@ func (guard *pullApplyJournalGuard) Close() {
 
 func openPullApplyJournalGuard(
 	ctx context.Context,
+	command *urfave.Command,
 	directory string,
 	label string,
 ) (*pullApplyJournalGuard, error) {
 	journal, err := publicationstate.OpenJournal(directory)
 	if err != nil {
+		writeRebuildRequiredHint(command, err, directory)
 		return nil, urfave.Exit(
 			label+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed",
 			3,
@@ -2308,5 +2313,22 @@ func renderPullSettingsReport(report service.PublicationSettingsReport) string {
 		"pull: settings applied=%d unchanged=%d\n",
 		report.Applied,
 		report.Unchanged,
+	)
+}
+
+func pullLiveJournalRefusal(input pullApplyPlanRequest, sources pullApplySources) error {
+	live, err := publicationstate.LiveJournalRows(sources.Paths.PublicationStateDir())
+	if err != nil {
+		return urfave.Exit(
+			input.label()+" refused: the apply journal cannot be read; nothing was changed", 3,
+		)
+	}
+	if live == 0 {
+		return nil
+	}
+	return urfave.Exit(
+		input.label()+" refused: an interrupted apply is recorded and no configured target can resolve it; "+
+			"configure the target it wrote or keep the state directory as evidence; nothing was changed",
+		4,
 	)
 }

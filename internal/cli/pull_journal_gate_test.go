@@ -158,7 +158,7 @@ func TestPullApplyJournalGuardSettlesAnInterruptedApply(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, journal.Close())
 
-	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
+	guard, err := openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.NoError(t, err)
 	resolved, err := guard.resolve(context.Background(), "pull", 0, nil)
 	require.NoError(t, err)
@@ -194,7 +194,7 @@ func TestPullApplyJournalGuardRefusesAnIndeterminateApply(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, journal.Close())
 
-	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
+	guard, err := openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.NoError(t, err)
 	defer guard.Close()
 	_, err = guard.resolve(context.Background(), "pull", 0, nil)
@@ -235,7 +235,7 @@ func TestPullApplyJournalGuardRefusesARowSeenAheadOfTheFloor(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, journal.Close())
 
-	guard, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
+	guard, err := openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.NoError(t, err)
 	defer guard.Close()
 	_, err = guard.resolve(context.Background(), "pull", 2, nil)
@@ -248,13 +248,13 @@ func TestPullApplyJournalGuardRefusesARowSeenAheadOfTheFloor(t *testing.T) {
 
 func TestPullApplyJournalGuardHoldsTheLeaseWhileTheFloorAdvances(t *testing.T) {
 	directory := publicationJournalDirectory(t)
-	first, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
+	first, err := openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.NoError(t, err)
-	_, err = openPullApplyJournalGuard(context.Background(), directory, "pull")
+	_, err = openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.Error(t, err, "a second run acquired the apply journal while the first held it")
 	first.Close()
 
-	second, err := openPullApplyJournalGuard(context.Background(), directory, "pull")
+	second, err := openPullApplyJournalGuard(context.Background(), nil, directory, "pull")
 	require.NoError(t, err)
 	second.Close()
 }

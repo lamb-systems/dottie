@@ -69,6 +69,7 @@ under `internal/publicationstate/testdata/`:
 | `positions-v2/schema2-pending-genesis.db` | 2 | same provenance; SHA-256 `d2e446ca…5f108` |
 | `positions-v3/schema3-empty.db` | 3 | written by the build at commit `479b2c5`, the tree that wrote schema 3 |
 | `positions-v3/schema3-upgraded.db` | 3 | same build, produced by its own supported upgrade from the pinned schema-2 `mixed` image |
+| `journals-v2/schema2-pending.db` | 2 | written by the build at commit `ca8451f`, the last tree whose apply journal had no `settings_journal` table; one live pending row with a stored preimage |
 
 The v2 and v3 inventories are frozen constants rather than the current table definitions: the current
 `attemptSchemaStatements` describe the schema-4 `retained_publications` and `attempt_payload_refs`, so

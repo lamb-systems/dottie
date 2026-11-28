@@ -111,13 +111,12 @@ func TestInspectKeepsAForeignDatabaseDistinctFromARebuild(t *testing.T) {
 
 func TestARefusedLegacyStoreKeepsItsLiveJournalAndBackups(t *testing.T) {
 	directory := legacyPositionsDirectory(t)
-	journal, err := OpenJournal(directory)
+	raw, err := os.ReadFile(filepath.Join("testdata", "journals-v2", "schema2-pending.db"))
 	require.NoError(t, err)
-	intent := settingsJournalIntent([32]byte{0x62}, SettingsValue{})
-	_, err = journal.BeginSettingsJournal(context.Background(), intent)
-	require.NoError(t, err)
-	require.NoError(t, journal.Close())
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "backup.bin"), []byte("preimage"), 0o600))
+	journalPath := filepath.Join(directory, journalDatabaseName)
+	require.NoError(t, os.WriteFile(journalPath, raw, 0o600))
+	backups := journalBackupCount(t, journalPath)
+	require.Equal(t, int64(1), backups, "the fixture does not carry a preimage")
 
 	_, err = Open(directory, legacyPositionsBinding())
 	requireErrorMetadata(t, err, ErrSchema, StageOpen, ReasonRebuildRequired)
@@ -125,14 +124,19 @@ func TestARefusedLegacyStoreKeepsItsLiveJournalAndBackups(t *testing.T) {
 	live, err := LiveJournalRows(directory)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), live, "the refused legacy store discarded a live journal row")
-	backup, err := os.ReadFile(filepath.Join(directory, "backup.bin"))
-	require.NoError(t, err)
-	assert.Equal(t, []byte("preimage"), backup, "the refused legacy store discarded a backup")
+	assert.Equal(t, backups, journalBackupCount(t, journalPath), "the refused store discarded a preimage")
 
-	reopened, err := OpenJournal(directory)
+	after, err := os.ReadFile(journalPath)
 	require.NoError(t, err)
-	defer func() { _ = reopened.Close() }()
-	entries, err := reopened.LiveSettingsEntries(context.Background())
+	assert.Equal(t, raw, after, "the refused store modified the journal")
+}
+
+func journalBackupCount(t *testing.T, path string) int64 {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbDSN(path, true))
 	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	defer func() { assert.NoError(t, db.Close()) }()
+	count, err := queryInt64(context.Background(), db, "SELECT count(*) FROM backups")
+	require.NoError(t, err)
+	return count
 }

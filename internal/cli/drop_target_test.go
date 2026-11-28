@@ -18,7 +18,6 @@ import (
 
 func dropTestCommand(t *testing.T, values ...string) *urfave.Command {
 	t.Helper()
-	exitCode := 0
 	command := &urfave.Command{
 		Name: "push",
 		Flags: []urfave.Flag{
@@ -33,7 +32,6 @@ func dropTestCommand(t *testing.T, values ...string) *urfave.Command {
 		arguments = append(arguments, "--drop-target", value)
 	}
 	require.NoError(t, command.Run(context.Background(), arguments))
-	_ = exitCode
 	return command
 }
 

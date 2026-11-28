@@ -585,10 +585,18 @@ func runSyncCommand(
 	if finding.Kind == pullFindingAbsent {
 		return urfave.Exit("sync refused: the provider position holds no records to reconcile; nothing was changed", 3)
 	}
+	planRequest := pullApplyPlanRequest{
+		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
+		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
+		RemoteOnly: true, Label: "sync",
+	}
+	preparation, err := preparePullApply(ctx, planRequest, applySources)
+	if err != nil {
+		return err
+	}
 	if len(drop) != 0 {
 		terminal := view.Snapshots[len(view.Snapshots)-1]
-		configuration := config.Config{Version: config.Version}
-		if err := service.ValidatePublicationDrop(drop, terminal.Raw, configuration); err != nil {
+		if err := service.ValidatePublicationDrop(drop, terminal.Raw, preparation.Sources.Configuration); err != nil {
 			if errors.Is(err, service.ErrPublicationCarry) {
 				return urfave.Exit(
 					"sync refused: --drop-target names "+strings.Join(escapeFields(drop), " ")+
@@ -598,15 +606,6 @@ func runSyncCommand(
 			}
 			return urfave.Exit("sync refused: the drop selection cannot be verified; nothing was changed", 3)
 		}
-	}
-	planRequest := pullApplyPlanRequest{
-		Command: command, Binding: binding, Vault: vault.Vault, Floor: inspection.Floor, Present: inspection.Present,
-		View: view, Remote: remote, Confirmation: confirmation, Confirmed: command.IsSet("confirm"),
-		RemoteOnly: true, Label: "sync",
-	}
-	preparation, err := preparePullApply(ctx, planRequest, applySources)
-	if err != nil {
-		return err
 	}
 	if len(preparation.Sources.Configuration.Targets) == 0 {
 		if len(drop) != 0 {
@@ -685,6 +684,7 @@ func runSyncCommand(
 	} else {
 		guard, guardErr := openPullApplyJournalGuard(
 			ctx,
+			command,
 			preparation.Sources.Paths.PublicationStateDir(),
 			"sync",
 		)
@@ -879,14 +879,6 @@ func runSyncPushHalf(
 			output,
 			"the review identity changed after the sync plan was prepared",
 			"post_pull_review_mismatch",
-		)
-	}
-	if len(identity.Dropped) != 0 && !slices.Equal(identity.Dropped, drop) {
-		return syncPushRefusal(
-			command,
-			output,
-			"the reviewed drop selection is not the one bound to this plan",
-			"post_pull_drop_mismatch",
 		)
 	}
 	request := service.PublicationPushRequest{
