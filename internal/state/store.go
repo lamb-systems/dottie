@@ -229,12 +229,11 @@ func (s *Store) PutTarget(ctx context.Context, descriptor TargetDescriptor) erro
 		err := tx.QueryRowContext(ctx, "SELECT descriptor_version, source, source_version, logical_base, logical_path, kind, mode FROM targets WHERE target_id = ?", descriptor.ID).
 			Scan(&version, &source, &sourceVersion, &logicalBase, &logicalPath, &kind, &mode)
 		if err == nil {
-			if version != int64(descriptor.Version) || source != string(descriptor.Source) ||
-				sourceVersion != int64(descriptor.SourceVersion) ||
-				logicalBase != string(descriptor.LogicalBase) ||
-				logicalPath != descriptor.LogicalPath ||
-				kind != string(descriptor.Kind) ||
-				mode != descriptor.Mode {
+			stored := storedTargetDescriptor{
+				version: version, source: source, sourceVersion: sourceVersion,
+				logicalBase: logicalBase, logicalPath: logicalPath, kind: kind, mode: mode,
+			}
+			if !stored.matches(descriptor) {
 				return fmt.Errorf(
 					"%w: target %q is already bound to a different portable descriptor",
 					ErrTargetBindingChanged,
@@ -1200,11 +1199,7 @@ func positionHistoryIdentity(vaultID [32]byte, epoch uint64, digest [32]byte, he
 }
 
 func sameAuthenticatedPositionContent(left, right AuthenticatedPositionEvidence) bool {
-	if left.Vault != right.Vault || left.Epoch != right.Epoch || left.PolicyDigest != right.PolicyDigest ||
-		!bytes.Equal(
-			left.Policy,
-			right.Policy,
-		) || !bytes.Equal(left.Control, right.Control) || !bytes.Equal(left.Head, right.Head) || len(left.Certificates) != len(right.Certificates) {
+	if !sameAuthenticatedPositionHeader(left, right) {
 		return false
 	}
 	for index := range left.Certificates {
@@ -1226,12 +1221,7 @@ func (s *Store) ImportVaultOnboarding(
 		len(selection.DeviceID) > vault.MaxDeviceIDBytes {
 		return errors.New("invalid onboarding vault selection")
 	}
-	if len(checkpoint.ControlCID) == 0 || len(checkpoint.ControlCID) > 128 || len(checkpoint.ControlBytes) == 0 ||
-		len(checkpoint.SnapshotCID) == 0 ||
-		len(checkpoint.SnapshotCID) > 128 ||
-		checkpoint.Epoch == 0 ||
-		checkpoint.Epoch > math.MaxInt64 ||
-		checkpoint.RecordedAt < 0 {
+	if !checkpointFieldsBounded(checkpoint) {
 		return errors.New("invalid onboarding checkpoint")
 	}
 	if err := validateVaultCheckpointObject(checkpoint); err != nil {
@@ -1562,15 +1552,7 @@ FROM authenticated_position_certificates WHERE vault = ? AND epoch = ? AND polic
 }
 
 func validateAuthenticatedPositionEvidence(evidence AuthenticatedPositionEvidence) ([][]byte, error) {
-	if evidence.Epoch > math.MaxInt64 || len(evidence.Policy) == 0 ||
-		len(evidence.Policy) > vault.MaxPolicyObjectBytes ||
-		len(evidence.Control) == 0 ||
-		len(evidence.Control) > vault.MaxPolicyObjectBytes ||
-		len(evidence.Head) == 0 ||
-		len(evidence.Head) > vault.MaxPolicyObjectBytes ||
-		len(evidence.CheckpointPosition) > vault.MaxPolicyObjectBytes ||
-		len(evidence.Certificates) == 0 ||
-		len(evidence.Certificates) > vault.MaxRecipients {
+	if !authenticatedPositionBounded(evidence) {
 		return nil, errors.New("authenticated position evidence exceeds its bounds")
 	}
 	policy, err := vault.DecodePolicy(evidence.Policy)
@@ -1728,11 +1710,7 @@ func (s *Store) VaultEpochFirstSeen(ctx context.Context, vault [32]byte, epoch u
 }
 
 func (s *Store) RecordVaultPublicationObservation(ctx context.Context, observation VaultPublicationObservation) error {
-	if len(observation.HeadCID) == 0 || len(observation.HeadCID) > 128 || len(observation.ControlCID) == 0 ||
-		len(observation.ControlCID) > 128 ||
-		len(observation.PrevControlCID) > 128 ||
-		observation.Epoch > math.MaxInt64 ||
-		observation.PublicationCount > math.MaxInt64 {
+	if !vaultPublicationObservationBounded(observation) {
 		return errors.New("invalid vault publication observation")
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
@@ -1982,11 +1960,7 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 	entry.RetentionBindingVersion = 1
 	if entry.Retention != nil {
 		binding := entry.Retention
-		if binding.Vault == ([32]byte{}) || binding.Epoch > math.MaxInt64 || len(binding.SnapshotCID) == 0 ||
-			len(binding.SnapshotCID) > 128 ||
-			binding.PolicyDigest == ([32]byte{}) ||
-			len(binding.ControlCID) == 0 ||
-			len(binding.ControlCID) > 128 {
+		if !retentionBindingFieldsBounded(*binding) {
 			return JournalEntry{}, errors.New("invalid journal retention binding")
 		}
 		retentionVault, retentionEpoch = binding.Vault[:], binding.Epoch
@@ -2259,15 +2233,13 @@ func (s *Store) readJournalEntries(ctx context.Context, query string, args ...an
 			value.Preimage.Mode = preMode
 			value.Postimage.Kind = model.FileKind(postKind)
 			value.Postimage.Mode = postMode
-			if len(retentionVault) != 0 || retentionEpoch.Valid || len(retentionSnapshot) != 0 ||
-				len(retentionPolicyDigest) != 0 ||
-				len(retentionControlCID) != 0 {
-				if len(retentionVault) != 32 || !retentionEpoch.Valid || retentionEpoch.Int64 < 0 ||
-					len(retentionSnapshot) == 0 ||
-					len(retentionSnapshot) > 128 ||
-					len(retentionPolicyDigest) != 32 ||
-					len(retentionControlCID) == 0 ||
-					len(retentionControlCID) > 128 {
+			if retentionBindingPresent(
+				retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID, retentionEpoch,
+			) {
+				if !storedRetentionBindingBounded(
+					retentionVault, retentionSnapshot, retentionPolicyDigest, retentionControlCID,
+					retentionEpoch,
+				) {
 					return errors.New("stored journal retention binding is malformed")
 				}
 				binding := &RetentionBinding{
@@ -2525,4 +2497,114 @@ func pointMatchesBinding(point RetentionRecoveryPoint, binding *RetentionBinding
 		bytes.Equal(point.SnapshotCID, binding.SnapshotCID) &&
 		point.PolicyDigest == binding.PolicyDigest &&
 		bytes.Equal(point.ControlCID, binding.ControlCID)
+}
+
+type storedTargetDescriptor struct {
+	version       int64
+	source        string
+	sourceVersion int64
+	logicalBase   string
+	logicalPath   string
+	kind          string
+	mode          string
+}
+
+func (stored storedTargetDescriptor) matches(descriptor TargetDescriptor) bool {
+	return stored.version == int64(descriptor.Version) &&
+		stored.source == string(descriptor.Source) &&
+		stored.sourceVersion == int64(descriptor.SourceVersion) &&
+		stored.logicalBase == string(descriptor.LogicalBase) &&
+		stored.logicalPath == descriptor.LogicalPath &&
+		stored.kind == string(descriptor.Kind) &&
+		stored.mode == descriptor.Mode
+}
+
+func sameAuthenticatedPositionHeader(left, right AuthenticatedPositionEvidence) bool {
+	if left.Vault != right.Vault || left.Epoch != right.Epoch || left.PolicyDigest != right.PolicyDigest {
+		return false
+	}
+	if !bytes.Equal(left.Policy, right.Policy) || !bytes.Equal(left.Control, right.Control) {
+		return false
+	}
+	if !bytes.Equal(left.Head, right.Head) {
+		return false
+	}
+	return len(left.Certificates) == len(right.Certificates)
+}
+
+func checkpointFieldsBounded(checkpoint VaultCheckpoint) bool {
+	if !boundedRetentionBytes(checkpoint.ControlCID) || !boundedRetentionBytes(checkpoint.SnapshotCID) {
+		return false
+	}
+	if len(checkpoint.ControlBytes) == 0 {
+		return false
+	}
+	if checkpoint.Epoch == 0 || checkpoint.Epoch > math.MaxInt64 {
+		return false
+	}
+	return checkpoint.RecordedAt >= 0
+}
+
+func boundedRetentionBytes(value []byte) bool {
+	return len(value) != 0 && len(value) <= 128
+}
+
+func authenticatedPositionBounded(evidence AuthenticatedPositionEvidence) bool {
+	if evidence.Epoch > math.MaxInt64 {
+		return false
+	}
+	if !boundedObjectBytes(evidence.Policy) || !boundedObjectBytes(evidence.Control) {
+		return false
+	}
+	if !boundedObjectBytes(evidence.Head) {
+		return false
+	}
+	if len(evidence.CheckpointPosition) > vault.MaxPolicyObjectBytes {
+		return false
+	}
+	return len(evidence.Certificates) != 0 && len(evidence.Certificates) <= vault.MaxRecipients
+}
+
+func boundedObjectBytes(value []byte) bool {
+	return len(value) != 0 && len(value) <= vault.MaxPolicyObjectBytes
+}
+
+func retentionBindingFieldsBounded(binding RetentionBinding) bool {
+	if binding.Vault == ([32]byte{}) || binding.Epoch > math.MaxInt64 {
+		return false
+	}
+	if !boundedRetentionBytes(binding.SnapshotCID) || !boundedRetentionBytes(binding.ControlCID) {
+		return false
+	}
+	return binding.PolicyDigest != ([32]byte{})
+}
+
+func vaultPublicationObservationBounded(observation VaultPublicationObservation) bool {
+	if !boundedRetentionBytes(observation.HeadCID) || !boundedRetentionBytes(observation.ControlCID) {
+		return false
+	}
+	if len(observation.PrevControlCID) > 128 {
+		return false
+	}
+	return observation.Epoch <= math.MaxInt64 && observation.PublicationCount <= math.MaxInt64
+}
+
+func retentionBindingPresent(vault, snapshot, digest, control []byte, epoch sql.NullInt64) bool {
+	if epoch.Valid {
+		return true
+	}
+	return len(vault) != 0 || len(snapshot) != 0 || len(digest) != 0 || len(control) != 0
+}
+
+func storedRetentionBindingBounded(
+	vault, snapshot, digest, control []byte,
+	epoch sql.NullInt64,
+) bool {
+	if len(vault) != 32 || !epoch.Valid || epoch.Int64 < 0 {
+		return false
+	}
+	if !boundedRetentionBytes(snapshot) || !boundedRetentionBytes(control) {
+		return false
+	}
+	return len(digest) == 32
 }

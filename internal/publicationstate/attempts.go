@@ -1182,18 +1182,7 @@ func validateStoredAttemptCore(
 	attemptLimits AttemptLimits,
 	databaseID [32]byte,
 ) error {
-	storedBinding, err := bindingFromWire(core.Binding)
-	if err != nil || !sameBinding(storedBinding, binding) || len(core.AttemptID) != 16 ||
-		len(core.DatabaseID) != 32 ||
-		!bytes.Equal(core.DatabaseID, databaseID[:]) ||
-		len(core.CandidateConfirmation) != 32 ||
-		core.ReservedCompletionBytes != 512<<10 ||
-		len(core.Review.SelectionDigest) != 32 ||
-		len(core.Review.ApprovalDigest) != 32 ||
-		allZero(core.Review.SelectionDigest) ||
-		allZero(core.Review.ApprovalDigest) ||
-		core.Review.SelectionRevision == 0 ||
-		core.Review.ApprovalRevision == 0 {
+	if !attemptCoreBelongsToStore(core, binding, databaseID) {
 		return errors.New("core")
 	}
 	snapshot, err := publication.DecodeSnapshot(core.SnapshotRecord)
@@ -1715,13 +1704,7 @@ func (s *Store) validateAttemptJournal(ctx context.Context, q queryer, attempt s
 		previous = bytes.Clone(digest)
 		kinds = append(kinds, metadata.kind)
 	}
-	if len(kinds) == 0 || kinds[0] != "created" || countEventKind(kinds, "created") != 1 ||
-		countEventKind(kinds, "upload-started") > 1 ||
-		countEventKind(kinds, "may-have-submitted") > 1 ||
-		countEventKind(kinds, "blocked-floor-replaced") > 1 ||
-		countEventKind(kinds, "retired-success") > 1 ||
-		countEventKind(kinds, "retired-abandoned") > 1 ||
-		countEventKind(kinds, "outcome-lost-fence") > 1 {
+	if !attemptEventKindsWellOrdered(kinds) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if attemptLifecycleImpliesUploadStarted(attempt, kinds) && countEventKind(kinds, "upload-started") != 1 {
@@ -2150,4 +2133,44 @@ func attemptLifecycleImpliesSubmission(attempt storedAttempt) bool {
 		return false
 	}
 	return false
+}
+
+func attemptCoreBelongsToStore(core attemptCoreWire, binding Binding, databaseID [32]byte) bool {
+	storedBinding, err := bindingFromWire(core.Binding)
+	if err != nil || !sameBinding(storedBinding, binding) {
+		return false
+	}
+	if len(core.AttemptID) != 16 || len(core.DatabaseID) != 32 ||
+		!bytes.Equal(core.DatabaseID, databaseID[:]) {
+		return false
+	}
+	if len(core.CandidateConfirmation) != 32 || core.ReservedCompletionBytes != 512<<10 {
+		return false
+	}
+	return attemptReviewIdentityUsable(core.Review)
+}
+
+func attemptReviewIdentityUsable(review localReviewWire) bool {
+	if len(review.SelectionDigest) != 32 || len(review.ApprovalDigest) != 32 {
+		return false
+	}
+	if allZero(review.SelectionDigest) || allZero(review.ApprovalDigest) {
+		return false
+	}
+	return review.SelectionRevision != 0 && review.ApprovalRevision != 0
+}
+
+func attemptEventKindsWellOrdered(kinds []string) bool {
+	if len(kinds) == 0 || kinds[0] != "created" {
+		return false
+	}
+	for _, kind := range []string{
+		"created", "upload-started", "may-have-submitted", "blocked-floor-replaced",
+		"retired-success", "retired-abandoned", "outcome-lost-fence",
+	} {
+		if countEventKind(kinds, kind) > 1 {
+			return false
+		}
+	}
+	return true
 }
