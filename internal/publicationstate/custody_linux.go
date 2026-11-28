@@ -235,11 +235,7 @@ func readOwnedPayloadFD(fd int, blob publication.BlobReference) ([]byte, error) 
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, err
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o777 != 0o600 ||
-		stat.Mode&0o7000 != 0 ||
-		stat.Nlink != 1 ||
-		stat.Size <= 0 ||
-		uint64(stat.Size) != blob.Size ||
+	if !ownedPayloadStatSafe(stat) || uint64(stat.Size) != blob.Size ||
 		blob.Size > publication.MaxBlobBytes {
 		return nil, errUnsafePayloadObject
 	}
@@ -419,12 +415,7 @@ func (s *Store) inventoryPayloads() (map[string]uint64, uint64, error) {
 		var stat unix.Stat_t
 		statErr := unix.Fstat(fd, &stat)
 		closeErr := unix.Close(fd)
-		if statErr != nil || closeErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG ||
-			stat.Uid != uint32(os.Geteuid()) ||
-			stat.Mode&0o777 != 0o600 ||
-			stat.Mode&0o7000 != 0 ||
-			stat.Nlink != 1 ||
-			stat.Size <= 0 ||
+		if statErr != nil || closeErr != nil || !ownedPayloadStatSafe(stat) ||
 			uint64(stat.Size) > publication.MaxBlobBytes {
 			return nil, 0, errors.New("unsafe payload object")
 		}
@@ -708,4 +699,14 @@ func (s *Store) persistPayloadObject(
 		return "", nil, err
 	}
 	return name, data, nil
+}
+
+func ownedPayloadStatSafe(stat unix.Stat_t) bool {
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) {
+		return false
+	}
+	if stat.Mode&0o777 != 0o600 || stat.Mode&0o7000 != 0 || stat.Nlink != 1 {
+		return false
+	}
+	return stat.Size > 0
 }

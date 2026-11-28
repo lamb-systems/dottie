@@ -938,11 +938,7 @@ func (s *Store) verifyAudit(ctx context.Context, source queryer, state stateSnap
 	if !recordCountOK || !recordRawOK || !recordLogicalOK {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if recordCount < 0 || recordRawBytes < 0 || recordLogical < 0 ||
-		uint64(recordCount) > uint64(s.limits.AcceptedRecordCount) ||
-		uint64(recordRawBytes) > s.limits.AcceptedLogicalBytes ||
-		uint64(recordLogical) > s.limits.AcceptedLogicalBytes ||
-		uint64(eventLogical)+uint64(recordLogical) > s.limits.AcceptedLogicalBytes {
+	if !s.acceptedCapacityHolds(eventLogical, recordCount, recordRawBytes, recordLogical) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	rows, err := source.QueryContext(
@@ -981,13 +977,7 @@ func (s *Store) verifyAudit(ctx context.Context, source queryer, state stateSnap
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		var event eventBodyWire
-		if strictJSON(body, &event) != nil || event.Version != 1 || event.Mode != mode || event.Reason != reason ||
-			event.Stop != stop ||
-			len(event.ObservationDigest) != 32 ||
-			len(event.SuppliedSetDigest) != 32 ||
-			event.Trace == nil ||
-			len(event.Trace) == 0 ||
-			len(event.Trace) > int(s.limits.MaxLineageLinks)+1 {
+		if strictJSON(body, &event) != nil || !s.eventBodyMatches(event, mode, reason, stop) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		calculated := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
@@ -1160,17 +1150,7 @@ func (s *Store) verifyAudit(ctx context.Context, source queryer, state stateSnap
 
 func validatePersistedFloor(floor Floor, binding Binding, databaseID [32]byte, limits Limits) error {
 	if validateBinding(floor.Binding) != nil || !sameBinding(floor.Binding, binding) ||
-		floor.DatabaseID != databaseID ||
-		floor.Revision == 0 ||
-		floor.Revision > publication.MaxSequence ||
-		floor.Generation == 0 ||
-		floor.Generation > publication.MaxSequence ||
-		len(floor.AnchorCID) == 0 ||
-		len(floor.RecordCID) == 0 ||
-		len(floor.RecordCID) > publication.MaxCIDBytes ||
-		len(floor.Head) == 0 ||
-		len(floor.Head) > publication.MaxRecordBytes ||
-		len(floor.ObservationDigest) == 0 {
+		floor.DatabaseID != databaseID || !floorFieldsBounded(floor) {
 		return errors.New("floor")
 	}
 	if floor.Provenance != ProvenanceFirst && floor.Provenance != ProvenanceReplace {
@@ -1199,13 +1179,7 @@ func (s *Store) validateEventWire(
 	stage Stage,
 ) (Floor, error) {
 	var event eventBodyWire
-	if strictJSON(body, &event) != nil || event.Version != 1 || event.Mode != mode || event.Reason != reason ||
-		event.Stop != stop ||
-		len(event.ObservationDigest) != 32 ||
-		len(event.SuppliedSetDigest) != 32 ||
-		event.Trace == nil ||
-		len(event.Trace) == 0 ||
-		len(event.Trace) > int(s.limits.MaxLineageLinks)+1 {
+	if strictJSON(body, &event) != nil || !s.eventBodyMatches(event, mode, reason, stop) {
 		return Floor{}, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	calculated := domainHash("systems.lamb.dottie.local-publication-event.v1", body)
@@ -1306,10 +1280,7 @@ func validateEventTransition(
 		}
 	}
 	if old == nil {
-		if mode != ModeFirstUse || reason != "" || stop != "first_use" || len(records) != 1 || next.Revision != 1 ||
-			next.Generation != 1 ||
-			next.Provenance != ProvenanceFirst ||
-			!bytes.Equal(next.AnchorCID, next.RecordCID) {
+		if mode != ModeFirstUse || reason != "" || stop != "first_use" || !firstUseFloorShape(next, records) {
 			return errors.New("first use")
 		}
 		return nil
@@ -1319,15 +1290,12 @@ func validateEventTransition(
 	}
 	switch mode {
 	case ModeAdvance:
-		if reason != "" || stop != "joined" || next.Generation != old.Generation || next.Provenance != old.Provenance ||
-			!bytes.Equal(next.AnchorCID, old.AnchorCID) ||
-			oldRecord == nil {
+		if reason != "" || stop != "joined" || oldRecord == nil || !advanceKeepsFloorLineage(next, old) {
 			return errors.New("advance")
 		}
 		return publication.VerifySuccessor(oldRecord.raw, records[len(records)-1].raw, records[len(records)-1].ref.Key)
 	case ModeReplaceFloor:
-		if next.Generation != old.Generation+1 || next.Provenance != ProvenanceReplace ||
-			!bytes.Equal(next.AnchorCID, next.RecordCID) ||
+		if !replacementFloorShape(next, old) ||
 			verifyDiscontinuousEvent(old, records, reason, stop, limits) != nil {
 			return errors.New("replacement")
 		}
@@ -1722,4 +1690,64 @@ func (s *Store) preflightSidecars() error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) acceptedCapacityHolds(eventLogical, records, rawBytes, logical int64) bool {
+	if records < 0 || rawBytes < 0 || logical < 0 || eventLogical < 0 {
+		return false
+	}
+	if uint64(records) > uint64(s.limits.AcceptedRecordCount) {
+		return false
+	}
+	if uint64(rawBytes) > s.limits.AcceptedLogicalBytes || uint64(logical) > s.limits.AcceptedLogicalBytes {
+		return false
+	}
+	return uint64(eventLogical)+uint64(logical) <= s.limits.AcceptedLogicalBytes
+}
+
+func (s *Store) eventBodyMatches(event eventBodyWire, mode, reason, stop string) bool {
+	if event.Version != 1 || event.Mode != mode || event.Reason != reason || event.Stop != stop {
+		return false
+	}
+	if len(event.ObservationDigest) != 32 || len(event.SuppliedSetDigest) != 32 {
+		return false
+	}
+	if len(event.Trace) == 0 {
+		return false
+	}
+	return len(event.Trace) <= int(s.limits.MaxLineageLinks)+1
+}
+
+func firstUseFloorShape(next Floor, records []validatedRecord) bool {
+	if len(records) != 1 || next.Revision != 1 || next.Generation != 1 {
+		return false
+	}
+	return next.Provenance == ProvenanceFirst && bytes.Equal(next.AnchorCID, next.RecordCID)
+}
+
+func advanceKeepsFloorLineage(next Floor, old *Floor) bool {
+	return next.Generation == old.Generation && next.Provenance == old.Provenance &&
+		bytes.Equal(next.AnchorCID, old.AnchorCID)
+}
+
+func replacementFloorShape(next Floor, old *Floor) bool {
+	return next.Generation == old.Generation+1 && next.Provenance == ProvenanceReplace &&
+		bytes.Equal(next.AnchorCID, next.RecordCID)
+}
+
+func floorFieldsBounded(floor Floor) bool {
+	if floor.Revision == 0 || floor.Revision > publication.MaxSequence {
+		return false
+	}
+	if floor.Generation == 0 || floor.Generation > publication.MaxSequence {
+		return false
+	}
+	if len(floor.AnchorCID) == 0 || len(floor.RecordCID) == 0 ||
+		len(floor.RecordCID) > publication.MaxCIDBytes {
+		return false
+	}
+	if len(floor.Head) == 0 || len(floor.Head) > publication.MaxRecordBytes {
+		return false
+	}
+	return len(floor.ObservationDigest) != 0
 }

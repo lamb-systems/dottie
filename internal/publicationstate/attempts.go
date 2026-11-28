@@ -1229,25 +1229,15 @@ func validateStoredAttemptCore(
 		return errors.New("head cid")
 	}
 	if core.Kind == string(AttemptGenesis) {
-		if snapshot.PublicationSeq != 0 || core.CapturedFloor != nil || core.CapturedRevision != 0 ||
-			core.CapturedGeneration != 0 ||
-			len(core.PredecessorRecord) != 0 ||
-			len(core.PredecessorCID) != 0 ||
-			core.PredecessorKey != "" {
+		if !genesisCoreIsBare(core, snapshot) {
 			return errors.New("genesis")
 		}
 	} else if core.Kind == string(AttemptSuccessor) {
-		if core.CapturedFloor == nil || len(core.PredecessorRecord) == 0 || len(core.PredecessorCID) == 0 ||
-			core.PredecessorKey == "" {
+		if !successorCoreCarriesPredecessor(core) {
 			return errors.New("successor")
 		}
 		floor, err := floorFromWire(*core.CapturedFloor)
-		if err != nil || !sameBinding(floor.Binding, binding) || floor.DatabaseID != databaseID ||
-			floor.Revision != core.CapturedRevision ||
-			floor.Generation != core.CapturedGeneration ||
-			floor.Sequence+1 != snapshot.PublicationSeq ||
-			!bytes.Equal(floor.RecordCID, core.PredecessorCID) ||
-			floor.SnapshotKey != core.PredecessorKey {
+		if err != nil || !capturedFloorMatchesCore(floor, core, snapshot, binding, databaseID) {
 			return errors.New("predecessor")
 		}
 		if err := publication.VerifySuccessor(
@@ -1734,15 +1724,13 @@ func (s *Store) validateAttemptJournal(ctx context.Context, q queryer, attempt s
 		countEventKind(kinds, "outcome-lost-fence") > 1 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if (attempt.lifecycle == AttemptUploadStarted || attempt.lifecycle == AttemptMayHaveSubmitted || attempt.lifecycle == AttemptRetiredSuccess || (attempt.lifecycle == AttemptRetiredAbandoned && countEventKind(kinds, "may-have-submitted") == 1)) &&
-		countEventKind(kinds, "upload-started") != 1 {
+	if attemptLifecycleImpliesUploadStarted(attempt, kinds) && countEventKind(kinds, "upload-started") != 1 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if attempt.lifecycle == AttemptPrepared && countEventKind(kinds, "upload-started") != 0 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if (attempt.lifecycle == AttemptMayHaveSubmitted || attempt.lifecycle == AttemptRetiredSuccess || (attempt.lifecycle == AttemptRetiredAbandoned && attempt.outcome != OutcomeNotSubmitted)) &&
-		countEventKind(kinds, "may-have-submitted") != 1 {
+	if attemptLifecycleImpliesSubmission(attempt) && countEventKind(kinds, "may-have-submitted") != 1 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if (attempt.lifecycle == AttemptRetiredSuccess) != (countEventKind(kinds, "retired-success") == 1) ||
@@ -1990,13 +1978,7 @@ func (s *Store) validateRetainedPublication(ctx context.Context, q queryer, atte
 	if err != nil {
 		return err
 	}
-	if acceptedFloor.Revision != uint64(row.revision) ||
-		!bytes.Equal(acceptedFloor.RecordCID, attempt.core.SnapshotCID) ||
-		acceptedFloor.Sequence != snapshot.PublicationSeq ||
-		!bytes.Equal(acceptedFloor.AcceptedEventDigest[:], digest) ||
-		!sameBinding(acceptedFloor.Binding, s.binding) ||
-		!sameSegmentSummaries(row.segments, summariesOfRecord(snapshot.Segments)) ||
-		!sameSegmentSummaries(acceptedFloor.Segments, row.segments) {
+	if !retainedFloorMatchesAttempt(acceptedFloor, digest, row, attempt, snapshot, s.binding) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	cache := make(fileSetCatalogCache)
@@ -2088,4 +2070,84 @@ func (s *Store) reconcileAttemptMutationRevision(ctx context.Context, q queryer,
 		return 0, classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	return revision, nil
+}
+
+func genesisCoreIsBare(core attemptCoreWire, snapshot publication.SnapshotRecord) bool {
+	if snapshot.PublicationSeq != 0 || core.CapturedFloor != nil {
+		return false
+	}
+	if core.CapturedRevision != 0 || core.CapturedGeneration != 0 {
+		return false
+	}
+	return len(core.PredecessorRecord) == 0 && len(core.PredecessorCID) == 0 && core.PredecessorKey == ""
+}
+
+func successorCoreCarriesPredecessor(core attemptCoreWire) bool {
+	return core.CapturedFloor != nil && len(core.PredecessorRecord) != 0 &&
+		len(core.PredecessorCID) != 0 && core.PredecessorKey != ""
+}
+
+func capturedFloorMatchesCore(
+	floor Floor,
+	core attemptCoreWire,
+	snapshot publication.SnapshotRecord,
+	binding Binding,
+	databaseID [32]byte,
+) bool {
+	if !sameBinding(floor.Binding, binding) || floor.DatabaseID != databaseID {
+		return false
+	}
+	if floor.Revision != core.CapturedRevision || floor.Generation != core.CapturedGeneration {
+		return false
+	}
+	if floor.Sequence+1 != snapshot.PublicationSeq {
+		return false
+	}
+	return bytes.Equal(floor.RecordCID, core.PredecessorCID) && floor.SnapshotKey == core.PredecessorKey
+}
+
+func retainedFloorMatchesAttempt(
+	floor Floor,
+	digest []byte,
+	row retainedPublicationRow,
+	attempt storedAttempt,
+	snapshot publication.SnapshotRecord,
+	binding Binding,
+) bool {
+	if floor.Revision != uint64(row.revision) || floor.Sequence != snapshot.PublicationSeq {
+		return false
+	}
+	if !bytes.Equal(floor.RecordCID, attempt.core.SnapshotCID) ||
+		!bytes.Equal(floor.AcceptedEventDigest[:], digest) {
+		return false
+	}
+	if !sameBinding(floor.Binding, binding) {
+		return false
+	}
+	return sameSegmentSummaries(row.segments, summariesOfRecord(snapshot.Segments)) &&
+		sameSegmentSummaries(floor.Segments, row.segments)
+}
+
+func attemptLifecycleImpliesUploadStarted(attempt storedAttempt, kinds []string) bool {
+	switch attempt.lifecycle {
+	case AttemptUploadStarted, AttemptMayHaveSubmitted, AttemptRetiredSuccess:
+		return true
+	case AttemptRetiredAbandoned:
+		return countEventKind(kinds, "may-have-submitted") == 1
+	case AttemptPrepared:
+		return false
+	}
+	return false
+}
+
+func attemptLifecycleImpliesSubmission(attempt storedAttempt) bool {
+	switch attempt.lifecycle {
+	case AttemptMayHaveSubmitted, AttemptRetiredSuccess:
+		return true
+	case AttemptRetiredAbandoned:
+		return attempt.outcome != OutcomeNotSubmitted
+	case AttemptPrepared, AttemptUploadStarted:
+		return false
+	}
+	return false
 }

@@ -70,10 +70,7 @@ func validRelativePath(rel string, allowRoot bool) bool {
 	if rel == "." {
 		return allowRoot
 	}
-	if rel == "" || len(rel) > 4096 || !utf8.ValidString(rel) || strings.ContainsRune(rel, 0) ||
-		strings.ContainsRune(rel, '\\') ||
-		strings.HasPrefix(rel, "/") ||
-		hasDrivePrefix(rel) {
+	if !usableRelativePathText(rel) {
 		return false
 	}
 	for segment := range strings.SplitSeq(rel, "/") {
@@ -95,10 +92,7 @@ func hasDrivePrefix(value string) bool {
 }
 
 func validLinkTextPath(target string) bool {
-	if target == "" || len(target) > 4096 || !utf8.ValidString(target) || strings.ContainsRune(target, 0) ||
-		strings.ContainsRune(target, '\\') ||
-		strings.HasPrefix(target, "/") ||
-		hasDrivePrefix(target) {
+	if !usableRelativePathText(target) {
 		return false
 	}
 	for segment := range strings.SplitSeq(target, "/") {
@@ -107,4 +101,14 @@ func validLinkTextPath(target string) bool {
 		}
 	}
 	return true
+}
+
+func usableRelativePathText(value string) bool {
+	if value == "" || len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+		return false
+	}
+	if strings.ContainsRune(value, '\\') || strings.HasPrefix(value, "/") {
+		return false
+	}
+	return !hasDrivePrefix(value)
 }

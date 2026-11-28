@@ -438,25 +438,7 @@ func ValidateGenesis(genesis Genesis) error {
 	if err != nil || !bytes.Equal(controlCID, genesis.ControlCID) || !bytes.Equal(controlCID, checkpoint.ControlCID) {
 		return fmt.Errorf("%w: genesis control binding", ErrHeadLinkage)
 	}
-	if policy.Vault != genesis.Vault || policy.EpochSeq != 0 || policy.PrevPolicyDigest != [32]byte{} ||
-		control.Vault != genesis.Vault ||
-		control.EpochSeq != 0 ||
-		control.PolicyDigest != policyDigest ||
-		len(control.PrevControlCID) != 0 ||
-		len(control.Revoked) != 0 ||
-		head.Vault != genesis.Vault ||
-		head.EpochSeq != 0 ||
-		head.PolicyDigest != policyDigest ||
-		head.PublicationCount != 0 ||
-		len(head.PrevHeadCID) != 0 ||
-		envelope.Vault != genesis.Vault ||
-		envelope.EpochSeq != 0 ||
-		envelope.PolicyDigest != policyDigest ||
-		envelope.Purpose != PurposeSnapshot ||
-		len(envelope.Parent) != 0 ||
-		checkpoint.Vault != genesis.Vault ||
-		checkpoint.EpochSeq != 0 ||
-		checkpoint.PolicyDigest != policyDigest {
+	if !genesisEpochObjectsAgree(genesis, policy, control, head, envelope, checkpoint, policyDigest) {
 		return fmt.Errorf("%w: genesis objects do not describe the count-zero epoch", ErrAuthorization)
 	}
 	if certificate.Vault != genesis.Vault || certificate.Role != RoleRoot || certificate.CertEpoch != 0 ||
@@ -1106,12 +1088,7 @@ func ValidatePublication(publication Publication, predecessor Predecessor) error
 	if err != nil {
 		return ErrSnapshotEpoch
 	}
-	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq ||
-		head.PolicyDigest != predecessor.PolicyDigest ||
-		envelope.Vault != policy.Vault ||
-		envelope.EpochSeq != policy.EpochSeq ||
-		envelope.PolicyDigest != predecessor.PolicyDigest ||
-		envelope.Purpose != PurposeSnapshot {
+	if !headAndEnvelopeSharePolicy(head, envelope, policy, predecessor.PolicyDigest) {
 		return ErrSnapshotEpoch
 	}
 	if !bytes.Equal(envelope.Parent, predecessor.HeadCID) || !bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) ||
@@ -2336,4 +2313,54 @@ func validDeviceIdentity(deviceID string, keyID []byte) bool {
 		return false
 	}
 	return len(keyID) != 0 && len(keyID) <= MaxKeyIDBytes
+}
+
+func genesisEpochObjectsAgree(
+	genesis Genesis,
+	policy Policy,
+	control Control,
+	head Head,
+	envelope Envelope,
+	checkpoint Checkpoint,
+	policyDigest [32]byte,
+) bool {
+	if policy.Vault != genesis.Vault || policy.EpochSeq != 0 || policy.PrevPolicyDigest != [32]byte{} {
+		return false
+	}
+	if control.Vault != genesis.Vault || control.EpochSeq != 0 || control.PolicyDigest != policyDigest {
+		return false
+	}
+	if len(control.PrevControlCID) != 0 || len(control.Revoked) != 0 {
+		return false
+	}
+	if head.Vault != genesis.Vault || head.EpochSeq != 0 || head.PolicyDigest != policyDigest {
+		return false
+	}
+	if head.PublicationCount != 0 || len(head.PrevHeadCID) != 0 {
+		return false
+	}
+	if envelope.Vault != genesis.Vault || envelope.EpochSeq != 0 || envelope.PolicyDigest != policyDigest {
+		return false
+	}
+	if envelope.Purpose != PurposeSnapshot || len(envelope.Parent) != 0 {
+		return false
+	}
+	return checkpoint.Vault == genesis.Vault && checkpoint.EpochSeq == 0 &&
+		checkpoint.PolicyDigest == policyDigest
+}
+
+func headAndEnvelopeSharePolicy(
+	head Head,
+	envelope Envelope,
+	policy Policy,
+	predecessorDigest [32]byte,
+) bool {
+	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq ||
+		head.PolicyDigest != predecessorDigest {
+		return false
+	}
+	if envelope.Vault != policy.Vault || envelope.EpochSeq != policy.EpochSeq {
+		return false
+	}
+	return envelope.PolicyDigest == predecessorDigest && envelope.Purpose == PurposeSnapshot
 }

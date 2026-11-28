@@ -71,14 +71,18 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 			uint64(revision) > publication.MaxSequence {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		if !recordTypeOK || recordType != cborTypeBlob || !recordLengthOK || recordLength < 1 ||
-			recordLength > publication.MaxCIDBytes ||
-			!recordCIDOK ||
-			int64(len(recordCID)) != recordLength {
+		if !blobFieldWellFormed(blobField{
+			typeText: recordType, typeOK: recordTypeOK,
+			length: recordLength, lengthOK: recordLengthOK,
+			raw: recordCID, rawOK: recordCIDOK, maximum: publication.MaxCIDBytes,
+		}) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		if !segmentsTypeOK || segmentsType != cborTypeBlob || !segmentsLengthOK || segmentsLength < 1 ||
-			segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength {
+		if !blobFieldWellFormed(blobField{
+			typeText: segmentsType, typeOK: segmentsTypeOK,
+			length: segmentsLength, lengthOK: segmentsLengthOK,
+			raw: segmentsRaw, rawOK: segmentsOK, maximum: maxSegmentSummariesBytes,
+		}) {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
 		segments, segmentsErr := decodeSegmentSummaries(segmentsRaw)
@@ -144,13 +148,18 @@ func (s *Store) checkIncomingMaterialRef(
 	digestType, digestTypeOK := digestTypeValue.(string)
 	digestLength, digestLengthOK := rawInt64(digestLengthValue)
 	digestRaw, digestOK := rawBytes(digestValue)
-	if !floorTypeOK || floorType != cborTypeBlob || !floorLengthOK || floorLength < 1 || floorLength > 65536 ||
-		!floorOK ||
-		int64(len(floorRaw)) != floorLength {
+	if !blobFieldWellFormed(blobField{
+		typeText: floorType, typeOK: floorTypeOK,
+		length: floorLength, lengthOK: floorLengthOK,
+		raw: floorRaw, rawOK: floorOK, maximum: 65536,
+	}) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if !digestTypeOK || digestType != cborTypeBlob || !digestLengthOK || digestLength != 32 || !digestOK ||
-		int64(len(digestRaw)) != digestLength {
+	if !blobFieldWellFormed(blobField{
+		typeText: digestType, typeOK: digestTypeOK,
+		length: digestLength, lengthOK: digestLengthOK,
+		raw: digestRaw, rawOK: digestOK, maximum: 32,
+	}) || digestLength != 32 {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	floor, err := decodeFloor(floorRaw)
@@ -206,10 +215,11 @@ func (s *Store) checkIncomingMaterialRef(
 		uint64(sequence) > publication.MaxSequence {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if !recordRawTypeOK || recordRawType != cborTypeBlob || !recordRawLengthOK || recordRawLength < 1 ||
-		recordRawLength > publication.MaxFileSetRecordBytes ||
-		!recordRawOK ||
-		int64(len(recordRaw)) != recordRawLength {
+	if !blobFieldWellFormed(blobField{
+		typeText: recordRawType, typeOK: recordRawTypeOK,
+		length: recordRawLength, lengthOK: recordRawLengthOK,
+		raw: recordRaw, rawOK: recordRawOK, maximum: publication.MaxFileSetRecordBytes,
+	}) {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
 	if !logicalTypeOK || logicalType != "integer" || !logicalOK || logical < 0 {
@@ -331,4 +341,24 @@ func (s *Store) checkIncomingFileSetCatalog(
 
 func fileSetCatalogKey(entry PayloadEntryReference) string {
 	return string(entry.CID) + "\x00" + strconv.FormatUint(entry.Size, 10)
+}
+
+type blobField struct {
+	typeText string
+	typeOK   bool
+	length   int64
+	lengthOK bool
+	raw      []byte
+	rawOK    bool
+	maximum  int64
+}
+
+func blobFieldWellFormed(field blobField) bool {
+	if !field.typeOK || field.typeText != cborTypeBlob || !field.lengthOK || !field.rawOK {
+		return false
+	}
+	if field.length < 1 || field.length > field.maximum {
+		return false
+	}
+	return int64(len(field.raw)) == field.length
 }
