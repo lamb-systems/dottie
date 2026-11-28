@@ -269,8 +269,8 @@ func writePublicationReconcileFile(t *testing.T, path string, content []byte, mo
 func clonePublicationReconcileSegments(summaries []publicationstate.SegmentSummary) []publicationstate.SegmentSummary {
 	cloned := make([]publicationstate.SegmentSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		copy := summary
-		copy.BlobCID = bytes.Clone(summary.BlobCID)
+		copied := summary
+		copied.BlobCID = bytes.Clone(summary.BlobCID)
 		if summary.Entries != nil {
 			entries := make([]publicationstate.PayloadEntryReference, 0, len(summary.Entries))
 			for _, entry := range summary.Entries {
@@ -278,9 +278,9 @@ func clonePublicationReconcileSegments(summaries []publicationstate.SegmentSumma
 					Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
 				})
 			}
-			copy.Entries = entries
+			copied.Entries = entries
 		}
-		cloned = append(cloned, copy)
+		cloned = append(cloned, copied)
 	}
 	return cloned
 }

@@ -36,7 +36,11 @@ func TestPublicationReadAcceptedMaterialRemainsReadableAtManagedObjectCapacity(t
 	defaultCustodyBytes := DefaultAttemptLimits().CustodyBytes
 	require.LessOrEqual(t, uint64(len(acceptedPayload(baseCandidate))), defaultCustodyBytes)
 	require.LessOrEqual(t, uint64(len(acceptedPayload(successorCandidate))), defaultCustodyBytes)
-	require.LessOrEqual(t, uint64(len(acceptedPayload(baseCandidate))+len(acceptedPayload(successorCandidate))), defaultCustodyBytes)
+	require.LessOrEqual(
+		t,
+		uint64(len(acceptedPayload(baseCandidate))+len(acceptedPayload(successorCandidate))),
+		defaultCustodyBytes,
+	)
 
 	lowOptions := DefaultOpenOptions()
 	lowAttemptLimits := DefaultAttemptLimits()
@@ -447,7 +451,10 @@ func assertAcceptedMaterialCapacityPositiveInventory(
 
 	payloadDirectory := filepath.Join(directory, payloadDirectoryName)
 	fileNames := readAcceptedMaterialCapacityDirectoryNames(t, payloadDirectory, 2)
-	wantNames := []string{payloadBasename(acceptedPayload(baseCandidate)), payloadBasename(acceptedPayload(successorCandidate))}
+	wantNames := []string{
+		payloadBasename(acceptedPayload(baseCandidate)),
+		payloadBasename(acceptedPayload(successorCandidate)),
+	}
 	sort.Strings(wantNames)
 	assert.Equal(t, wantNames, fileNames)
 	for _, candidate := range []CandidateInput{baseCandidate, successorCandidate} {
@@ -487,7 +494,10 @@ func assertAcceptedMaterialCapacitySuccessor(
 	require.NotEmpty(t, acceptedPayload(successorCandidate))
 	require.NotEqual(t, acceptedPayload(baseCandidate), acceptedPayload(successorCandidate))
 	require.NotEqual(t, blobForCandidate(t, baseCandidate).CID, blobForCandidate(t, successorCandidate).CID)
-	require.NoError(t, publication.VerifyPayload(acceptedPayload(successorCandidate), blobForCandidate(t, successorCandidate)))
+	require.NoError(
+		t,
+		publication.VerifyPayload(acceptedPayload(successorCandidate), blobForCandidate(t, successorCandidate)),
+	)
 	_, err := publication.DecodePayload(acceptedPayload(successorCandidate), blobForCandidate(t, successorCandidate))
 	require.NoError(t, err)
 	baseRecord, err := publication.DecodeSnapshot(baseCandidate.SnapshotRecord)

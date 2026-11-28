@@ -721,7 +721,10 @@ func publicationPreviewAcceptSuccessor(
 			{Key: key, Raw: bytes.Clone(record)},
 		},
 	}
-	input := publicationstate.MaterialInput{Payloads: clonePublicationPayloadSets(payloads), Entries: clonePublicationPayloadEntries(entries)}
+	input := publicationstate.MaterialInput{
+		Payloads: clonePublicationPayloadSets(payloads),
+		Entries:  clonePublicationPayloadEntries(entries),
+	}
 	proposal, err := fixture.store.PrepareMaterial(
 		context.Background(),
 		publicationstate.ModeAdvance,

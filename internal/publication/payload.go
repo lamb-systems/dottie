@@ -196,6 +196,7 @@ func checkResolvedPayloadLimits(record SnapshotRecord, limits PayloadLimits) err
 					return &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonTotalBytes}
 				}
 			}
+		case SegmentFormSettings:
 		}
 	}
 	if limits.MaxTotalBytes != 0 && total > limits.MaxTotalBytes {
@@ -228,7 +229,10 @@ func resolvePayloadEntries(entries []SnapshotEntry, limits PayloadLimits, fetch 
 		if err := VerifyPayload(content, entry.Blob); err != nil {
 			return nil, &FileSetPayloadError{Entry: entry.Path, Reason: FileSetReasonMismatch, cause: err}
 		}
-		resolved = append(resolved, PayloadEntry{Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content})
+		resolved = append(
+			resolved,
+			PayloadEntry{Path: entry.Path, Mode: entry.Mode, Size: entry.Size, Content: content},
+		)
 	}
 	return resolved, nil
 }
@@ -300,11 +304,11 @@ func payloadSegmentEntries(target model.Target, entries []PayloadEntry) ([]model
 }
 
 func payloadEntryParent(path string) string {
-	index := strings.LastIndexByte(path, '/')
-	if index < 0 {
+	parent, _, found := strings.CutLast(path, "/")
+	if !found {
 		return "."
 	}
-	return path[:index]
+	return parent
 }
 
 func payloadEntryPathLess(left, right string) bool {

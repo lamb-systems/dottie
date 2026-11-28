@@ -128,7 +128,13 @@ func TestSharedPayloadPersistenceUsesTransactionAndPreservesReuse(t *testing.T) 
 	require.GreaterOrEqual(t, store.payloadFD, 0)
 	capacityErr := store.checkPayloadCapacityWithQueryer(ctx, catalogTx, name, blob.Size, false)
 	require.NoError(t, capacityErr)
-	catalogName, catalogBytes, catalogErr := store.persistPayload(ctx, catalogTx, acceptedPayload(candidate), blob, name)
+	catalogName, catalogBytes, catalogErr := store.persistPayload(
+		ctx,
+		catalogTx,
+		acceptedPayload(candidate),
+		blob,
+		name,
+	)
 	require.NoError(t, catalogErr)
 	assert.Equal(t, name, catalogName)
 	assert.Nil(t, catalogBytes)

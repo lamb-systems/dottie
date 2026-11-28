@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -103,7 +102,7 @@ func TestPublicationProposalRefusesAnOversizedRecordWithoutWriting(t *testing.T)
 
 	err := store.Issue(context.Background(), record)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errProposalRecordTooLarge))
+	require.ErrorIs(t, err, errProposalRecordTooLarge)
 
 	entries, readErr := os.ReadDir(directory)
 	require.NoError(t, readErr)
@@ -117,15 +116,19 @@ func TestPublicationProposalRefusesAnOversizedRecordWithoutWriting(t *testing.T)
 func TestPublicationProposalRefusesAFileAboveTheBoundOnRead(t *testing.T) {
 	directory := publicationProposalStoreDirectory(t)
 	store := newPublicationProposalStore(directory)
-	record := publicationProposalRecordFor(cliEncodedPackedSegments(t), publication.PayloadFormPacked, [16]byte{0x71, 0x03})
+	record := publicationProposalRecordFor(
+		cliEncodedPackedSegments(t),
+		publication.PayloadFormPacked,
+		[16]byte{0x71, 0x03},
+	)
 	encoded, err := encodeProposalRecord(record)
 	require.NoError(t, err)
-	oversized := append(encoded, bytes.Repeat([]byte(" "), publicationProposalFileLimit)...)
+	oversized := append(append([]byte(nil), encoded...), bytes.Repeat([]byte(" "), publicationProposalFileLimit)...)
 	require.NoError(t, os.WriteFile(store.path(record.PublicationID), oversized, 0o600))
 
 	_, err = store.List(context.Background())
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errProposalRecordInvalid))
+	assert.ErrorIs(t, err, errProposalRecordInvalid)
 }
 
 func TestPublicationProposalReadsALegacyHexSegmentsField(t *testing.T) {
@@ -154,7 +157,11 @@ func TestPublicationProposalReadsALegacyHexSegmentsField(t *testing.T) {
 func TestPublicationProposalRefusesAnArraySegmentsField(t *testing.T) {
 	directory := publicationProposalStoreDirectory(t)
 	store := newPublicationProposalStore(directory)
-	record := publicationProposalRecordFor(cliEncodedPackedSegments(t), publication.PayloadFormPacked, [16]byte{0x71, 0x05})
+	record := publicationProposalRecordFor(
+		cliEncodedPackedSegments(t),
+		publication.PayloadFormPacked,
+		[16]byte{0x71, 0x05},
+	)
 	encoded, err := encodeProposalRecord(record)
 	require.NoError(t, err)
 	segments, err := decodeProposalSegments(

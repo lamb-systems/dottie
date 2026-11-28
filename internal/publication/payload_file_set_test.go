@@ -413,7 +413,6 @@ func TestResolvePayloadRefusesAnEntryTreeThatCollidesWithADirectory(t *testing.T
 }
 
 func TestResolvePayloadReadsManySegmentsWithinThePerSegmentEntryBudget(t *testing.T) {
-	targets := make([]model.Target, 0, 3)
 	segments := make([]SnapshotSegment, 0, 3)
 	contents := make(map[string][]byte)
 	for _, id := range []string{"alpha", "beta", "gamma"} {
@@ -421,7 +420,6 @@ func TestResolvePayloadReadsManySegmentsWithinThePerSegmentEntryBudget(t *testin
 			ID: id, Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 			Root: &model.FileRoot{Base: model.RootHome, Path: id, Kind: model.SelectionDirectory},
 		}
-		targets = append(targets, target)
 		entries := make([]SnapshotEntry, 0, 33)
 		for index := range 33 {
 			path := id + "-" + string(rune('a'+index)) + ".conf"

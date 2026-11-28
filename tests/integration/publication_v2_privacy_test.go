@@ -947,6 +947,7 @@ func publicationPrivacyAssertBlobPacking(
 	fetched := make([][]byte, 0)
 	for _, segment := range record.Segments {
 		switch segment.Form {
+		case publication.SegmentFormSettings:
 		case publication.SegmentFormPacked:
 			payload := fixture.fetchBlob(t, segment.Blob.CID, int64(segment.Blob.Size))
 			assert.Len(

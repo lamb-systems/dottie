@@ -25,8 +25,6 @@ const (
 	SequenceKeyLength    = 16
 )
 
-const legacySnapshotBlobMIMEType = BlobMIMEType
-
 var (
 	ErrInvalidRecord         = errors.New("invalid publication record")
 	ErrNonCanonical          = errors.New("noncanonical publication record")

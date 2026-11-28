@@ -19,32 +19,6 @@ func recordFileSetEntries(record publication.SnapshotRecord) []publication.Snaps
 	return entries
 }
 
-func recordSummaries(t *testing.T, record publication.SnapshotRecord) []publicationstate.SegmentSummary {
-	t.Helper()
-	summaries := make([]publicationstate.SegmentSummary, 0, len(record.Segments))
-	for _, segment := range record.Segments {
-		summary := publicationstate.SegmentSummary{TargetID: segment.Target.ID}
-		switch segment.Form {
-		case publication.SegmentFormPacked:
-			summary.Form = publicationstate.PayloadFormPacked
-			summary.BlobCID = segment.Blob.CID
-			summary.BlobSize = segment.Blob.Size
-		case publication.SegmentFormEntries:
-			summary.Form = publicationstate.PayloadFormFileSet
-			for _, entry := range segment.Entries {
-				summary.Entries = append(summary.Entries, publicationstate.PayloadEntryReference{
-					Path: entry.Path, CID: entry.Blob.CID, Size: entry.Size,
-				})
-			}
-		case publication.SegmentFormSettings:
-			summary.Form = publicationstate.PayloadFormSettings
-			summary.Settings = publication.SettingsDigest(segment.Settings)
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries
-}
-
 func floorPackedBlob(floor publicationstate.Floor) publication.BlobReference {
 	for _, summary := range floor.Segments {
 		if summary.Form == publicationstate.PayloadFormPacked {
@@ -112,6 +86,7 @@ func recordBlobs(t *testing.T, record publication.SnapshotRecord) []publication.
 			for _, entry := range segment.Entries {
 				blobs = append(blobs, entry.Blob)
 			}
+		case publication.SegmentFormSettings:
 		}
 	}
 	return blobs
@@ -130,6 +105,7 @@ func candidateBlobs(t *testing.T, candidate publicationstate.CandidateInput) []p
 			blobs = append(blobs, publication.BlobReference{
 				CID: cid, Size: uint64(len(payload)), MIMEType: publication.SnapshotBlobMIMEType,
 			})
+		case publicationstate.PayloadFormSettings:
 		case publicationstate.PayloadFormFileSet:
 			for range segment.Entries {
 				require.Less(t, entryIndex, len(candidate.Entries))

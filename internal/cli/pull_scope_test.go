@@ -122,7 +122,7 @@ func TestPullAppliesASingleEntriesHeadBesideAConfiguredSettingsTarget(t *testing
 	assert.Contains(t, stdout, "target desktop is configured but the published position does not name it")
 	assert.NotContains(t, stdout, "pull: adoption only", "a settings target was offered an adoption token")
 	token := pullTestConfirmation(t, stdout)
-	code, stdout, stderr = runPullFileSetStep(
+	code, _, stderr = runPullFileSetStep(
 		t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token,
 	)
 	require.Equal(t, 0, code, stderr)

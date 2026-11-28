@@ -32,11 +32,13 @@ func incomingCapacityAppendDistinctRecord(t *testing.T, f *fixture, sequence uin
 		Vault:          f.binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         parent,
-		Segments: []publication.SnapshotSegment{{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		}}},
+		Segments: []publication.SnapshotSegment{
+			{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			}},
+		},
 	}
 	binary.BigEndian.PutUint64(record.PublicationID[8:], sequence+1)
 	raw, err := publication.EncodeSnapshot(record)

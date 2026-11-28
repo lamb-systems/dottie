@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -315,7 +316,10 @@ func ApplyPublication(ctx context.Context, request PublicationApplyRequest) (Pub
 				reason: publicationApplyReasonIndeterminate,
 				entry:  resolution.Entry,
 			}
-		case publicationstate.JournalOutcomeApplied, publicationstate.JournalOutcomeFailed:
+		case publicationstate.JournalOutcomeApplied,
+			publicationstate.JournalOutcomeFailed,
+			publicationstate.JournalOutcomeRolledBack,
+			publicationstate.JournalOutcomeRollbackPending:
 			continue
 		}
 	}
@@ -449,12 +453,7 @@ func validatePublicationApplyPlanRequest(ctx context.Context, request Publicatio
 }
 
 func (request PublicationApplyRequest) fileSetTarget(targetID string) bool {
-	for _, id := range request.FileSetTargets {
-		if id == targetID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(request.FileSetTargets, targetID)
 }
 
 func publicationApplyPublishedTarget(snapshot model.Snapshot, targetID string) (model.Target, bool) {
@@ -696,7 +695,7 @@ func publicationApplyOperationFor(
 					nil,
 				)
 			}
-			mode := uint32(fileSetProjectionDirectoryMode)
+			mode := fileSetProjectionDirectoryMode
 			if declaredDirectory {
 				mode = declared.File.Mode
 			}
@@ -1373,12 +1372,19 @@ func ResolvePublicationApplyJournal(
 			publicationstate.JournalOutcomeIndeterminate,
 			publicationstate.JournalOutcomeRollbackPending:
 			status.Unsettled++
+		case publicationstate.JournalOutcomeApplied,
+			publicationstate.JournalOutcomeFailed,
+			publicationstate.JournalOutcomeRolledBack:
 		}
 	}
 	for _, resolution := range settingsResolutions {
 		switch resolution.Outcome {
 		case publicationstate.JournalOutcomeUnobserved, publicationstate.JournalOutcomeIndeterminate:
 			status.Unsettled++
+		case publicationstate.JournalOutcomeApplied,
+			publicationstate.JournalOutcomeFailed,
+			publicationstate.JournalOutcomeRolledBack,
+			publicationstate.JournalOutcomeRollbackPending:
 		}
 	}
 	admission := journal.CheckAdmission(ctx, floorRevision)
@@ -1398,7 +1404,12 @@ func resolvePublicationApplyJournal(
 	fileSystem files.ApplyFileSystem,
 ) ([]publicationstate.JournalResolution, error) {
 	if journal == nil {
-		return nil, publicationApplyFailure(ctx, publicationApplyStageResolve, publicationApplyReasonRequestInvalid, nil)
+		return nil, publicationApplyFailure(
+			ctx,
+			publicationApplyStageResolve,
+			publicationApplyReasonRequestInvalid,
+			nil,
+		)
 	}
 	return journal.ResolveInterrupted(
 		ctx,

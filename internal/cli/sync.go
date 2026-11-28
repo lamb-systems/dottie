@@ -817,7 +817,7 @@ func runSyncPushHalf(
 		return syncPushRefusal(command, output, "the accepted material cannot be read", "post_pull_floor")
 	}
 	pushedConfiguration := service.PublicationConfigurationWithoutDrop(sources.Configuration, drop)
-	baseline, err := syncAcceptedSnapshot(material, pushedConfiguration)
+	baseline, err := syncAcceptedSnapshot(material)
 	if err != nil {
 		return syncPushRefusal(command, output, "the accepted material cannot be decoded", "post_pull_floor")
 	}
@@ -857,7 +857,12 @@ func runSyncPushHalf(
 		binding, snapshot, candidatePosition, candidatePresent, acceptedSnapshot, carry, publicationID,
 	)
 	if err != nil {
-		return syncPushRefusal(command, output, "the post-pull publication identity is unavailable", "post_pull_candidate")
+		return syncPushRefusal(
+			command,
+			output,
+			"the post-pull publication identity is unavailable",
+			"post_pull_candidate",
+		)
 	}
 	candidateCID, err := syncCandidateRecordCID(candidateMaterial.SnapshotRecord, reviewedID)
 	if err != nil || !bytes.Equal(candidateCID, identity.SnapshotCID) {
@@ -1030,9 +1035,8 @@ func syncViewMatchesFloor(floor publicationstate.Floor, view publicationstate.Su
 
 func syncAcceptedSnapshot(
 	material publicationstate.AcceptedMaterial,
-	configuration config.Config,
 ) (model.Snapshot, error) {
-	snapshot, _, err := service.AcceptedPublicationSnapshot(material, configuration)
+	snapshot, _, err := service.AcceptedPublicationSnapshot(material)
 	return snapshot, err
 }
 
@@ -1419,17 +1423,19 @@ func renderSyncPullEffects(plan service.PublicationApplyPlan, drop []string) str
 			deletions++
 		case service.PublicationApplyWrite, service.PublicationApplyMkdir:
 			writes++
+		case service.PublicationApplyUnchanged:
 		}
 	}
 	if deletions == 0 && len(drop) == 0 {
 		return ""
 	}
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf(
+	fmt.Fprintf(
+		&output,
 		"sync: pull effects: local-deletions=%d local-writes=%d\n",
 		deletions,
 		writes,
-	))
+	)
 	if deletions != 0 {
 		output.WriteString(
 			"sync: the pull half settles before the push half runs, so these local deletions survive a refused push\n",

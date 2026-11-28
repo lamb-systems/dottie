@@ -125,13 +125,15 @@ func publicationDropRefusal(
 	for _, segment := range accepted.Segments {
 		published[segment.Target.ID] = struct{}{}
 	}
-	for index, id := range drop {
+	previous := ""
+	for _, id := range drop {
 		if id == "" {
 			return ErrPublicationCarry
 		}
-		if index > 0 && drop[index-1] >= id {
+		if previous != "" && previous >= id {
 			return ErrPublicationCarry
 		}
+		previous = id
 		if _, ok := published[id]; !ok {
 			return ErrPublicationCarry
 		}

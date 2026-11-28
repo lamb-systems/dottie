@@ -79,7 +79,7 @@ func TestFileSetAcceptedMaterialProjectsTheSoleSingleFileEntry(t *testing.T) {
 	require.Len(t, acceptedEntriesOf(material), 1)
 	assert.Equal(t, "init.lua", acceptedEntriesOf(material)[0].Path)
 
-	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
+	snapshot, form, err := acceptedPublicationSnapshot(material)
 	require.NoError(t, err)
 	assert.Equal(t, publication.PayloadFormFileSet, form)
 	require.Len(t, snapshot.Entries, 1)
@@ -369,13 +369,13 @@ func TestFileSetAcceptedMaterialRoundTripThroughProjection(t *testing.T) {
 	require.True(t, present)
 	material, err := fixture.store.ReadAcceptedMaterial(context.Background(), fixture.binding, floor)
 	require.NoError(t, err)
-	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
+	snapshot, form, err := acceptedPublicationSnapshot(material)
 	require.NoError(t, err)
 	assert.Equal(t, publication.PayloadFormFileSet, form)
 	require.Len(t, snapshot.Entries, 1)
 	assert.Equal(t, "init.lua", snapshot.Entries[0].File.Path)
 	assert.Equal(t, []byte("synthetic push payload"), snapshot.Entries[0].File.Content)
-	require.True(t, floorFileSet(floor) != nil)
+	require.NotNil(t, floorFileSet(floor))
 	assert.Empty(t, floorPackedBlob(floor).CID)
 }
 
@@ -466,7 +466,7 @@ func setFileSetReaderFromAccepted(t *testing.T, fixture *publicationPushFixture)
 			Path: entry.Path, Mode: entry.Mode, Size: uint64(len(entry.Content)), Content: entry.Content,
 		})
 	}
-	snapshot, form, err := acceptedPublicationSnapshot(material, fixture.configuration)
+	snapshot, form, err := acceptedPublicationSnapshot(material)
 	require.NoError(t, err)
 	fixture.reader.setPayload(publication.Payload{Form: form, Snapshot: snapshot, Entries: entries})
 }
@@ -837,7 +837,7 @@ func newPackedDeletionReceiver(
 	require.True(t, present)
 	acceptedMaterial, err := source.store.ReadAcceptedMaterial(ctx, source.binding, floor)
 	require.NoError(t, err)
-	base, _, err := acceptedPublicationSnapshot(acceptedMaterial, source.configuration)
+	base, _, err := acceptedPublicationSnapshot(acceptedMaterial)
 	require.NoError(t, err)
 	require.Len(t, base.Entries, 2)
 	record, err := publication.DecodeSnapshot(successor.Proposal.Batch.SnapshotRecord)

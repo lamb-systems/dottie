@@ -285,6 +285,7 @@ func (s *Store) attachIncomingMaterialTx(
 				}
 				objects[name] = entry.blob.Size
 			}
+		case PayloadFormSettings:
 		}
 	}
 	if err := s.checkPayloadBatchCapacity(ctx, tx, objects, true); err != nil {
@@ -309,7 +310,14 @@ func (s *Store) attachIncomingMaterialTx(
 				}
 				seen[key] = true
 				name := payloadBasename(entry.content)
-				if _, _, err := s.persistPayloadObject(ctx, tx, entry.content, entry.blob, name, PayloadFormFileSet); err != nil {
+				if _, _, err := s.persistPayloadObject(
+					ctx,
+					tx,
+					entry.content,
+					entry.blob,
+					name,
+					PayloadFormFileSet,
+				); err != nil {
 					return classifyMaterialCustody(err)
 				}
 				if err := cataloguePayload(ctx, tx, entry.blob, name); err != nil {
@@ -350,23 +358,6 @@ func cataloguePayload(ctx context.Context, tx *sql.Tx, blob publication.BlobRefe
 	}
 	if err := requireCataloguedPayloadObject(ctx, tx, blob, name); err != nil {
 		return err
-	}
-	return nil
-}
-
-func (s *Store) checkIncomingFileSetCapacity(ctx context.Context, q queryer, material materialAttachment) error {
-	objects := make(map[string]uint64)
-	for _, segment := range material.segments {
-		for _, entry := range segment.entries {
-			name := payloadBasename(entry.content)
-			if existing, present := objects[name]; present && existing != entry.blob.Size {
-				return classified(ErrInvalid, StageAcceptMaterial, ReasonRecordSet)
-			}
-			objects[name] = entry.blob.Size
-		}
-	}
-	if err := s.checkPayloadBatchCapacity(ctx, q, objects, true); err != nil {
-		return classified(ErrLimit, StageAcceptMaterial, ReasonCapacity)
 	}
 	return nil
 }

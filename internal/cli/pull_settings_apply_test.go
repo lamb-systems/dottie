@@ -112,7 +112,7 @@ func pullTestMixedView(
 	settings []publication.SnapshotSetting,
 ) (publicationstate.SuppliedRepositoryView, *pullTestReader) {
 	t.Helper()
-	portable, err := fixtureSettingsTarget(t, fixture).Model()
+	portable, err := fixtureSettingsTarget(t).Model()
 	require.NoError(t, err)
 	packed, err := vault.PackTarget(fixture.snapshot, fixture.snapshot.Targets[0].ID)
 	require.NoError(t, err)
@@ -134,7 +134,7 @@ func pullTestMixedView(
 	return view, reader
 }
 
-func fixtureSettingsTarget(t *testing.T, fixture *pullTestFixture) config.Target {
+func fixtureSettingsTarget(t *testing.T) config.Target {
 	t.Helper()
 	policy, err := config.ApprovedGNOMEPolicy([]string{"appearance"})
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func newPullTestCommandWithSettings(
 func TestPullAppliesPublishedSettingsBesideFiles(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, config.Review)
-	target := fixtureSettingsTarget(t, fixture)
+	target := fixtureSettingsTarget(t)
 	snapshot, err := service.FileConfigPort{Paths: fixture.paths}.Snapshot(t.Context())
 	require.NoError(t, err)
 	_, err = service.FileConfigPort{Paths: fixture.paths}.Update(
@@ -243,7 +243,7 @@ func fixtureReadFile(t *testing.T, path string) []byte {
 func TestPullRefusesAPublishedSettingsTargetWithoutASettingsBackend(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	fixture.configure(t, config.Review)
-	target := fixtureSettingsTarget(t, fixture)
+	target := fixtureSettingsTarget(t)
 	snapshot, err := service.FileConfigPort{Paths: fixture.paths}.Snapshot(t.Context())
 	require.NoError(t, err)
 	_, err = service.FileConfigPort{Paths: fixture.paths}.Update(
@@ -270,7 +270,7 @@ func TestPullRefusesAPublishedSettingsTargetWithoutASettingsBackend(t *testing.T
 	assert.Contains(t, stderr.String(), "cannot apply settings")
 	assert.NotContains(t, stdout.String(), "confirmation:", "a token was printed for a refused settings apply")
 	_, statErr := os.Lstat(fixture.targetPath("init.lua"))
-	assert.ErrorIs(t, statErr, os.ErrNotExist, "a refused settings apply wrote local files")
+	require.ErrorIs(t, statErr, os.ErrNotExist, "a refused settings apply wrote local files")
 
 	inspection, err := publicationstate.Inspect(
 		context.Background(), fixture.paths.PublicationStateDir(), fixture.binding,

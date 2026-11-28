@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/lamb-systems/dottie/internal/publication"
 )
+
+const cborTypeBlob = "blob"
 
 const incomingMaterialSchemaStatement = "CREATE TABLE accepted_material_refs (accepted_revision INTEGER PRIMARY KEY NOT NULL REFERENCES accepted_events(revision), record_cid BLOB NOT NULL REFERENCES accepted_records(cid), segments BLOB NOT NULL)"
 
@@ -68,13 +71,13 @@ func (s *Store) checkIncomingMaterialRefs(ctx context.Context, q queryer, stage 
 			uint64(revision) > publication.MaxSequence {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		if !recordTypeOK || recordType != "blob" || !recordLengthOK || recordLength < 1 ||
+		if !recordTypeOK || recordType != cborTypeBlob || !recordLengthOK || recordLength < 1 ||
 			recordLength > publication.MaxCIDBytes ||
 			!recordCIDOK ||
 			int64(len(recordCID)) != recordLength {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
-		if !segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		if !segmentsTypeOK || segmentsType != cborTypeBlob || !segmentsLengthOK || segmentsLength < 1 ||
 			segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength {
 			return classified(ErrSchema, stage, ReasonCorrupt)
 		}
@@ -141,11 +144,12 @@ func (s *Store) checkIncomingMaterialRef(
 	digestType, digestTypeOK := digestTypeValue.(string)
 	digestLength, digestLengthOK := rawInt64(digestLengthValue)
 	digestRaw, digestOK := rawBytes(digestValue)
-	if !floorTypeOK || floorType != "blob" || !floorLengthOK || floorLength < 1 || floorLength > 65536 || !floorOK ||
+	if !floorTypeOK || floorType != cborTypeBlob || !floorLengthOK || floorLength < 1 || floorLength > 65536 ||
+		!floorOK ||
 		int64(len(floorRaw)) != floorLength {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if !digestTypeOK || digestType != "blob" || !digestLengthOK || digestLength != 32 || !digestOK ||
+	if !digestTypeOK || digestType != cborTypeBlob || !digestLengthOK || digestLength != 32 || !digestOK ||
 		int64(len(digestRaw)) != digestLength {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
@@ -189,7 +193,7 @@ func (s *Store) checkIncomingMaterialRef(
 	recordRaw, recordRawOK := rawBytes(rawValue)
 	logicalType, logicalTypeOK := logicalTypeValue.(string)
 	logical, logicalOK := rawInt64(logicalValue)
-	if !cidTypeOK || cidType != "blob" || !cidLengthOK || cidLength < 1 || cidLength > publication.MaxCIDBytes ||
+	if !cidTypeOK || cidType != cborTypeBlob || !cidLengthOK || cidLength < 1 || cidLength > publication.MaxCIDBytes ||
 		!cidOK ||
 		int64(len(cid)) != cidLength {
 		return classified(ErrSchema, stage, ReasonCorrupt)
@@ -202,7 +206,7 @@ func (s *Store) checkIncomingMaterialRef(
 		uint64(sequence) > publication.MaxSequence {
 		return classified(ErrSchema, stage, ReasonCorrupt)
 	}
-	if !recordRawTypeOK || recordRawType != "blob" || !recordRawLengthOK || recordRawLength < 1 ||
+	if !recordRawTypeOK || recordRawType != cborTypeBlob || !recordRawLengthOK || recordRawLength < 1 ||
 		recordRawLength > publication.MaxFileSetRecordBytes ||
 		!recordRawOK ||
 		int64(len(recordRaw)) != recordRawLength {
@@ -248,7 +252,12 @@ type payloadCatalogObject struct {
 
 type fileSetCatalogCache map[string]payloadCatalogObject
 
-func (s *Store) readPayloadCatalogRow(ctx context.Context, q queryer, blobCID []byte, stage Stage) (payloadCatalogObject, error) {
+func (s *Store) readPayloadCatalogRow(
+	ctx context.Context,
+	q queryer,
+	blobCID []byte,
+	stage Stage,
+) (payloadCatalogObject, error) {
 	var cidTypeValue, cidLengthValue, cidValue, sizeTypeValue, sizeValue, nameTypeValue, nameLengthValue, nameValue, logicalTypeValue, logicalValue any
 	err := q.QueryRowContext(ctx, "SELECT typeof(blob_cid),length(CAST(blob_cid AS BLOB)),substr(CAST(blob_cid AS BLOB),1,129),typeof(size),CASE WHEN typeof(size)='integer' THEN size END,typeof(basename),length(CAST(basename AS BLOB)),substr(CAST(basename AS BLOB),1,73),typeof(logical_bytes),CASE WHEN typeof(logical_bytes)='integer' THEN logical_bytes END FROM payload_objects WHERE blob_cid=?", blobCID).
 		Scan(&cidTypeValue, &cidLengthValue, &cidValue, &sizeTypeValue, &sizeValue, &nameTypeValue, &nameLengthValue, &nameValue, &logicalTypeValue, &logicalValue)
@@ -268,7 +277,7 @@ func (s *Store) readPayloadCatalogRow(ctx context.Context, q queryer, blobCID []
 	nameBytes, nameOK := rawBytes(nameValue)
 	logicalType, logicalTypeOK := logicalTypeValue.(string)
 	logical, logicalOK := rawInt64(logicalValue)
-	if !cidTypeOK || cidType != "blob" || !cidLengthOK || cidLength < 1 ||
+	if !cidTypeOK || cidType != cborTypeBlob || !cidLengthOK || cidLength < 1 ||
 		cidLength > publication.MaxCIDBytes ||
 		!cidOK ||
 		int64(len(cid)) != cidLength {
@@ -321,5 +330,5 @@ func (s *Store) checkIncomingFileSetCatalog(
 }
 
 func fileSetCatalogKey(entry PayloadEntryReference) string {
-	return string(entry.CID) + "\x00" + fmt.Sprint(entry.Size)
+	return string(entry.CID) + "\x00" + strconv.FormatUint(entry.Size, 10)
 }

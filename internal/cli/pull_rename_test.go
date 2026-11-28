@@ -54,7 +54,7 @@ func TestPullApplyPlansASameContentRenameAsADeleteAndAWrite(t *testing.T) {
 	require.Len(t, material.Entries, 1)
 	assert.Equal(t, "after.lua", material.Entries[0].Path)
 
-	baseEntries, ok, err := pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	baseEntries, ok, err := pullProjectionBaseEntries(material)
 	require.NoError(t, err)
 	require.True(t, ok)
 

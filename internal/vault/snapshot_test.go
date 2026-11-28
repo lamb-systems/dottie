@@ -1153,11 +1153,17 @@ func TestPackTargetSelectsOneTargetsPayload(t *testing.T) {
 	require.ErrorContains(t, err, "not selected")
 
 	orphan := snapshot
-	orphan.Entries = append(orphan.Entries, fileEntry("missing", "orphan.txt", model.FileRegular, model.FilePresent, []byte("x")))
+	orphan.Entries = append(
+		orphan.Entries,
+		fileEntry("missing", "orphan.txt", model.FileRegular, model.FilePresent, []byte("x")),
+	)
 	_, err = PackTarget(orphan, "a")
 	require.ErrorContains(t, err, "unknown target")
 
-	empty := model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{fileTarget("a", "a-config", model.SelectionDirectory)}}
+	empty := model.Snapshot{
+		Version: model.SnapshotVersion,
+		Targets: []model.Target{fileTarget("a", "a-config", model.SelectionDirectory)},
+	}
 	blob, err := PackTarget(empty, "a")
 	require.NoError(t, err)
 	unpacked, err := Unpack(blob)

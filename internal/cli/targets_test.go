@@ -199,7 +199,12 @@ func TestTargetsModeInheritanceAndRemoveDoesNotDeleteFiles(t *testing.T) {
 	code, out, stderr := invokeTargets(env)
 	require.Equal(t, 2, code, "targets without a subcommand exit code")
 	assert.Empty(t, out, "targets without a subcommand output")
-	assert.Equal(t, "dottie: usage: expected list, add, remove, mode, approve or categories\n", stderr, "targets without a subcommand error")
+	assert.Equal(
+		t,
+		"dottie: usage: expected list, add, remove, mode, approve or categories\n",
+		stderr,
+		"targets without a subcommand error",
+	)
 
 	code, out, stderr = invokeTargets(env, "mode", "custom", "backup-only")
 	require.Equal(t, 0, code, "mode set exit code")
@@ -327,7 +332,12 @@ func TestTargetsUnknownTokenAndFlagErrorsEscapeControls(t *testing.T) {
 	code, out, stderr := invokeTargets(env, "unknown\x1b")
 	require.Equal(t, 2, code, "unknown targets command exit code")
 	assert.Empty(t, out, "unknown targets command output")
-	assert.Equal(t, "dottie: usage: expected list, add, remove, mode, approve or categories\n", stderr, "unknown targets command error")
+	assert.Equal(
+		t,
+		"dottie: usage: expected list, add, remove, mode, approve or categories\n",
+		stderr,
+		"unknown targets command error",
+	)
 
 	for _, args := range [][]string{{"--bad\x1b"}, {"list", "--bad\x1b"}} {
 		code, out, stderr = invokeTargets(env, args...)

@@ -703,24 +703,6 @@ func (coordinator *Coordinator) retireRejectedMaterialSubmission(
 	return MaterialPublishResult{Attempt: rejected, Outcome: publicationstate.OutcomeRejected}, refusal
 }
 
-func fileSetCandidateEntriesMatch(entries []publication.PayloadEntry, record []publication.SnapshotEntry) bool {
-	if len(entries) != len(record) {
-		return false
-	}
-	for index, entry := range entries {
-		want := record[index]
-		if entry.Path != want.Path || entry.Mode != want.Mode || entry.Size != want.Size ||
-			uint64(len(entry.Content)) != want.Size {
-			return false
-		}
-		cid, err := publication.RawPayloadCID(entry.Content)
-		if err != nil || !bytes.Equal(cid, want.Blob.CID) {
-			return false
-		}
-	}
-	return true
-}
-
 func newMaterialWriteBatch(
 	binding publicationstate.Binding,
 	captured *publicationstate.Floor,
@@ -781,19 +763,6 @@ func newMaterialWriteBatch(
 		Sequence: captured.Sequence,
 	}
 	return batch, nil
-}
-
-func cloneFileSetPayloadReference(payload *publicationstate.FileSetPayload) *publicationstate.FileSetPayload {
-	if payload == nil {
-		return nil
-	}
-	entries := make([]publicationstate.PayloadEntryReference, 0, len(payload.Entries))
-	for _, entry := range payload.Entries {
-		entries = append(entries, publicationstate.PayloadEntryReference{
-			Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
-		})
-	}
-	return &publicationstate.FileSetPayload{Entries: entries}
 }
 
 func materialWriteBatchFromSubmission(material publicationstate.SubmissionMaterial) MaterialWriteBatch {
@@ -916,20 +885,20 @@ func cloneMaterialCandidate(candidate publicationstate.CandidateInput) publicati
 		cloned.Payloads = append(cloned.Payloads, bytes.Clone(payload))
 	}
 	for _, segment := range candidate.Segments {
-		copy := publicationstate.CandidateSegment{
+		copied := publicationstate.CandidateSegment{
 			TargetID: segment.TargetID, Form: segment.Form, SettingsDigest: segment.SettingsDigest,
 		}
 		if segment.Blob != nil {
 			blob := *segment.Blob
 			blob.CID = bytes.Clone(blob.CID)
-			copy.Blob = &blob
+			copied.Blob = &blob
 		}
 		for _, entry := range segment.Entries {
-			copy.Entries = append(copy.Entries, publicationstate.PayloadEntryReference{
+			copied.Entries = append(copied.Entries, publicationstate.PayloadEntryReference{
 				Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
 			})
 		}
-		cloned.Segments = append(cloned.Segments, copy)
+		cloned.Segments = append(cloned.Segments, copied)
 	}
 	if len(candidate.Entries) != 0 {
 		cloned.Entries = make([]publication.PayloadEntry, 0, len(candidate.Entries))
@@ -1055,8 +1024,12 @@ func candidatePayloadDigest(candidate publicationstate.CandidateInput) ([32]byte
 			for _, entry := range segment.Entries {
 				hash.Write([]byte(entry.Path))
 			}
+		case publication.SegmentFormSettings:
+			settings := publication.SettingsDigest(segment.Settings)
+			hash.Write(settings[:])
 		}
 	}
+
 	var digest [32]byte
 	copy(digest[:], hash.Sum(nil))
 	return digest, nil
@@ -1335,7 +1308,7 @@ func (coordinator *Coordinator) PreparePublicationPush(
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}
-		base, _, err = acceptedPublicationSnapshot(acceptedMaterial, request.Configuration)
+		base, _, err = acceptedPublicationSnapshot(acceptedMaterial)
 		if err != nil {
 			return PublicationPushPreparation{}, err
 		}

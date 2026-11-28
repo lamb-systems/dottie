@@ -119,10 +119,22 @@ func TestSnapshotSegmentListRequiresUniqueSortedTargets(t *testing.T) {
 	require.NoError(t, validateSegmentList([]SnapshotSegment{second, first}))
 	_, err := encodeSegments([]SnapshotSegment{second, first})
 	require.NoError(t, err)
-	requireViolation(t, validateSegmentList([]SnapshotSegment{first, second}), ErrInvalidRecord, "segments.target", "order")
+	requireViolation(
+		t,
+		validateSegmentList([]SnapshotSegment{first, second}),
+		ErrInvalidRecord,
+		"segments.target",
+		"order",
+	)
 
 	duplicate := first
-	requireViolation(t, validateSegmentList([]SnapshotSegment{first, duplicate}), ErrInvalidRecord, "segments.target", "duplicate")
+	requireViolation(
+		t,
+		validateSegmentList([]SnapshotSegment{first, duplicate}),
+		ErrInvalidRecord,
+		"segments.target",
+		"duplicate",
+	)
 }
 
 func TestSettingsResetCarriesNoValueProperty(t *testing.T) {

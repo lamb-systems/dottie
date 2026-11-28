@@ -266,20 +266,6 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func readStateForUpgrade(ctx context.Context, conn queryer, binding Binding, limits Limits) (stateSnapshot, error) {
-	databaseID, err := readValueBounded(ctx, conn, "database_id", 32)
-	if err != nil || len(databaseID) != 32 {
-		return stateSnapshot{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
-	}
-	var id [32]byte
-	copy(id[:], databaseID)
-	if allZero(id[:]) {
-		return stateSnapshot{}, classified(ErrSchema, StageOpen, ReasonCorrupt)
-	}
-	store := &Store{binding: binding, limits: limits, databaseID: id, schemaVersion: 1}
-	return store.readState(ctx, conn, StageOpen)
-}
-
 func checkAttemptMetadata(ctx context.Context, conn interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, limits AttemptLimits) error {

@@ -171,18 +171,6 @@ func (f retainedValidationFixture) validate(t *testing.T) error {
 	return f.store.validateRetainedPublication(context.Background(), f.store.conn, f.stored, StageOpen)
 }
 
-func retainedValidationSetFloor(t *testing.T, store *Store, floor Floor) {
-	t.Helper()
-	encoded, err := encodeFloor(floor)
-	require.NoError(t, err)
-	_, err = store.conn.ExecContext(
-		context.Background(),
-		"UPDATE accepted_events SET new_floor=? WHERE revision=1",
-		encoded,
-	)
-	require.NoError(t, err)
-}
-
 func TestRetainedPublicationValidatorAcceptsBothPayloadForms(t *testing.T) {
 	t.Run("packed", func(t *testing.T) {
 		f := newRetainedValidationFixture(t, PayloadFormPacked)
@@ -208,7 +196,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 	}{
 		{
 			name: "entry size differs from the snapshot",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.Entries[0].Size++
 					return summary
@@ -217,7 +205,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 		},
 		{
 			name: "entry cid differs from the snapshot",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.Entries[0].CID = append([]byte{0xff}, summary.Entries[0].CID...)
 					return summary
@@ -226,7 +214,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 		},
 		{
 			name: "entry path differs from the snapshot",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.Entries[0].Path = "elsewhere.lua"
 					return summary
@@ -235,7 +223,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 		},
 		{
 			name: "entry is missing",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.Entries = summary.Entries[:1]
 					return summary
@@ -244,7 +232,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 		},
 		{
 			name: "target differs from the snapshot",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.TargetID = "other"
 					return summary
@@ -253,7 +241,7 @@ func TestRetainedPublicationValidatorRefusesCorruptFileSetPositions(t *testing.T
 		},
 		{
 			name: "form disagrees with the snapshot",
-			mutate: func(t *testing.T, f retainedValidationFixture) []SegmentSummary {
+			mutate: func(_ *testing.T, f retainedValidationFixture) []SegmentSummary {
 				return mutate(summariesOfRecord(f.snapshot.Segments), func(summary SegmentSummary) SegmentSummary {
 					summary.Form = PayloadFormSettings
 					summary.Entries = nil
@@ -361,12 +349,26 @@ func TestRetainedFileSetCodecRefusesInvalidEncodings(t *testing.T) {
 		{name: "malformed", input: []byte("{")},
 		{name: "empty list", input: []byte("[]")},
 		{name: "null list", input: []byte("null")},
-		{name: "unknown field", input: []byte(`[{"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":1,"mode":384}]`)},
+		{
+			name: "unknown field",
+			input: []byte(
+				`[{"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":1,"mode":384}]`,
+			),
+		},
 		{name: "noncanonical whitespace", input: bytes.Replace(valid, []byte(","), []byte(", "), 1)},
-		{name: "noncanonical field order", input: []byte(`[{"size":1,"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE"}]`)},
-		{name: "empty path", input: []byte(`[{"path":"","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":1}]`)},
+		{
+			name:  "noncanonical field order",
+			input: []byte(`[{"size":1,"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE"}]`),
+		},
+		{
+			name:  "empty path",
+			input: []byte(`[{"path":"","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":1}]`),
+		},
 		{name: "empty cid", input: []byte(`[{"path":"init.lua","cid":"","size":1}]`)},
-		{name: "zero size", input: []byte(`[{"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":0}]`)},
+		{
+			name:  "zero size",
+			input: []byte(`[{"path":"init.lua","cid":"AVUSIPux4gUzs4+Zd1V8xEPG26F4W6CaUtxAH1fzcaZ+MCdE","size":0}]`),
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -378,7 +380,7 @@ func TestRetainedFileSetCodecRefusesInvalidEncodings(t *testing.T) {
 
 func retainedFileSetCeilingPayload(count int) *FileSetPayload {
 	entries := make([]PayloadEntryReference, 0, count)
-	for index := 0; index < count; index++ {
+	for index := range count {
 		entries = append(entries, PayloadEntryReference{
 			Path: fmt.Sprintf("entry-%02d", index),
 			CID:  []byte{0x01, byte(index)},
@@ -409,7 +411,7 @@ func TestRetainedFileSetCodecAcceptsTheSnapshotEntryCeiling(t *testing.T) {
 func TestRetainedFileSetCodecRefusesEntriesAboveTheSnapshotCeiling(t *testing.T) {
 	_, err := encodeRetainedFileSet(retainedFileSetCeilingPayload(publication.MaxSnapshotEntries + 1))
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrLimit)
+	require.ErrorIs(t, err, ErrLimit)
 	encoded := retainedFileSetCeilingJSON(t, publication.MaxSnapshotEntries+1)
 	_, err = decodeRetainedFileSet(encoded)
 	require.Error(t, err)

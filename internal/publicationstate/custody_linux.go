@@ -438,10 +438,6 @@ func (s *Store) inventoryPayloads() (map[string]uint64, uint64, error) {
 	return objects, total, nil
 }
 
-func (s *Store) checkPayloadCapacity(ctx context.Context, name string, size uint64, createDirectory bool) error {
-	return s.checkPayloadCapacityWithQueryer(ctx, s.conn, name, size, createDirectory)
-}
-
 func (s *Store) checkPayloadCapacityWithQueryer(
 	ctx context.Context,
 	q queryer,

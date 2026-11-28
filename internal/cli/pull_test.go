@@ -1286,25 +1286,51 @@ func TestPullConfirmationTokenBindsTheVaultThePlanTheStateAndTheObservation(t *t
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, sha256.Sum256([]byte("changed plan")), state, observation, pullApplyTargetBinding{}),
+		pullApplyConfirmationToken(
+			binding,
+			sha256.Sum256([]byte("changed plan")),
+			state,
+			observation,
+			pullApplyTargetBinding{},
+		),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, plan, sha256.Sum256([]byte("moved state")), observation, pullApplyTargetBinding{}),
+		pullApplyConfirmationToken(
+			binding,
+			plan,
+			sha256.Sum256([]byte("moved state")),
+			observation,
+			pullApplyTargetBinding{},
+		),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		pullApplyConfirmationToken(binding, plan, state, sha256.Sum256([]byte("moved observation")), pullApplyTargetBinding{}),
+		pullApplyConfirmationToken(
+			binding,
+			plan,
+			state,
+			sha256.Sum256([]byte("moved observation")),
+			pullApplyTargetBinding{},
+		),
 	)
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
-	assert.NotEqual(t, token, pullApplyConfirmationToken(otherVault, plan, state, observation, pullApplyTargetBinding{}))
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(otherVault, plan, state, observation, pullApplyTargetBinding{}),
+	)
 	otherAccount := binding
 	otherAccount.AccountDID = "did:plc:zyxwvutsrqponmlkjihgfedc"
 	otherAccount.Repository = "at://" + otherAccount.AccountDID
-	assert.NotEqual(t, token, pullApplyConfirmationToken(otherAccount, plan, state, observation, pullApplyTargetBinding{}))
+	assert.NotEqual(
+		t,
+		token,
+		pullApplyConfirmationToken(otherAccount, plan, state, observation, pullApplyTargetBinding{}),
+	)
 	assert.NotEqual(
 		t,
 		token,
@@ -1349,7 +1375,15 @@ func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t 
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, true, []byte{0x01, 0x02, 0x04}, 7, observation, pullApplyTargetBinding{}),
+		pullAcceptPositionConfirmationToken(
+			binding,
+			3,
+			true,
+			[]byte{0x01, 0x02, 0x04},
+			7,
+			observation,
+			pullApplyTargetBinding{},
+		),
 		"the token does not bind the observed record",
 	)
 	assert.NotEqual(
@@ -1361,7 +1395,15 @@ func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t 
 	assert.NotEqual(
 		t,
 		token,
-		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, sha256.Sum256([]byte("moved observation")), pullApplyTargetBinding{}),
+		pullAcceptPositionConfirmationToken(
+			binding,
+			3,
+			true,
+			recordCID,
+			7,
+			sha256.Sum256([]byte("moved observation")),
+			pullApplyTargetBinding{},
+		),
 		"the token does not bind the observation digest",
 	)
 	otherVault := binding
@@ -1372,7 +1414,11 @@ func TestPullAcceptPositionTokenBindsTheBindingTheFloorAndTheObservedPosition(t 
 		pullAcceptPositionConfirmationToken(otherVault, 3, true, recordCID, 7, observation, pullApplyTargetBinding{}),
 		"the token does not bind the vault",
 	)
-	assert.Equal(t, token, pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation, pullApplyTargetBinding{}))
+	assert.Equal(
+		t,
+		token,
+		pullAcceptPositionConfirmationToken(binding, 3, true, recordCID, 7, observation, pullApplyTargetBinding{}),
+	)
 }
 
 func TestPullOffersAcceptanceForANewcomerWhoseFilesAlreadyMatch(t *testing.T) {

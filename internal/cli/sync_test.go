@@ -1137,41 +1137,111 @@ func TestSyncConfirmationTokenBindsThePullAndPushHalves(t *testing.T) {
 			ApprovalRevision:  3,
 		},
 	}
-	token := syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity)
-	assert.NotEqual(
-		t,
-		token,
-		syncConfirmationToken(binding, publicationstate.Floor{}, false, sha256.Sum256([]byte("changed plan")), stateToken, observation, view, identity),
+	token := syncConfirmationToken(
+		binding,
+		publicationstate.Floor{},
+		false,
+		plan,
+		stateToken,
+		observation,
+		view,
+		identity,
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, sha256.Sum256([]byte("moved state")), observation, view, identity),
+		syncConfirmationToken(
+			binding,
+			publicationstate.Floor{},
+			false,
+			sha256.Sum256([]byte("changed plan")),
+			stateToken,
+			observation,
+			view,
+			identity,
+		),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, sha256.Sum256([]byte("moved observation")), view, identity),
+		syncConfirmationToken(
+			binding,
+			publicationstate.Floor{},
+			false,
+			plan,
+			sha256.Sum256([]byte("moved state")),
+			observation,
+			view,
+			identity,
+		),
 	)
 	assert.NotEqual(
 		t,
 		token,
-		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, sha256.Sum256([]byte("moved view")), identity),
+		syncConfirmationToken(
+			binding,
+			publicationstate.Floor{},
+			false,
+			plan,
+			stateToken,
+			sha256.Sum256([]byte("moved observation")),
+			view,
+			identity,
+		),
+	)
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(
+			binding,
+			publicationstate.Floor{},
+			false,
+			plan,
+			stateToken,
+			observation,
+			sha256.Sum256([]byte("moved view")),
+			identity,
+		),
 	)
 	moved := identity
 	moved.SnapshotCID = []byte{0x02}
-	assert.NotEqual(t, token, syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, moved))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, moved),
+	)
 	reviewed := identity
 	reviewed.Review.ApprovalRevision++
-	assert.NotEqual(t, token, syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, reviewed))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, reviewed),
+	)
 	otherVault := binding
 	otherVault.Vault = [32]byte{0x63}
-	assert.NotEqual(t, token, syncConfirmationToken(otherVault, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(
+			otherVault,
+			publicationstate.Floor{},
+			false,
+			plan,
+			stateToken,
+			observation,
+			view,
+			identity,
+		),
+	)
 	movedPosition := publicationstate.Floor{
 		DatabaseID: [32]byte{0x01}, Revision: 4, Generation: 2,
 		RecordCID: []byte{0x02}, SnapshotKey: "0000000000000001",
 	}
-	assert.NotEqual(t, token, syncConfirmationToken(binding, movedPosition, true, plan, stateToken, observation, view, identity))
+	assert.NotEqual(
+		t,
+		token,
+		syncConfirmationToken(binding, movedPosition, true, plan, stateToken, observation, view, identity),
+	)
 	assert.NotEqual(
 		t,
 		token,
@@ -1256,20 +1326,6 @@ func mustPullRecordCID(t *testing.T, raw []byte) []byte {
 	cid, err := publication.RecordCID(raw)
 	require.NoError(t, err)
 	return cid
-}
-
-func mustPullBlobCID(t *testing.T, raw []byte) []byte {
-	t.Helper()
-	record, err := publication.DecodeSnapshot(raw)
-	require.NoError(t, err)
-	return cliRecordPackedBlob(record).CID
-}
-
-func mustPullBlobSize(t *testing.T, raw []byte) uint64 {
-	t.Helper()
-	record, err := publication.DecodeSnapshot(raw)
-	require.NoError(t, err)
-	return cliRecordPackedBlob(record).Size
 }
 
 func TestSyncRefusesAProviderViewThatDivergesWhileTheFloorStillMatches(t *testing.T) {
@@ -1515,12 +1571,31 @@ func TestSyncConfirmationTokenBindsTheCandidateRecord(t *testing.T) {
 		Targets:     1,
 		Entries:     3,
 	}
-	token := syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, identity)
+	token := syncConfirmationToken(
+		binding,
+		publicationstate.Floor{},
+		false,
+		plan,
+		stateToken,
+		observation,
+		view,
+		identity,
+	)
 	changedRecord := identity
 	changedRecord.SnapshotCID = []byte{0x02}
 	assert.NotEqual(
-		t, token,
-		syncConfirmationToken(binding, publicationstate.Floor{}, false, plan, stateToken, observation, view, changedRecord),
+		t,
+		token,
+		syncConfirmationToken(
+			binding,
+			publicationstate.Floor{},
+			false,
+			plan,
+			stateToken,
+			observation,
+			view,
+			changedRecord,
+		),
 	)
 	assert.Equal(
 		t, token,
@@ -1541,7 +1616,7 @@ func TestSyncRetriesAfterAnAbandonedPushHalf(t *testing.T) {
 	fixture.transport.mu.Lock()
 	fixture.transport.uploadErr = errors.New("synthetic upload failure")
 	fixture.transport.mu.Unlock()
-	code, _, stderr = runSyncForTest(
+	code, _, _ = runSyncForTest(
 		t, fixture, syncTestHooks{}, "--did", fixture.binding.AccountDID, "--vault", pullTestVaultHex(),
 		"--confirm", token,
 	)

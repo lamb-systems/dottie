@@ -53,29 +53,6 @@ func candidateSummary(segment CandidateSegment) (SegmentSummary, error) {
 	return summary, nil
 }
 
-func (input CandidateSegments) summaries() ([]SegmentSummary, error) {
-	if len(input.Segments) != len(input.Payloads) {
-		return nil, errors.New("candidate payload count")
-	}
-	for index, segment := range input.Segments {
-		if segment.Form == PayloadFormSettings && len(input.Payloads[index]) != 0 {
-			return nil, errors.New("settings segment carries a payload")
-		}
-	}
-	summaries := make([]SegmentSummary, 0, len(input.Segments))
-	for _, segment := range input.Segments {
-		summary, err := candidateSummary(segment)
-		if err != nil {
-			return nil, err
-		}
-		summaries = append(summaries, summary)
-	}
-	if err := validateSegmentSummaries(summaries); err != nil {
-		return nil, err
-	}
-	return summaries, nil
-}
-
 func validateSegmentSummaries(summaries []SegmentSummary) error {
 	if len(summaries) == 0 || len(summaries) > publication.MaxSnapshotSettings {
 		return errors.New("segment summary count")
@@ -248,7 +225,7 @@ func summariesOfRecord(segments []publication.SnapshotSegment) []SegmentSummary 
 func cloneSegmentSummaries(summaries []SegmentSummary) []SegmentSummary {
 	cloned := make([]SegmentSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		copy := SegmentSummary{
+		copied := SegmentSummary{
 			TargetID: summary.TargetID,
 			Form:     summary.Form,
 			BlobCID:  bytes.Clone(summary.BlobCID),
@@ -256,11 +233,11 @@ func cloneSegmentSummaries(summaries []SegmentSummary) []SegmentSummary {
 			Settings: summary.Settings,
 		}
 		for _, entry := range summary.Entries {
-			copy.Entries = append(copy.Entries, PayloadEntryReference{
+			copied.Entries = append(copied.Entries, PayloadEntryReference{
 				Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
 			})
 		}
-		cloned = append(cloned, copy)
+		cloned = append(cloned, copied)
 	}
 	return cloned
 }

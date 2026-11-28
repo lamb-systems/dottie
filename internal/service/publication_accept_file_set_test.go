@@ -258,7 +258,13 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 	t.Run("head file-set with a later packed snapshot", func(t *testing.T) {
 		fixture := newPublicationAcceptFixture(t)
 		files := fileSetServiceFilesWithContent(t, "synthetic head file-set entry")
-		genesis := newSequencedFileSetServicePublication(t, fixture.binding.Vault, [16]byte{0x25, 0x76}, 0, nil, files...)
+		genesis := newSequencedFileSetServicePublication(
+			t,
+			fixture.binding.Vault,
+			[16]byte{0x25, 0x76},
+			0,
+			nil,
+			files...)
 		sibling := packedServiceBlock(
 			t,
 			fixture.binding,
@@ -318,6 +324,10 @@ func TestPublicationAcceptSelectsTheFormFromTheVerifiedHead(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Nil(t, floorFileSet(accepted))
-		assert.Equal(t, packed.block.Raw, publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted).SnapshotRecord)
+		assert.Equal(
+			t,
+			packed.block.Raw,
+			publicationAcceptMaterial(t, fixture.directory, fixture.binding, accepted).SnapshotRecord,
+		)
 	})
 }

@@ -2,30 +2,9 @@ package publication
 
 import (
 	"math"
-	"path"
 
 	"github.com/lamb-systems/dottie/internal/model"
 )
-
-func validateSnapshotTargets(entries []SnapshotEntry, targets []model.Target) error {
-	if len(targets) != 1 {
-		return violation(ErrInvalidRecord, "targets", "count")
-	}
-	target := targets[0]
-	if target.Source != model.SourceFiles || target.Root == nil || target.Validate() != nil {
-		return violation(ErrInvalidRecord, "targets.target", "unsupported")
-	}
-	switch target.Root.Kind {
-	case model.SelectionFile:
-		if len(entries) != 1 || entries[0].Path != path.Base(target.Root.Path) {
-			return violation(ErrInvalidRecord, "targets.root", "mismatch")
-		}
-	case model.SelectionDirectory:
-	default:
-		return violation(ErrInvalidRecord, "targets.root.kind", "unsupported")
-	}
-	return nil
-}
 
 func encodeSnapshotTargets(targets []model.Target) []any {
 	encoded := make([]any, 0, len(targets))

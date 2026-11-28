@@ -49,7 +49,9 @@ func newFileSetAttemptFixture(t *testing.T, paths []string) fileSetAttemptFixtur
 		PublicationID:  publicationID,
 		PublicationSeq: 0,
 		Parent:         []byte{},
-		Segments:       []publication.SnapshotSegment{{Target: fileSetTestTargets()[0], Form: publication.SegmentFormEntries, Entries: entries}},
+		Segments: []publication.SnapshotSegment{
+			{Target: fileSetTestTargets()[0], Form: publication.SegmentFormEntries, Entries: entries},
+		},
 	}
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)
@@ -683,7 +685,7 @@ func assertFileSetRetainedPosition(
 	assert.Equal(t, len(f.entries), objects)
 	for _, entry := range f.entries {
 		_, err := os.Stat(filepath.Join(directory, payloadDirectoryName, payloadBasename(entry.Content)))
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 	_, present, err := store.ActiveAttempt(ctx)
 	require.NoError(t, err)

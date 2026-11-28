@@ -39,7 +39,7 @@ func settingsTestIdentity(key model.EntryKey) string {
 }
 
 func (backend *settingsTestBackend) Observe(
-	ctx context.Context,
+	_ context.Context,
 	key model.EntryKey,
 ) (syncengine.SettingValue, error) {
 	if backend.observe != nil {
@@ -52,15 +52,15 @@ func (backend *settingsTestBackend) Observe(
 }
 
 func (backend *settingsTestBackend) Canonicalize(
-	ctx context.Context,
-	key model.EntryKey,
+	_ context.Context,
+	_ model.EntryKey,
 	valueType, text string,
 ) (syncengine.SettingValue, error) {
 	return syncengine.SettingValue{Present: true, Type: valueType, Text: text, Writable: true}, nil
 }
 
 func (backend *settingsTestBackend) Set(
-	ctx context.Context,
+	_ context.Context,
 	key model.EntryKey,
 	valueType, text string,
 ) error {
@@ -77,7 +77,7 @@ func (backend *settingsTestBackend) Set(
 	return nil
 }
 
-func (backend *settingsTestBackend) Reset(ctx context.Context, key model.EntryKey) error {
+func (backend *settingsTestBackend) Reset(_ context.Context, key model.EntryKey) error {
 	if backend.mutate != nil {
 		return backend.mutate
 	}

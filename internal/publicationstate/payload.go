@@ -47,21 +47,6 @@ func (p FileSetPayload) TotalBytes() uint64 {
 	return total
 }
 
-func cloneFileSetPayload(payload *FileSetPayload) *FileSetPayload {
-	if payload == nil {
-		return nil
-	}
-	entries := make([]PayloadEntryReference, 0, len(payload.Entries))
-	for _, entry := range payload.Entries {
-		entries = append(entries, PayloadEntryReference{
-			Path: entry.Path,
-			CID:  bytes.Clone(entry.CID),
-			Size: entry.Size,
-		})
-	}
-	return &FileSetPayload{Entries: entries}
-}
-
 func fileSetPayloadOf(record publication.SnapshotRecord) *FileSetPayload {
 	recordEntries, _ := record.SegmentEntries()
 	if len(recordEntries) == 0 {
@@ -194,10 +179,6 @@ func sameFileSetPayload(left, right *FileSetPayload) bool {
 	return true
 }
 
-func fileSetPayloadMatchesRecord(snapshot *FileSetPayload, record publication.SnapshotRecord) bool {
-	return sameFileSetPayload(snapshot, fileSetPayloadOf(record))
-}
-
 func floorPayloadMatchesRecord(floor Floor, record publication.SnapshotRecord) bool {
 	return sameSegmentSummaries(floor.Segments, summariesOfRecord(record.Segments))
 }
@@ -248,16 +229,10 @@ func attemptCoreForm(core attemptCoreWire) PayloadForm {
 			}
 		case PayloadFormFileSet:
 			form = PayloadFormFileSet
+		case PayloadFormPacked:
 		}
 	}
 	return form
-}
-
-func requirePackedAttemptCore(core attemptCoreWire, stage Stage) error {
-	if attemptCoreForm(core) != PayloadFormPacked {
-		return fileSetPayloadUnsupported(stage)
-	}
-	return nil
 }
 
 const (

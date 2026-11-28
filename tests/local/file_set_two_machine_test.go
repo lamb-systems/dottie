@@ -39,7 +39,11 @@ func fileSetTwoMachineSnapshot(
 	blobs := atproto.VaultReader{Transport: fixture.pds, Budgets: atproto.DefaultBudgets()}
 	if record.PayloadForm() == publication.PayloadFormPacked {
 		payload, err := blobs.FetchBlob(
-			context.Background(), publicationTwoMachineDID, recordPackedBlob(record).CID, int64(recordPackedBlob(record).Size))
+			context.Background(),
+			publicationTwoMachineDID,
+			recordPackedBlob(record).CID,
+			int64(recordPackedBlob(record).Size),
+		)
 		require.NoError(t, err)
 		snapshot, err := publication.DecodePayload(payload, recordPackedBlob(record))
 		require.NoError(t, err)

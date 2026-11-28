@@ -10,6 +10,8 @@ import (
 	"github.com/lamb-systems/dottie/internal/publication"
 )
 
+const maxEncodedFloorBytes = 65536
+
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -442,7 +444,7 @@ func (s *Store) acceptFloorTx(
 	if err != nil {
 		return zeroFloor(), classified(ErrInvalid, stage, ReasonRecordSet)
 	}
-	if len(encodedNext) > 65536 {
+	if len(encodedNext) > maxEncodedFloorBytes {
 		return zeroFloor(), classified(ErrLimit, stage, ReasonCapacity)
 	}
 	if err := s.checkAcceptedCapacityWithReservation(

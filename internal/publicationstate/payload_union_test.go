@@ -90,10 +90,17 @@ func TestAttemptSegmentsMustMatchTheirSnapshotRecord(t *testing.T) {
 		SchemaVersion: publication.SchemaVersion,
 		Vault:         [32]byte{1},
 		PublicationID: [16]byte{1},
-		Segments: []publication.SnapshotSegment{{
-			Target: fixturePackedTarget(), Form: publication.SegmentFormPacked,
-			Blob: publication.BlobReference{CID: mustPayloadRawCID(t, []byte("payload")), Size: 4096, MIMEType: publication.SnapshotBlobMIMEType},
-		}},
+		Segments: []publication.SnapshotSegment{
+			{
+				Target: fixturePackedTarget(),
+				Form:   publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID:      mustPayloadRawCID(t, []byte("payload")),
+					Size:     4096,
+					MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			},
+		},
 	}
 	segments := summariesOfRecord(record.Segments)
 	encoded, err := encodeSegmentSummaries(segments)
@@ -127,10 +134,17 @@ func TestSegmentEvidenceHeadBindingCarriesNoPayloadCID(t *testing.T) {
 		SchemaVersion: publication.SchemaVersion,
 		Vault:         [32]byte{1},
 		PublicationID: [16]byte{1},
-		Segments: []publication.SnapshotSegment{{
-			Target: fixturePackedTarget(), Form: publication.SegmentFormPacked,
-			Blob: publication.BlobReference{CID: mustPayloadRawCID(t, []byte("payload")), Size: 4096, MIMEType: publication.SnapshotBlobMIMEType},
-		}},
+		Segments: []publication.SnapshotSegment{
+			{
+				Target: fixturePackedTarget(),
+				Form:   publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID:      mustPayloadRawCID(t, []byte("payload")),
+					Size:     4096,
+					MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			},
+		},
 	}
 	raw, err := publication.EncodeSnapshot(record)
 	require.NoError(t, err)

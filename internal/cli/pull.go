@@ -540,7 +540,10 @@ func preparePullApply(
 		reason := input.label() +
 			" refused: no target is configured and the published position names none to adopt; " +
 			"run dottie targets add or pass --settings; nothing was changed"
-		if live, liveErr := publicationstate.LiveJournalRows(sources.Paths.PublicationStateDir()); liveErr == nil && live > 0 {
+		if live, liveErr := publicationstate.LiveJournalRows(
+			sources.Paths.PublicationStateDir(),
+		); liveErr == nil &&
+			live > 0 {
 			reason += "; an interrupted apply is still recorded there and needs a configured target to resolve it"
 		}
 		return pullApplyPreparation{}, urfave.Exit(reason, 3)
@@ -555,7 +558,9 @@ func preparePullApply(
 	if err != nil {
 		if adoption != nil {
 			return pullApplyPreparation{}, urfave.Exit(
-				input.label()+" refused: the published target root "+escapeField(pullAdoptionSelector(adoption))+" does not exist or cannot be resolved; create it and re-run; nothing was changed",
+				input.label()+" refused: the published target root "+escapeField(
+					pullAdoptionSelector(adoption),
+				)+" does not exist or cannot be resolved; create it and re-run; nothing was changed",
 				3,
 			)
 		}
@@ -583,7 +588,7 @@ func preparePullApply(
 			)
 		}
 		if input.Present {
-			baseEntries, ok, err := pullProjectionBaseEntries(input, material)
+			baseEntries, ok, err := pullProjectionBaseEntries(material)
 			if err != nil {
 				return pullApplyPreparation{}, err
 			}
@@ -763,7 +768,9 @@ func pullAdoptPublishedTargets(
 		if !samePullGNOMEPolicy(existing.GNOMEPolicy, policy) {
 			return config.Config{}, nil, nil, pullAdoptionRefusal(
 				input,
-				"settings target "+escapeField(settings.TargetID)+" is already configured; run dottie targets approve to change it",
+				"settings target "+escapeField(
+					settings.TargetID,
+				)+" is already configured; run dottie targets approve to change it",
 			)
 		}
 	}
@@ -972,10 +979,8 @@ func parsePullSettings(values []string) ([]pullSettingsSelection, error) {
 		}
 		seen[id] = struct{}{}
 		categories := strings.Split(list, ",")
-		for _, category := range categories {
-			if category == "" {
-				return nil, usageExit("--settings must be id=CATEGORY[,CATEGORY]")
-			}
+		if slices.Contains(categories, "") {
+			return nil, usageExit("--settings must be id=CATEGORY[,CATEGORY]")
 		}
 		selections = append(selections, pullSettingsSelection{TargetID: id, Categories: categories})
 	}
@@ -2071,7 +2076,9 @@ func openPullApplyJournalGuard(
 	if err != nil {
 		writeRebuildRequiredHint(command, err, directory)
 		return nil, urfave.Exit(
-			label+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			label+" refused: the apply journal cannot be opened ("+escapeField(
+				pullStoreReason(err),
+			)+"); nothing was changed",
 			3,
 		)
 	}
@@ -2080,7 +2087,9 @@ func openPullApplyJournalGuard(
 	if err != nil {
 		guard.Close()
 		return nil, urfave.Exit(
-			label+" refused: the apply journal is held by another run ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			label+" refused: the apply journal is held by another run ("+escapeField(
+				pullStoreReason(err),
+			)+"); nothing was changed",
 			3,
 		)
 	}
@@ -2097,7 +2106,9 @@ func (guard *pullApplyJournalGuard) resolve(
 	status, err := service.ResolvePublicationApplyJournal(ctx, guard.journal, floorRevision, settings)
 	if err != nil {
 		return 0, urfave.Exit(
-			label+" refused: an interrupted apply could not be resolved ("+escapeField(pullStoreReason(err))+"); nothing was changed",
+			label+" refused: an interrupted apply could not be resolved ("+escapeField(
+				pullStoreReason(err),
+			)+"); nothing was changed",
 			4,
 		)
 	}
@@ -2143,7 +2154,6 @@ func pullSkippedUnpublishedTargets(configuration config.Config, material pullApp
 }
 
 func pullProjectionBaseEntries(
-	input pullApplyPlanRequest,
 	material pullApplyMaterial,
 ) ([]publication.PayloadEntry, bool, error) {
 	head := material.Targets[0]
@@ -2217,14 +2227,16 @@ func pullCheckApplyJournalAdmission(
 	label string,
 	floorRevision uint64,
 ) error {
-	journal := (*publicationstate.Journal)(nil)
+	var journal *publicationstate.Journal
 	if guard != nil {
 		journal = guard.journal
 	} else {
 		opened, err := publicationstate.OpenJournal(directory)
 		if err != nil {
 			return urfave.Exit(
-				label+" refused: the apply journal cannot be opened ("+escapeField(pullStoreReason(err))+"); nothing was published",
+				label+" refused: the apply journal cannot be opened ("+escapeField(
+					pullStoreReason(err),
+				)+"); nothing was published",
 				3,
 			)
 		}
@@ -2241,7 +2253,9 @@ func pullCheckApplyJournalAdmission(
 		)
 	case admission != nil:
 		return urfave.Exit(
-			label+" refused: the apply journal cannot be read ("+escapeField(pullStoreReason(admission))+"); nothing was published",
+			label+" refused: the apply journal cannot be read ("+escapeField(
+				pullStoreReason(admission),
+			)+"); nothing was published",
 			4,
 		)
 	}

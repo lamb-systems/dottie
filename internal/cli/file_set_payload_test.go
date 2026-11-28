@@ -10,14 +10,15 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/lamb-systems/dottie/internal/config"
 	"github.com/lamb-systems/dottie/internal/model"
 	"github.com/lamb-systems/dottie/internal/publication"
 	"github.com/lamb-systems/dottie/internal/publicationstate"
 	"github.com/lamb-systems/dottie/internal/source/gnome/matrix"
 	"github.com/lamb-systems/dottie/internal/vault"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type cliFileSetFile struct {
@@ -189,7 +190,12 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, publication.PayloadFormFileSet, record.PayloadForm())
 	require.Len(t, cliRecordFileSetEntries(record), 2)
-	require.Len(t, reader.entries, len(cliRecordFileSetEntries(record)), "the reader fixture did not supply every file-set entry")
+	require.Len(
+		t,
+		reader.entries,
+		len(cliRecordFileSetEntries(record)),
+		"the reader fixture did not supply every file-set entry",
+	)
 	for _, entry := range cliRecordFileSetEntries(record) {
 		require.Contains(t, reader.entries, string(entry.Blob.CID), entry.Path)
 	}
@@ -218,7 +224,17 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	assert.False(t, pullFileSetFloorPresent(t, fixture), "the unconfirmed plan accepted a floor")
 
 	fixture.configureRoot(t, "", "config-moved")
-	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	assert.NotContains(t, stdout, "pull: applied")
@@ -228,7 +244,17 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	fixture.configureRoot(t, "", "config")
 
 	pullFileSetConfigureRevision(t, fixture, 2)
-	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 3, code)
 	assert.Contains(t, stderr, "stale or bound to a different vault")
 	assert.NotContains(t, stdout, "pull: applied")
@@ -237,7 +263,17 @@ func TestPullAppliesANestedFileSetOntoAFreshTarget(t *testing.T) {
 	assert.False(t, pullFileSetFloorPresent(t, fixture), "a changed configuration revision accepted a floor")
 	fixture.configureRoot(t, "", "config")
 
-	code, stdout, stderr = runPullFileSetStep(t, fixture, reader, "--did", pullTestDID, "--vault", pullTestVaultHex(), "--confirm", token)
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		reader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+		"--confirm",
+		token,
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(
 		t,
@@ -367,11 +403,7 @@ func TestSyncAcceptedSnapshotProjectsAFileSetWithTheSoleTarget(t *testing.T) {
 		Floor: fileSet.floor, SnapshotRecord: fileSet.block.Raw,
 		Segments: []publicationstate.AcceptedMaterialSegment{segment},
 	}
-	configuration := config.Config{Version: config.Version, Targets: []config.Target{{
-		ID: "files", Source: model.SourceFiles,
-		Root: &config.Root{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
-	}}}
-	snapshot, err := syncAcceptedSnapshot(accepted, configuration)
+	snapshot, err := syncAcceptedSnapshot(accepted)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Entries, 4)
 	byPath := map[string]model.FileEntry{}
@@ -390,7 +422,9 @@ func TestPullRefusesAFileSetWithoutASoleFilesTarget(t *testing.T) {
 	configPath := filepath.Join(fixture.paths.AppConfigDir(), config.FileName)
 	file, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
-	_, err = file.WriteString("\n[[targets]]\nid = \"other\"\nsource = \"files\"\n\n[targets.root]\nbase = \"home\"\npath = \"other\"\nkind = \"directory\"\n")
+	_, err = file.WriteString(
+		"\n[[targets]]\nid = \"other\"\nsource = \"files\"\n\n[targets.root]\nbase = \"home\"\npath = \"other\"\nkind = \"directory\"\n",
+	)
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 	fileSet := newCLIFileSetPublication(t, fixture.binding)
@@ -446,7 +480,15 @@ func TestPullAppliesASoleSingleFileFileSetOntoAFileTarget(t *testing.T) {
 	firstReader := &pullTestReader{view: acceptedView, entries: entries}
 	movedReader := &pullTestReader{view: movedView, entries: entries}
 
-	code, stdout, stderr := runPullFileSetStep(t, fixture, firstReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr := runPullFileSetStep(
+		t,
+		fixture,
+		firstReader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "pull: first-use\n")
 	assert.Contains(
@@ -468,7 +510,15 @@ func TestPullAppliesASoleSingleFileFileSetOntoAFileTarget(t *testing.T) {
 	assert.Contains(t, stdout, "floor: revision=1 generation=1 sequence=0\n")
 	require.Equal(t, accepted, readPullSingleFile(t, fixture))
 
-	code, stdout, stderr = runPullFileSetStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		movedReader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "apply: changes=1 unchanged=0\n")
 	assert.Contains(t, stdout, fmt.Sprintf("apply: write . size=%d\n", len(published)))
@@ -490,7 +540,15 @@ func TestPullAppliesASoleSingleFileFileSetOntoAFileTarget(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
 	before := pullTestDirectoryState(t, fixture.paths.Home)
-	code, stdout, stderr = runPullFileSetStep(t, fixture, movedReader, "--did", pullTestDID, "--vault", pullTestVaultHex())
+	code, stdout, stderr = runPullFileSetStep(
+		t,
+		fixture,
+		movedReader,
+		"--did",
+		pullTestDID,
+		"--vault",
+		pullTestVaultHex(),
+	)
 	require.Equal(t, 0, code, stderr)
 	assert.Equal(t, "pull: matches\n", stdout)
 	assert.Equal(t, before, pullTestDirectoryState(t, fixture.paths.Home), "a matching re-pull wrote a local file")
@@ -619,7 +677,10 @@ func TestPullAdoptsAFileSetTargetWhenLocalFilesAlreadyMatch(t *testing.T) {
 	fixture := newPullTestFixture(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(fixture.paths.Home, "config", "lua", "config"), 0o755))
 	require.NoError(t, os.WriteFile(fixture.targetPath("init.lua"), []byte("synthetic file-set init"), 0o600))
-	require.NoError(t, os.WriteFile(fixture.targetPath("lua/config/options.lua"), []byte("synthetic file-set options"), 0o644))
+	require.NoError(
+		t,
+		os.WriteFile(fixture.targetPath("lua/config/options.lua"), []byte("synthetic file-set options"), 0o644),
+	)
 	fileSet := newCLIFileSetPublication(t, fixture.binding)
 	reader := fileSetTestReader(fileSet)
 

@@ -502,7 +502,7 @@ func pullBootstrapGate(
 
 func bootstrapGateMaterialRead(
 	t *testing.T,
-	ctx context.Context,
+	_ context.Context,
 	view publicationstate.SuppliedRepositoryView,
 	floor publicationstate.Floor,
 	blobs atproto.VaultReader,

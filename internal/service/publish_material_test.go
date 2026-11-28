@@ -1850,9 +1850,12 @@ func TestPublishMaterialPublishesSeveralPackedSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, position.Close())
 	observation := publicationstate.Observation{
-		Origin: fixture.binding, SuppliedContext: fixture.transport.context,
-		Head:      fixture.transport.committedHead(),
-		Snapshots: []publicationstate.SnapshotBlock{{Key: proposal.Batch.SnapshotKey, Raw: proposal.Batch.SnapshotRecord}},
+		Origin:          fixture.binding,
+		SuppliedContext: fixture.transport.context,
+		Head:            fixture.transport.committedHead(),
+		Snapshots: []publicationstate.SnapshotBlock{
+			{Key: proposal.Batch.SnapshotKey, Raw: proposal.Batch.SnapshotRecord},
+		},
 	}
 	staged, err := StagePublicationAccept(ctx, PublicationAcceptStageRequest{
 		Directory: directory, Binding: fixture.binding, Observation: observation,
@@ -1925,7 +1928,7 @@ func TestPublishMaterialPublishesEntriesBesideInlineSettings(t *testing.T) {
 	assert.Equal(t, "init.lua", accepted.Segments[1].Entries[0].Path)
 	assert.Equal(t, []byte("synthetic entries payload"), accepted.Segments[1].Entries[0].Content)
 
-	snapshot, form, err := acceptedPublicationSnapshot(accepted, config.Default())
+	snapshot, form, err := acceptedPublicationSnapshot(accepted)
 	require.NoError(t, err)
 	assert.Equal(t, publication.PayloadFormMixed, form)
 	require.Len(t, snapshot.Targets, 2)

@@ -369,10 +369,7 @@ type settingsDigestEntry struct {
 func SettingsDigest(settings []SnapshotSetting) [32]byte {
 	entries := make([]settingsDigestEntry, 0, len(settings))
 	for _, setting := range settings {
-		entries = append(entries, settingsDigestEntry{
-			SchemaID: setting.SchemaID, Path: setting.Path, Key: setting.Key,
-			State: setting.State, Value: setting.Value,
-		})
+		entries = append(entries, settingsDigestEntry(setting))
 	}
 	encoded, err := json.Marshal(entries)
 	if err != nil {

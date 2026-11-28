@@ -176,17 +176,17 @@ func encodePublicationCandidateWithCarry(
 func cloneSegmentSummariesService(summaries []publicationstate.SegmentSummary) []publicationstate.SegmentSummary {
 	cloned := make([]publicationstate.SegmentSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		copy := publicationstate.SegmentSummary{
+		copied := publicationstate.SegmentSummary{
 			TargetID: summary.TargetID, Form: summary.Form,
 			BlobCID: bytes.Clone(summary.BlobCID), BlobSize: summary.BlobSize,
 			Settings: summary.Settings,
 		}
 		for _, entry := range summary.Entries {
-			copy.Entries = append(copy.Entries, publicationstate.PayloadEntryReference{
+			copied.Entries = append(copied.Entries, publicationstate.PayloadEntryReference{
 				Path: entry.Path, CID: bytes.Clone(entry.CID), Size: entry.Size,
 			})
 		}
-		cloned = append(cloned, copy)
+		cloned = append(cloned, copied)
 	}
 	return cloned
 }

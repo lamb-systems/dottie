@@ -120,26 +120,6 @@ func fileSetSyntheticPath(target model.Target) (string, bool) {
 	return base, true
 }
 
-func fileSetSnapshotTargets(snapshot model.Snapshot) ([]model.Target, error) {
-	if len(snapshot.Targets) != 1 {
-		return nil, publication.ErrInvalidRecord
-	}
-	target := snapshot.Targets[0]
-	if target.Source != model.SourceFiles || target.Root == nil || target.Validate() != nil {
-		return nil, publication.ErrInvalidRecord
-	}
-	return []model.Target{{
-		ID:            target.ID,
-		Source:        target.Source,
-		SourceVersion: target.SourceVersion,
-		Root: &model.FileRoot{
-			Base: target.Root.Base,
-			Path: target.Root.Path,
-			Kind: target.Root.Kind,
-		},
-	}}, nil
-}
-
 func fileSetSnapshotEntries(snapshot model.Snapshot) ([]publication.SnapshotEntry, error) {
 	target, single := fileSetSingleFileTarget(snapshot)
 	if !single {
@@ -168,7 +148,7 @@ func fileSetPayloadEntries(
 	target, single := fileSetSingleFileTarget(snapshot)
 	synthetic := ""
 	if single {
-		valid := false
+		var valid bool
 		synthetic, valid = fileSetSyntheticPath(target)
 		if !valid {
 			return nil, publication.ErrInvalidRecord
@@ -367,11 +347,11 @@ func fileSetDirectoryProjection(
 }
 
 func publicationFileSetParent(path string) string {
-	index := strings.LastIndexByte(path, '/')
-	if index < 0 {
+	parent, _, found := strings.CutLast(path, "/")
+	if !found {
 		return "."
 	}
-	return path[:index]
+	return parent
 }
 
 func publicationFileSetPathLess(left, right string) bool {
@@ -406,7 +386,6 @@ func fileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
 
 func acceptedPublicationSnapshot(
 	material publicationstate.AcceptedMaterial,
-	configuration config.Config,
 ) (model.Snapshot, publication.PayloadForm, error) {
 	if len(material.SnapshotRecord) == 0 {
 		return model.Snapshot{}, "", publication.ErrInvalidRecord
@@ -438,19 +417,6 @@ func fileSetPayloadEntriesMatch(record []publication.SnapshotEntry, entries []pu
 		}
 		cid, err := publication.RawPayloadCID(entry.Content)
 		if err != nil || !bytes.Equal(cid, want.Blob.CID) {
-			return false
-		}
-	}
-	return true
-}
-
-func fileSetFloorMatchesRecord(floor *publicationstate.FileSetPayload, record []publication.SnapshotEntry) bool {
-	if floor == nil || len(floor.Entries) != len(record) {
-		return false
-	}
-	for index, want := range record {
-		entry := floor.Entries[index]
-		if entry.Path != want.Path || entry.Size != want.Size || !bytes.Equal(entry.CID, want.Blob.CID) {
 			return false
 		}
 	}
@@ -538,9 +504,8 @@ func FileSetEntrySetDigest(entries []publication.SnapshotEntry) [32]byte {
 
 func AcceptedPublicationSnapshot(
 	material publicationstate.AcceptedMaterial,
-	configuration config.Config,
 ) (model.Snapshot, publication.PayloadForm, error) {
-	return acceptedPublicationSnapshot(material, configuration)
+	return acceptedPublicationSnapshot(material)
 }
 
 func PublicationPayloadSnapshot(payload publication.Payload) (model.Snapshot, error) {

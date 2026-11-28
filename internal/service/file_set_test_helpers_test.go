@@ -23,16 +23,6 @@ type fileSetServicePublication struct {
 	head     []byte
 }
 
-func newFileSetServicePublication(
-	t *testing.T,
-	vault [32]byte,
-	publicationID [16]byte,
-	files ...fileSetServiceFile,
-) fileSetServicePublication {
-	t.Helper()
-	return newSequencedFileSetServicePublication(t, vault, publicationID, 0, nil, files...)
-}
-
 func newSequencedFileSetServicePublication(
 	t *testing.T,
 	vault [32]byte,

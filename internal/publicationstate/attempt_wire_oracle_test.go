@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ipfs/go-cid"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -947,44 +945,4 @@ func oracleReview(review LocalReviewContext) wireOracleReview {
 func encodeOracleProof(t *testing.T, proof wireOracleEvidence) []byte {
 	t.Helper()
 	return oracleCanonicalJSON(t, proof)
-}
-
-type wireOracleSegment struct {
-	TargetID string                     `json:"target_id"`
-	Form     string                     `json:"form"`
-	BlobCID  string                     `json:"blob_cid,omitempty"`
-	BlobSize uint64                     `json:"blob_size,omitempty"`
-	Entries  []wireOracleEntryReference `json:"entries,omitempty"`
-	Settings string                     `json:"settings,omitempty"`
-}
-
-type wireOracleEntryReference struct {
-	Path string `json:"path"`
-	CID  string `json:"cid"`
-	Size uint64 `json:"size"`
-}
-
-func wireVectorSegments(summaries []SegmentSummary) []wireOracleSegment {
-	wire := make([]wireOracleSegment, 0, len(summaries))
-	for _, summary := range summaries {
-		item := wireOracleSegment{TargetID: summary.TargetID, Form: string(summary.Form), BlobSize: summary.BlobSize}
-		if len(summary.BlobCID) != 0 {
-			cidValue, err := cid.Cast(summary.BlobCID)
-			if err == nil {
-				item.BlobCID = cidValue.String()
-			}
-		}
-		if summary.Settings != ([32]byte{}) {
-			item.Settings = hex.EncodeToString(summary.Settings[:])
-		}
-		for _, entry := range summary.Entries {
-			reference := wireOracleEntryReference{Path: entry.Path, Size: entry.Size}
-			if entryCID, err := cid.Cast(entry.CID); err == nil {
-				reference.CID = entryCID.String()
-			}
-			item.Entries = append(item.Entries, reference)
-		}
-		wire = append(wire, item)
-	}
-	return wire
 }

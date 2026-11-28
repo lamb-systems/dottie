@@ -297,7 +297,12 @@ func summaryOfSegment(segment publication.SnapshotSegment) SegmentSummary {
 	return summariesOfRecord([]publication.SnapshotSegment{segment})[0]
 }
 
-func validateObservationWithFileSet(input Observation, binding Binding, limits Limits, _ bool) (validatedObservation, error) {
+func validateObservationWithFileSet(
+	input Observation,
+	binding Binding,
+	limits Limits,
+	_ bool,
+) (validatedObservation, error) {
 	if err := validateBinding(input.Origin); err != nil || !sameBinding(input.Origin, binding) {
 		return validatedObservation{}, classified(ErrInvalid, StageInput, ReasonBinding)
 	}

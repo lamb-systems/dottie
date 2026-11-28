@@ -420,6 +420,7 @@ func (s *Store) checkFirstConflictSlotFeasibility(
 			occupant.Segments[index].Entries = entries
 		case publication.SegmentFormPacked:
 			occupant.Segments[index].Blob.Size = publication.MaxBlobBytes
+		case publication.SegmentFormSettings:
 		}
 	}
 	occupant.PublicationID[15] ^= 1
@@ -622,11 +623,6 @@ func cloneSnapshotBlocks(blocks []SnapshotBlock) []SnapshotBlock {
 		out[index] = SnapshotBlock{Key: block.Key, Raw: bytes.Clone(block.Raw)}
 	}
 	return out
-}
-
-func attemptPayloadReference(candidate validatedCandidate) publication.BlobReference {
-	blob, _ := candidate.snapshot.SegmentBlob()
-	return blob
 }
 
 func validLifecycle(value AttemptLifecycle) bool {

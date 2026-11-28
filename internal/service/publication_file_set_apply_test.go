@@ -23,7 +23,11 @@ func fileSetApplyUmask(t *testing.T) {
 	t.Cleanup(func() { syscall.Umask(previous) })
 }
 
-func fileSetApplyRemote(t *testing.T, fixture publicationApplyFixture, entries ...publication.PayloadEntry) model.Snapshot {
+func fileSetApplyRemote(
+	t *testing.T,
+	fixture publicationApplyFixture,
+	entries ...publication.PayloadEntry,
+) model.Snapshot {
 	t.Helper()
 	snapshot, err := ProjectFileSetSnapshot(fixture.portable, entries)
 	require.NoError(t, err)

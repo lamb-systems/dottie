@@ -1969,30 +1969,6 @@ func (s *Store) validateAttemptPayloadReference(
 	return nil
 }
 
-func (s *Store) checkFileSetPayloadReferences(
-	ctx context.Context,
-	q queryer,
-	fileSet *FileSetPayload,
-	stage Stage,
-) error {
-	for _, entry := range fileSet.Entries {
-		var objectCIDValue, sizeValue, basenameValue any
-		if err := q.QueryRowContext(ctx, "SELECT blob_cid,size,basename FROM payload_objects WHERE blob_cid=?", entry.CID).
-			Scan(&objectCIDValue, &sizeValue, &basenameValue); err != nil {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-		objectCID, objectOK := rawBytes(objectCIDValue)
-		size, sizeOK := rawInt64(sizeValue)
-		basename, nameOK := basenameValue.(string)
-		wantedName, nameErr := payloadBasenameFromCID(entry.CID)
-		if !objectOK || !sizeOK || !nameOK || !bytes.Equal(objectCID, entry.CID) || size <= 0 ||
-			uint64(size) != entry.Size || nameErr != nil || basename != wantedName {
-			return classified(ErrSchema, stage, ReasonCorrupt)
-		}
-	}
-	return nil
-}
-
 type retainedPublicationRow struct {
 	recordCID []byte
 	sequence  int64
@@ -2063,7 +2039,7 @@ func (s *Store) readRetainedPublication(
 	revision, revisionOK := rawInt64(revisionValue)
 	if !recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes ||
 		int64(len(record)) != recordLength ||
-		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		!segmentsTypeOK || segmentsType != cborTypeBlob || !segmentsLengthOK || segmentsLength < 1 ||
 		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
 		!seqOK || seq < 0 || !revisionOK || revision <= 0 {
 		return retainedPublicationRow{}, classified(ErrSchema, stage, ReasonCorrupt)

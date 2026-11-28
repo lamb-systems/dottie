@@ -440,7 +440,13 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	} else {
 		output.WriteString("push: review required (retained proposal)\n")
 	}
-	fmt.Fprintf(&output, "form: %s\ntargets: %d\nentries: %d\n", preparation.Form, preparation.Targets, preparation.Entries)
+	fmt.Fprintf(
+		&output,
+		"form: %s\ntargets: %d\nentries: %d\n",
+		preparation.Form,
+		preparation.Targets,
+		preparation.Entries,
+	)
 	if preparation.Present {
 		fmt.Fprintf(
 			&output,
@@ -455,7 +461,12 @@ func renderPushProposal(preparation service.PublicationPushPreparation) string {
 	fmt.Fprintf(&output, "candidate record: %x\n", preparation.Proposal.Proposal.CandidateRecordCID)
 	segments, err := publicationstate.DecodeSegmentSummaries(preparation.Record.Segments)
 	if err == nil {
-		fmt.Fprintf(&output, "candidate segments: %d payload-set=%x\n", len(segments), preparation.Record.PayloadsDigest)
+		fmt.Fprintf(
+			&output,
+			"candidate segments: %d payload-set=%x\n",
+			len(segments),
+			preparation.Record.PayloadsDigest,
+		)
 	}
 	fmt.Fprintf(&output, "review: selection-digest=%x selection-revision=%d approval-digest=%x approval-revision=%d\n",
 		preparation.Proposal.Review.SelectionDigest, preparation.Proposal.Review.SelectionRevision,

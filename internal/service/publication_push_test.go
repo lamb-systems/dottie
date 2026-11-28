@@ -100,12 +100,6 @@ func (source *stubAcceptedSource) setPayload(payload publication.Payload) {
 	source.payload = payload
 }
 
-func (source *stubAcceptedSource) set(snapshot model.Snapshot) {
-	source.mu.Lock()
-	defer source.mu.Unlock()
-	source.snapshot = snapshot
-}
-
 type publicationPushFixture struct {
 	binding       publicationstate.Binding
 	store         *publicationstate.Store

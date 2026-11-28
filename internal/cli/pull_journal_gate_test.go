@@ -72,19 +72,18 @@ func TestPullProjectionBaseEntriesRefusesAReplacedPublishedTarget(t *testing.T) 
 		Targets: []model.Target{second},
 		Base:    model.Snapshot{Version: model.SnapshotVersion, Targets: []model.Target{first}},
 	}
-	input := pullApplyPlanRequest{Present: true}
-	_, _, err := pullProjectionBaseEntries(input, material)
+	_, _, err := pullProjectionBaseEntries(material)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "replaced target first with second")
 
 	material.Targets = []model.Target{first}
-	entries, ok, err := pullProjectionBaseEntries(input, material)
+	entries, ok, err := pullProjectionBaseEntries(material)
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Empty(t, entries)
 
 	material.Base = model.Snapshot{Version: model.SnapshotVersion}
-	_, ok, err = pullProjectionBaseEntries(input, material)
+	_, ok, err = pullProjectionBaseEntries(material)
 	require.NoError(t, err)
 	assert.False(t, ok, "a base without the published target was used as a predecessor")
 
@@ -92,7 +91,7 @@ func TestPullProjectionBaseEntriesRefusesAReplacedPublishedTarget(t *testing.T) 
 	moved := first
 	moved.Root = &model.FileRoot{Base: model.RootHome, Path: "moved", Kind: model.SelectionDirectory}
 	material.Base.Targets = []model.Target{moved}
-	_, _, err = pullProjectionBaseEntries(input, material)
+	_, _, err = pullProjectionBaseEntries(material)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "different root")
 }
@@ -129,7 +128,7 @@ func TestPullProjectionBaseEntriesSelectsTheHeadIdentityFromAMixedBase(t *testin
 			},
 		},
 	}
-	entries, ok, err := pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	entries, ok, err := pullProjectionBaseEntries(material)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, entries, 1, "the predecessor came from the wrong target")
@@ -280,7 +279,6 @@ func TestPullRefusesAnAcceptanceWhileAnApplyIsUnresolved(t *testing.T) {
 	postimage := publicationstate.ObservedJournalFile([]byte("after"))
 	postimage.Mode = 0o600
 	interrupted := publicationstate.ObservedJournalFile([]byte(pullTestBaseContent))
-	interrupted.Mode = 0o600
 	require.NotEqual(t, interrupted.Digest, preimage.Digest)
 	require.NotEqual(t, interrupted.Digest, postimage.Digest)
 	_, err = journal.BeginJournal(context.Background(), publicationstate.JournalIntent{
@@ -356,7 +354,7 @@ func TestPullRefusesAMixedPredecessorReplacedByASingleEntriesHead(t *testing.T) 
 		Targets: []model.Target{second},
 		Base:    base,
 	}
-	entries, ok, err := pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	entries, ok, err := pullProjectionBaseEntries(material)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, entries, 1)
@@ -366,7 +364,7 @@ func TestPullRefusesAMixedPredecessorReplacedByASingleEntriesHead(t *testing.T) 
 		ID: "replacement", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		Root: &model.FileRoot{Base: model.RootHome, Path: "config", Kind: model.SelectionDirectory},
 	}}
-	_, _, err = pullProjectionBaseEntries(pullApplyPlanRequest{Present: true}, material)
+	_, _, err = pullProjectionBaseEntries(material)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "replaced target")
 	assert.NotContains(t, err.Error(), "sentinel")

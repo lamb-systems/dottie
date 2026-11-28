@@ -643,7 +643,10 @@ func TestIndependentCIDRoleAndHashVariantsAreRejected(t *testing.T) {
 	for _, variant := range variants {
 		t.Run(variant.name, func(t *testing.T) {
 			value := cloneTestMap(valid)
-			segmentValue(value, 0)["blob"].(map[string]any)["ref"] = testTag{number: 42, value: append([]byte{0}, variant.cid...)}
+			segmentValue(value, 0)["blob"].(map[string]any)["ref"] = testTag{
+				number: 42,
+				value:  append([]byte{0}, variant.cid...),
+			}
 			encoded := testCBOR(value)
 			decoded, err := DecodeSnapshot(encoded)
 			require.Equal(t, SnapshotRecord{}, decoded)
@@ -872,7 +875,7 @@ func TestV2SchemasMatchTheCodecContract(t *testing.T) {
 	packedBlob, ok := segmentProperties["blob"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []any{SnapshotBlobMIMEType}, packedBlob["accept"])
-	assert.Equal(t, float64(MaxBlobBytes), packedBlob["maxSize"])
+	assert.InDelta(t, float64(MaxBlobBytes), packedBlob["maxSize"], 0)
 	assert.Equal(
 		t,
 		map[string]any{"type": "bytes", "minLength": float64(1), "maxLength": float64(MaxCIDBytes)},

@@ -114,6 +114,7 @@ func resolvedRecord(
 	entryIndex := 0
 	for index, segment := range record.Segments {
 		switch segment.Form {
+		case publication.SegmentFormSettings:
 		case publication.SegmentFormPacked:
 			raw, err := fetch(segment.Blob)
 			require.NoError(t, err)

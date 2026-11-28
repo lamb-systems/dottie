@@ -870,6 +870,8 @@ func (j *Journal) resolveObserved(
 			})
 		}
 		return JournalOutcomeRollbackPending, nil
+	case JournalStateFailed, JournalStateRolledBack:
+		return "", classified(ErrSchema, StageJournal, ReasonCorrupt)
 	default:
 		return "", classified(ErrSchema, StageJournal, ReasonCorrupt)
 	}

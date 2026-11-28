@@ -94,11 +94,22 @@ func (journal *Journal) BeginSettingsJournal(
 		result, err := tx.ExecContext(
 			ctx,
 			"INSERT INTO settings_journal(vault,target_id,schema_id,path,key,prior_state,prior_type,prior_text,written_state,written_type,written_text,stage,state,seen_floor_revision,created,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			intent.Vault[:], intent.Anchor.TargetID, intent.Anchor.SchemaID, intent.Anchor.Path, intent.Anchor.Key,
-			settingsStateOf(intent.Prior), intent.Prior.Type, intent.Prior.Text,
-			settingsStateOf(intent.Written), intent.Written.Type, intent.Written.Text,
-			string(settingsJournalStagePending), string(JournalStatePending),
-			int64(intent.SeenFloorRevision), now, now,
+			intent.Vault[:],
+			intent.Anchor.TargetID,
+			intent.Anchor.SchemaID,
+			intent.Anchor.Path,
+			intent.Anchor.Key,
+			settingsStateOf(intent.Prior),
+			intent.Prior.Type,
+			intent.Prior.Text,
+			settingsStateOf(intent.Written),
+			intent.Written.Type,
+			intent.Written.Text,
+			string(settingsJournalStagePending),
+			string(JournalStatePending),
+			int64(intent.SeenFloorRevision),
+			now,
+			now,
 		)
 		if err != nil {
 			return storageFailure(ctx, StageSettingsJournal, err)
@@ -270,7 +281,8 @@ func (journal *Journal) LiveSettingsEntries(ctx context.Context) ([]SettingsJour
 	rows, err := journal.conn.QueryContext(
 		ctx,
 		"SELECT entry,vault,target_id,schema_id,path,key,prior_state,prior_type,prior_text,written_state,written_type,written_text,stage,state,seen_floor_revision FROM settings_journal WHERE state IN (?,?) ORDER BY entry",
-		string(JournalStatePending), string(JournalStateIndeterminate),
+		string(JournalStatePending),
+		string(JournalStateIndeterminate),
 	)
 	if err != nil {
 		return nil, storageFailure(ctx, StageSettingsJournal, err)

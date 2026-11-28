@@ -528,15 +528,6 @@ func independentFileSetBytes(t testing.TB, record SnapshotRecord) []byte {
 	return testCBOR(independentFileSetValue(t, record))
 }
 
-func independentSnapshotValueWithEntries(t testing.TB, packed SnapshotRecord, entries []SnapshotEntry) map[string]any {
-	t.Helper()
-	value := independentSnapshotValue(t, packed)
-	segments, _ := value["segments"].([]any)
-	segmentValue, _ := segments[0].(map[string]any)
-	segmentValue["entries"] = independentEntriesValue(t, entries)
-	return value
-}
-
 func fileSetEntryValue(t testing.TB, value map[string]any, index int) map[string]any {
 	t.Helper()
 	entries, ok := segmentValue(value, 0)["entries"].([]any)

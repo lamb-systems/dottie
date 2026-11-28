@@ -327,15 +327,6 @@ func clonePublicationPreviewBaseSelection(selection publicationBaseSelection) pu
 	return out
 }
 
-func publicationPreviewTarget(snapshot model.Snapshot, targetID string) (model.Target, bool) {
-	for _, target := range snapshot.Targets {
-		if target.ID == targetID {
-			return cloneSelectionTargetModel(target), true
-		}
-	}
-	return model.Target{}, false
-}
-
 func publicationPreviewFailure(ctx context.Context, reason publicationReconciliationReason, cause error) error {
 	return publicationReconciliationFailure(ctx, publicationPreviewStage, reason, cause)
 }

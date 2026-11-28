@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -185,36 +184,6 @@ func recordEntriesOf(record publication.SnapshotRecord) []publication.SnapshotEn
 	return entries
 }
 
-func ownerName(owner materialOwnership) string {
-	for _, summary := range owner.segments {
-		if summary.Form == PayloadFormPacked {
-			name, err := payloadBasenameFromCID(summary.BlobCID)
-			if err == nil {
-				return name
-			}
-		}
-	}
-	return ""
-}
-
-func ownerBlob(owner materialOwnership) publication.BlobReference {
-	for _, summary := range owner.segments {
-		if summary.Form == PayloadFormPacked {
-			return publication.BlobReference{
-				CID: summary.BlobCID, Size: summary.BlobSize, MIMEType: publication.SnapshotBlobMIMEType,
-			}
-		}
-	}
-	return publication.BlobReference{}
-}
-
-func b8TestContext(t *testing.T) context.Context {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-	return ctx
-}
-
 func b8Count(t *testing.T, ctx context.Context, q queryer, query string, args ...any) int64 {
 	t.Helper()
 	var count int64
@@ -262,7 +231,7 @@ func requireIncomingMaterialLoadAbsent(t *testing.T, ctx context.Context, store 
 	require.Equal(t, Floor{}, floor)
 }
 
-func requireIncomingMaterialPublication(t *testing.T, ctx context.Context, store *Store, f fixture, floor Floor) {
+func requireIncomingMaterialPublication(t *testing.T, ctx context.Context, store *Store, _ fixture, floor Floor) {
 	t.Helper()
 	loaded, present, err := store.Load(ctx)
 	require.NoError(t, err)
@@ -302,32 +271,6 @@ func (f fileSetAttemptFixture) recordSegments() []publication.SnapshotSegment {
 		return nil
 	}
 	return record.Segments
-}
-
-func retainedReferencesCID(t *testing.T, store *Store, cidValue []byte) int64 {
-	t.Helper()
-	rows, err := store.conn.QueryContext(context.Background(), "SELECT segments FROM retained_publications")
-	require.NoError(t, err)
-	defer func() { assert.NoError(t, rows.Close()) }()
-	var matches int64
-	for rows.Next() {
-		var encoded []byte
-		require.NoError(t, rows.Scan(&encoded))
-		summaries, err := decodeSegmentSummaries(encoded)
-		require.NoError(t, err)
-		for _, summary := range summaries {
-			if bytes.Equal(summary.BlobCID, cidValue) {
-				matches++
-			}
-			for _, entry := range summary.Entries {
-				if bytes.Equal(entry.CID, cidValue) {
-					matches++
-				}
-			}
-		}
-	}
-	require.NoError(t, rows.Err())
-	return matches
 }
 
 func candidatePackedPayload(candidate CandidateInput) []byte {

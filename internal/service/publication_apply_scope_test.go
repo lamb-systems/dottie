@@ -28,8 +28,12 @@ func TestPlanPublicationApplyIgnoresAConfiguredUnpublishedTarget(t *testing.T) {
 	fixture.configuration.Targets = append(fixture.configuration.Targets, newPublicationApplySettingsTarget(t))
 	fixture.write(t, "note.ini", "before")
 
-	base := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}))
-	remote := fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "content"}))
+	base := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "before"}),
+	)
+	remote := fixture.targetSnapshot(
+		publicationPreviewFileEntries(fixture.target.ID, map[string]string{"note.ini": "content"}),
+	)
 	request := fixture.request(fixture.local, base, remote)
 	plan, err := PlanPublicationApply(context.Background(), request)
 	require.NoError(t, err)
@@ -67,7 +71,10 @@ func TestPlanPublicationApplyRefusesAPublishedRootMismatch(t *testing.T) {
 			Root: &model.FileRoot{Base: model.RootHome, Path: "applied/other", Kind: model.SelectionDirectory},
 		}},
 	}
-	_, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+	_, err := PlanPublicationApply(
+		context.Background(),
+		fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+	)
 	requirePublicationApplyRefusal(t, err, "apply-plan", "root_mismatch")
 }
 
@@ -88,7 +95,9 @@ func TestPlanPublicationApplyIgnoresBaseEntriesFromADifferentRoot(t *testing.T) 
 		fixture.request(
 			fixture.local,
 			base,
-			fixture.targetSnapshot(publicationPreviewFileEntries(fixture.target.ID, map[string]string{"kept.ini": "local"})),
+			fixture.targetSnapshot(
+				publicationPreviewFileEntries(fixture.target.ID, map[string]string{"kept.ini": "local"}),
+			),
 		),
 	)
 	require.NoError(t, err)
@@ -115,7 +124,10 @@ func TestPlanPublicationApplySkipsAnUnconfiguredPublishedTarget(t *testing.T) {
 		ID: "unconfigured", Source: model.SourceFiles, SourceVersion: model.SourceVersion,
 		Root: &model.FileRoot{Base: model.RootHome, Path: "applied/unused", Kind: model.SelectionDirectory},
 	})
-	plan, err := PlanPublicationApply(context.Background(), fixture.request(fixture.local, fixture.emptySnapshot(), remote))
+	plan, err := PlanPublicationApply(
+		context.Background(),
+		fixture.request(fixture.local, fixture.emptySnapshot(), remote),
+	)
 	require.NoError(t, err)
 	assert.Equal(t, 0, plan.Changes)
 	assert.Empty(t, plan.Entries)

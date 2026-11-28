@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-
-	"github.com/lamb-systems/dottie/internal/publication"
 )
 
 type abandonConfirmationWire struct {
@@ -526,17 +524,6 @@ func repositoryViewToObservation(view validatedRepositoryView) Observation {
 		Head:            bytes.Clone(view.input.Head),
 		Snapshots:       blocks,
 	}
-}
-
-func encodeAttemptRetainedFileSet(core attemptCoreWire) ([]byte, error) {
-	if attemptCoreForm(core) != PayloadFormFileSet {
-		return nil, nil
-	}
-	record, err := publication.DecodeSnapshot(core.SnapshotRecord)
-	if err != nil {
-		return nil, err
-	}
-	return encodeRetainedFileSet(fileSetPayloadOf(record))
 }
 
 func (s *Store) attemptReservationSize() uint64 {

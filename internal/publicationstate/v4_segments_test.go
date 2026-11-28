@@ -176,8 +176,15 @@ func TestRecordCarriesPerTargetSegments(t *testing.T) {
 		Vault:         f.binding.Vault,
 		PublicationID: [16]byte{1},
 		Segments: []publication.SnapshotSegment{
-			{Target: v4PackedTarget(), Form: publication.SegmentFormPacked,
-				Blob: publication.BlobReference{CID: packedCID, Size: uint64(len(packed.Payload)), MIMEType: publication.SnapshotBlobMIMEType}},
+			{
+				Target: v4PackedTarget(),
+				Form:   publication.SegmentFormPacked,
+				Blob: publication.BlobReference{
+					CID:      packedCID,
+					Size:     uint64(len(packed.Payload)),
+					MIMEType: publication.SnapshotBlobMIMEType,
+				},
+			},
 			{Target: v4SettingsTarget(), Form: publication.SegmentFormSettings, Settings: settings},
 			{Target: v4EntriesTarget(), Form: publication.SegmentFormEntries, Entries: entryEntries},
 		},

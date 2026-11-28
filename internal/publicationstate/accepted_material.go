@@ -5,8 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io"
+	"slices"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 
@@ -151,7 +152,7 @@ func (s *Store) readAcceptedSegmentEntries(
 			!bytes.Equal(entry.Blob.CID, reference.CID) {
 			return nil, classified(ErrSchema, StageReadAcceptedMaterial, ReasonCorrupt)
 		}
-		key := string(reference.CID) + "\x00" + fmt.Sprint(reference.Size)
+		key := string(reference.CID) + "\x00" + strconv.FormatUint(reference.Size, 10)
 		content, present := contents[key]
 		if !present {
 			name, nameErr := payloadBasenameFromCID(reference.CID)
@@ -329,7 +330,7 @@ func (s *Store) finalizedAcceptedMaterialOwner(
 	recordSequence, recordSequenceOK := rawInt64(recordSequenceValue)
 	if !idOK || !idLengthOK || idLength != 16 || len(attemptID) != 16 ||
 		!recordOK || !recordLengthOK || recordLength <= 0 || recordLength > publication.MaxCIDBytes || int64(len(recordCID)) != recordLength ||
-		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		!segmentsTypeOK || segmentsType != cborTypeBlob || !segmentsLengthOK || segmentsLength < 1 ||
 		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
 		!sequenceOK || sequence < 0 || uint64(sequence) != floor.Sequence ||
 		!revisionOK || revision <= 0 || uint64(revision) != floor.Revision ||
@@ -404,10 +405,10 @@ func (s *Store) incomingAcceptedMaterialOwner(
 	segmentsRaw, segmentsOK := rawBytes(segmentsValue)
 	if !revisionTypeOK || revisionType != "integer" || !revisionOK || revision < 1 ||
 		uint64(revision) != floor.Revision ||
-		!recordTypeOK || recordType != "blob" || !recordLengthOK || recordLength < 1 ||
+		!recordTypeOK || recordType != cborTypeBlob || !recordLengthOK || recordLength < 1 ||
 		recordLength > publication.MaxCIDBytes || !recordOK ||
 		int64(len(recordCID)) != recordLength ||
-		!segmentsTypeOK || segmentsType != "blob" || !segmentsLengthOK || segmentsLength < 1 ||
+		!segmentsTypeOK || segmentsType != cborTypeBlob || !segmentsLengthOK || segmentsLength < 1 ||
 		segmentsLength > maxSegmentSummariesBytes || !segmentsOK || int64(len(segmentsRaw)) != segmentsLength ||
 		!bytes.Equal(recordCID, floor.RecordCID) {
 		return materialOwnership{}, classified(ErrSchema, stage, ReasonCorrupt)
@@ -495,12 +496,14 @@ func sameSegmentSummaries(left, right []SegmentSummary) bool {
 			len(left[index].Entries) != len(right[index].Entries) {
 			return false
 		}
-		for entry := range left[index].Entries {
-			if left[index].Entries[entry].Path != right[index].Entries[entry].Path ||
-				left[index].Entries[entry].Size != right[index].Entries[entry].Size ||
-				!bytes.Equal(left[index].Entries[entry].CID, right[index].Entries[entry].CID) {
-				return false
-			}
+		if !slices.EqualFunc(
+			left[index].Entries, right[index].Entries,
+			func(reference, other PayloadEntryReference) bool {
+				return reference.Path == other.Path && reference.Size == other.Size &&
+					bytes.Equal(reference.CID, other.CID)
+			},
+		) {
+			return false
 		}
 	}
 	return true

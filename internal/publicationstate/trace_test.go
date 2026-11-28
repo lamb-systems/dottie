@@ -134,11 +134,13 @@ func fixtureRecord(t *testing.T, f fixture, sequence uint64, parent []byte, pubI
 		Vault:          f.binding.Vault,
 		PublicationSeq: sequence,
 		Parent:         bytes.Clone(parent),
-		Segments: []publication.SnapshotSegment{{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
-			CID:      blobCID,
-			Size:     uint64(len(f.payload)),
-			MIMEType: publication.SnapshotBlobMIMEType,
-		}}},
+		Segments: []publication.SnapshotSegment{
+			{Target: fixturePackedTarget(), Form: publication.SegmentFormPacked, Blob: publication.BlobReference{
+				CID:      blobCID,
+				Size:     uint64(len(f.payload)),
+				MIMEType: publication.SnapshotBlobMIMEType,
+			}},
+		},
 	}
 	record.PublicationID[15] = pubID
 	raw, err := publication.EncodeSnapshot(record)
