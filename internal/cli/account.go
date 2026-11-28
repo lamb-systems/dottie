@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	urfave "github.com/urfave/cli/v3"
@@ -183,7 +184,7 @@ func newAccountCommandWithFactories(
 		if exitError, ok := errors.AsType[urfave.ExitCoder](err); ok {
 			code = exitError.ExitCode()
 		}
-		if code != 1 && code != 2 && code != 3 && code != 4 {
+		if !slices.Contains([]int{1, 2, 3, 4}, code) {
 			code = 1
 		}
 		if message := escapeErrorMessage(err.Error()); message != "" {

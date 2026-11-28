@@ -2031,10 +2031,7 @@ func (s *Store) AppendJournal(ctx context.Context, entry JournalEntry, backup []
 			}
 			pointFound := false
 			for _, point := range declaration.RecoveryPoints {
-				if point.Epoch == entry.Retention.Epoch &&
-					bytes.Equal(point.SnapshotCID, entry.Retention.SnapshotCID) &&
-					point.PolicyDigest == entry.Retention.PolicyDigest &&
-					bytes.Equal(point.ControlCID, entry.Retention.ControlCID) {
+				if pointMatchesBinding(point, entry.Retention) {
 					pointFound = true
 					break
 				}
@@ -2518,4 +2515,14 @@ func scanBase(row scanner) (BaseRecord, error) {
 	record.Fingerprint.Kind = model.FileKind(kind)
 	record.Fingerprint.Mode = mode
 	return record, nil
+}
+
+func pointMatchesBinding(point RetentionRecoveryPoint, binding *RetentionBinding) bool {
+	if binding == nil {
+		return false
+	}
+	return point.Epoch == binding.Epoch &&
+		bytes.Equal(point.SnapshotCID, binding.SnapshotCID) &&
+		point.PolicyDigest == binding.PolicyDigest &&
+		bytes.Equal(point.ControlCID, binding.ControlCID)
 }

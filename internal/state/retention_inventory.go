@@ -314,17 +314,16 @@ FROM apply_journal WHERE backup_ref <> '' ORDER BY id LIMIT ?`,
 		if !retentionPayloadExists(payloadDir, reference) {
 			continue
 		}
-		if len(boundVault) == 32 && bytes.Equal(boundVault, vaultID[:]) && epoch.Valid && epoch.Int64 >= 0 &&
-			bindingVersion != 0 &&
-			len(snapshotCID) > 0 &&
-			len(policyDigest) == 32 &&
-			len(controlCID) > 0 {
+		binding := journalBackupBinding{
+			vault: boundVault, epoch: epoch, bindingVersion: bindingVersion,
+			snapshotCID: snapshotCID, policyDigest: policyDigest, controlCID: controlCID,
+		}
+		if binding.complete(vaultID) {
 			knownEpochs[uint64(epoch.Int64)] = true
 			knownReferences[reference] = true
 			continue
 		}
-		if len(boundVault) == 0 && !epoch.Valid && len(snapshotCID) == 0 && len(policyDigest) == 0 &&
-			len(controlCID) == 0 {
+		if binding.unbound() {
 			addUnknown("legacy-unbound-journal-backup")
 			continue
 		}
@@ -542,4 +541,28 @@ func payloadReferenceMatchesSnapshot(reference string, snapshotCID []byte) bool 
 		return false
 	}
 	return hex.EncodeToString(decoded.Digest) == name
+}
+
+type journalBackupBinding struct {
+	vault          []byte
+	epoch          sql.NullInt64
+	bindingVersion int
+	snapshotCID    []byte
+	policyDigest   []byte
+	controlCID     []byte
+}
+
+func (binding journalBackupBinding) unbound() bool {
+	return len(binding.vault) == 0 && !binding.epoch.Valid && len(binding.snapshotCID) == 0 &&
+		len(binding.policyDigest) == 0 && len(binding.controlCID) == 0
+}
+
+func (binding journalBackupBinding) complete(vaultID [32]byte) bool {
+	if len(binding.vault) != 32 || !bytes.Equal(binding.vault, vaultID[:]) {
+		return false
+	}
+	if !binding.epoch.Valid || binding.epoch.Int64 < 0 || binding.bindingVersion == 0 {
+		return false
+	}
+	return len(binding.snapshotCID) > 0 && len(binding.policyDigest) == 32 && len(binding.controlCID) > 0
 }

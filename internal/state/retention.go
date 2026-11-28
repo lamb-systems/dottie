@@ -1422,8 +1422,7 @@ func (s *Store) planRetentionPruneTx(
 			oldestEpoch = point.Epoch
 			oldestPoint = point
 		}
-		if point.Epoch == request.Boundary.Epoch && bytes.Equal(point.SnapshotCID, request.Boundary.SnapshotCID) &&
-			point.PolicyDigest == request.Boundary.PolicyDigest && bytes.Equal(point.ControlCID, request.Boundary.ControlCID) {
+		if sameRecoveryPoint(point, request.Boundary) {
 			pointFound = true
 		}
 	}
@@ -1798,4 +1797,11 @@ WHERE backup_ref <> '' ORDER BY id`,
 		return plan.Candidates[i].JournalID < plan.Candidates[j].JournalID
 	})
 	return plan, nil
+}
+
+func sameRecoveryPoint(point, other RetentionRecoveryPoint) bool {
+	return point.Epoch == other.Epoch &&
+		bytes.Equal(point.SnapshotCID, other.SnapshotCID) &&
+		point.PolicyDigest == other.PolicyDigest &&
+		bytes.Equal(point.ControlCID, other.ControlCID)
 }

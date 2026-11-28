@@ -231,8 +231,7 @@ func (coordinator *Coordinator) PreparePublishMaterial(
 		)
 	}
 	accepted := (*PublicationAccepted)(nil)
-	if present && request.Accepted != nil && len(request.Accepted.Targets) != 0 &&
-		bytes.Equal(request.Accepted.FloorCID, floor.RecordCID) {
+	if acceptedCacheUsable(request.Accepted, floor, present) {
 		accepted = request.Accepted
 	}
 	if accepted == nil && present {
@@ -1637,4 +1636,11 @@ func validPublicationPushRequest(request PublicationPushRequest) bool {
 		return false
 	}
 	return true
+}
+
+func acceptedCacheUsable(cached *PublicationAccepted, floor publicationstate.Floor, present bool) bool {
+	if !present || cached == nil || len(cached.Targets) == 0 {
+		return false
+	}
+	return bytes.Equal(cached.FloorCID, floor.RecordCID)
 }

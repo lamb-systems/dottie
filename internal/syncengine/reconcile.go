@@ -326,11 +326,7 @@ func decideWithoutBase(local, remote *model.Entry, source model.SourceKind) (Act
 	if bothFileDeleted(local, remote, source) {
 		return ActionUnchanged, ReasonBothDeleted
 	}
-	if source == model.SourceGNOME && local != nil && local.Setting != nil &&
-		local.Setting.State == model.SettingReset &&
-		remote != nil &&
-		remote.Setting != nil &&
-		remote.Setting.State == model.SettingPresent {
+	if remoteResetsPresentLocalSetting(local, remote, source) {
 		return ActionDownload, ReasonBaseMissing
 	}
 	if local == nil && remote != nil {
@@ -726,4 +722,12 @@ func targetFingerprint(target model.Target) string {
 	}
 	digest := sha256.Sum256([]byte(canonical.String()))
 	return hex.EncodeToString(digest[:])
+}
+
+func remoteResetsPresentLocalSetting(local, remote *model.Entry, source model.SourceKind) bool {
+	if source != model.SourceGNOME || local == nil || local.Setting == nil || remote == nil ||
+		remote.Setting == nil {
+		return false
+	}
+	return local.Setting.State == model.SettingReset && remote.Setting.State == model.SettingPresent
 }

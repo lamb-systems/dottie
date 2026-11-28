@@ -263,8 +263,7 @@ func adaptPublicationFileCapture(
 		byPath[skip.Path] = model.Observation{State: model.ObservationUnknown, Identity: identity}
 		complete = false
 	}
-	if selection.target.Root.Kind == model.SelectionFile && callbackUsed && len(result.Observations) == 0 &&
-		len(result.Skipped) == 0 {
+	if singleFileTargetObservedNothing(selection, callbackUsed, result) {
 		identity := model.EntryKey{TargetID: selection.target.ID, Source: model.SourceFiles, FilePath: "."}
 		byPath["."] = model.Observation{State: model.ObservationUnknown, Identity: identity}
 		complete = false
@@ -392,4 +391,15 @@ func publicationCaptureFailure(ctx context.Context, reason publicationReconcilia
 		reason = publicationCaptureReasonCanceled
 	}
 	return publicationReconciliationFailure(ctx, publicationCaptureStage, reason, cause)
+}
+
+func singleFileTargetObservedNothing(
+	selection publicationSelection,
+	callbackUsed bool,
+	result files.Result,
+) bool {
+	if selection.target.Root.Kind != model.SelectionFile || !callbackUsed {
+		return false
+	}
+	return len(result.Observations) == 0 && len(result.Skipped) == 0
 }

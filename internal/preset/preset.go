@@ -460,9 +460,7 @@ func cloneTarget(target config.Target) config.Target {
 
 func matchingRoot(c config.Config, root Root) (config.Target, bool) {
 	for _, target := range c.Targets {
-		if target.Source == model.SourceFiles && target.Root != nil && target.Root.Base == root.Base &&
-			target.Root.Path == root.Path &&
-			target.Root.Kind == root.Kind {
+		if samePortableRoot(target, root) {
 			return target, true
 		}
 	}
@@ -511,4 +509,11 @@ func normalizedExcludes(values []string) []string {
 		}
 	}
 	return unique
+}
+
+func samePortableRoot(target config.Target, root Root) bool {
+	if target.Source != model.SourceFiles || target.Root == nil {
+		return false
+	}
+	return target.Root.Base == root.Base && target.Root.Path == root.Path && target.Root.Kind == root.Kind
 }
