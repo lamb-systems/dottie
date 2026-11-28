@@ -266,8 +266,7 @@ type sessionGenesisPreflight struct {
 }
 
 func (port sessionGenesisPreflight) Preflight(ctx context.Context) error {
-	if port.identity.DID == "" || port.identity.DIDDocumentID == "" || len(port.identity.VerificationMethods) == 0 ||
-		port.transport == nil {
+	if port.transport == nil || !discoveredIdentityUsable(port.identity) {
 		return errors.New("authenticated genesis provider wiring is unavailable")
 	}
 	return atproto.CheckNoDottiePublication(ctx, atproto.RevisionReader{
@@ -317,4 +316,8 @@ func keyringError(err error) string {
 	default:
 		return "keyring operation failed"
 	}
+}
+
+func discoveredIdentityUsable(identity atproto.Identity) bool {
+	return identity.DID != "" && identity.DIDDocumentID != "" && len(identity.VerificationMethods) != 0
 }

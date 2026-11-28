@@ -50,8 +50,7 @@ func provisionPublicationStoreDirectory(directory string) error {
 }
 
 func verifyPublicationStoreDirectory(info os.FileInfo) error {
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 ||
-		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+	if !privateOwnedDirectory(info) {
 		return errPublicationStoreUnsafe
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -95,4 +94,11 @@ func writeRebuildRequiredHint(command *urfave.Command, err error, directory stri
 		writer,
 		"dottie: a rebuild means a fresh state directory, not an in-place change; move the old one aside yourself when you have kept what you need",
 	)
+}
+
+func privateOwnedDirectory(info os.FileInfo) bool {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return false
+	}
+	return info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == 0
 }

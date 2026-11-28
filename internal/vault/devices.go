@@ -623,9 +623,7 @@ func clonePublicDeviceInput(device PublicDeviceInput) PublicDeviceInput {
 }
 
 func validatePublicDeviceInput(device PublicDeviceInput) error {
-	if device.DeviceID == "" || len(device.DeviceID) > MaxDeviceIDBytes || !utf8.ValidString(device.DeviceID) ||
-		len(device.KeyID) == 0 ||
-		len(device.KeyID) > MaxKeyIDBytes {
+	if !validDeviceIdentity(device.DeviceID, device.KeyID) {
 		return fmt.Errorf("%w: device identity", ErrFormat)
 	}
 	if len(device.SigningPublicKey) != ed25519.PublicKeySize || len(device.RecipientPublicKey) != 32 {
@@ -1494,10 +1492,7 @@ func validateRevocationTransition(transition Transition, predecessor Predecessor
 	if len(transition.Certificate) != 0 {
 		return ErrCertificateAuthority
 	}
-	if !bytes.Equal(transition.Predecessor.ControlCID, predecessor.ControlCID) ||
-		transition.Predecessor.PolicyDigest != predecessor.PolicyDigest ||
-		transition.Predecessor.EpochSeq != predecessor.EpochSeq ||
-		!bytes.Equal(transition.Predecessor.HeadCID, predecessor.HeadCID) {
+	if !observedPredecessorMatches(transition.Predecessor, predecessor) {
 		return ErrObservedRevision
 	}
 	oldPolicy, _ := DecodePolicy(predecessor.Policy)
@@ -1534,16 +1529,11 @@ func validateRevocationTransition(transition Transition, predecessor Predecessor
 	if predecessor.EpochSeq == ^uint64(0) || policy.EpochSeq != predecessor.EpochSeq+1 {
 		return ErrTransitionEpoch
 	}
-	if policy.Vault != oldPolicy.Vault || policy.PrevPolicyDigest != predecessor.PolicyDigest ||
-		policy.Signer.DeviceID != proposer.DeviceID ||
-		!bytes.Equal(policy.Signer.KeyID, proposer.KeyID) {
+	if !policyContinuesAncestry(policy, oldPolicy, predecessor, proposer) {
 		return ErrPolicyAncestry
 	}
 	policyDigest := mustPolicyDigest(transition.Policy)
-	if control.Vault != policy.Vault || control.EpochSeq != policy.EpochSeq || control.PolicyDigest != policyDigest ||
-		!bytes.Equal(control.PrevControlCID, predecessor.ControlCID) ||
-		control.Signer.DeviceID != proposer.DeviceID ||
-		!bytes.Equal(control.Signer.KeyID, proposer.KeyID) {
+	if !controlContinuesAncestry(control, policy, policyDigest, predecessor, proposer) {
 		return ErrControlAncestry
 	}
 	if err := validateRevocationDelta(oldPolicy, policy, oldControl, control, predecessor.Certificates); err != nil {
@@ -1552,18 +1542,10 @@ func validateRevocationTransition(transition Transition, predecessor Predecessor
 	if err := validateTransitionRecipients(transition, policy, predecessor, proposer, envelope); err != nil {
 		return err
 	}
-	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq ||
-		envelope.PolicyDigest != policyDigest ||
-		envelope.Vault != policy.Vault ||
-		!bytes.Equal(envelope.Parent, predecessor.HeadCID) {
+	if !envelopeSealsSnapshot(envelope, policy, policyDigest, predecessor) {
 		return ErrSnapshotEpoch
 	}
-	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != policyDigest ||
-		head.PublicationCount != 0 ||
-		!bytes.Equal(head.SnapshotCID, transition.SnapshotCID) ||
-		!bytes.Equal(head.BlobCID, transition.BlobCID) ||
-		!bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) ||
-		!bytes.Equal(control.HeadSnapshotCID, transition.SnapshotCID) {
+	if !headLinksTransition(head, policy, policyDigest, transition, predecessor, control) {
 		return ErrHeadLinkage
 	}
 	actualSnapshotCID, err := rawCID(transition.Snapshot)
@@ -1685,10 +1667,7 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 	if err := validatePredecessor(predecessor); err != nil {
 		return fmt.Errorf("%w: %v", ErrPredecessor, err)
 	}
-	if !bytes.Equal(transition.Predecessor.ControlCID, predecessor.ControlCID) ||
-		transition.Predecessor.PolicyDigest != predecessor.PolicyDigest ||
-		transition.Predecessor.EpochSeq != predecessor.EpochSeq ||
-		!bytes.Equal(transition.Predecessor.HeadCID, predecessor.HeadCID) {
+	if !observedPredecessorMatches(transition.Predecessor, predecessor) {
 		return ErrObservedRevision
 	}
 	oldPolicy, _ := DecodePolicy(predecessor.Policy)
@@ -1726,16 +1705,12 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 	if predecessor.EpochSeq == ^uint64(0) || policy.EpochSeq != predecessor.EpochSeq+1 {
 		return ErrTransitionEpoch
 	}
-	if policy.Vault != oldPolicy.Vault || policy.PrevPolicyDigest != predecessor.PolicyDigest ||
-		policy.Signer.DeviceID != proposer.DeviceID ||
-		!bytes.Equal(policy.Signer.KeyID, proposer.KeyID) {
+	if !policyContinuesAncestry(policy, oldPolicy, predecessor, proposer) {
 		return ErrPolicyAncestry
 	}
-	if control.Vault != policy.Vault || control.EpochSeq != policy.EpochSeq ||
-		control.PolicyDigest != mustPolicyDigest(transition.Policy) ||
-		!bytes.Equal(control.PrevControlCID, predecessor.ControlCID) ||
-		control.Signer.DeviceID != proposer.DeviceID ||
-		!bytes.Equal(control.Signer.KeyID, proposer.KeyID) {
+	if !controlContinuesAncestry(
+		control, policy, mustPolicyDigest(transition.Policy), predecessor, proposer,
+	) {
 		return ErrControlAncestry
 	}
 	if certificate.Vault != policy.Vault || certificate.Issuer != proposer.DeviceID ||
@@ -1757,18 +1732,10 @@ func ValidateTransition(transition Transition, predecessor Predecessor) error {
 		return err
 	}
 	policyDigest := mustPolicyDigest(transition.Policy)
-	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq ||
-		envelope.PolicyDigest != policyDigest ||
-		envelope.Vault != policy.Vault ||
-		!bytes.Equal(envelope.Parent, predecessor.HeadCID) {
+	if !envelopeSealsSnapshot(envelope, policy, policyDigest, predecessor) {
 		return ErrSnapshotEpoch
 	}
-	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != policyDigest ||
-		head.PublicationCount != 0 ||
-		!bytes.Equal(head.SnapshotCID, transition.SnapshotCID) ||
-		!bytes.Equal(head.BlobCID, transition.BlobCID) ||
-		!bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) ||
-		!bytes.Equal(control.HeadSnapshotCID, transition.SnapshotCID) {
+	if !headLinksTransition(head, policy, policyDigest, transition, predecessor, control) {
 		return ErrHeadLinkage
 	}
 	actualSnapshotCID, err := rawCID(transition.Snapshot)
@@ -2264,9 +2231,7 @@ func signingPublicKey(signing ed25519.PrivateKey) (ed25519.PublicKey, bool) {
 }
 
 func validateDeviceMaterial(material DeviceMaterial) error {
-	if material.DeviceID == "" || len(material.DeviceID) > MaxDeviceIDBytes || !utf8.ValidString(material.DeviceID) ||
-		len(material.KeyID) == 0 ||
-		len(material.KeyID) > MaxKeyIDBytes {
+	if !validDeviceIdentity(material.DeviceID, material.KeyID) {
 		return fmt.Errorf("%w: device identity", ErrFormat)
 	}
 	if len(material.Signing) != ed25519.PrivateKeySize || material.Recipient == nil ||
@@ -2291,4 +2256,84 @@ func cloneByteSlices(values [][]byte) [][]byte {
 func mustPolicyDigest(encoded []byte) [32]byte {
 	digest, _ := ComputePolicyDigest(encoded)
 	return digest
+}
+
+func observedPredecessorMatches(observed PredecessorRef, predecessor Predecessor) bool {
+	return bytes.Equal(observed.ControlCID, predecessor.ControlCID) &&
+		observed.PolicyDigest == predecessor.PolicyDigest &&
+		observed.EpochSeq == predecessor.EpochSeq &&
+		bytes.Equal(observed.HeadCID, predecessor.HeadCID)
+}
+
+func policyContinuesAncestry(
+	policy, oldPolicy Policy,
+	predecessor Predecessor,
+	proposer Certificate,
+) bool {
+	if policy.Vault != oldPolicy.Vault || policy.PrevPolicyDigest != predecessor.PolicyDigest {
+		return false
+	}
+	return policy.Signer.DeviceID == proposer.DeviceID && bytes.Equal(policy.Signer.KeyID, proposer.KeyID)
+}
+
+func controlContinuesAncestry(
+	control Control,
+	policy Policy,
+	policyDigest [32]byte,
+	predecessor Predecessor,
+	proposer Certificate,
+) bool {
+	if control.Vault != policy.Vault || control.EpochSeq != policy.EpochSeq {
+		return false
+	}
+	if control.PolicyDigest != policyDigest || !bytes.Equal(control.PrevControlCID, predecessor.ControlCID) {
+		return false
+	}
+	return control.Signer.DeviceID == proposer.DeviceID && bytes.Equal(control.Signer.KeyID, proposer.KeyID)
+}
+
+func envelopeSealsSnapshot(
+	envelope Envelope,
+	policy Policy,
+	policyDigest [32]byte,
+	predecessor Predecessor,
+) bool {
+	if envelope.Purpose != PurposeSnapshot || envelope.EpochSeq != policy.EpochSeq {
+		return false
+	}
+	if envelope.PolicyDigest != policyDigest || envelope.Vault != policy.Vault {
+		return false
+	}
+	return bytes.Equal(envelope.Parent, predecessor.HeadCID)
+}
+
+func headLinksTransition(
+	head Head,
+	policy Policy,
+	policyDigest [32]byte,
+	transition Transition,
+	predecessor Predecessor,
+	control Control,
+) bool {
+	if head.Vault != policy.Vault || head.EpochSeq != policy.EpochSeq || head.PolicyDigest != policyDigest {
+		return false
+	}
+	if head.PublicationCount != 0 {
+		return false
+	}
+	if !bytes.Equal(head.SnapshotCID, transition.SnapshotCID) ||
+		!bytes.Equal(head.BlobCID, transition.BlobCID) {
+		return false
+	}
+	if !bytes.Equal(head.PrevHeadCID, predecessor.HeadCID) {
+		return false
+	}
+	return bytes.Equal(control.HeadSnapshotCID, transition.SnapshotCID)
+}
+
+func validDeviceIdentity(deviceID string, keyID []byte) bool {
+	if deviceID == "" || len(deviceID) > MaxDeviceIDBytes || !utf8.ValidString(deviceID) {
+		return false
+	}
+	return len(keyID) != 0 && len(keyID) <= MaxKeyIDBytes
 }

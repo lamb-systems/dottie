@@ -75,13 +75,17 @@ func (e Entry) Identity() EntryKey {
 	return key
 }
 
+func (k EntryKey) hasSettingLocator() bool {
+	return k.SchemaID != "" || k.SettingsPath != "" || k.SettingKey != ""
+}
+
 func (k EntryKey) Validate() error {
 	if !validText(k.TargetID, MaxTargetIDBytes) {
 		return errors.New("invalid entry identity target")
 	}
 	switch k.Source {
 	case SourceFiles:
-		if !validRelativePath(k.FilePath, true) || k.SchemaID != "" || k.SettingsPath != "" || k.SettingKey != "" {
+		if !validRelativePath(k.FilePath, true) || k.hasSettingLocator() {
 			return errors.New("invalid file entry identity")
 		}
 	case SourceGNOME:

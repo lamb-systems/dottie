@@ -2005,8 +2005,7 @@ func openAuthorizedPublicationReader(
 		return fail(err)
 	}
 	identity, err := client.Discover(ctx, session.Session.Handle)
-	if err != nil || identity.DID != session.Session.DID || identity.DIDDocumentID == "" ||
-		len(identity.VerificationMethods) == 0 {
+	if err != nil || !identityUsableForSession(identity, session.Session.DID) {
 		return fail(errors.New("account identity is unavailable"))
 	}
 	api, err := atproto.NewSessionAPIClient(client, identity, identity.Handle, session.Session)
@@ -2345,4 +2344,8 @@ func pullLiveJournalRefusal(input pullApplyPlanRequest, sources pullApplySources
 			"configure the target it wrote or keep the state directory as evidence; nothing was changed",
 		4,
 	)
+}
+
+func identityUsableForSession(identity atproto.Identity, did string) bool {
+	return discoveredIdentityUsable(identity) && identity.DID == did
 }

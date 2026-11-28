@@ -247,7 +247,7 @@ func (store publicationProposalStore) read(path string) (service.PublicationProp
 
 func readProposalFile(path string) ([]byte, error) {
 	before, err := os.Lstat(path)
-	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0o077 != 0 {
+	if err != nil || !ownedPrivateRegularFile(before) {
 		return nil, errProposalRecordUnsafe
 	}
 	file, err := os.Open(path)
@@ -256,7 +256,7 @@ func readProposalFile(path string) ([]byte, error) {
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || !os.SameFile(before, info) || info.Mode().Perm()&0o077 != 0 {
+	if err != nil || !ownedPrivateRegularFile(info) || !os.SameFile(before, info) {
 		return nil, errProposalRecordUnsafe
 	}
 	encoded, err := io.ReadAll(io.LimitReader(file, publicationProposalFileLimit+1))
@@ -353,4 +353,8 @@ func (store publicationProposalStore) Delete(ctx context.Context, publicationID 
 		return errProposalRecordInvalid
 	}
 	return nil
+}
+
+func ownedPrivateRegularFile(info os.FileInfo) bool {
+	return info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0
 }

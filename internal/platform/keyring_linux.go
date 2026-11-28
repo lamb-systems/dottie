@@ -102,14 +102,7 @@ func (k *Keyring) Delete(ctx context.Context, itemName string) error {
 }
 
 func (k *Keyring) StoreDeviceKeys(ctx context.Context, vaultID [32]byte, material vault.DeviceMaterial) error {
-	if k == nil || k.backend == nil || material.DeviceID == "" || len(material.DeviceID) > vault.MaxDeviceIDBytes ||
-		!utf8.ValidString(material.DeviceID) ||
-		len(material.KeyID) == 0 ||
-		len(material.KeyID) > vault.MaxKeyIDBytes ||
-		material.Recipient == nil ||
-		len(material.Signing) != ed25519.PrivateKeySize ||
-		len(material.Recipient.Bytes()) != 32 ||
-		!validDeviceSigningKey(material.Signing) {
+	if !k.usable() || !validDeviceKeyMaterial(material) {
 		return ErrKeyringUnavailable
 	}
 	name := deviceKeyringItemName(vaultID, material.DeviceID)
@@ -118,8 +111,7 @@ func (k *Keyring) StoreDeviceKeys(ctx context.Context, vaultID [32]byte, materia
 }
 
 func (k *Keyring) LoadDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) (vault.DeviceMaterial, error) {
-	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes ||
-		!utf8.ValidString(deviceID) {
+	if !k.usable() || !validDeviceID(deviceID) {
 		return vault.DeviceMaterial{}, ErrKeyringUnavailable
 	}
 	payload, err := k.Load(ctx, deviceKeyringItemName(vaultID, deviceID))
@@ -134,8 +126,7 @@ func (k *Keyring) LoadDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID
 }
 
 func (k *Keyring) DeleteDeviceKeys(ctx context.Context, vaultID [32]byte, deviceID string) error {
-	if k == nil || k.backend == nil || deviceID == "" || len(deviceID) > vault.MaxDeviceIDBytes ||
-		!utf8.ValidString(deviceID) {
+	if !k.usable() || !validDeviceID(deviceID) {
 		return ErrKeyringUnavailable
 	}
 	return k.Delete(ctx, deviceKeyringItemName(vaultID, deviceID))
@@ -502,4 +493,25 @@ func (b *secretServiceBackend) closeSession(session dbus.ObjectPath) {
 	_ = b.connection.Object(secretServiceName, secretServicePath).
 		Call(secretServiceInterface+".CloseSession", 0, session).
 		Err
+}
+
+func (k *Keyring) usable() bool {
+	return k != nil && k.backend != nil
+}
+
+func validDeviceID(deviceID string) bool {
+	return deviceID != "" && len(deviceID) <= vault.MaxDeviceIDBytes && utf8.ValidString(deviceID)
+}
+
+func validDeviceKeyMaterial(material vault.DeviceMaterial) bool {
+	if !validDeviceID(material.DeviceID) || material.Recipient == nil {
+		return false
+	}
+	if len(material.KeyID) == 0 || len(material.KeyID) > vault.MaxKeyIDBytes {
+		return false
+	}
+	if len(material.Signing) != ed25519.PrivateKeySize || len(material.Recipient.Bytes()) != 32 {
+		return false
+	}
+	return validDeviceSigningKey(material.Signing)
 }
